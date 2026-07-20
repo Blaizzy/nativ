@@ -98,6 +98,7 @@ private final class ModelMenuRowView: NSView {
         tooltip: String,
         provider: LocalModelProvider?,
         capabilities: Set<LocalModelCapability>,
+        memoryEstimate: LocalModelMemoryEstimate?,
         isSelected: Bool,
         onSelect: @escaping () -> Void
     ) {
@@ -166,6 +167,19 @@ private final class ModelMenuRowView: NSView {
             capabilityImage.widthAnchor.constraint(equalToConstant: 13).isActive = true
             capabilityImage.heightAnchor.constraint(equalToConstant: 13).isActive = true
             titleRow.addArrangedSubview(capabilityImage)
+        }
+
+        if let memoryEstimate, !memoryEstimate.isUsable {
+            let compatibilityLabel = NSTextField(
+                labelWithString: memoryEstimate.compatibilityLabel
+            )
+            compatibilityLabel.font = .systemFont(ofSize: 9, weight: .semibold)
+            compatibilityLabel.textColor = .systemOrange
+            compatibilityLabel.lineBreakMode = .byClipping
+            compatibilityLabel.toolTip = memoryEstimate.explanation
+            compatibilityLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+            compatibilityLabel.setContentHuggingPriority(.required, for: .horizontal)
+            titleRow.addArrangedSubview(compatibilityLabel)
         }
 
         let detailsLabel = NSTextField(labelWithString: details)
@@ -751,6 +765,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tooltip: modelMenuTooltip(localModel),
             provider: localModel.provider,
             capabilities: localModel.capabilities,
+            memoryEstimate: localModel.memoryEstimate(),
             isSelected: model.settings.normalized().languageModelID == localModel.repoID,
             onSelect: { [weak self] in
                 self?.model.switchLanguageModel(to: localModel.repoID)
@@ -779,6 +794,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func modelDetails(_ localModel: LocalModel) -> String {
         var details: [String] = []
+        if let parameterSize = localModel.parameterSizeLabel {
+            details.append(parameterSize)
+        }
+        if let quantization = localModel.quantizationLabel {
+            details.append(quantization)
+        }
         if let sizeBytes = localModel.sizeBytes {
             details.append(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))
         }
@@ -793,6 +814,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let provider = localModel.provider {
             lines.append("Provider: \(provider.displayName)")
         }
+        if let parameterSize = localModel.parameterSizeLabel {
+            lines.append("Parameters: \(parameterSize)")
+        }
+        if let quantization = localModel.quantizationLabel {
+            lines.append("Quantization: \(quantization)")
+        }
         if let sizeBytes = localModel.sizeBytes {
             lines.append("Size: \(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))")
         }
@@ -806,6 +833,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .sorted()
                 .joined(separator: ", ")
             lines.append("Capabilities: \(capabilities)")
+        }
+        if let memoryEstimate = localModel.memoryEstimate() {
+            lines.append(memoryEstimate.compatibilityLabel)
+            lines.append(memoryEstimate.explanation)
         }
         return lines.joined(separator: "\n")
     }

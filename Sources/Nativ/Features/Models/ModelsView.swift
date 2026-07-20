@@ -760,6 +760,14 @@ private struct HubModelRow: View {
                         if model.isGated {
                             ModelPill(title: "Gated", systemImage: "lock")
                         }
+                        if let memoryEstimate = model.memoryEstimate, !memoryEstimate.isUsable {
+                            ModelPill(
+                                title: "May not fit in memory",
+                                systemImage: "exclamationmark.triangle.fill",
+                                color: .orange
+                            )
+                            .help("Pre-download estimate. \(memoryEstimate.explanation)")
+                        }
                     }
 
                     Text(model.id)

@@ -49,6 +49,9 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     let snapshotURL: URL?
     let modifiedAt: Date?
     let sizeBytes: Int64?
+    let parameterCount: Int64?
+    let quantizationBits: Int?
+    let quantizationGroupSize: Int?
     let contextSize: Int?
     let provider: LocalModelProvider?
     let capabilities: Set<LocalModelCapability>
@@ -56,6 +59,110 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     var isEligibleForLanguageModelPicker: Bool {
         !capabilities.contains(.speechToText)
             && !capabilities.contains(.textToSpeech)
+    }
+
+    var parameterSizeLabel: String? {
+        guard let parameterCount, parameterCount > 0 else {
+            return nil
+        }
+        if parameterCount >= 1_000_000_000 {
+            return Self.compactCount(Double(parameterCount) / 1_000_000_000, suffix: "B")
+        }
+        if parameterCount >= 1_000_000 {
+            return Self.compactCount(Double(parameterCount) / 1_000_000, suffix: "M")
+        }
+        return NumberFormatter.localizedString(
+            from: NSNumber(value: parameterCount),
+            number: .decimal
+        )
+    }
+
+    var quantizationLabel: String? {
+        quantizationBits.map { "\($0)-bit" }
+    }
+
+    func memoryEstimate(
+        totalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) -> LocalModelMemoryEstimate? {
+        guard totalMemoryBytes > 0 else {
+            return nil
+        }
+
+        var estimates: [Double] = []
+        if let sizeBytes, sizeBytes > 0 {
+            estimates.append(Double(sizeBytes))
+        }
+
+        if let parameterCount, parameterCount > 0 {
+            let bitsPerParameter = Double(quantizationBits ?? 16)
+            var bytesPerParameter = bitsPerParameter / 8
+
+            // MLX quantization stores a scale and bias (two Float16 values) per group.
+            if quantizationBits != nil,
+               let quantizationGroupSize,
+               quantizationGroupSize > 0 {
+                bytesPerParameter += 4 / Double(quantizationGroupSize)
+            }
+            estimates.append(Double(parameterCount) * bytesPerParameter)
+        }
+
+        guard let estimatedBytes = estimates.max(),
+              estimatedBytes.isFinite,
+              estimatedBytes > 0,
+              estimatedBytes <= Double(Int64.max)
+        else {
+            return nil
+        }
+
+        let memoryBudgetBytes = UInt64(
+            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
+                .rounded(.down)
+        )
+        return LocalModelMemoryEstimate(
+            estimatedModelBytes: UInt64(estimatedBytes.rounded(.up)),
+            memoryBudgetBytes: memoryBudgetBytes,
+            totalMemoryBytes: totalMemoryBytes
+        )
+    }
+
+    private static func compactCount(_ value: Double, suffix: String) -> String {
+        if value.rounded() == value {
+            return "\(Int(value))\(suffix)"
+        }
+        return String(format: "%.1f%@", value, suffix)
+    }
+}
+
+struct LocalModelMemoryEstimate: Equatable, Sendable {
+    static let headroomFraction = 0.20
+
+    let estimatedModelBytes: UInt64
+    let memoryBudgetBytes: UInt64
+    let totalMemoryBytes: UInt64
+
+    var isUsable: Bool {
+        estimatedModelBytes <= memoryBudgetBytes
+    }
+
+    var compatibilityLabel: String {
+        isUsable ? "Likely fits in memory" : "May not fit in memory"
+    }
+
+    var explanation: String {
+        let estimated = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: estimatedModelBytes),
+            countStyle: .memory
+        )
+        let budget = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: memoryBudgetBytes),
+            countStyle: .memory
+        )
+        let total = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: totalMemoryBytes),
+            countStyle: .memory
+        )
+        let headroomPercent = Int((Self.headroomFraction * 100).rounded())
+        return "Estimated model memory: \(estimated). Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
     }
 }
 
@@ -144,11 +251,19 @@ enum LocalModelDiscovery {
             }
 
             let modifiedAt = (try? snapshotURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let memoryMetadata = modelMemoryMetadata(
+                repoID: repoID,
+                snapshotURL: snapshotURL,
+                fileManager: fileManager
+            )
             return LocalModel(
                 repoID: repoID,
                 snapshotURL: snapshotURL,
                 modifiedAt: modifiedAt,
                 sizeBytes: snapshotSize(at: snapshotURL, fileManager: fileManager),
+                parameterCount: memoryMetadata.parameterCount,
+                quantizationBits: memoryMetadata.quantizationBits,
+                quantizationGroupSize: memoryMetadata.quantizationGroupSize,
                 contextSize: contextSize(at: snapshotURL, fileManager: fileManager),
                 provider: modelProvider(
                     repoID: repoID,
@@ -307,6 +422,118 @@ enum LocalModelDiscovery {
         }
 
         return foundFile ? totalBytes : nil
+    }
+
+    private struct ModelMemoryMetadata {
+        let parameterCount: Int64?
+        let quantizationBits: Int?
+        let quantizationGroupSize: Int?
+    }
+
+    private static func modelMemoryMetadata(
+        repoID: String,
+        snapshotURL: URL,
+        fileManager: FileManager
+    ) -> ModelMemoryMetadata {
+        let configURL = snapshotURL.appendingPathComponent("config.json")
+        let config: [String: Any]? = if fileManager.fileExists(atPath: configURL.path),
+                                       let data = try? Data(contentsOf: configURL) {
+            try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } else {
+            nil
+        }
+
+        let quantization = (config?["quantization"] as? [String: Any])
+            ?? (config?["quantization_config"] as? [String: Any])
+        let parameterCount = integer64Value(config?["num_parameters"])
+            ?? integer64Value(config?["parameter_count"])
+            ?? parameterCount(from: repoID)
+        let quantizationBits = integerValue(quantization?["bits"])
+            ?? integerValue(quantization?["nbits"])
+            ?? quantizationBits(from: repoID)
+        let quantizationGroupSize = integerValue(quantization?["group_size"])
+
+        return ModelMemoryMetadata(
+            parameterCount: parameterCount,
+            quantizationBits: quantizationBits,
+            quantizationGroupSize: quantizationGroupSize
+        )
+    }
+
+    private static func integerValue(_ value: Any?) -> Int? {
+        if let value = value as? Int {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.intValue
+        }
+        if let value = value as? String {
+            return Int(value)
+        }
+        return nil
+    }
+
+    private static func integer64Value(_ value: Any?) -> Int64? {
+        if let value = value as? Int64 {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.int64Value
+        }
+        if let value = value as? String {
+            return Int64(value)
+        }
+        return nil
+    }
+
+    static func parameterCount(from repoID: String) -> Int64? {
+        firstNumericModelDescriptor(
+            in: repoID,
+            pattern: #"(?i)(?:^|[/_-])(\d+(?:\.\d+)?)\s*([bm])(?:$|[/_-])"#
+        ) { value, suffix in
+            let multiplier = suffix.lowercased() == "b" ? 1_000_000_000.0 : 1_000_000.0
+            let result = value * multiplier
+            guard result.isFinite, result > 0, result <= Double(Int64.max) else {
+                return nil
+            }
+            return Int64(result.rounded())
+        }
+    }
+
+    static func quantizationBits(from repoID: String) -> Int? {
+        firstNumericModelDescriptor(
+            in: repoID,
+            pattern: #"(?i)(?:^|[/_-])(\d+(?:\.\d+)?)\s*-?bits?(?:$|[/_-])"#
+        ) { value, _ in
+            let bits = Int(value.rounded())
+            return (2...16).contains(bits) ? bits : nil
+        }
+    }
+
+    private static func firstNumericModelDescriptor<Result>(
+        in value: String,
+        pattern: String,
+        transform: (Double, String) -> Result?
+    ) -> Result? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(
+                  in: value,
+                  range: NSRange(value.startIndex..., in: value)
+              ),
+              let numberRange = Range(match.range(at: 1), in: value),
+              let number = Double(value[numberRange])
+        else {
+            return nil
+        }
+
+        let suffix: String
+        if match.numberOfRanges > 2,
+           let suffixRange = Range(match.range(at: 2), in: value) {
+            suffix = String(value[suffixRange])
+        } else {
+            suffix = ""
+        }
+        return transform(number, suffix)
     }
 
     private static func contextSize(at snapshotURL: URL, fileManager: FileManager) -> Int? {

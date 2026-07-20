@@ -89,6 +89,59 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         safetensors?.sizeBytes
     }
 
+    var memoryEstimate: LocalModelMemoryEstimate? {
+        guard let safetensors,
+              safetensors.hasOnlyKnownDataTypes,
+              let sizeBytes = safetensors.sizeBytes,
+              sizeBytes > 0
+        else {
+            return nil
+        }
+
+        let parameterCount = LocalModelDiscovery.parameterCount(from: id)
+        let quantizationBits = LocalModelDiscovery.quantizationBits(from: id)
+        var estimatedModelBytes = Double(sizeBytes)
+
+        // Packed integer summaries and explicitly quantized repositories need a
+        // second, independent signal before we present a compatibility label.
+        if quantizationBits != nil || safetensors.hasPotentiallyPackedWeights {
+            guard let parameterCount,
+                  let quantizationBits
+            else {
+                return nil
+            }
+
+            let bytesPerParameter = Double(quantizationBits) / 8 + (4 / 64)
+            let parameterEstimate = Double(parameterCount) * bytesPerParameter
+            let metadataRatio = estimatedModelBytes / parameterEstimate
+            guard metadataRatio.isFinite,
+                  (0.65...1.75).contains(metadataRatio)
+            else {
+                return nil
+            }
+            estimatedModelBytes = max(estimatedModelBytes, parameterEstimate)
+        }
+
+        let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+        guard totalMemoryBytes > 0,
+              estimatedModelBytes.isFinite,
+              estimatedModelBytes > 0,
+              estimatedModelBytes <= Double(Int64.max)
+        else {
+            return nil
+        }
+
+        let memoryBudgetBytes = UInt64(
+            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
+                .rounded(.down)
+        )
+        return LocalModelMemoryEstimate(
+            estimatedModelBytes: UInt64(estimatedModelBytes.rounded(.up)),
+            memoryBudgetBytes: memoryBudgetBytes,
+            totalMemoryBytes: totalMemoryBytes
+        )
+    }
+
     var capabilities: Set<LocalModelCapability> {
         let pipeline = pipelineTag?.lowercased() ?? ""
         let descriptors = ([pipelineTag, libraryName].compactMap { $0 } + tags)
@@ -163,6 +216,37 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
 
 struct HuggingFaceSafetensors: Decodable, Equatable, Sendable {
     let parameters: [String: Int64]
+
+    private static let knownDataTypes: Set<String> = [
+        "F64", "I64", "U64", "F32", "I32", "U32", "F16", "BF16", "I16", "U16",
+        "F8_E4M3", "F8_E5M2", "I8", "U8", "BOOL", "F6_E2M3", "F6_E3M2", "F4",
+        "I4", "U4", "I2", "U2"
+    ]
+
+    var hasOnlyKnownDataTypes: Bool {
+        !parameters.isEmpty
+            && parameters.keys.allSatisfy { Self.knownDataTypes.contains($0.uppercased()) }
+    }
+
+    var hasPotentiallyPackedWeights: Bool {
+        let totalCount = parameters.values.reduce(Int64(0)) { partialResult, count in
+            partialResult.addingReportingOverflow(count).overflow
+                ? Int64.max
+                : partialResult + count
+        }
+        guard totalCount > 0 else {
+            return false
+        }
+        let packedCount = parameters.reduce(Int64(0)) { partialResult, entry in
+            guard ["I32", "U32"].contains(entry.key.uppercased()) else {
+                return partialResult
+            }
+            return partialResult.addingReportingOverflow(entry.value).overflow
+                ? Int64.max
+                : partialResult + entry.value
+        }
+        return Double(packedCount) / Double(totalCount) >= 0.10
+    }
 
     var sizeBytes: Int64? {
         guard !parameters.isEmpty else { return nil }

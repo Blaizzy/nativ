@@ -424,6 +424,7 @@ private struct WelcomeModelPickerRow: View {
     let detail: String
     let systemImage: String?
     let provider: LocalModelProvider?
+    let memoryEstimate: LocalModelMemoryEstimate?
     let isSelected: Bool
     let action: () -> Void
 
@@ -438,6 +439,7 @@ private struct WelcomeModelPickerRow: View {
         self.detail = detail
         self.systemImage = systemImage
         provider = nil
+        memoryEstimate = nil
         self.isSelected = isSelected
         self.action = action
     }
@@ -447,6 +449,7 @@ private struct WelcomeModelPickerRow: View {
         detail = WelcomeModelPickerRow.modelDetail(model)
         systemImage = nil
         provider = model.provider
+        memoryEstimate = model.memoryEstimate()
         self.isSelected = isSelected
         self.action = action
     }
@@ -457,10 +460,17 @@ private struct WelcomeModelPickerRow: View {
                 modelIcon
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    HStack(spacing: 7) {
+                        Text(title)
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+
+                        if let memoryEstimate, !memoryEstimate.isUsable {
+                            WelcomeMemoryFitBadge(estimate: memoryEstimate)
+                        }
+                    }
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -486,7 +496,7 @@ private struct WelcomeModelPickerRow: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title), \(isSelected ? "selected" : "not selected")")
+        .accessibilityLabel(accessibilityLabel)
     }
 
     @ViewBuilder
@@ -513,6 +523,12 @@ private struct WelcomeModelPickerRow: View {
         if let provider = model.provider {
             details.append(provider.displayName)
         }
+        if let parameterSize = model.parameterSizeLabel {
+            details.append(parameterSize)
+        }
+        if let quantization = model.quantizationLabel {
+            details.append(quantization)
+        }
         if let sizeBytes = model.sizeBytes {
             details.append(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))
         }
@@ -530,6 +546,35 @@ private struct WelcomeModelPickerRow: View {
             return "\(value / 1024)K"
         }
         return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+    }
+
+    private var accessibilityLabel: String {
+        let selection = isSelected ? "selected" : "not selected"
+        guard let memoryEstimate else {
+            return "\(title), \(selection)"
+        }
+        return "\(title), \(memoryEstimate.compatibilityLabel), \(selection)"
+    }
+}
+
+private struct WelcomeMemoryFitBadge: View {
+    let estimate: LocalModelMemoryEstimate
+
+    var body: some View {
+        Label(
+            estimate.compatibilityLabel,
+            systemImage: estimate.isUsable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(estimate.isUsable ? Color.green : Color.orange)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            (estimate.isUsable ? Color.green : Color.orange).opacity(0.10),
+            in: Capsule()
+        )
+        .fixedSize()
+        .help(estimate.explanation)
     }
 }
 
