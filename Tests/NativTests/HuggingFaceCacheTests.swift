@@ -47,6 +47,18 @@ final class HuggingFaceCacheTests: XCTestCase {
         )
     }
 
+    // MARK: - isConfigured
+
+    func testIsConfiguredDetectsEitherVariable() {
+        XCTAssertTrue(HuggingFaceCache.isConfigured(in: ["HF_HOME": customHome]))
+        XCTAssertTrue(HuggingFaceCache.isConfigured(in: ["HF_HUB_CACHE": customCache]))
+    }
+
+    func testIsConfiguredIgnoresBlankAndMissingValues() {
+        XCTAssertFalse(HuggingFaceCache.isConfigured(in: [:]))
+        XCTAssertFalse(HuggingFaceCache.isConfigured(in: ["HF_HOME": "  ", "HF_HUB_CACHE": ""]))
+    }
+
     // MARK: - resolvedSearchPath
 
     func testResolvedSearchPathUsesEnvironmentDefaultWhenUnset() {

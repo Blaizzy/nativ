@@ -7,6 +7,16 @@ enum HuggingFaceCache {
     /// Cache location used when neither environment variable is set.
     static let fallbackHubPath = "~/.cache/huggingface/hub"
 
+    /// Environment variables that locate the hub cache, in priority order.
+    static let environmentVariableNames = ["HF_HUB_CACHE", "HF_HOME"]
+
+    /// Whether the given environment already configures the hub cache.
+    static func isConfigured(
+        in environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environmentVariableNames.contains { nonEmpty(environment[$0]) != nil }
+    }
+
     /// The default hub cache path for the given environment.
     static func defaultHubPath(
         environment: [String: String] = ProcessInfo.processInfo.environment

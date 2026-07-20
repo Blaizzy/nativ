@@ -52,6 +52,31 @@ final class NativModel: ObservableObject {
         allTimeStats = NativAllTimeStats.load(from: currentAnalyticsDatabaseURL())
         configureServerCallbacks()
         isRunning = server.isRunning
+        resolveHubCacheFromShellEnvironment()
+    }
+
+    /// GUI apps inherit launchd's environment, which excludes exports from
+    /// shell startup files. When the process environment doesn't configure
+    /// the Hugging Face cache, probe the user's login shell once and adopt
+    /// its HF_HOME/HF_HUB_CACHE if present. `resolvedSearchPath` only
+    /// migrates the legacy default, so user-customized paths are preserved.
+    private func resolveHubCacheFromShellEnvironment() {
+        guard !HuggingFaceCache.isConfigured() else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let shellEnvironment = ShellEnvironment.resolveFromLoginShell(
+                names: HuggingFaceCache.environmentVariableNames
+            )
+            guard !shellEnvironment.isEmpty else { return }
+            await MainActor.run {
+                guard let self else { return }
+                let resolved = HuggingFaceCache.resolvedSearchPath(
+                    stored: self.settings.modelSearchPath,
+                    environment: shellEnvironment
+                )
+                guard resolved != self.settings.modelSearchPath else { return }
+                self.settings.modelSearchPath = resolved
+            }
+        }
     }
 
     var metricsAreStale: Bool {

@@ -92,6 +92,7 @@ targets:
     sources:
       - path: Tests/NativTests
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
+      - path: Sources/Nativ/Utilities/ShellEnvironment.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests
