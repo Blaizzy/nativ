@@ -380,9 +380,12 @@ enum LocalModelDiscovery {
             return false
         }
 
-        let indexURL = snapshotURL.appendingPathComponent("model.safetensors.index.json")
-        if fileManager.fileExists(atPath: indexURL.path) {
-            return true
+        // A sharded model advertises its weight files in an index. That index
+        // is tiny and downloads before the shards it points to, so its mere
+        // presence does not mean the model is fully downloaded. Require every
+        // referenced shard to exist before treating the snapshot as installed.
+        if let indexIsComplete = safetensorsShardIndexIsComplete(at: snapshotURL, fileManager: fileManager) {
+            return indexIsComplete
         }
 
         guard let contents = try? fileManager.contentsOfDirectory(
@@ -393,6 +396,39 @@ enum LocalModelDiscovery {
             return false
         }
         return contents.contains { $0.pathExtension == "safetensors" }
+    }
+
+    /// Validates a sharded-safetensors weight index against the files on disk.
+    ///
+    /// - Returns: `nil` when the snapshot has no `model.safetensors.index.json`
+    ///   to validate (single-file or non-safetensors layouts), otherwise `true`
+    ///   only when every shard listed in the index's `weight_map` is present.
+    private static func safetensorsShardIndexIsComplete(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> Bool? {
+        let indexURL = snapshotURL.appendingPathComponent("model.safetensors.index.json")
+        guard fileManager.fileExists(atPath: indexURL.path) else {
+            return nil
+        }
+
+        guard let data = try? Data(contentsOf: indexURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let weightMap = json["weight_map"] as? [String: Any]
+        else {
+            // The index exists but cannot be read; treat as incomplete so a
+            // partially downloaded model is not reported as installed.
+            return false
+        }
+
+        let shardFilenames = Set(weightMap.values.compactMap { $0 as? String })
+        guard !shardFilenames.isEmpty else {
+            return false
+        }
+
+        return shardFilenames.allSatisfy { filename in
+            fileManager.fileExists(atPath: snapshotURL.appendingPathComponent(filename).path)
+        }
     }
 
     private static func snapshotSize(at snapshotURL: URL, fileManager: FileManager) -> Int64? {
