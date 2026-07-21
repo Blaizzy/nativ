@@ -39,22 +39,3 @@ jobs:
 
       - name: Build app (unsigned Debug)
         run: make xcode-build
-
-      - name: Zip app bundle
-        run: |
-          set -euo pipefail
-          cd build/XcodeDerivedData/Build/Products/Debug
-          ditto -c -k --keepParent Nativ.app Nativ-dev.zip
-
-      - name: Compute artifact name
-        run: |
-          set -euo pipefail
-          safe_ref="$(echo "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" | tr '/' '-')"
-          echo "ARTIFACT_NAME=Nativ-dev-${safe_ref}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-
-      - name: Upload app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: build/XcodeDerivedData/Build/Products/Debug/Nativ-dev.zip
-          retention-days: 7
