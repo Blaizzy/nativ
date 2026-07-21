@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -28,11 +29,36 @@ TRACKED_PATHS = {
     "/responses",
     "/v1/responses",
 }
+METRICS_PATHS = {"/metrics", "/v1/metrics"}
 
 _BASE_METRICS_CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
     "nativ_base_metrics_capture",
     default=None,
 )
+
+
+class MetricsAccessLogFilter(logging.Filter):
+    """Hide successful metrics polls from Uvicorn's access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+
+        request_path = str(args[2]).partition("?")[0]
+        try:
+            status_code = int(args[4])
+        except (TypeError, ValueError):
+            return True
+
+        return request_path not in METRICS_PATHS or status_code >= 400
+
+
+def install_metrics_access_log_filter() -> None:
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(isinstance(item, MetricsAccessLogFilter) for item in access_logger.filters):
+        return
+    access_logger.addFilter(MetricsAccessLogFilter())
 
 
 @dataclass
@@ -1155,6 +1181,7 @@ def install_metrics_overlay() -> None:
 
 def main() -> None:
     install_metrics_overlay()
+    install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
 
     def nativ_argument_parser(*args: Any, **kwargs: Any):
