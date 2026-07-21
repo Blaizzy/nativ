@@ -6,8 +6,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: macos-release
@@ -17,9 +15,6 @@ jobs:
   build-notarize-publish:
     if: ${{ !github.event.release.prerelease }}
     runs-on: macos-26
-    environment:
-      name: github-pages
-      url: ${{ steps.pages.outputs.page_url }}
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       APP_BUNDLE_ID: ${{ vars.NATIV_BUNDLE_IDENTIFIER }}
@@ -56,8 +51,7 @@ jobs:
               exit 1
             fi
           done
-          version="${RELEASE_TAG#v}"
-          if [[ ! "$version" =~ ^[0-9]+([.][0-9]+){1,2}$ ]]; then
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+([.][0-9]+){1,2}$ ]]; then
             echo "::error::Release tag must be vMAJOR.MINOR[.PATCH], got $RELEASE_TAG"
             exit 1
           fi
@@ -123,12 +117,9 @@ jobs:
             --release-notes "$RUNNER_TEMP/release-notes.md" \
             "$RELEASE_VERSION"
 
-      - name: Upload notarized app to GitHub Release
+      - name: Upload notarized app and appcast to GitHub Release
         run: |
           set -euo pipefail
-          asset_path="dist/release/Nativ-${RELEASE_VERSION}.dmg"
-          asset_name="$(basename "$asset_path")"
-          response_path="$RUNNER_TEMP/release-upload-response.json"
           upload_url="$(jq -r '.release.upload_url // empty' "$GITHUB_EVENT_PATH")"
           upload_url="${upload_url%%\{*}"
           if [[ "$upload_url" != https://uploads.github.com/* ]]; then
@@ -136,38 +127,43 @@ jobs:
             exit 1
           fi
 
-          curl \
-            --silent \
-            --show-error \
-            --fail-with-body \
-            --retry 6 \
-            --retry-delay 10 \
-            --retry-max-time 300 \
-            --retry-all-errors \
-            --request POST \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            --header "X-GitHub-Api-Version: 2026-03-10" \
-            --header "Content-Type: application/x-apple-diskimage" \
-            --data-binary "@$asset_path" \
-            --output "$response_path" \
-            "${upload_url}?name=${asset_name}"
-          jq -r '"Uploaded \(.name): \(.browser_download_url)"' "$response_path"
+          assets=(
+            "dist/release/Nativ-${RELEASE_VERSION}.dmg|application/x-apple-diskimage"
+            "dist/release/appcast.xml|application/xml"
+          )
+          for asset in "${assets[@]}"; do
+            IFS='|' read -r asset_path content_type <<< "$asset"
+            asset_name="$(basename "$asset_path")"
+            response_path="$RUNNER_TEMP/release-upload-${asset_name}.json"
+            curl \
+              --silent \
+              --show-error \
+              --fail-with-body \
+              --retry 6 \
+              --retry-delay 10 \
+              --retry-max-time 300 \
+              --retry-all-errors \
+              --request POST \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2026-03-10" \
+              --header "Content-Type: $content_type" \
+              --data-binary "@$asset_path" \
+              --output "$response_path" \
+              "${upload_url}?name=${asset_name}"
+            jq -r '"Uploaded \(.name): \(.browser_download_url)"' "$response_path"
+          done
 
-      - name: Prepare GitHub Pages feed
+      - name: Verify published appcast
         run: |
-          mkdir -p dist/release/site
-          cp -R website/. dist/release/site/
-          cp dist/release/appcast.xml dist/release/site/appcast.xml
-
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist/release/site
-
-      - name: Publish appcast after release asset
-        id: pages
-        uses: actions/deploy-pages@v4
+          archive_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Nativ-${RELEASE_VERSION}.dmg"
+          release_appcast_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/appcast.xml"
+          latest_appcast_url="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml"
+          scripts/verify_macos_appcast.sh \
+            "$release_appcast_url" \
+            "$archive_url" \
+            dist/release/appcast.xml
+          scripts/verify_macos_appcast.sh \
+            "$latest_appcast_url" \
+            "$archive_url" \
+            dist/release/appcast.xml

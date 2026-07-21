@@ -27,13 +27,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Preserve the current Sparkle feed
-        continue-on-error: true
-        run: |
-          curl --fail --silent --show-error \
-            --output website/appcast.xml \
-            https://marvis-labs.github.io/mlx-platform/appcast.xml
-
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
