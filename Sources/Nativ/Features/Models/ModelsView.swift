@@ -112,18 +112,35 @@ struct ModelsView: View {
                         )
                     }
 
-                    if localLibrary.isScanning && localLibrary.models.isEmpty {
+                    ForEach(filteredPendingModels) { pending in
+                        PendingModelRow(
+                            model: pending,
+                            isDeleting: localLibrary.deletingModelIDs.contains(pending.repoID),
+                            onPauseResume: {
+                                if downloadManager.isDownloadPaused {
+                                    downloadManager.resumeDownload()
+                                } else {
+                                    downloadManager.pauseDownload()
+                                }
+                            },
+                            onDelete: { deletePendingModel(pending) }
+                        )
+                    }
+
+                    if localLibrary.isScanning && localLibrary.models.isEmpty && filteredPendingModels.isEmpty {
                         ModelsLoadingState(title: "Scanning your Hugging Face cache…")
                     } else if filteredLocalModels.isEmpty {
-                        ModelsEmptyState(
-                            systemImage: localQuery.isEmpty ? "shippingbox" : "magnifyingglass",
-                            title: localQuery.isEmpty ? "No MLX models installed" : "No models match your filter",
-                            message: localQuery.isEmpty
-                                ? "Discover an MLX model on Hugging Face and download it to this cache."
-                                : "Try a different model name or provider.",
-                            actionTitle: localQuery.isEmpty ? "Discover models" : nil,
-                            action: { section = .discover }
-                        )
+                        if filteredPendingModels.isEmpty {
+                            ModelsEmptyState(
+                                systemImage: localQuery.isEmpty ? "shippingbox" : "magnifyingglass",
+                                title: localQuery.isEmpty ? "No MLX models installed" : "No models match your filter",
+                                message: localQuery.isEmpty
+                                    ? "Discover an MLX model on Hugging Face and download it to this cache."
+                                    : "Try a different model name or provider.",
+                                actionTitle: localQuery.isEmpty ? "Discover models" : nil,
+                                action: { section = .discover }
+                            )
+                        }
                     } else {
                         HStack {
                             Text("\(filteredLocalModels.count) \(filteredLocalModels.count == 1 ? "model" : "models")")
@@ -331,6 +348,70 @@ struct ModelsView: View {
 
     private var installedModelIDs: Set<String> {
         Set(localLibrary.models.map(\.repoID))
+    }
+
+    /// In-progress and interrupted downloads, surfaced on the Installed page so
+    /// they can be canceled or removed before they finish. The active download is
+    /// sourced from the download manager (live progress); leftover partials come
+    /// from the cache scan. Installed repos are excluded so nothing is duplicated.
+    private var pendingModels: [PendingModel] {
+        let installedIDs = installedModelIDs
+        let activeID = downloadManager.downloadingModelID
+        var result: [PendingModel] = []
+
+        if let activeID, !installedIDs.contains(activeID) {
+            result.append(
+                PendingModel(
+                    repoID: activeID,
+                    provider: LocalModelProviderResolver.resolve(
+                        repoID: activeID,
+                        modelType: nil,
+                        architectures: []
+                    ),
+                    downloadedBytes: nil,
+                    state: .downloading(
+                        progress: downloadManager.downloadProgress,
+                        isPaused: downloadManager.isDownloadPaused
+                    )
+                )
+            )
+        }
+
+        for incomplete in localLibrary.incompleteModels
+            where incomplete.repoID != activeID && !installedIDs.contains(incomplete.repoID) {
+            result.append(
+                PendingModel(
+                    repoID: incomplete.repoID,
+                    provider: incomplete.provider,
+                    downloadedBytes: incomplete.downloadedBytes,
+                    state: .incomplete
+                )
+            )
+        }
+        return result
+    }
+
+    private var filteredPendingModels: [PendingModel] {
+        let query = localQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return pendingModels }
+        return pendingModels.filter {
+            $0.repoID.localizedCaseInsensitiveContains(query)
+                || $0.provider?.displayName.localizedCaseInsensitiveContains(query) == true
+        }
+    }
+
+    private func deletePendingModel(_ pending: PendingModel) {
+        switch pending.state {
+        case .downloading:
+            downloadManager.removeDownload()
+        case .incomplete:
+            localLibrary.delete(
+                repoID: pending.repoID,
+                path: model.settings.modelSearchPath
+            ) {
+                NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+            }
+        }
     }
 
     private var pageTitle: some View {
@@ -607,6 +688,132 @@ private struct ModelsSearchField: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
+    }
+}
+
+private struct PendingModel: Identifiable {
+    enum State: Equatable {
+        case downloading(progress: Double, isPaused: Bool)
+        case incomplete
+    }
+
+    let repoID: String
+    let provider: LocalModelProvider?
+    let downloadedBytes: Int64?
+    let state: State
+
+    var id: String { repoID }
+}
+
+private struct PendingModelRow: View {
+    let model: PendingModel
+    let isDeleting: Bool
+    let onPauseResume: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+    @State private var showsDeleteConfirmation = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ModelProviderBadge(provider: model.provider)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(modelName(model.repoID))
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+
+                Text(model.repoID)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 6) {
+                    statusPill
+                    if let downloadedBytes = model.downloadedBytes {
+                        ModelPill(
+                            title: "\(ByteCountFormatter.string(fromByteCount: downloadedBytes, countStyle: .file)) on disk",
+                            systemImage: "internaldrive"
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 12)
+
+            if case let .downloading(_, isPaused) = model.state, !isDeleting {
+                ModelDownloadActionButton(
+                    title: isPaused ? "Resume download" : "Pause download",
+                    systemImage: isPaused ? "play.fill" : "pause.fill",
+                    tint: isPaused ? .green : .orange,
+                    action: onPauseResume
+                )
+            }
+
+            if isDeleting {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 30, height: 30)
+                    .help("Removing download")
+            } else {
+                ModelDownloadActionButton(
+                    title: deleteButtonTitle,
+                    systemImage: "trash",
+                    tint: .red
+                ) {
+                    showsDeleteConfirmation = true
+                }
+            }
+        }
+        .padding(14)
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .modelRowBackground(isHighlighted: false, isHovered: isHovered)
+        .alert(deleteConfirmationTitle, isPresented: $showsDeleteConfirmation) {
+            Button(deleteConfirmationButton, role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the partially downloaded files for \(model.repoID) from the local Hugging Face cache.")
+        }
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        switch model.state {
+        case let .downloading(progress, isPaused):
+            let percent = Int((progress * 100).rounded())
+            ModelPill(
+                title: isPaused ? "Paused \(percent)%" : "Downloading \(percent)%",
+                systemImage: isPaused ? "pause.circle" : "arrow.down.circle",
+                color: .accentColor
+            )
+        case .incomplete:
+            ModelPill(
+                title: "Incomplete download",
+                systemImage: "exclamationmark.triangle.fill",
+                color: .orange
+            )
+        }
+    }
+
+    private var isDownloading: Bool {
+        if case .downloading = model.state { return true }
+        return false
+    }
+
+    private var deleteButtonTitle: String {
+        isDownloading ? "Cancel and remove download" : "Remove incomplete download"
+    }
+
+    private var deleteConfirmationTitle: String {
+        isDownloading ? "Cancel downloading \(modelName(model.repoID))?" : "Remove \(modelName(model.repoID))?"
+    }
+
+    private var deleteConfirmationButton: String {
+        isDownloading ? "Cancel Download" : "Remove Files"
     }
 }
 

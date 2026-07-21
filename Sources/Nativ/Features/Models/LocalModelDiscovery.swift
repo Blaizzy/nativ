@@ -133,6 +133,27 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A model repository present in the cache that has not finished downloading —
+/// either currently in progress or a leftover partial from an interrupted run.
+struct IncompleteLocalModel: Identifiable, Equatable, Sendable {
+    var id: String { repoID }
+
+    let repoID: String
+    let provider: LocalModelProvider?
+    let downloadedBytes: Int64?
+    let snapshotURL: URL?
+    let modifiedAt: Date?
+}
+
+/// The outcome of a cache scan, split into fully installed models and partial
+/// downloads so the UI can surface and manage each independently.
+struct LocalModelScanResult: Equatable, Sendable {
+    let installed: [LocalModel]
+    let incomplete: [IncompleteLocalModel]
+
+    static let empty = LocalModelScanResult(installed: [], incomplete: [])
+}
+
 struct LocalModelMemoryEstimate: Equatable, Sendable {
     static let headroomFraction = 0.20
 
@@ -173,6 +194,10 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
 
 enum LocalModelDiscovery {
     static func scan(path: String) async throws -> [LocalModel] {
+        try await scanAll(path: path).installed
+    }
+
+    static func scanAll(path: String) async throws -> LocalModelScanResult {
         let expandedPath = Self.expandedPath(path)
         return try await Task.detached(priority: .userInitiated) {
             try Self.scanSynchronously(path: expandedPath)
@@ -218,7 +243,7 @@ enum LocalModelDiscovery {
         return (effectivePath as NSString).expandingTildeInPath
     }
 
-    private static func scanSynchronously(path: String) throws -> [LocalModel] {
+    private static func scanSynchronously(path: String) throws -> LocalModelScanResult {
         let fileManager = FileManager.default
         let rootURL = URL(fileURLWithPath: path, isDirectory: true)
         var isDirectory: ObjCBool = false
@@ -236,53 +261,129 @@ enum LocalModelDiscovery {
             options: [.skipsHiddenFiles]
         )
 
-        let models = repoURLs.compactMap { repoURL -> LocalModel? in
+        var installed: [LocalModel] = []
+        var incomplete: [IncompleteLocalModel] = []
+
+        for repoURL in repoURLs {
             guard repoURL.lastPathComponent.hasPrefix("models--"),
                   isDirectoryURL(repoURL, fileManager: fileManager),
                   let repoID = repoID(fromCacheDirectoryName: repoURL.lastPathComponent)
             else {
-                return nil
+                continue
             }
 
-            guard let snapshotURL = preferredSnapshotURL(for: repoURL, fileManager: fileManager),
-                  isLikelyMLXModelSnapshot(snapshotURL, fileManager: fileManager)
-            else {
-                return nil
-            }
+            let snapshotURL = preferredSnapshotURL(for: repoURL, fileManager: fileManager)
 
-            let modifiedAt = (try? snapshotURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            let memoryMetadata = modelMemoryMetadata(
+            if let snapshotURL, isLikelyMLXModelSnapshot(snapshotURL, fileManager: fileManager) {
+                installed.append(
+                    makeLocalModel(repoID: repoID, snapshotURL: snapshotURL, fileManager: fileManager)
+                )
+            } else if isIncompleteDownload(snapshotURL: snapshotURL, repoURL: repoURL, fileManager: fileManager) {
+                incomplete.append(
+                    makeIncompleteModel(repoID: repoID, snapshotURL: snapshotURL, fileManager: fileManager)
+                )
+            }
+        }
+
+        return LocalModelScanResult(
+            installed: installed.sorted { orderedByRepoID($0.repoID, $1.repoID) },
+            incomplete: incomplete.sorted { orderedByRepoID($0.repoID, $1.repoID) }
+        )
+    }
+
+    private static func makeLocalModel(
+        repoID: String,
+        snapshotURL: URL,
+        fileManager: FileManager
+    ) -> LocalModel {
+        let modifiedAt = (try? snapshotURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let memoryMetadata = modelMemoryMetadata(
+            repoID: repoID,
+            snapshotURL: snapshotURL,
+            fileManager: fileManager
+        )
+        return LocalModel(
+            repoID: repoID,
+            snapshotURL: snapshotURL,
+            modifiedAt: modifiedAt,
+            sizeBytes: snapshotSize(at: snapshotURL, fileManager: fileManager),
+            parameterCount: memoryMetadata.parameterCount,
+            quantizationBits: memoryMetadata.quantizationBits,
+            quantizationGroupSize: memoryMetadata.quantizationGroupSize,
+            contextSize: contextSize(at: snapshotURL, fileManager: fileManager),
+            provider: modelProvider(
                 repoID: repoID,
                 snapshotURL: snapshotURL,
                 fileManager: fileManager
-            )
-            return LocalModel(
-                repoID: repoID,
-                snapshotURL: snapshotURL,
-                modifiedAt: modifiedAt,
-                sizeBytes: snapshotSize(at: snapshotURL, fileManager: fileManager),
-                parameterCount: memoryMetadata.parameterCount,
-                quantizationBits: memoryMetadata.quantizationBits,
-                quantizationGroupSize: memoryMetadata.quantizationGroupSize,
-                contextSize: contextSize(at: snapshotURL, fileManager: fileManager),
-                provider: modelProvider(
-                    repoID: repoID,
-                    snapshotURL: snapshotURL,
-                    fileManager: fileManager
-                ),
-                capabilities: modelCapabilities(at: snapshotURL, fileManager: fileManager)
-            )
+            ),
+            capabilities: modelCapabilities(at: snapshotURL, fileManager: fileManager)
+        )
+    }
+
+    private static func makeIncompleteModel(
+        repoID: String,
+        snapshotURL: URL?,
+        fileManager: FileManager
+    ) -> IncompleteLocalModel {
+        let modifiedAt = snapshotURL.flatMap {
+            (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        }
+        let provider = snapshotURL.flatMap {
+            modelProvider(repoID: repoID, snapshotURL: $0, fileManager: fileManager)
+        } ?? LocalModelProviderResolver.resolve(repoID: repoID, modelType: nil, architectures: [])
+        let downloadedBytes = snapshotURL.flatMap {
+            snapshotSize(at: $0, fileManager: fileManager)
+        }
+        return IncompleteLocalModel(
+            repoID: repoID,
+            provider: provider,
+            downloadedBytes: downloadedBytes,
+            snapshotURL: snapshotURL,
+            modifiedAt: modifiedAt
+        )
+    }
+
+    /// Determines whether a cached repository is a partial download rather than a
+    /// usable model. Used to surface interrupted or in-progress downloads so the
+    /// user can remove them.
+    private static func isIncompleteDownload(
+        snapshotURL: URL?,
+        repoURL: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        // A sharded model whose weight index is present but whose shards have not
+        // all arrived yet is, by definition, still downloading.
+        if let snapshotURL,
+           safetensorsShardIndexIsComplete(at: snapshotURL, fileManager: fileManager) == false {
+            return true
         }
 
-        return models.sorted { lhs, rhs in
-            switch lhs.repoID.localizedCaseInsensitiveCompare(rhs.repoID) {
-            case .orderedAscending:
-                return true
-            case .orderedDescending:
-                return false
-            case .orderedSame:
-                return lhs.repoID < rhs.repoID
-            }
+        // huggingface_hub streams each file into a "<etag>.incomplete" blob and
+        // only finalizes it once the transfer succeeds, so a leftover marks an
+        // interrupted download.
+        return hasIncompleteBlob(in: repoURL, fileManager: fileManager)
+    }
+
+    private static func hasIncompleteBlob(in repoURL: URL, fileManager: FileManager) -> Bool {
+        let blobsURL = repoURL.appendingPathComponent("blobs", isDirectory: true)
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: blobsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        return contents.contains { $0.pathExtension == "incomplete" }
+    }
+
+    private static func orderedByRepoID(_ lhs: String, _ rhs: String) -> Bool {
+        switch lhs.localizedCaseInsensitiveCompare(rhs) {
+        case .orderedAscending:
+            return true
+        case .orderedDescending:
+            return false
+        case .orderedSame:
+            return lhs < rhs
         }
     }
 
@@ -1081,6 +1182,7 @@ enum LocalModelDiscoveryError: LocalizedError, Equatable {
 @MainActor
 final class LocalModelLibrary: ObservableObject {
     @Published private(set) var models: [LocalModel] = []
+    @Published private(set) var incompleteModels: [IncompleteLocalModel] = []
     @Published private(set) var isScanning = false
     @Published private(set) var deletingModelIDs = Set<String>()
     @Published private(set) var error: String?
@@ -1098,11 +1200,12 @@ final class LocalModelLibrary: ObservableObject {
 
         scanTask = Task { [weak self] in
             do {
-                let models = try await LocalModelDiscovery.scan(path: path)
+                let result = try await LocalModelDiscovery.scanAll(path: path)
                 guard !Task.isCancelled else {
                     return
                 }
-                self?.models = models
+                self?.models = result.installed
+                self?.incompleteModels = result.incomplete
                 self?.error = nil
             } catch is CancellationError {
                 return
@@ -1111,6 +1214,7 @@ final class LocalModelLibrary: ObservableObject {
                     return
                 }
                 self?.models = []
+                self?.incompleteModels = []
                 self?.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
 
@@ -1132,19 +1236,28 @@ final class LocalModelLibrary: ObservableObject {
         path: String,
         onCompletion: @escaping () -> Void
     ) {
-        guard !deletingModelIDs.contains(model.repoID) else { return }
-        deletingModelIDs.insert(model.repoID)
+        delete(repoID: model.repoID, path: path, onCompletion: onCompletion)
+    }
+
+    func delete(
+        repoID: String,
+        path: String,
+        onCompletion: @escaping () -> Void
+    ) {
+        guard !deletingModelIDs.contains(repoID) else { return }
+        deletingModelIDs.insert(repoID)
         error = nil
 
         Task { [weak self] in
             do {
-                try await LocalModelDiscovery.delete(repoID: model.repoID, path: path)
-                self?.models.removeAll { $0.repoID == model.repoID }
-                self?.deletingModelIDs.remove(model.repoID)
+                try await LocalModelDiscovery.delete(repoID: repoID, path: path)
+                self?.models.removeAll { $0.repoID == repoID }
+                self?.incompleteModels.removeAll { $0.repoID == repoID }
+                self?.deletingModelIDs.remove(repoID)
                 onCompletion()
             } catch {
-                self?.deletingModelIDs.remove(model.repoID)
-                self?.error = "Couldn’t delete \(model.repoID): \(error.localizedDescription)"
+                self?.deletingModelIDs.remove(repoID)
+                self?.error = "Couldn’t delete \(repoID): \(error.localizedDescription)"
             }
         }
     }
