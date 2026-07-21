@@ -141,7 +141,7 @@ struct ModelsView: View {
                                 selectedLanguageModelID: model.settings.normalized().languageModelID,
                                 isModelSwitchInProgress: model.modelSwitchInProgress,
                                 isDeleting: localLibrary.deletingModelIDs.contains(localModel.repoID),
-                                canDelete: !model.modelSwitchInProgress && !isModelInUse(localModel.repoID),
+                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress && !isModelInUse(localModel.repoID),
                                 onLoadModel: { model.switchLanguageModel(to: localModel.repoID) },
                                 onDelete: { deleteInstalledModel(localModel) }
                             )
@@ -290,6 +290,7 @@ struct ModelsView: View {
     }
 
     private func deleteInstalledModel(_ localModel: LocalModel) {
+        guard localModel.isDeletable else { return }
         localLibrary.delete(
             model: localModel,
             path: model.settings.modelSearchPath
@@ -318,6 +319,7 @@ struct ModelsView: View {
             ? localLibrary.models
             : localLibrary.models.filter {
                 $0.repoID.localizedCaseInsensitiveContains(query)
+                    || $0.displayName.localizedCaseInsensitiveContains(query)
                     || $0.provider?.displayName.localizedCaseInsensitiveContains(query) == true
             }
 
@@ -641,9 +643,16 @@ private struct InstalledModelRow: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 7) {
-                            Text(modelName(localModel.repoID))
+                            Text(modelName(localModel.displayName))
                                 .font(.body.weight(.semibold))
                                 .lineLimit(1)
+                            if let sourceLabel = localModel.source.badgeLabel {
+                                ModelPill(
+                                    title: sourceLabel,
+                                    systemImage: "cube",
+                                    color: .purple
+                                )
+                            }
                             if isLoading {
                                 ModelPill(
                                     title: "Loading model",

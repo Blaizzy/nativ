@@ -42,6 +42,18 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     }
 }
 
+enum LocalModelSource: String, Equatable, Sendable {
+    case huggingFaceCache
+    case lmStudio
+
+    var badgeLabel: String? {
+        switch self {
+        case .huggingFaceCache: nil
+        case .lmStudio: "LM Studio"
+        }
+    }
+}
+
 struct LocalModel: Identifiable, Equatable, Sendable {
     var id: String { repoID }
 
@@ -55,6 +67,19 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     let contextSize: Int?
     let provider: LocalModelProvider?
     let capabilities: Set<LocalModelCapability>
+    var source: LocalModelSource = .huggingFaceCache
+
+    var displayName: String {
+        guard source != .huggingFaceCache, let snapshotURL else {
+            return repoID
+        }
+        let components = snapshotURL.standardizedFileURL.pathComponents.suffix(2)
+        return components.joined(separator: "/")
+    }
+
+    var isDeletable: Bool {
+        source == .huggingFaceCache
+    }
 
     var isEligibleForLanguageModelPicker: Bool {
         !capabilities.contains(.speechToText)
@@ -172,10 +197,23 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
 }
 
 enum LocalModelDiscovery {
+    static let lmStudioModelRoots = [
+        "~/.lmstudio/models",
+        "~/.cache/lm-studio/models"
+    ]
+
     static func scan(path: String) async throws -> [LocalModel] {
         let expandedPath = Self.expandedPath(path)
         return try await Task.detached(priority: .userInitiated) {
-            try Self.scanSynchronously(path: expandedPath)
+            let externalModels = Self.scanLMStudioSynchronously(fileManager: FileManager.default)
+            do {
+                return Self.sortedByDisplayName(try Self.scanSynchronously(path: expandedPath) + externalModels)
+            } catch {
+                guard !externalModels.isEmpty else {
+                    throw error
+                }
+                return Self.sortedByDisplayName(externalModels)
+            }
         }.value
     }
 
@@ -274,8 +312,12 @@ enum LocalModelDiscovery {
             )
         }
 
-        return models.sorted { lhs, rhs in
-            switch lhs.repoID.localizedCaseInsensitiveCompare(rhs.repoID) {
+        return models
+    }
+
+    private static func sortedByDisplayName(_ models: [LocalModel]) -> [LocalModel] {
+        models.sorted { lhs, rhs in
+            switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
             case .orderedAscending:
                 return true
             case .orderedDescending:
@@ -286,11 +328,90 @@ enum LocalModelDiscovery {
         }
     }
 
+    private static func scanLMStudioSynchronously(fileManager: FileManager) -> [LocalModel] {
+        var models: [LocalModel] = []
+        var seenPaths = Set<String>()
+
+        for root in lmStudioModelRoots {
+            let rootURL = URL(
+                fileURLWithPath: (root as NSString).expandingTildeInPath,
+                isDirectory: true
+            )
+            guard isDirectoryURL(rootURL, fileManager: fileManager),
+                  let publisherURLs = try? fileManager.contentsOfDirectory(
+                      at: rootURL,
+                      includingPropertiesForKeys: [.isDirectoryKey],
+                      options: [.skipsHiddenFiles]
+                  )
+            else {
+                continue
+            }
+
+            for publisherURL in publisherURLs where isDirectoryURL(publisherURL, fileManager: fileManager) {
+                guard let modelURLs = try? fileManager.contentsOfDirectory(
+                    at: publisherURL,
+                    includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    continue
+                }
+
+                for modelURL in modelURLs where isDirectoryURL(modelURL, fileManager: fileManager) {
+                    let standardizedPath = modelURL.standardizedFileURL.path
+                    guard !seenPaths.contains(standardizedPath),
+                          isLikelyMLXModelSnapshot(modelURL, fileManager: fileManager)
+                    else {
+                        continue
+                    }
+                    seenPaths.insert(standardizedPath)
+
+                    let hubStyleID = "\(publisherURL.lastPathComponent)/\(modelURL.lastPathComponent)"
+                    let modifiedAt = (try? modelURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                    let memoryMetadata = modelMemoryMetadata(
+                        repoID: hubStyleID,
+                        snapshotURL: modelURL,
+                        fileManager: fileManager
+                    )
+                    models.append(LocalModel(
+                        repoID: standardizedPath,
+                        snapshotURL: modelURL,
+                        modifiedAt: modifiedAt,
+                        sizeBytes: snapshotSize(at: modelURL, fileManager: fileManager),
+                        parameterCount: memoryMetadata.parameterCount,
+                        quantizationBits: memoryMetadata.quantizationBits,
+                        quantizationGroupSize: memoryMetadata.quantizationGroupSize,
+                        contextSize: contextSize(at: modelURL, fileManager: fileManager),
+                        provider: modelProvider(
+                            repoID: hubStyleID,
+                            snapshotURL: modelURL,
+                            fileManager: fileManager
+                        ),
+                        capabilities: modelCapabilities(at: modelURL, fileManager: fileManager),
+                        source: .lmStudio
+                    ))
+                }
+            }
+        }
+        return models
+    }
+
     private static func configurationMetadataSynchronously(
         repoID: String,
         path: String
     ) -> LocalModelConfigurationMetadata? {
         let fileManager = FileManager.default
+
+        if repoID.hasPrefix("/") {
+            let directURL = URL(fileURLWithPath: repoID, isDirectory: true)
+            guard isDirectoryURL(directURL, fileManager: fileManager) else {
+                return nil
+            }
+            return LocalModelConfigurationMetadata(
+                contextSize: contextSizeFromConfig(at: directURL, fileManager: fileManager),
+                defaultSystemPrompt: defaultSystemPrompt(at: directURL, fileManager: fileManager)
+            )
+        }
+
         let repositoryName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
         let repositoryURL = URL(fileURLWithPath: path, isDirectory: true)
             .appendingPathComponent(repositoryName, isDirectory: true)
