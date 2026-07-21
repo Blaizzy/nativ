@@ -224,7 +224,15 @@ enum IssueReportBuilder {
             parts.append("<details>\n<summary>Server output (last \(serverOutput.count) lines)</summary>\n\n```\n\(log)\n```\n\n</details>")
         }
 
-        return parts.joined(separator: "\n\n")
+        return redactingHomeDirectory(parts.joined(separator: "\n\n"))
+    }
+
+    static func redactingHomeDirectory(_ text: String) -> String {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        guard homePath.count > 1 else {
+            return text
+        }
+        return text.replacingOccurrences(of: homePath, with: "~")
     }
 
     static func githubIssueURL(title: String, label: String, body: String) -> URL? {
