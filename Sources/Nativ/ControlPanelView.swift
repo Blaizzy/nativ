@@ -69,6 +69,7 @@ struct ControlPanelView: View {
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
     @State private var isNewChatHovering = false
+    @State private var showsIssueReport = false
     private let sidebarItemInsets = EdgeInsets(top: -1, leading: 0, bottom: -1, trailing: 0)
 
     var body: some View {
@@ -80,6 +81,9 @@ struct ControlPanelView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 1040, minHeight: 600)
+        .sheet(isPresented: $showsIssueReport) {
+            IssueReportView(model: model, runtime: runtime)
+        }
         .background {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
@@ -169,6 +173,24 @@ struct ControlPanelView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             if isFullScreen {
                 Color.clear.frame(height: 28)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    showsIssueReport = true
+                } label: {
+                    Label("Report an Issue", systemImage: "exclamationmark.bubble")
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .help("Report a problem with prefilled app diagnostics")
             }
         }
         .navigationTitle("Nativ")
