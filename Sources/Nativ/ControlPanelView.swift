@@ -69,7 +69,6 @@ struct ControlPanelView: View {
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
     @State private var isNewChatHovering = false
-    @State private var showsIssueReport = false
     private let sidebarItemInsets = EdgeInsets(top: -1, leading: 0, bottom: -1, trailing: 0)
 
     var body: some View {
@@ -81,9 +80,6 @@ struct ControlPanelView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 1040, minHeight: 600)
-        .sheet(isPresented: $showsIssueReport) {
-            IssueReportView(model: model, runtime: runtime)
-        }
         .background {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
@@ -179,9 +175,9 @@ struct ControlPanelView: View {
             VStack(spacing: 0) {
                 Divider()
                 Button {
-                    showsIssueReport = true
+                    reportIssue()
                 } label: {
-                    Label("Report an Issue", systemImage: "exclamationmark.bubble")
+                    Label("Report an Issue", systemImage: "ladybug")
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
@@ -190,11 +186,29 @@ struct ControlPanelView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .help("Report a problem with prefilled app diagnostics")
+                .help("Open a prefilled GitHub issue with app diagnostics")
             }
         }
         .navigationTitle("Nativ")
         .background(ControlPanelSidebarSurfaceReader())
+    }
+
+    private func reportIssue() {
+        let category = IssueReportCategory.appInteraction
+        let body = IssueReportBuilder.markdown(
+            category: category,
+            details: "",
+            sections: IssueDiagnostics.collect(category: category, model: model, runtime: runtime),
+            serverOutput: IssueDiagnostics.serverOutputTail(model: model)
+        )
+        guard let url = IssueReportBuilder.githubIssueURL(
+            title: "",
+            label: category.githubLabel,
+            body: body
+        ) else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private var recentSessions: [ControlPanelRecentSession] {
