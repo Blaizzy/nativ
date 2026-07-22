@@ -61,3 +61,32 @@ enum HuggingFaceCache {
         return trimmed
     }
 }
+
+/// Resolves and applies Hugging Face authentication without persisting tokens
+/// discovered in the process or login-shell environment.
+enum HuggingFaceAuthentication {
+    static let environmentVariableName = "HF_TOKEN"
+
+    static func token(
+        in environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        normalizedToken(environment[environmentVariableName])
+    }
+
+    static func effectiveToken(customToken: String?, environmentToken: String?) -> String? {
+        normalizedToken(customToken) ?? normalizedToken(environmentToken)
+    }
+
+    static func authorize(_ request: inout URLRequest, token: String?) {
+        guard let token = normalizedToken(token) else { return }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    static func normalizedToken(_ token: String?) -> String? {
+        guard let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+}

@@ -40,7 +40,6 @@ final class ImageGenerationViewModel: ObservableObject {
     @Published private(set) var statusText: String?
     @Published private(set) var errorText: String?
 
-    private let client = NativImageClient()
     private let sessionStore = ImageGenerationSessionStore()
     private var activeTask: Task<Void, Never>?
     private var storedSessions: [ImageGenerationSession] = []
@@ -206,6 +205,7 @@ final class ImageGenerationViewModel: ObservableObject {
         persistCurrentSession(updateTimestamp: true)
 
         activeTask?.cancel()
+        let client = NativImageClient(baseURL: appModel.settings.serverBaseURL)
         activeTask = Task { @MainActor [weak self, weak appModel] in
             guard let self else {
                 return

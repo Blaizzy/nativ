@@ -811,7 +811,7 @@ private struct ChatModelPickerLabel: View {
         guard supportsReasoning else {
             return modelName
         }
-        return modelName + Text("  \(reasoningLevel.rawValue)").foregroundColor(.secondary)
+        return Text("\(modelName)  \(reasoningLevel.rawValue)").foregroundColor(.secondary)
     }
 
 }

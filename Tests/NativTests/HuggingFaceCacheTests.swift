@@ -119,3 +119,49 @@ final class HuggingFaceCacheTests: XCTestCase {
         )
     }
 }
+
+final class HuggingFaceAuthenticationTests: XCTestCase {
+    func testTokenReadsAndTrimsHFToken() {
+        XCTAssertEqual(
+            HuggingFaceAuthentication.token(in: ["HF_TOKEN": "  hf_example\n"]),
+            "hf_example"
+        )
+    }
+
+    func testTokenIgnoresMissingAndBlankValues() {
+        XCTAssertNil(HuggingFaceAuthentication.token(in: [:]))
+        XCTAssertNil(HuggingFaceAuthentication.token(in: ["HF_TOKEN": " \n "]))
+    }
+
+    func testCustomTokenOverridesEnvironmentToken() {
+        XCTAssertEqual(
+            HuggingFaceAuthentication.effectiveToken(
+                customToken: "hf_custom",
+                environmentToken: "hf_environment"
+            ),
+            "hf_custom"
+        )
+    }
+
+    func testBlankCustomTokenFallsBackToEnvironmentToken() {
+        XCTAssertEqual(
+            HuggingFaceAuthentication.effectiveToken(
+                customToken: "  ",
+                environmentToken: "hf_environment"
+            ),
+            "hf_environment"
+        )
+    }
+
+    func testAuthorizeAddsBearerHeader() {
+        var request = URLRequest(url: URL(string: "https://huggingface.co/api/models")!)
+        HuggingFaceAuthentication.authorize(&request, token: " hf_example ")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer hf_example")
+    }
+
+    func testAuthorizeIgnoresBlankToken() {
+        var request = URLRequest(url: URL(string: "https://huggingface.co/api/models")!)
+        HuggingFaceAuthentication.authorize(&request, token: " ")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+}

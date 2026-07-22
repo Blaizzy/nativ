@@ -4,12 +4,15 @@ import NativServerKit
 import SwiftUI
 
 struct DeveloperView: View {
+    private static let configurationToggleClearance: CGFloat = 36
+
     @ObservedObject var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
     @State private var logQuery = ""
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
+    @State private var isSelectedPortAvailable = true
 
     var body: some View {
         ModelConfigurationLayout(
@@ -22,8 +25,9 @@ struct DeveloperView: View {
                         pageHeader
                         runtimeGrid
                         serverEndpointsPanel
+                        huggingFaceAuthenticationPanel
                         logPanel
-                            .frame(height: max(320, geometry.size.height - 430))
+                            .frame(height: max(320, geometry.size.height - 550))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 22)
@@ -40,7 +44,7 @@ struct DeveloperView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Developer")
                     .font(.title2.weight(.semibold))
-                Text("Runtime diagnostics, API endpoints, and live server output.")
+                Text("Runtime diagnostics, Hub authentication, API endpoints, and live server output.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -54,6 +58,7 @@ struct DeveloperView: View {
                 .padding(.vertical, 5)
                 .background(Capsule().fill(Color.secondary.opacity(0.10)))
         }
+        .padding(.trailing, Self.configurationToggleClearance)
     }
 
     private var runtimeGrid: some View {
@@ -63,34 +68,27 @@ struct DeveloperView: View {
             spacing: 10
         ) {
             RuntimeInfoCard(
-                title: "Apple chip",
                 value: runtime.chipName,
-                detail: "Apple silicon",
                 systemImage: "cpu",
                 tint: .blue
             )
 
             RuntimeInfoCard(
-                title: "Memory",
                 value: "\(byteCount(runtime.usedMemoryBytes)) of \(byteCount(runtime.totalMemoryBytes))",
-                detail: "\(memoryUsagePercent)%",
                 systemImage: "memorychip",
                 tint: memoryUsageTint,
-                progress: runtime.memoryUsageFraction
+                progress: runtime.memoryUsageFraction,
+                progressLabel: "\(memoryUsagePercent)%"
             )
 
             RuntimeInfoCard(
-                title: "macOS",
-                value: runtime.macOSVersion,
-                detail: runtime.macOSBuild,
+                value: "macOS \(runtime.macOSVersion)",
                 systemImage: "macbook",
                 tint: .teal
             )
 
             RuntimeInfoCard(
-                title: "mlx-vlm",
-                value: runtime.mlxVLMVersion,
-                detail: "Bundled runtime",
+                value: "mlx-vlm \(runtime.mlxVLMVersion)",
                 systemImage: "shippingbox",
                 tint: .orange
             )
@@ -136,6 +134,16 @@ struct DeveloperView: View {
         )
     }
 
+    private var huggingFaceAuthenticationPanel: some View {
+        HuggingFaceAuthenticationPanel(
+            customToken: Binding(
+                get: { model.settings.huggingFaceToken ?? "" },
+                set: { model.settings.huggingFaceToken = $0.isEmpty ? nil : $0 }
+            ),
+            hasEnvironmentToken: model.environmentHuggingFaceToken != nil
+        )
+    }
+
     private var serverEndpointsPanel: some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
@@ -144,8 +152,10 @@ struct DeveloperView: View {
 
                     endpointCategoryPicker
                         .frame(width: 300, alignment: .leading)
+
+                    serverPortField
                 }
-                .frame(width: 560, alignment: .leading)
+                .frame(width: 660, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 9) {
                     endpointPanelTitle
@@ -153,6 +163,8 @@ struct DeveloperView: View {
                     HStack(spacing: 10) {
                         endpointCategoryPicker
                             .frame(width: 320)
+
+                        serverPortField
 
                         Spacer()
                     }
@@ -162,23 +174,32 @@ struct DeveloperView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
+            if showsPortInUseWarning {
+                Label(
+                    "Port \(String(model.settings.normalized().serverPort)) is already in use — that port can’t be used.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+            }
+
             Divider()
 
-            ScrollView {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 245), spacing: 8)],
-                    alignment: .leading,
-                    spacing: 8
-                ) {
-                    ForEach(ServerEndpoint.endpoints(in: selectedEndpointCategory)) { endpoint in
-                        ServerEndpointRow(endpoint: endpoint) {
-                            copyEndpoint(endpoint)
-                        }
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 245), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(ServerEndpoint.endpoints(in: selectedEndpointCategory)) { endpoint in
+                    ServerEndpointRow(endpoint: endpoint, baseURL: model.settings.serverBaseURL) {
+                        copyEndpoint(endpoint)
                     }
                 }
-                .padding(10)
             }
-            .frame(height: endpointListHeight)
+            .padding(10)
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -194,13 +215,42 @@ struct DeveloperView: View {
                 .foregroundStyle(.blue)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Server endpoints")
+                Text("Server Endpoints")
                     .font(.callout.weight(.semibold))
-                Text(ServerEndpoint.baseURL.absoluteString)
+                Text(model.settings.serverBaseURL.absoluteString)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var serverPortField: some View {
+        HStack(spacing: 6) {
+            Text("Port")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            TextField("", value: $model.settings.serverPort, format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.monospaced())
+                .multilineTextAlignment(.trailing)
+                .frame(width: 64)
+                .onChange(of: model.settings.serverPort) { _, newValue in
+                    model.settings.serverPort = min(max(newValue, 1), 65_535)
+                }
+        }
+        .help("The local server listens at 127.0.0.1 on this port. Changing it requires a server restart.")
+        .task(id: model.settings.normalized().serverPort) {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let port = model.settings.normalized().serverPort
+            let available = await Task.detached { ServerPortProbe.isAvailable(port) }.value
+            guard !Task.isCancelled else { return }
+            isSelectedPortAvailable = available
+        }
+    }
+
+    private var showsPortInUseWarning: Bool {
+        !isSelectedPortAvailable && model.settings.normalized().serverPort != model.activeServerPort
     }
 
     private var endpointCategoryPicker: some View {
@@ -211,14 +261,6 @@ struct DeveloperView: View {
         }
         .labelsHidden()
         .pickerStyle(.segmented)
-    }
-
-    private var endpointListHeight: CGFloat {
-        switch selectedEndpointCategory {
-        case .openAI: 148
-        case .anthropic: 50
-        case .metrics: 86
-        }
     }
 
     private func logPanelToolbar(_ output: LogOutput) -> some View {
@@ -261,7 +303,7 @@ struct DeveloperView: View {
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Server output")
+                Text("Server Output")
                     .font(.callout.weight(.semibold))
                 Text(logSummary(output))
                     .font(.caption)
@@ -339,19 +381,167 @@ struct DeveloperView: View {
     private func copyEndpoint(_ endpoint: ServerEndpoint) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(endpoint.absoluteURL, forType: .string)
+        pasteboard.setString(endpoint.absoluteURL(baseURL: model.settings.serverBaseURL), forType: .string)
+    }
+}
+
+private struct HuggingFaceAuthenticationPanel: View {
+    @Binding var customToken: String
+    let hasEnvironmentToken: Bool
+    @State private var isCustomTokenExpanded: Bool
+    @State private var hasSelectedDisclosureState = false
+
+    init(customToken: Binding<String>, hasEnvironmentToken: Bool) {
+        _customToken = customToken
+        self.hasEnvironmentToken = hasEnvironmentToken
+        _isCustomTokenExpanded = State(initialValue: !hasEnvironmentToken)
+    }
+
+    private var hasCustomToken: Bool {
+        HuggingFaceAuthentication.normalizedToken(customToken) != nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "key.horizontal")
+                    .foregroundStyle(.purple)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Hugging Face Authentication")
+                        .font(.callout.weight(.semibold))
+                    Text("Authenticate Hub requests and downloads for gated models.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Label(authenticationStatus, systemImage: authenticationStatusImage)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(authenticationStatusColor)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isCustomTokenExpanded.toggle()
+                        hasSelectedDisclosureState = true
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(isCustomTokenExpanded ? 90 : 0))
+                            .frame(width: 10)
+
+                        Text("Use Custom Token")
+                            .font(.callout.weight(.medium))
+
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Use Custom Token")
+                .accessibilityValue(isCustomTokenExpanded ? "Expanded" : "Collapsed")
+
+                if isCustomTokenExpanded {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 8) {
+                            SecureField("Enter token", text: $customToken)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.callout.monospaced())
+                                .privacySensitive()
+                                .accessibilityLabel("Custom Hugging Face token")
+
+                            if hasCustomToken {
+                                Button {
+                                    customToken = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(.secondary)
+                                .help("Clear custom token")
+                            }
+
+                            Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
+                                Label("Manage Tokens", systemImage: "arrow.up.right")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Text(authenticationDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 10)
+                    .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .onChange(of: hasEnvironmentToken) { wasAvailable, isAvailable in
+            if !wasAvailable && isAvailable && !hasSelectedDisclosureState {
+                isCustomTokenExpanded = false
+            }
+        }
+        .onChange(of: customToken) { oldValue, newValue in
+            if oldValue != newValue {
+                hasSelectedDisclosureState = true
+            }
+        }
+    }
+
+    private var authenticationStatus: String {
+        if hasCustomToken { return "Custom Token" }
+        if hasEnvironmentToken { return "HF_TOKEN" }
+        return "Not Configured"
+    }
+
+    private var authenticationStatusImage: String {
+        hasCustomToken || hasEnvironmentToken ? "checkmark.circle.fill" : "circle.dashed"
+    }
+
+    private var authenticationStatusColor: Color {
+        hasCustomToken || hasEnvironmentToken ? .green : .secondary
+    }
+
+    private var authenticationDetail: String {
+        if hasCustomToken && hasEnvironmentToken {
+            return "The custom token overrides HF_TOKEN from your environment. Access to a gated model must also be approved on Hugging Face."
+        }
+        if hasCustomToken {
+            return "Using the custom token. Access to a gated model must also be approved on Hugging Face."
+        }
+        if hasEnvironmentToken {
+            return "Using HF_TOKEN from your process or login-shell environment. Enter a custom token above to override it."
+        }
+        return "Set HF_TOKEN in your environment or enter a custom token. Access to a gated model must also be approved on Hugging Face."
     }
 }
 
 private struct ServerEndpoint: Identifiable {
-    static let baseURL = URL(string: "http://127.0.0.1:8080")!
-
     let method: ServerEndpointMethod
     let path: String
     let category: ServerEndpointCategory
 
     var id: String { "\(method.rawValue):\(path)" }
-    var absoluteURL: String { Self.baseURL.absoluteString + path }
+
+    func absoluteURL(baseURL: URL) -> String { baseURL.absoluteString + path }
 
     static func endpoints(in category: ServerEndpointCategory) -> [ServerEndpoint] {
         supported.filter { $0.category == category }
@@ -414,6 +604,7 @@ private enum ServerEndpointMethod: String {
 
 private struct ServerEndpointRow: View {
     let endpoint: ServerEndpoint
+    let baseURL: URL
     let copyAction: () -> Void
     @State private var isHovering = false
 
@@ -447,7 +638,7 @@ private struct ServerEndpointRow: View {
                 .fill(isHovering ? Color.secondary.opacity(0.08) : .clear)
         )
         .onHover { isHovering = $0 }
-        .help("Copy \(endpoint.absoluteURL)")
+        .help("Copy \(endpoint.absoluteURL(baseURL: baseURL))")
     }
 }
 
@@ -612,26 +803,21 @@ private struct LogToolbarActionButton: View {
 }
 
 private struct RuntimeInfoCard: View {
-    let title: String
     let value: String
-    let detail: String
     let systemImage: String
     let tint: Color
     var progress: Double?
+    var progressLabel: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: progress == nil ? .center : .top, spacing: 10) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(tint.opacity(0.12)))
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-
+            VStack(alignment: .leading, spacing: 4) {
                 Text(value)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
@@ -643,25 +829,21 @@ private struct RuntimeInfoCard: View {
                             .progressViewStyle(.linear)
                             .tint(tint)
 
-                        Text(detail)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .fixedSize()
+                        if let progressLabel {
+                            Text(progressLabel)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
                     }
-                        .padding(.top, 2)
-                } else {
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(11)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(height: 82, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 64, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 11)
                 .fill(Color(nsColor: .controlBackgroundColor))

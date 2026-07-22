@@ -37,6 +37,17 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "51AD42FA29E71F2450386688"
+               BuildableName = "NativTests.xctest"
+               BlueprintName = "NativTests"
+               ReferencedContainer = "container:Nativ.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

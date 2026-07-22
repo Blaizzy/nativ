@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import NativServerKit
 
-enum HuggingFaceModelSort: String, CaseIterable, Identifiable, Sendable {
+enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendable {
     case downloads
     case trending = "trendingScore"
     case likes
@@ -138,7 +138,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         return LocalModelMemoryEstimate(
             estimatedModelBytes: UInt64(estimatedModelBytes.rounded(.up)),
             memoryBudgetBytes: memoryBudgetBytes,
-            totalMemoryBytes: totalMemoryBytes
+            totalMemoryBytes: totalMemoryBytes,
+            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
         )
     }
 
@@ -303,7 +304,11 @@ enum HuggingFaceHubError: LocalizedError {
 }
 
 private struct HuggingFaceHubClient: Sendable {
-    func search(query: String, sort: HuggingFaceModelSort) async throws -> HuggingFaceModelPage {
+    func search(
+        query: String,
+        sort: HuggingFaceModelSort,
+        token: String?
+    ) async throws -> HuggingFaceModelPage {
         var components = URLComponents()
         components.scheme = "https"
         components.host = "huggingface.co"
@@ -329,14 +334,15 @@ private struct HuggingFaceHubClient: Sendable {
             throw HuggingFaceHubError.invalidResponse
         }
 
-        return try await page(at: url)
+        return try await page(at: url, token: token)
     }
 
-    func page(at url: URL) async throws -> HuggingFaceModelPage {
+    func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("MLXPlatform/1.0", forHTTPHeaderField: "User-Agent")
+        HuggingFaceAuthentication.authorize(&request, token: token)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HuggingFaceHubError.invalidResponse
@@ -397,7 +403,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         searchTask?.cancel()
     }
 
-    func search(query: String, sort: HuggingFaceModelSort) {
+    func search(query: String, sort: HuggingFaceModelSort, token: String?) {
         searchTask?.cancel()
         isSearching = true
         error = nil
@@ -408,8 +414,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
         searchTask = Task { [weak self] in
             do {
-                guard let self else { return }
-                let page = try await self.client.search(query: query, sort: sort)
+                let page = try await client.search(query: query, sort: sort, token: token)
                 try Task.checkCancellation()
                 self.buffer = page.models
                 self.nextPageURL = page.nextPageURL
@@ -446,7 +451,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         error = nil
     }
 
-    func goToNextPage() {
+    func goToNextPage(token: String?) {
         guard canGoToNextPage else { return }
         let target = pageNumber + 1
 
@@ -463,8 +468,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
         searchTask = Task { [weak self] in
             do {
-                guard let self else { return }
-                try await self.fillBuffer(upTo: target * self.pageSize)
+                let page = try await client.page(at: nextPageURL, token: token)
                 try Task.checkCancellation()
                 let nextModels = self.slice(forPage: target)
                 if !nextModels.isEmpty {
@@ -519,19 +523,26 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private var downloadTask: Task<Void, Never>?
     private var activeOperation: HuggingFaceDownloadOperation?
     private var activeCachePath: String?
+    private var activeToken: String?
     private var activeCompletion: (() -> Void)?
 
     deinit {
         downloadTask?.cancel()
     }
 
-    func download(repoID: String, cachePath: String, onCompletion: @escaping () -> Void) {
+    func download(
+        repoID: String,
+        cachePath: String,
+        token: String?,
+        onCompletion: @escaping () -> Void
+    ) {
         guard downloadingModelID == nil else { return }
         downloadingModelID = repoID
         downloadProgress = 0
         isDownloadPaused = false
         errorByModelID[repoID] = nil
         activeCachePath = LocalModelDiscovery.expandedPath(cachePath)
+        activeToken = HuggingFaceAuthentication.normalizedToken(token)
         activeCompletion = onCompletion
 
         startActiveDownload()
@@ -571,7 +582,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
         do {
             operation = try HuggingFaceDownloadOperation(
                 repoID: repoID,
-                cachePath: cachePath
+                cachePath: cachePath,
+                token: activeToken
             ) { progress in
                 Task { @MainActor [weak self] in
                     guard self?.downloadingModelID == repoID else { return }
@@ -611,6 +623,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         isDownloadPaused = false
         activeOperation = nil
         activeCachePath = nil
+        activeToken = nil
         activeCompletion = nil
     }
 }
@@ -649,6 +662,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     init(
         repoID: String,
         cachePath: String,
+        token: String?,
         progress: @escaping @Sendable (Double) -> Void
     ) throws {
         let distributionURL = try Nativ.distributionURL()
@@ -718,6 +732,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         environment["PYTHONUNBUFFERED"] = "1"
         environment["HF_HUB_CACHE"] = cachePath
         environment["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        if let token = HuggingFaceAuthentication.normalizedToken(token) {
+            environment[HuggingFaceAuthentication.environmentVariableName] = token
+        }
         process.environment = environment
         self.process = process
         self.progress = progress

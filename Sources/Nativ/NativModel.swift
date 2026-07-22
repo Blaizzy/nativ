@@ -23,6 +23,7 @@ final class NativModel: ObservableObject {
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     @Published private(set) var modelSwitchInProgress = false
     @Published private(set) var metricsLoading = false
+    @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
     @Published var settings = NativSettings.load() {
         didSet {
             settings.save()
@@ -33,11 +34,12 @@ final class NativModel: ObservableObject {
     var onMenuStateChanged: (() -> Void)?
 
     private let server = NativProcessController()
-    private let metricsClient = NativMetricsClient()
+    private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
     private var metricsTimer: Timer?
     private var metricsStartupGraceUntil: Date?
     private var settingsAppliedAtServerStart: NativSettings?
+    private var huggingFaceTokenAppliedAtServerStart: String?
     private var previousSessionPromptTokenCount: Int?
     private var previousSessionGeneratedTokenCount: Int?
     private var preservedSessionMetrics: NativMetrics?
@@ -52,31 +54,56 @@ final class NativModel: ObservableObject {
         allTimeStats = NativAllTimeStats.load(from: currentAnalyticsDatabaseURL())
         configureServerCallbacks()
         isRunning = server.isRunning
-        resolveHubCacheFromShellEnvironment()
+        resolveHuggingFaceEnvironmentFromLoginShell()
     }
 
     /// GUI apps inherit launchd's environment, which excludes exports from
-    /// shell startup files. When the process environment doesn't configure
-    /// the Hugging Face cache, probe the user's login shell once and adopt
-    /// its HF_HOME/HF_HUB_CACHE if present. `resolvedSearchPath` only
-    /// migrates the legacy default, so user-customized paths are preserved.
-    private func resolveHubCacheFromShellEnvironment() {
-        guard !HuggingFaceCache.isConfigured() else { return }
-        Task.detached(priority: .utility) { [weak self] in
-            let shellEnvironment = ShellEnvironment.resolveFromLoginShell(
-                names: HuggingFaceCache.environmentVariableNames
-            )
+    /// shell startup files. Probe the user's login shell once for any missing
+    /// Hugging Face cache or authentication variables. Environment tokens stay
+    /// in memory; only a token entered in Developer settings is persisted.
+    private func resolveHuggingFaceEnvironmentFromLoginShell() {
+        let processEnvironment = ProcessInfo.processInfo.environment
+        let needsCacheEnvironment = !HuggingFaceCache.isConfigured(in: processEnvironment)
+        let needsTokenEnvironment = HuggingFaceAuthentication.token(in: processEnvironment) == nil
+        guard needsCacheEnvironment || needsTokenEnvironment else { return }
+
+        var names: [String] = []
+        if needsCacheEnvironment {
+            names.append(contentsOf: HuggingFaceCache.environmentVariableNames)
+        }
+        if needsTokenEnvironment {
+            names.append(HuggingFaceAuthentication.environmentVariableName)
+        }
+
+        let environmentVariableNames = names
+        Task { [weak self] in
+            let shellEnvironment = await Task.detached(priority: .utility) {
+                ShellEnvironment.resolveFromLoginShell(names: environmentVariableNames)
+            }.value
             guard !shellEnvironment.isEmpty else { return }
-            await MainActor.run {
-                guard let self else { return }
+            guard let self else { return }
+            if needsCacheEnvironment {
                 let resolved = HuggingFaceCache.resolvedSearchPath(
                     stored: self.settings.modelSearchPath,
                     environment: shellEnvironment
                 )
-                guard resolved != self.settings.modelSearchPath else { return }
-                self.settings.modelSearchPath = resolved
+                if resolved != self.settings.modelSearchPath {
+                    self.settings.modelSearchPath = resolved
+                }
+            }
+            if needsTokenEnvironment {
+                self.environmentHuggingFaceToken = HuggingFaceAuthentication.token(
+                    in: shellEnvironment
+                )
             }
         }
+    }
+
+    var effectiveHuggingFaceToken: String? {
+        HuggingFaceAuthentication.effectiveToken(
+            customToken: settings.huggingFaceToken,
+            environmentToken: environmentHuggingFaceToken
+        )
     }
 
     var metricsAreStale: Bool {
@@ -119,24 +146,38 @@ final class NativModel: ObservableObject {
             return false
         }
         return !settings.hasSameLaunchConfiguration(as: settingsAppliedAtServerStart)
+            || effectiveHuggingFaceToken != huggingFaceTokenAppliedAtServerStart
+    }
+
+    var activeServerPort: Int? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.normalized().serverPort
     }
 
     func startServer() {
         var shouldStartMetrics = false
+        metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
+            if let effectiveHuggingFaceToken {
+                launchEnvironment[HuggingFaceAuthentication.environmentVariableName] = effectiveHuggingFaceToken
+            }
             try server.start(
                 arguments: settings.launchArguments,
                 environment: launchEnvironment
             )
             isRunning = true
             settingsAppliedAtServerStart = settings.normalized()
+            huggingFaceTokenAppliedAtServerStart = effectiveHuggingFaceToken
             appendLog("\nStarted mlx-vlm-server.\n")
             shouldStartMetrics = true
         } catch NativError.alreadyRunning {
             isRunning = true
             settingsAppliedAtServerStart = settings.normalized()
+            huggingFaceTokenAppliedAtServerStart = effectiveHuggingFaceToken
             appendLog("\nmlx-vlm-server is already running.\n")
             shouldStartMetrics = true
         } catch {
@@ -169,6 +210,7 @@ final class NativModel: ObservableObject {
         isRunning = server.isRunning
         if !isRunning {
             settingsAppliedAtServerStart = nil
+            huggingFaceTokenAppliedAtServerStart = nil
         }
         stopMetricsPolling(clearSession: true)
         notifyMenuStateChanged()
@@ -236,6 +278,7 @@ final class NativModel: ObservableObject {
         }
         isRunning = false
         settingsAppliedAtServerStart = nil
+        huggingFaceTokenAppliedAtServerStart = nil
     }
 
     func resetSettings() {
@@ -291,6 +334,7 @@ final class NativModel: ObservableObject {
                 self?.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
                 self?.isRunning = false
                 self?.settingsAppliedAtServerStart = nil
+                self?.huggingFaceTokenAppliedAtServerStart = nil
                 self?.stopMetricsPolling(clearSession: true)
                 self?.metricsLoading = false
                 if self?.isStoppingForModelSwitch != true {

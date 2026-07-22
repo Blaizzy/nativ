@@ -16,6 +16,13 @@ private enum HubAccessFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private struct HubSearchTaskID: Hashable {
+    let section: ModelsPageSection
+    let query: String
+    let sort: HuggingFaceModelSort
+    let authenticationToken: String?
+}
+
 struct ModelsView: View {
     @ObservedObject var model: NativModel
     @Binding var showsConfiguration: Bool
@@ -54,7 +61,11 @@ struct ModelsView: View {
             guard section == .discover else { return }
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            hubLibrary.search(query: hubQuery, sort: hubSort)
+            hubLibrary.search(
+                query: hubQuery,
+                sort: hubSort,
+                token: model.effectiveHuggingFaceToken
+            )
         }
         .onDisappear {
             localLibrary.cancel()
@@ -219,7 +230,8 @@ struct ModelsView: View {
                                     onDownload: {
                                         downloadManager.download(
                                             repoID: hubModel.id,
-                                            cachePath: model.settings.modelSearchPath
+                                            cachePath: model.settings.modelSearchPath,
+                                            token: model.effectiveHuggingFaceToken
                                         ) {
                                             rescanLocalModels()
                                             NotificationCenter.default.post(
@@ -258,7 +270,7 @@ struct ModelsView: View {
                                 .frame(minWidth: 122)
 
                             Button {
-                                hubLibrary.goToNextPage()
+                                hubLibrary.goToNextPage(token: model.effectiveHuggingFaceToken)
                             } label: {
                                 Label("Next", systemImage: "chevron.right")
                                     .labelStyle(.titleAndIcon)
@@ -602,8 +614,13 @@ struct ModelsView: View {
         (LocalModelDiscovery.expandedPath(path) as NSString).abbreviatingWithTildeInPath
     }
 
-    private var hubSearchTaskID: String {
-        "\(section.rawValue):\(hubQuery):\(hubSort.rawValue)"
+    private var hubSearchTaskID: HubSearchTaskID {
+        HubSearchTaskID(
+            section: section,
+            query: hubQuery,
+            sort: hubSort,
+            authenticationToken: model.effectiveHuggingFaceToken
+        )
     }
 
     private var hubModelsURL: URL {

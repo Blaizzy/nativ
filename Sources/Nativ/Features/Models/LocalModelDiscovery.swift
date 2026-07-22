@@ -146,7 +146,8 @@ struct LocalModel: Identifiable, Equatable, Sendable {
         return LocalModelMemoryEstimate(
             estimatedModelBytes: UInt64(estimatedBytes.rounded(.up)),
             memoryBudgetBytes: memoryBudgetBytes,
-            totalMemoryBytes: totalMemoryBytes
+            totalMemoryBytes: totalMemoryBytes,
+            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
         )
     }
 
@@ -161,12 +162,30 @@ struct LocalModel: Identifiable, Equatable, Sendable {
 struct LocalModelMemoryEstimate: Equatable, Sendable {
     static let headroomFraction = 0.20
 
+    /// Coarse peak-activation reserve for image-generation pipelines. Diffusion
+    /// activation memory (attention + VAE decode) is roughly dtype-independent
+    /// and grows with resolution, so a weights-only estimate green-lights
+    /// pipelines that OOM at generation. Starting constant — refine per family
+    /// and output resolution later.
+    static let imageGenerationActivationReserveBytes: UInt64 = 6 * 1024 * 1024 * 1024
+
+    static func activationReserveBytes(for capabilities: Set<LocalModelCapability>) -> UInt64 {
+        capabilities.contains(.imageGeneration) ? imageGenerationActivationReserveBytes : 0
+    }
+
     let estimatedModelBytes: UInt64
     let memoryBudgetBytes: UInt64
     let totalMemoryBytes: UInt64
+    var activationReserveBytes: UInt64 = 0
+
+    /// Resident weights plus any peak-activation reserve, saturating on overflow.
+    var workingSetBytes: UInt64 {
+        let sum = estimatedModelBytes.addingReportingOverflow(activationReserveBytes)
+        return sum.overflow ? UInt64.max : sum.partialValue
+    }
 
     var isUsable: Bool {
-        estimatedModelBytes <= memoryBudgetBytes
+        workingSetBytes <= memoryBudgetBytes
     }
 
     var compatibilityLabel: String {
@@ -187,6 +206,13 @@ struct LocalModelMemoryEstimate: Equatable, Sendable {
             countStyle: .memory
         )
         let headroomPercent = Int((Self.headroomFraction * 100).rounded())
+        if activationReserveBytes > 0 {
+            let reserve = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: activationReserveBytes),
+                countStyle: .memory
+            )
+            return "Estimated weights: \(estimated), plus ~\(reserve) peak activation for image generation. Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
+        }
         return "Estimated model memory: \(estimated). Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
     }
 }
