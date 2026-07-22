@@ -35,7 +35,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     var summary: String {
         switch self {
         case .pi: "Minimal, extensible coding agent"
-        case .codex: "OpenAI coding agent for terminal and desktop"
+        case .codex: "OpenAI coding agent for the terminal"
         case .claudeCode: "Anthropic's agentic coding tool"
         case .hermes: "Open agent with tools, skills, and memory"
         case .openCode: "Open-source coding agent"
@@ -87,7 +87,6 @@ enum IntegrationServiceError: LocalizedError {
     case modelLoadFailed(String, String)
     case modelLoadTimedOut(String)
     case terminalLaunchFailed(String)
-    case desktopLaunchFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -105,22 +104,14 @@ enum IntegrationServiceError: LocalizedError {
             return "Loading \(model) took longer than five minutes. The coding tool was not opened."
         case .terminalLaunchFailed(let message):
             return "Couldn’t open Terminal: \(message)"
-        case .desktopLaunchFailed(let message):
-            return "Couldn’t open Codex Desktop: \(message)"
         }
     }
 }
 
 struct IntegrationProfileManager {
-    static let providerID = "nativ"
-
-    static var openAIBaseURL: String {
-        NativSettings.load().serverBaseURL.absoluteString + "/v1"
-    }
-
-    static var anthropicBaseURL: String {
-        NativSettings.load().serverBaseURL.absoluteString
-    }
+    static let providerID = CodexCLIProfile.providerID
+    static let openAIBaseURL = CodexCLIProfile.baseURL
+    static let anthropicBaseURL = "http://127.0.0.1:8080"
 
     private let fileManager = FileManager.default
 
@@ -178,7 +169,11 @@ struct IntegrationProfileManager {
         case .pi:
             try configurePi(selectedModelID: selectedModelID, models: models)
         case .codex:
-            try writeText(codexProfile(selectedModelID: selectedModelID), to: configurationURL(for: tool))
+            try CodexCLIProfile.write(
+                selectedModelID: selectedModelID,
+                homeDirectory: fileManager.homeDirectoryForCurrentUser,
+                fileManager: fileManager
+            )
         case .claudeCode:
             try writeJSON(claudeSettings(selectedModelID: selectedModelID), to: configurationURL(for: tool))
         case .hermes:
@@ -244,52 +239,13 @@ struct IntegrationProfileManager {
             .joined(separator: "\n")
     }
 
-    func codexDesktopLaunchCommand(
-        executableURL: URL,
-        selectedModelID _: String,
-        workingDirectory: URL
-    ) -> String {
-        ([shellQuote(executableURL.path)] + codexDesktopArguments(
-            workingDirectory: workingDirectory
-        ).map(shellQuote))
-        .joined(separator: " ")
-    }
-
-    func configureCodexDesktop(selectedModelID: String) throws {
-        let url = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml")
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let updated = updatingCodexUserConfiguration(existing, selectedModelID: selectedModelID)
-        try writeText(updated, to: url)
-    }
-
-    func launchCodexDesktop(
-        executableURL: URL,
-        selectedModelID _: String,
-        workingDirectory: URL
-    ) throws {
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = codexDesktopArguments(workingDirectory: workingDirectory)
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            throw IntegrationServiceError.desktopLaunchFailed(error.localizedDescription)
-        }
-        guard process.terminationStatus == 0 else {
-            throw IntegrationServiceError.desktopLaunchFailed(
-                "codex app exited with status \(process.terminationStatus)"
-            )
-        }
-    }
-
     func configurationURL(for tool: IntegrationTool) -> URL {
         let home = fileManager.homeDirectoryForCurrentUser
         switch tool {
         case .pi:
             return home.appendingPathComponent(".pi/agent/models.json")
         case .codex:
-            return home.appendingPathComponent(".codex/nativ.config.toml")
+            return CodexCLIProfile.configurationURL(in: home)
         case .claudeCode:
             return integrationsSupportURL.appendingPathComponent("claude-settings.json")
         case .hermes:
@@ -421,19 +377,6 @@ struct IntegrationProfileManager {
         return value
     }
 
-    private func codexProfile(selectedModelID: String) -> String {
-        """
-        # Managed by Nativ. Other Codex profiles are not modified.
-        model = \(tomlString(selectedModelID))
-        model_provider = \(tomlString(Self.providerID))
-
-        [model_providers.\(tomlString(Self.providerID))]
-        name = "Nativ"
-        base_url = \(tomlString(Self.openAIBaseURL))
-        wire_api = "responses"
-        """
-    }
-
     private func claudeSettings(selectedModelID: String) -> [String: Any] {
         [
             "env": [
@@ -557,96 +500,6 @@ struct IntegrationProfileManager {
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
             )
         }
-    }
-
-    private func codexDesktopArguments(workingDirectory: URL) -> [String] {
-        ["app", workingDirectory.path]
-    }
-
-    private func updatingCodexUserConfiguration(
-        _ configuration: String,
-        selectedModelID: String
-    ) -> String {
-        let lines = configuration.components(separatedBy: .newlines)
-        var output: [String] = []
-        var reachedTable = false
-        var skippingManagedProvider = false
-        var wroteModel = false
-        var wroteProvider = false
-
-        func appendMissingRootValues() {
-            guard !wroteModel || !wroteProvider else { return }
-            output.append("# Model selection managed by Nativ.")
-            if !wroteModel {
-                output.append("model = \(tomlString(selectedModelID))")
-                wroteModel = true
-            }
-            if !wroteProvider {
-                output.append("model_provider = \(tomlString(Self.providerID))")
-                wroteProvider = true
-            }
-            output.append("")
-        }
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let isTable = trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
-
-            if isTable {
-                if !reachedTable {
-                    appendMissingRootValues()
-                    reachedTable = true
-                }
-                if isCodexManagedProviderTable(trimmed) {
-                    skippingManagedProvider = true
-                    continue
-                }
-                skippingManagedProvider = false
-            }
-
-            if skippingManagedProvider { continue }
-
-            if !reachedTable, let key = tomlAssignmentKey(line) {
-                if key == "model" {
-                    output.append("model = \(tomlString(selectedModelID)) # Managed by Nativ")
-                    wroteModel = true
-                    continue
-                }
-                if key == "model_provider" {
-                    output.append("model_provider = \(tomlString(Self.providerID)) # Managed by Nativ")
-                    wroteProvider = true
-                    continue
-                }
-            }
-            output.append(line)
-        }
-
-        if !reachedTable {
-            appendMissingRootValues()
-        }
-        while output.last?.isEmpty == true { output.removeLast() }
-        output.append("")
-        output.append("# Provider managed by Nativ.")
-        output.append("[model_providers.\(tomlString(Self.providerID))]")
-        output.append("name = \(tomlString("Nativ"))")
-        output.append("base_url = \(tomlString(Self.openAIBaseURL))")
-        output.append("wire_api = \(tomlString("responses"))")
-        output.append("")
-        return output.joined(separator: "\n")
-    }
-
-    private func tomlAssignmentKey(_ line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("#"), let equals = trimmed.firstIndex(of: "=") else {
-            return nil
-        }
-        return String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
-    }
-
-    private func isCodexManagedProviderTable(_ line: String) -> Bool {
-        line == "[model_providers.\(Self.providerID)]"
-            || line == "[model_providers.\(tomlString(Self.providerID))]"
-            || line == "[model_providers.'\(Self.providerID)']"
     }
 
     private func terminalScriptURL(for tool: IntegrationTool) throws -> URL {

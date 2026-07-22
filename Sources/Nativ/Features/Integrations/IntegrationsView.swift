@@ -97,9 +97,6 @@ final class IntegrationsViewModel: ObservableObject {
         activeOperation = tool
         do {
             try configureProfile(tool: tool, selectedModelID: selectedModelID)
-            if tool == .codex {
-                try profiles.configureCodexDesktop(selectedModelID: selectedModelID)
-            }
             var status = statuses[tool] ?? .unavailable
             status.isConfigured = true
             statuses[tool] = status
@@ -131,40 +128,6 @@ final class IntegrationsViewModel: ObservableObject {
                 try await prepareServer(modelID: selectedModelID)
                 try profiles.launch(
                     tool: tool,
-                    executableURL: executableURL,
-                    selectedModelID: selectedModelID,
-                    workingDirectory: workingDirectory
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            activeOperation = nil
-        }
-    }
-
-    func configureAndOpenCodexDesktop(workingDirectory: URL) {
-        let tool = IntegrationTool.codex
-        guard let selectedModelID else {
-            errorMessage = IntegrationServiceError.noModel.localizedDescription
-            return
-        }
-        guard let executableURL = statuses[tool]?.executableURL else {
-            errorMessage = IntegrationServiceError.missingExecutable(tool).localizedDescription
-            return
-        }
-
-        rememberWorkingDirectory(workingDirectory, for: tool)
-        activeOperation = tool
-        Task {
-            do {
-                try configureProfile(tool: tool, selectedModelID: selectedModelID)
-                try profiles.configureCodexDesktop(selectedModelID: selectedModelID)
-                var status = statuses[tool] ?? .unavailable
-                status.isConfigured = true
-                statuses[tool] = status
-
-                try await prepareServer(modelID: selectedModelID)
-                try profiles.launchCodexDesktop(
                     executableURL: executableURL,
                     selectedModelID: selectedModelID,
                     workingDirectory: workingDirectory
@@ -224,24 +187,6 @@ final class IntegrationsViewModel: ObservableObject {
             models: eligibleModels,
             maxOutputTokens: serverModel.settings.normalized().maxTokens
         )
-    }
-
-    func codexDesktopLaunchCommand(workingDirectory: URL) -> String? {
-        guard
-            let selectedModelID,
-            let executableURL = statuses[.codex]?.executableURL
-        else { return nil }
-        return profiles.codexDesktopLaunchCommand(
-            executableURL: executableURL,
-            selectedModelID: selectedModelID,
-            workingDirectory: workingDirectory
-        )
-    }
-
-    func copyCodexDesktopLaunchCommand(workingDirectory: URL) {
-        guard let command = codexDesktopLaunchCommand(workingDirectory: workingDirectory) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
     }
 
     private func prepareServer(modelID: String) async throws {
@@ -651,7 +596,7 @@ private struct IntegrationDetailView: View {
                 }
             }
             if tool == .codex {
-                Text("Codex Desktop reads ~/.codex/config.toml. Configuring this integration makes the selected local model its default while preserving unrelated Codex settings.")
+                Text("Nativ writes only ~/.codex/nativ.config.toml. Your default Codex app and ~/.codex/config.toml are left unchanged; the local model is selected only for CLI launches using --profile nativ.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -680,36 +625,11 @@ private struct IntegrationDetailView: View {
                 }
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 
-                if tool == .codex,
-                   let desktopCommand = viewModel.codexDesktopLaunchCommand(workingDirectory: workingDirectory) {
-                    Text("Desktop app")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    ScrollView(.horizontal) {
-                        Text(desktopCommand)
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                }
-
                 HStack {
-                    Text(tool == .codex
-                         ? "Choose Terminal or the Codex desktop app after the server is ready."
-                         : "This is the command opened in Terminal after the server is ready.")
+                    Text("This is the command opened in Terminal after the server is ready.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    if tool == .codex {
-                        Button {
-                            viewModel.copyCodexDesktopLaunchCommand(workingDirectory: workingDirectory)
-                        } label: {
-                            Label("Copy Desktop", systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(.bordered)
-                    }
                     Button {
                         viewModel.copyLaunchCommand(for: tool, workingDirectory: workingDirectory)
                     } label: {
