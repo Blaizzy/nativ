@@ -312,6 +312,38 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func conversationText(for sessionID: UUID) -> String? {
+        guard let session = storedSessions.first(where: { $0.id == sessionID }) else {
+            return nil
+        }
+        var lines = [session.displayTitle, ""]
+        for message in session.messages {
+            let speaker: String
+            switch message.role {
+            case .user:
+                speaker = "You"
+            case .assistant:
+                speaker = message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 60) } ?? "Assistant"
+            case .error:
+                speaker = "Error"
+            }
+            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if content.isEmpty && message.imageAttachments.isEmpty {
+                continue
+            }
+            lines.append("\(speaker):")
+            if !message.imageAttachments.isEmpty {
+                let count = message.imageAttachments.count
+                lines.append("[\(count) attachment\(count == 1 ? "" : "s")]")
+            }
+            if !content.isEmpty {
+                lines.append(content)
+            }
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     func send(using appModel: NativModel) {
         let settings = appModel.settings.normalized()
         guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),

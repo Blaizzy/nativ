@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
@@ -129,11 +130,18 @@ struct ControlPanelView: View {
                         isCurrent: isCurrentRecent(recent),
                         isSelectionDisabled: isRecentSelectionDisabled(recent),
                         isDeleteDisabled: isRecentDeleteDisabled(recent),
+                        canExport: canExportRecent(recent),
                         onSelect: {
                             applySidebarSelection(recent.selection)
                         },
                         onDelete: {
                             deleteRecentSession(recent)
+                        },
+                        onCopyConversation: {
+                            copyRecentConversation(recent)
+                        },
+                        onExportFile: {
+                            exportRecentConversation(recent)
                         }
                     )
                     .listRowInsets(sidebarItemInsets)
@@ -249,6 +257,38 @@ struct ControlPanelView: View {
             return
         }
         createRecentSession()
+    }
+
+    private func canExportRecent(_ recent: ControlPanelRecentSession) -> Bool {
+        if case .chat = recent.selection {
+            return true
+        }
+        return false
+    }
+
+    private func copyRecentConversation(_ recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection,
+              let text = chat.conversationText(for: sessionID)
+        else {
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func exportRecentConversation(_ recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection,
+              let text = chat.conversationText(for: sessionID)
+        else {
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(recent.title).txt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        try? text.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func deleteRecentSession(_ recent: ControlPanelRecentSession) {
@@ -481,8 +521,11 @@ private struct ControlPanelRecentSessionRow: View {
     let isCurrent: Bool
     let isSelectionDisabled: Bool
     let isDeleteDisabled: Bool
+    let canExport: Bool
     let onSelect: () -> Void
     let onDelete: () -> Void
+    let onCopyConversation: () -> Void
+    let onExportFile: () -> Void
     @State private var isHovering = false
     @State private var isDeleteHovering = false
 
@@ -538,6 +581,19 @@ private struct ControlPanelRecentSessionRow: View {
                 Label("Open", systemImage: "arrow.up.right.square")
             }
             .disabled(isSelectionDisabled)
+
+            if canExport {
+                Button {
+                    onCopyConversation()
+                } label: {
+                    Label("Copy Conversation", systemImage: "doc.on.doc")
+                }
+                Button {
+                    onExportFile()
+                } label: {
+                    Label("Export as Text\u{2026}", systemImage: "square.and.arrow.up")
+                }
+            }
 
             Button(role: .destructive) {
                 onDelete()
