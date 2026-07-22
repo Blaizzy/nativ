@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativServerKit
 import UniformTypeIdentifiers
@@ -296,6 +297,56 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable {
 
     var imageData: Data? {
         Data(base64Encoded: base64Data)
+    }
+
+    static func canReadImages(from pasteboard: NSPasteboard) -> Bool {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+           urls.contains(where: isImageURL) {
+            return true
+        }
+        return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
+    }
+
+    static func imageAttachments(from pasteboard: NSPasteboard) -> [ChatImageAttachment] {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] {
+            let fileAttachments = urls
+                .filter(isImageURL)
+                .compactMap { try? ChatImageAttachment(contentsOf: $0) }
+            if !fileAttachments.isEmpty {
+                return fileAttachments
+            }
+        }
+
+        guard let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage] else {
+            return []
+        }
+        return images.enumerated().compactMap { index, image in
+            attachment(from: image, filename: pastedImageFilename(index: index))
+        }
+    }
+
+    static func attachment(from image: NSImage, filename: String) -> ChatImageAttachment? {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:])
+        else {
+            return nil
+        }
+        return ChatImageAttachment(
+            filename: filename,
+            mimeType: "image/png",
+            base64Data: png.base64EncodedString()
+        )
+    }
+
+    private static func isImageURL(_ url: URL) -> Bool {
+        guard url.isFileURL else { return false }
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .image)
+    }
+
+    private static func pastedImageFilename(index: Int) -> String {
+        index == 0 ? "Pasted Image.png" : "Pasted Image \(index + 1).png"
     }
 }
 

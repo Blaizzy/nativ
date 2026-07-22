@@ -399,6 +399,38 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.append(contentsOf: attachments)
     }
 
+    var canPasteImage: Bool {
+        ChatImageAttachment.canReadImages(from: .general)
+    }
+
+    @discardableResult
+    func attachImages(from pasteboard: NSPasteboard) -> Bool {
+        let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
+        guard !attachments.isEmpty else {
+            return false
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+        return true
+    }
+
+    func pasteImageFromClipboard() {
+        attachImages(from: .general)
+    }
+
+    func captureScreenshot() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Nativ-Screenshot-\(UUID().uuidString).png")
+
+        Task { [weak self] in
+            let captured = await ChatScreenCapture.captureInteractive(to: fileURL)
+            guard captured, let attachment = try? ChatImageAttachment(contentsOf: fileURL) else {
+                return
+            }
+            self?.pendingImageAttachments.append(attachment)
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     func removePendingImageAttachment(_ id: UUID) {
         pendingImageAttachments.removeAll { $0.id == id }
     }

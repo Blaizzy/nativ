@@ -127,6 +127,7 @@ struct ChatComposer: View {
                         text: $viewModel.draft,
                         isEnabled: canCompose,
                         onSubmit: onSend,
+                        onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
                         }
@@ -161,7 +162,10 @@ struct ChatComposer: View {
                 HStack(spacing: 8) {
                     ChatComposerActionMenu(
                         isEnabled: canCompose,
-                        onAttachImages: viewModel.chooseImageAttachments
+                        canPasteImage: viewModel.canPasteImage,
+                        onAttachImages: viewModel.chooseImageAttachments,
+                        onPasteImage: viewModel.pasteImageFromClipboard,
+                        onCaptureScreenshot: viewModel.captureScreenshot
                     )
                     .frame(width: 30, height: 30)
                     .help("Add attachment")
@@ -872,7 +876,10 @@ private struct ChatComposerModelIcon: View {
 
 private struct ChatComposerActionMenu: NSViewRepresentable {
     let isEnabled: Bool
+    let canPasteImage: Bool
     let onAttachImages: () -> Void
+    let onPasteImage: () -> Void
+    let onCaptureScreenshot: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -927,20 +934,48 @@ private struct ChatComposerActionMenu: NSViewRepresentable {
             menu.minimumWidth = 190
 
             let imageItem = NSMenuItem(
-                title: "Attach Image",
+                title: "Upload Image…",
                 action: #selector(attachImages(_:)),
                 keyEquivalent: ""
             )
             imageItem.target = self
-            imageItem.image = menuImage("photo.badge.plus", description: "Attach Image")
+            imageItem.image = menuImage("photo.badge.plus", description: "Upload Image")
             imageItem.isEnabled = true
             menu.addItem(imageItem)
+
+            let pasteItem = NSMenuItem(
+                title: "Paste Image",
+                action: #selector(pasteImage(_:)),
+                keyEquivalent: ""
+            )
+            pasteItem.target = self
+            pasteItem.image = menuImage("doc.on.clipboard", description: "Paste Image")
+            pasteItem.isEnabled = parent.canPasteImage
+            menu.addItem(pasteItem)
+
+            let screenshotItem = NSMenuItem(
+                title: "Take Screenshot",
+                action: #selector(captureScreenshot(_:)),
+                keyEquivalent: ""
+            )
+            screenshotItem.target = self
+            screenshotItem.image = menuImage("camera.viewfinder", description: "Take Screenshot")
+            screenshotItem.isEnabled = true
+            menu.addItem(screenshotItem)
 
             return menu
         }
 
         @objc private func attachImages(_ sender: NSMenuItem) {
             parent.onAttachImages()
+        }
+
+        @objc private func pasteImage(_ sender: NSMenuItem) {
+            parent.onPasteImage()
+        }
+
+        @objc private func captureScreenshot(_ sender: NSMenuItem) {
+            parent.onCaptureScreenshot()
         }
 
         private func menuImage(_ systemName: String, description: String) -> NSImage? {
@@ -1083,12 +1118,14 @@ private struct ChatComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let isEnabled: Bool
     let onSubmit: () -> Void
+    let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
             onSubmit: onSubmit,
+            onPasteImage: onPasteImage,
             onContentHeightChange: onContentHeightChange
         )
     }
@@ -1097,6 +1134,7 @@ private struct ChatComposerTextEditor: NSViewRepresentable {
         let textView = ChatComposerNSTextView()
         textView.delegate = context.coordinator
         textView.onSubmit = context.coordinator.handleSubmit
+        textView.onPasteImage = context.coordinator.handlePasteImage
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.font = NSFont.preferredFont(forTextStyle: .body)
@@ -1129,6 +1167,7 @@ private struct ChatComposerTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onPasteImage = onPasteImage
         context.coordinator.onContentHeightChange = onContentHeightChange
 
         guard let textView = context.coordinator.textView else {
@@ -1150,6 +1189,7 @@ private struct ChatComposerTextEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: String
         var onSubmit: () -> Void
+        var onPasteImage: (NSPasteboard) -> Bool
         var onContentHeightChange: (CGFloat) -> Void
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
@@ -1157,11 +1197,17 @@ private struct ChatComposerTextEditor: NSViewRepresentable {
         init(
             text: Binding<String>,
             onSubmit: @escaping () -> Void,
+            onPasteImage: @escaping (NSPasteboard) -> Bool,
             onContentHeightChange: @escaping (CGFloat) -> Void
         ) {
             _text = text
             self.onSubmit = onSubmit
+            self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
+        }
+
+        func handlePasteImage(_ pasteboard: NSPasteboard) -> Bool {
+            onPasteImage(pasteboard)
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1216,6 +1262,7 @@ private final class ChatComposerNSScrollView: NSScrollView {
 
 private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
+    var onPasteImage: ((NSPasteboard) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
         switch ComposerReturnBehavior.resolve(for: event) {
@@ -1226,6 +1273,13 @@ private final class ChatComposerNSTextView: NSTextView {
         case .passthrough:
             super.keyDown(with: event)
         }
+    }
+
+    override func paste(_ sender: Any?) {
+        if onPasteImage?(NSPasteboard.general) == true {
+            return
+        }
+        super.paste(sender)
     }
 }
 
