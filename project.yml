@@ -93,6 +93,8 @@ targets:
       - path: Tests/NativTests
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
+      - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
+      - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
     settings:
       base:

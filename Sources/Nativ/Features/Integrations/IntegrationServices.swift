@@ -1,119 +1,36 @@
 import AppKit
 import Foundation
 
-enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
-    case pi
-    case codex
-    case claudeCode
-    case hermes
-    case openCode
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .pi: "Pi"
-        case .codex: "Codex"
-        case .claudeCode: "Claude Code"
-        case .hermes: "Hermes"
-        case .openCode: "OpenCode"
-        }
-    }
-
-    var commandName: String {
-        switch self {
-        case .pi: "pi"
-        case .codex: "codex"
-        case .claudeCode: "claude"
-        case .hermes: "hermes"
-        case .openCode: "opencode"
-        }
-    }
-
-    var logoAssetName: String { "IntegrationLogo-\(rawValue)" }
-
-    var summary: String {
-        switch self {
-        case .pi: "Minimal, extensible coding agent"
-        case .codex: "OpenAI coding agent for the terminal"
-        case .claudeCode: "Anthropic's agentic coding tool"
-        case .hermes: "Open agent with tools, skills, and memory"
-        case .openCode: "Open-source coding agent"
-        }
-    }
-
-    var installURL: URL {
-        switch self {
-        case .pi: URL(string: "https://pi.dev/docs/latest")!
-        case .codex: URL(string: "https://developers.openai.com/codex/cli")!
-        case .claudeCode: URL(string: "https://code.claude.com/docs/en/setup")!
-        case .hermes: URL(string: "https://github.com/NousResearch/hermes-agent")!
-        case .openCode: URL(string: "https://opencode.ai/docs")!
-        }
-    }
-}
-
-struct IntegrationModelDescriptor: Identifiable, Equatable, Sendable {
-    let id: String
-    let displayName: String
-    let contextWindow: Int?
-    let supportsVision: Bool
-    let supportsReasoning: Bool
-    let supportsTools: Bool
-
-    init(localModel: LocalModel) {
-        id = localModel.repoID
-        displayName = localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID
-        contextWindow = localModel.contextSize
-        supportsVision = localModel.capabilities.contains(.vision)
-        supportsReasoning = localModel.capabilities.contains(.reasoning)
-        supportsTools = localModel.capabilities.contains(.tools)
-    }
-}
-
-struct IntegrationToolStatus: Equatable, Sendable {
-    var executableURL: URL?
-    var version: String?
-    var isConfigured: Bool
-
-    static let unavailable = IntegrationToolStatus(executableURL: nil, version: nil, isConfigured: false)
-}
-
-enum IntegrationServiceError: LocalizedError {
-    case missingExecutable(IntegrationTool)
-    case invalidConfiguration(URL)
-    case noModel
-    case serverUnavailable
-    case modelLoadFailed(String, String)
-    case modelLoadTimedOut(String)
-    case terminalLaunchFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .missingExecutable(let tool):
-            return "\(tool.displayName) is not installed or could not be found in the application bundle or shell PATH."
-        case .invalidConfiguration(let url):
-            return "The existing configuration at \(url.path) is not valid JSON. It was left unchanged."
-        case .noModel:
-            return "Choose an installed chat model first."
-        case .serverUnavailable:
-            return "The local model server did not become ready in time."
-        case .modelLoadFailed(let model, let message):
-            return "Couldn’t load \(model): \(message)"
-        case .modelLoadTimedOut(let model):
-            return "Loading \(model) took longer than five minutes. The coding tool was not opened."
-        case .terminalLaunchFailed(let message):
-            return "Couldn’t open Terminal: \(message)"
-        }
-    }
-}
-
 struct IntegrationProfileManager {
     static let providerID = CodexCLIProfile.providerID
-    static let openAIBaseURL = CodexCLIProfile.baseURL
-    static let anthropicBaseURL = "http://127.0.0.1:8080"
 
-    private let fileManager = FileManager.default
+    private let fileManager: FileManager
+    private let homeDirectory: URL
+    private let applicationSupportDirectory: URL
+    let serverBaseURL: URL
+
+    var openAIBaseURL: String {
+        serverBaseURL.appendingPathComponent("v1").absoluteString
+    }
+
+    var anthropicBaseURL: String {
+        serverBaseURL.absoluteString
+    }
+
+    init(
+        serverBaseURL: URL,
+        fileManager: FileManager = .default,
+        homeDirectory: URL? = nil,
+        applicationSupportDirectory: URL? = nil
+    ) {
+        let resolvedHomeDirectory = homeDirectory ?? fileManager.homeDirectoryForCurrentUser
+        self.fileManager = fileManager
+        self.homeDirectory = resolvedHomeDirectory
+        self.serverBaseURL = serverBaseURL
+        self.applicationSupportDirectory = applicationSupportDirectory
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? resolvedHomeDirectory
+    }
 
     func status(for tool: IntegrationTool) async -> IntegrationToolStatus {
         let resolvedExecutableURL: URL?
@@ -146,7 +63,7 @@ struct IntegrationProfileManager {
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let environment = root["env"] as? [String: Any]
             else { return false }
-            return environment["ANTHROPIC_BASE_URL"] as? String == Self.anthropicBaseURL
+            return environment["ANTHROPIC_BASE_URL"] as? String == anthropicBaseURL
         case .openCode:
             guard
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -155,7 +72,7 @@ struct IntegrationProfileManager {
             return providers[Self.providerID] != nil
         case .codex, .hermes:
             guard let text = String(data: data, encoding: .utf8) else { return false }
-            return text.contains(Self.providerID) && text.contains(Self.openAIBaseURL)
+            return text.contains(Self.providerID) && text.contains(openAIBaseURL)
         }
     }
 
@@ -171,7 +88,8 @@ struct IntegrationProfileManager {
         case .codex:
             try CodexCLIProfile.write(
                 selectedModelID: selectedModelID,
-                homeDirectory: fileManager.homeDirectoryForCurrentUser,
+                baseURL: openAIBaseURL,
+                homeDirectory: homeDirectory,
                 fileManager: fileManager
             )
         case .claudeCode:
@@ -240,7 +158,7 @@ struct IntegrationProfileManager {
     }
 
     func configurationURL(for tool: IntegrationTool) -> URL {
-        let home = fileManager.homeDirectoryForCurrentUser
+        let home = homeDirectory
         switch tool {
         case .pi:
             return home.appendingPathComponent(".pi/agent/models.json")
@@ -256,16 +174,14 @@ struct IntegrationProfileManager {
     }
 
     private var integrationsSupportURL: URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser
-        return base
+        applicationSupportDirectory
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("Integrations", isDirectory: true)
     }
 
     private func bundledExecutableURL(for tool: IntegrationTool) -> URL? {
         guard tool == .codex else { return nil }
-        let home = fileManager.homeDirectoryForCurrentUser
+        let home = homeDirectory
         let candidates = [
             URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
             URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
@@ -349,7 +265,7 @@ struct IntegrationProfileManager {
         }
         var providers = root["providers"] as? [String: Any] ?? [:]
         providers[Self.providerID] = [
-            "baseUrl": Self.openAIBaseURL,
+            "baseUrl": openAIBaseURL,
             "api": "openai-completions",
             "apiKey": "nativ",
             "compat": [
@@ -382,7 +298,7 @@ struct IntegrationProfileManager {
             "env": [
                 "ANTHROPIC_AUTH_TOKEN": "nativ",
                 "ANTHROPIC_API_KEY": "",
-                "ANTHROPIC_BASE_URL": Self.anthropicBaseURL,
+                "ANTHROPIC_BASE_URL": anthropicBaseURL,
                 "ANTHROPIC_MODEL": selectedModelID,
                 "ANTHROPIC_SMALL_FAST_MODEL": selectedModelID
             ]
@@ -409,13 +325,13 @@ struct IntegrationProfileManager {
         model:
           default: \(yamlString(selectedModelID))
           provider: custom
-          base_url: \(yamlString(Self.openAIBaseURL))
+          base_url: \(yamlString(openAIBaseURL))
           api_key: nativ
         display:
           streaming: true
         custom_providers:
           - name: nativ
-            base_url: \(yamlString(Self.openAIBaseURL))
+            base_url: \(yamlString(openAIBaseURL))
             api_key: nativ
             api_mode: chat_completions
             models:
@@ -465,7 +381,7 @@ struct IntegrationProfileManager {
                     "npm": "@ai-sdk/openai-compatible",
                     "name": "Nativ",
                     "options": [
-                        "baseURL": Self.openAIBaseURL,
+                        "baseURL": openAIBaseURL,
                         "apiKey": "nativ"
                     ],
                     "models": modelCatalog
@@ -489,7 +405,7 @@ struct IntegrationProfileManager {
                 [
                     "ANTHROPIC_AUTH_TOKEN": "nativ",
                     "ANTHROPIC_API_KEY": "",
-                    "ANTHROPIC_BASE_URL": Self.anthropicBaseURL
+                    "ANTHROPIC_BASE_URL": anthropicBaseURL
                 ]
             )
         case .hermes:

@@ -2,6 +2,19 @@ import AppKit
 import Combine
 import SwiftUI
 
+extension IntegrationModelDescriptor {
+    init(localModel: LocalModel) {
+        self.init(
+            id: localModel.repoID,
+            displayName: localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID,
+            contextWindow: localModel.contextSize,
+            supportsVision: localModel.capabilities.contains(.vision),
+            supportsReasoning: localModel.capabilities.contains(.reasoning),
+            supportsTools: localModel.capabilities.contains(.tools)
+        )
+    }
+}
+
 @MainActor
 final class IntegrationsViewModel: ObservableObject {
     @Published var selectedTool: IntegrationTool?
@@ -15,7 +28,6 @@ final class IntegrationsViewModel: ObservableObject {
 
     let library = LocalModelLibrary()
     private let serverModel: NativModel
-    private let profiles = IntegrationProfileManager()
     private let defaults = UserDefaults.standard
     private var libraryObservation: AnyCancellable?
 
@@ -46,6 +58,21 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     var isBusy: Bool { activeOperation != nil }
+
+    var integrationEndpoint: String {
+        profiles.openAIBaseURL
+    }
+
+    private var integrationServerBaseURL: URL {
+        guard let activeServerPort = serverModel.activeServerPort else {
+            return serverModel.settings.serverBaseURL
+        }
+        return URL(string: "http://127.0.0.1:\(activeServerPort)")!
+    }
+
+    private var profiles: IntegrationProfileManager {
+        IntegrationProfileManager(serverBaseURL: integrationServerBaseURL)
+    }
 
     func appear() {
         library.scan(path: serverModel.settings.modelSearchPath)
@@ -230,7 +257,7 @@ final class IntegrationsViewModel: ObservableObject {
             // /v1/models is part of the public inference API and does not
             // require a management API key. It also proves the listener that
             // the harness will use is ready.
-            var request = URLRequest(url: serverModel.settings.serverBaseURL.appendingPathComponent("v1/models"))
+            var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models"))
             request.timeoutInterval = 3
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -241,7 +268,7 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func loadModelThroughEndpoint(_ modelID: String) async throws {
-        var request = URLRequest(url: serverModel.settings.serverBaseURL.appendingPathComponent("v1/models/load"))
+        var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models/load"))
         request.httpMethod = "POST"
         request.timeoutInterval = 300
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -587,7 +614,7 @@ private struct IntegrationDetailView: View {
     private var configurationPanel: some View {
         IntegrationPanel(title: "Managed configuration", systemImage: "gearshape.2") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
-                IntegrationConfigurationRow(label: "Endpoint", value: IntegrationProfileManager.openAIBaseURL)
+                IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "Profile", value: IntegrationProfileManager.providerID)
                 IntegrationConfigurationRow(label: "Model loading", value: "On demand · no restart")
                 IntegrationConfigurationRow(label: "Responses", value: "Streaming")
