@@ -413,6 +413,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         pageNumber = 1
 
         searchTask = Task { [weak self] in
+            guard let self else { return }
             do {
                 let page = try await client.search(query: query, sort: sort, token: token)
                 try Task.checkCancellation()
@@ -426,12 +427,12 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.buffer = []
-                self?.models = []
-                self?.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.buffer = []
+                self.models = []
+                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             guard !Task.isCancelled else { return }
-            self?.isSearching = false
+            self.isSearching = false
         }
     }
 
@@ -461,15 +462,19 @@ final class HuggingFaceModelLibrary: ObservableObject {
             error = nil
             return
         }
+        guard let nextPageURL else { return }
 
         searchTask?.cancel()
         isSearching = true
         error = nil
 
         searchTask = Task { [weak self] in
+            guard let self else { return }
             do {
                 let page = try await client.page(at: nextPageURL, token: token)
                 try Task.checkCancellation()
+                self.buffer.append(contentsOf: page.models)
+                self.nextPageURL = page.nextPageURL
                 let nextModels = self.slice(forPage: target)
                 if !nextModels.isEmpty {
                     self.pageNumber = target
@@ -480,17 +485,17 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             guard !Task.isCancelled else { return }
-            self?.isSearching = false
+            self.isSearching = false
         }
     }
 
     private func fillBuffer(upTo count: Int) async throws {
         var fetches = 0
         while buffer.count < count, let url = nextPageURL, fetches < 8 {
-            let nextPage = try await client.page(at: url)
+            let nextPage = try await client.page(at: url, token: nil)
             try Task.checkCancellation()
             buffer.append(contentsOf: nextPage.models)
             nextPageURL = nextPage.nextPageURL
