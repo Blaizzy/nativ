@@ -394,7 +394,9 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     private let client = HuggingFaceHubClient()
     private var searchTask: Task<Void, Never>?
-    private var cachedPages: [HuggingFaceModelPage] = []
+    private var buffer: [HuggingFaceModel] = []
+    private var nextPageURL: URL?
+    private let pageSize = 24
     private let maximumPageCount = 5
 
     deinit {
@@ -406,20 +408,25 @@ final class HuggingFaceModelLibrary: ObservableObject {
         isSearching = true
         error = nil
         models = []
-        cachedPages = []
+        buffer = []
+        nextPageURL = nil
         pageNumber = 1
 
-        searchTask = Task { [weak self, client] in
+        searchTask = Task { [weak self] in
             do {
                 let page = try await client.search(query: query, sort: sort, token: token)
                 try Task.checkCancellation()
-                self?.cachedPages = [page]
-                self?.models = page.models
-                self?.error = nil
+                self.buffer = page.models
+                self.nextPageURL = page.nextPageURL
+                try await self.fillBuffer(upTo: self.pageSize)
+                try Task.checkCancellation()
+                self.models = self.slice(forPage: 1)
+                self.error = nil
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
+                self?.buffer = []
                 self?.models = []
                 self?.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
@@ -434,42 +441,41 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     var canGoToNextPage: Bool {
         guard !isSearching, pageNumber < maximumPageCount else { return false }
-        if pageNumber < cachedPages.count {
-            return true
-        }
-        return cachedPages.last?.nextPageURL != nil
+        return buffer.count > pageNumber * pageSize || nextPageURL != nil
     }
 
     func goToPreviousPage() {
         guard canGoToPreviousPage else { return }
         pageNumber -= 1
-        models = cachedPages[pageNumber - 1].models
+        models = slice(forPage: pageNumber)
         error = nil
     }
 
     func goToNextPage(token: String?) {
         guard canGoToNextPage else { return }
+        let target = pageNumber + 1
 
-        if pageNumber < cachedPages.count {
-            pageNumber += 1
-            models = cachedPages[pageNumber - 1].models
+        if buffer.count >= target * pageSize || nextPageURL == nil {
+            pageNumber = target
+            models = slice(forPage: target)
             error = nil
             return
         }
 
-        guard let nextPageURL = cachedPages.last?.nextPageURL else { return }
         searchTask?.cancel()
         isSearching = true
         error = nil
 
-        searchTask = Task { [weak self, client] in
+        searchTask = Task { [weak self] in
             do {
                 let page = try await client.page(at: nextPageURL, token: token)
                 try Task.checkCancellation()
-                self?.cachedPages.append(page)
-                self?.pageNumber += 1
-                self?.models = page.models
-                self?.error = nil
+                let nextModels = self.slice(forPage: target)
+                if !nextModels.isEmpty {
+                    self.pageNumber = target
+                    self.models = nextModels
+                }
+                self.error = nil
             } catch is CancellationError {
                 return
             } catch {
@@ -479,6 +485,23 @@ final class HuggingFaceModelLibrary: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.isSearching = false
         }
+    }
+
+    private func fillBuffer(upTo count: Int) async throws {
+        var fetches = 0
+        while buffer.count < count, let url = nextPageURL, fetches < 8 {
+            let nextPage = try await client.page(at: url)
+            try Task.checkCancellation()
+            buffer.append(contentsOf: nextPage.models)
+            nextPageURL = nextPage.nextPageURL
+            fetches += 1
+        }
+    }
+
+    private func slice(forPage number: Int) -> [HuggingFaceModel] {
+        let start = (number - 1) * pageSize
+        guard start < buffer.count else { return [] }
+        return Array(buffer[start..<min(start + pageSize, buffer.count)])
     }
 
     func cancel() {
