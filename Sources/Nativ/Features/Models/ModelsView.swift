@@ -151,7 +151,8 @@ struct ModelsView: View {
                             InstalledModelRow(
                                 localModel: localModel,
                                 selectedLanguageModelID: model.settings.normalized().languageModelID,
-                                isModelSwitchInProgress: model.modelSwitchInProgress,
+                                isModelLoading: model.isModelLoading,
+                                modelLoadingPercentage: model.modelLoadingPercentage,
                                 isDeleting: localLibrary.deletingModelIDs.contains(localModel.repoID),
                                 canDelete: localModel.isDeletable && !model.modelSwitchInProgress && !isModelInUse(localModel.repoID),
                                 onLoadModel: { model.switchLanguageModel(to: localModel.repoID) },
@@ -691,7 +692,8 @@ private struct ModelsSearchField: View {
 private struct InstalledModelRow: View {
     let localModel: LocalModel
     let selectedLanguageModelID: String?
-    let isModelSwitchInProgress: Bool
+    let isModelLoading: Bool
+    let modelLoadingPercentage: Int?
     let isDeleting: Bool
     let canDelete: Bool
     let onLoadModel: () -> Void
@@ -705,13 +707,13 @@ private struct InstalledModelRow: View {
     }
 
     private var isLoading: Bool {
-        isSelected && isModelSwitchInProgress
+        isSelected && isModelLoading
     }
 
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                guard !isSelected, !isModelSwitchInProgress else { return }
+                guard !isSelected, !isModelLoading else { return }
                 onLoadModel()
             } label: {
                 HStack(spacing: 14) {
@@ -731,7 +733,8 @@ private struct InstalledModelRow: View {
                             }
                             if isLoading {
                                 ModelPill(
-                                    title: "Loading model",
+                                    title: modelLoadingPercentage.map { "Loading model · \($0)%" }
+                                        ?? "Loading model",
                                     systemImage: "arrow.triangle.2.circlepath",
                                     color: .orange
                                 )

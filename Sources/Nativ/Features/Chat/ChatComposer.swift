@@ -243,8 +243,9 @@ struct ChatComposer: View {
             selectedModelProvider: selectedModelProvider,
             supportsReasoning: selectedModelSupportsThinking,
             reasoningLevel: reasoningLevel,
-            modelSwitchInProgress: model.modelSwitchInProgress,
-            isDisabled: model.modelSwitchInProgress || viewModel.hasPendingRequests,
+            isModelLoading: model.isModelLoading,
+            modelLoadingPercentage: model.modelLoadingPercentage,
+            isDisabled: model.isModelLoading || viewModel.hasPendingRequests,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
@@ -266,9 +267,13 @@ struct ChatComposer: View {
     }
 
     private var modelPickerAccessibilityValue: String {
-        selectedModelSupportsThinking
+        let value = selectedModelSupportsThinking
             ? "\(selectedModelLabel), reasoning \(reasoningLevel.rawValue)"
             : selectedModelLabel
+        guard model.isModelLoading, let percentage = model.modelLoadingPercentage else {
+            return value
+        }
+        return "\(value), loading \(percentage) percent"
     }
 
     private var selectedLocalModel: LocalModel? {
@@ -318,8 +323,8 @@ struct ChatComposer: View {
         if viewModel.hasPendingRequests {
             return "Model switching is unavailable while requests are active or queued"
         }
-        if model.modelSwitchInProgress {
-            return "Restarting the server with \(selectedModelLabel)"
+        if model.isModelLoading {
+            return model.modelLoadingStatusText ?? "Loading \(selectedModelLabel)"
         }
         return "Change model"
     }
@@ -435,7 +440,8 @@ private struct StableChatModelPicker: View {
     let selectedModelProvider: LocalModelProvider?
     let supportsReasoning: Bool
     let reasoningLevel: ChatReasoningLevel
-    let modelSwitchInProgress: Bool
+    let isModelLoading: Bool
+    let modelLoadingPercentage: Int?
     let isDisabled: Bool
     let statusLabel: String
     let helpText: String
@@ -509,7 +515,8 @@ private struct StableChatModelPicker: View {
             selectedModelProvider: selectedModelProvider,
             supportsReasoning: supportsReasoning,
             reasoningLevel: reasoningLevel,
-            modelSwitchInProgress: modelSwitchInProgress
+            isModelLoading: isModelLoading,
+            modelLoadingPercentage: modelLoadingPercentage
         )
     }
 
@@ -781,16 +788,24 @@ private struct ChatModelPickerLabel: View {
     let selectedModelProvider: LocalModelProvider?
     let supportsReasoning: Bool
     let reasoningLevel: ChatReasoningLevel
-    let modelSwitchInProgress: Bool
+    let isModelLoading: Bool
+    let modelLoadingPercentage: Int?
 
     var body: some View {
         HStack(spacing: 5) {
             Label {
-                pickerTitle
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    pickerTitle
+                        .lineLimit(1)
+                    if isModelLoading, let modelLoadingPercentage {
+                        Text("· \(modelLoadingPercentage)%")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
             } icon: {
                 Group {
-                    if modelSwitchInProgress {
+                    if isModelLoading {
                         ProgressView()
                             .controlSize(.small)
                     } else {

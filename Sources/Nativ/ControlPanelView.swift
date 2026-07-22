@@ -112,9 +112,20 @@ struct ControlPanelView: View {
                     Button {
                         applySidebarSelection(selection)
                     } label: {
-                        Label(tab.rawValue, systemImage: tab.systemImage)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(.rect)
+                        HStack(spacing: 8) {
+                            Label(tab.rawValue, systemImage: tab.systemImage)
+                            Spacer(minLength: 0)
+                            if tab == .models,
+                               model.isModelLoading,
+                               let percentage = model.modelLoadingPercentageText {
+                                Text(percentage)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 34, alignment: .trailing)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
                     }
                     .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
                     .buttonStyle(.plain)

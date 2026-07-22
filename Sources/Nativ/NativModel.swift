@@ -22,6 +22,7 @@ final class NativModel: ObservableObject {
     @Published private(set) var allTimeStats = NativAllTimeStats()
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     @Published private(set) var modelSwitchInProgress = false
+    @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var metricsLoading = false
     @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
     @Published var settings = NativSettings.load() {
@@ -117,6 +118,29 @@ final class NativModel: ObservableObject {
         metrics?.server.displayLoadedModel ?? "None"
     }
 
+    var isModelLoading: Bool {
+        settings.normalized().languageModelID != nil
+            && (modelSwitchInProgress || metricsLoading || modelLoadingProgress != nil)
+    }
+
+    var modelLoadingPercentage: Int? {
+        modelLoadingProgress.map { progress in
+            min(max(Int((progress * 100).rounded()), 0), 100)
+        }
+    }
+
+    var modelLoadingPercentageText: String? {
+        modelLoadingPercentage.map { "\($0)%" }
+    }
+
+    var modelLoadingStatusText: String? {
+        guard isModelLoading else { return nil }
+        if let modelLoadingPercentageText {
+            return "Loading model · \(modelLoadingPercentageText)"
+        }
+        return "Loading model…"
+    }
+
     var sessionStatsDisplayMetrics: NativMetrics? {
         metrics ?? preservedSessionMetrics
     }
@@ -159,6 +183,7 @@ final class NativModel: ObservableObject {
     func startServer() {
         var shouldStartMetrics = false
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
+        modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
@@ -181,6 +206,7 @@ final class NativModel: ObservableObject {
             appendLog("\nmlx-vlm-server is already running.\n")
             shouldStartMetrics = true
         } catch {
+            modelLoadingProgress = nil
             appendLog("\nFailed to start mlx-vlm-server: \(error)\n")
         }
 
@@ -191,6 +217,7 @@ final class NativModel: ObservableObject {
     }
 
     func stopServer(preserveSessionStats: Bool = false) {
+        modelLoadingProgress = nil
         if preserveSessionStats {
             preserveCurrentSessionStats()
         } else {
@@ -326,7 +353,7 @@ final class NativModel: ObservableObject {
     private func configureServerCallbacks() {
         server.onOutput = { [weak self] text in
             Task { @MainActor [weak self] in
-                self?.appendLog(text)
+                self?.handleServerOutput(text)
             }
         }
         server.onTermination = { [weak self] status in
@@ -337,6 +364,7 @@ final class NativModel: ObservableObject {
                 self?.huggingFaceTokenAppliedAtServerStart = nil
                 self?.stopMetricsPolling(clearSession: true)
                 self?.metricsLoading = false
+                self?.modelLoadingProgress = nil
                 if self?.isStoppingForModelSwitch != true {
                     self?.modelSwitchInProgress = false
                     self?.clearPreservedSessionStats()
@@ -383,6 +411,7 @@ final class NativModel: ObservableObject {
         lastMetricsFetchAt = nil
         metricsStartupGraceUntil = nil
         metricsLoading = false
+        modelLoadingProgress = nil
 
         if clearSession {
             metrics = nil
@@ -406,6 +435,7 @@ final class NativModel: ObservableObject {
         lastMetricsError = nil
         metricsStartupGraceUntil = nil
         metricsLoading = false
+        modelLoadingProgress = nil
         recordSessionActivity(
             promptTokenCount: fetchedMetrics.summary.promptTokensTotal,
             generatedTokenCount: fetchedMetrics.summary.generatedTokensTotal
@@ -449,6 +479,37 @@ final class NativModel: ObservableObject {
         logText.append(text)
         if logText.count > maxLogCharacters {
             logText.removeFirst(logText.count - maxLogCharacters)
+        }
+    }
+
+    private func handleServerOutput(_ text: String) {
+        let prefix = "__NATIV_MODEL_LOAD_PROGRESS__:"
+        var visibleLines: [Substring] = []
+
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \Character.isNewline) {
+            guard let markerRange = line.range(of: prefix) else {
+                visibleLines.append(line)
+                continue
+            }
+
+            let rawValue = line[markerRange.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value = Double(rawValue) {
+                modelLoadingProgress = min(max(value, 0), 1)
+                if menuIsOpen {
+                    notifyMenuStateChanged()
+                }
+            }
+
+            let leadingText = line[..<markerRange.lowerBound]
+            if !leadingText.isEmpty {
+                visibleLines.append(leadingText)
+            }
+        }
+
+        let visibleText = visibleLines.joined(separator: "\n")
+        if !visibleText.isEmpty {
+            appendLog(visibleText)
         }
     }
 
