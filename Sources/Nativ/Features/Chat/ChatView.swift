@@ -152,7 +152,6 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
 
-    private let client = NativChatClient()
     private let sessionStore = ChatSessionStore()
     private var activeTask: Task<Void, Never>?
     private var activeRequestID: UUID?
@@ -436,6 +435,8 @@ final class ChatViewModel: ObservableObject {
             if currentSessionID == queuedRequest.sessionID {
                 bumpScroll()
             }
+
+            let client = NativChatClient(baseURL: queuedRequest.settings.serverBaseURL)
 
             activeTask = Task { @MainActor [weak self] in
                 guard let self else {

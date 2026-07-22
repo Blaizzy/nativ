@@ -249,7 +249,7 @@ final class IntegrationsViewModel: ObservableObject {
         // the management endpoint. The harness also sends this model on every
         // inference request, so subsequent responses stay on the selection.
         // Check the listener before starting a process because an earlier app
-        // session may still own the bundled server on port 8080.
+        // session may still own the bundled server on the configured port.
         if await inferenceEndpointIsReady() {
             try await loadModelThroughEndpoint(modelID)
             return
@@ -285,7 +285,7 @@ final class IntegrationsViewModel: ObservableObject {
             // /v1/models is part of the public inference API and does not
             // require a management API key. It also proves the listener that
             // the harness will use is ready.
-            var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/v1/models")!)
+            var request = URLRequest(url: serverModel.settings.serverBaseURL.appendingPathComponent("v1/models"))
             request.timeoutInterval = 3
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -296,7 +296,7 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func loadModelThroughEndpoint(_ modelID: String) async throws {
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/v1/models/load")!)
+        var request = URLRequest(url: serverModel.settings.serverBaseURL.appendingPathComponent("v1/models/load"))
         request.httpMethod = "POST"
         request.timeoutInterval = 300
         request.cachePolicy = .reloadIgnoringLocalCacheData

@@ -113,8 +113,14 @@ enum IntegrationServiceError: LocalizedError {
 
 struct IntegrationProfileManager {
     static let providerID = "nativ"
-    static let openAIBaseURL = "http://127.0.0.1:8080/v1"
-    static let anthropicBaseURL = "http://127.0.0.1:8080"
+
+    static var openAIBaseURL: String {
+        NativSettings.load().serverBaseURL.absoluteString + "/v1"
+    }
+
+    static var anthropicBaseURL: String {
+        NativSettings.load().serverBaseURL.absoluteString
+    }
 
     private let fileManager = FileManager.default
 

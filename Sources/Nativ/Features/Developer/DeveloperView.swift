@@ -10,6 +10,7 @@ struct DeveloperView: View {
     @State private var logQuery = ""
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
+    @State private var isSelectedPortAvailable = true
 
     var body: some View {
         ModelConfigurationLayout(
@@ -144,8 +145,10 @@ struct DeveloperView: View {
 
                     endpointCategoryPicker
                         .frame(width: 300, alignment: .leading)
+
+                    serverPortField
                 }
-                .frame(width: 560, alignment: .leading)
+                .frame(width: 660, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 9) {
                     endpointPanelTitle
@@ -154,6 +157,8 @@ struct DeveloperView: View {
                         endpointCategoryPicker
                             .frame(width: 320)
 
+                        serverPortField
+
                         Spacer()
                     }
                 }
@@ -161,6 +166,18 @@ struct DeveloperView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+
+            if showsPortInUseWarning {
+                Label(
+                    "Port \(String(model.settings.normalized().serverPort)) is already in use — that port can’t be used.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+            }
 
             Divider()
 
@@ -171,7 +188,7 @@ struct DeveloperView: View {
                     spacing: 8
                 ) {
                     ForEach(ServerEndpoint.endpoints(in: selectedEndpointCategory)) { endpoint in
-                        ServerEndpointRow(endpoint: endpoint) {
+                        ServerEndpointRow(endpoint: endpoint, baseURL: model.settings.serverBaseURL) {
                             copyEndpoint(endpoint)
                         }
                     }
@@ -196,11 +213,40 @@ struct DeveloperView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Server endpoints")
                     .font(.callout.weight(.semibold))
-                Text(ServerEndpoint.baseURL.absoluteString)
+                Text(model.settings.serverBaseURL.absoluteString)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var serverPortField: some View {
+        HStack(spacing: 6) {
+            Text("Port")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            TextField("", value: $model.settings.serverPort, format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.monospaced())
+                .multilineTextAlignment(.trailing)
+                .frame(width: 64)
+                .onChange(of: model.settings.serverPort) { _, newValue in
+                    model.settings.serverPort = min(max(newValue, 1), 65_535)
+                }
+        }
+        .help("The local server listens at 127.0.0.1 on this port. Changing it requires a server restart.")
+        .task(id: model.settings.normalized().serverPort) {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let port = model.settings.normalized().serverPort
+            let available = await Task.detached { ServerPortProbe.isAvailable(port) }.value
+            guard !Task.isCancelled else { return }
+            isSelectedPortAvailable = available
+        }
+    }
+
+    private var showsPortInUseWarning: Bool {
+        !isSelectedPortAvailable && model.settings.normalized().serverPort != model.activeServerPort
     }
 
     private var endpointCategoryPicker: some View {
@@ -339,19 +385,18 @@ struct DeveloperView: View {
     private func copyEndpoint(_ endpoint: ServerEndpoint) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(endpoint.absoluteURL, forType: .string)
+        pasteboard.setString(endpoint.absoluteURL(baseURL: model.settings.serverBaseURL), forType: .string)
     }
 }
 
 private struct ServerEndpoint: Identifiable {
-    static let baseURL = URL(string: "http://127.0.0.1:8080")!
-
     let method: ServerEndpointMethod
     let path: String
     let category: ServerEndpointCategory
 
     var id: String { "\(method.rawValue):\(path)" }
-    var absoluteURL: String { Self.baseURL.absoluteString + path }
+
+    func absoluteURL(baseURL: URL) -> String { baseURL.absoluteString + path }
 
     static func endpoints(in category: ServerEndpointCategory) -> [ServerEndpoint] {
         supported.filter { $0.category == category }
@@ -414,6 +459,7 @@ private enum ServerEndpointMethod: String {
 
 private struct ServerEndpointRow: View {
     let endpoint: ServerEndpoint
+    let baseURL: URL
     let copyAction: () -> Void
     @State private var isHovering = false
 
@@ -447,7 +493,7 @@ private struct ServerEndpointRow: View {
                 .fill(isHovering ? Color.secondary.opacity(0.08) : .clear)
         )
         .onHover { isHovering = $0 }
-        .help("Copy \(endpoint.absoluteURL)")
+        .help("Copy \(endpoint.absoluteURL(baseURL: baseURL))")
     }
 }
 

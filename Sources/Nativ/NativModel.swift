@@ -33,7 +33,7 @@ final class NativModel: ObservableObject {
     var onMenuStateChanged: (() -> Void)?
 
     private let server = NativProcessController()
-    private let metricsClient = NativMetricsClient()
+    private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
     private var metricsTimer: Timer?
     private var metricsStartupGraceUntil: Date?
@@ -121,8 +121,16 @@ final class NativModel: ObservableObject {
         return !settings.hasSameLaunchConfiguration(as: settingsAppliedAtServerStart)
     }
 
+    var activeServerPort: Int? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.normalized().serverPort
+    }
+
     func startServer() {
         var shouldStartMetrics = false
+        metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
