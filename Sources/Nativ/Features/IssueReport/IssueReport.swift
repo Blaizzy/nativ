@@ -238,8 +238,8 @@ enum IssueReportBuilder {
     static func githubIssueURL(title: String, label: String, body: String) -> URL? {
         var urlBody = body
         if urlBody.count > urlBodyCharacterBudget {
-            urlBody = String(urlBody.prefix(urlBodyCharacterBudget))
-                + "\n\n_Diagnostics truncated — the full report was copied to the clipboard, paste it here to replace this body._"
+            urlBody = balancedMarkdown(String(urlBody.prefix(urlBodyCharacterBudget)))
+                + "\n\n_Diagnostics truncated — the full report was copied to your clipboard; paste it here to replace this body._"
         }
 
         var components = URLComponents(string: newIssueURL)
@@ -249,5 +249,18 @@ enum IssueReportBuilder {
             URLQueryItem(name: "body", value: urlBody)
         ]
         return components?.url
+    }
+
+    private static func balancedMarkdown(_ text: String) -> String {
+        var result = text
+        if (result.components(separatedBy: "```").count - 1) % 2 != 0 {
+            result += "\n```"
+        }
+        let openDetails = result.components(separatedBy: "<details>").count - 1
+        let closeDetails = result.components(separatedBy: "</details>").count - 1
+        if openDetails > closeDetails {
+            result += String(repeating: "\n</details>", count: openDetails - closeDetails)
+        }
+        return result
     }
 }
