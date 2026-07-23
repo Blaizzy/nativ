@@ -633,7 +633,9 @@ private struct IntegrationDetailView: View {
                 Button("Choose…", action: chooseFolder)
                     .buttonStyle(.bordered)
             }
-            Text("\(tool.displayName) opens in this folder. The last folder is remembered for this tool.")
+            Text(tool == .conductor
+                 ? "Conductor creates an isolated workspace for this repository. The last folder is remembered."
+                 : "\(tool.displayName) opens in this folder. The last folder is remembered for this tool.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -652,6 +654,10 @@ private struct IntegrationDetailView: View {
             }
             if tool == .codex {
                 Text("Codex Desktop reads ~/.codex/config.toml. Configuring this integration makes the selected local model its default while preserving unrelated Codex settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if tool == .conductor {
+                Text("Conductor reads Nativ's provider variables from a dedicated env file referenced by ~/.conductor/settings.toml. Every compatible model in Nativ's local library is added through OpenCode automatically. Conductor's existing default, visible third-party models, env files, and unrelated settings are preserved.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -696,9 +702,7 @@ private struct IntegrationDetailView: View {
                 }
 
                 HStack {
-                    Text(tool == .codex
-                         ? "Choose Terminal or the Codex desktop app after the server is ready."
-                         : "This is the command opened in Terminal after the server is ready.")
+                    Text(launchDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -750,6 +754,25 @@ private struct IntegrationDetailView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isBusy || viewModel.selectedModelID == nil || workingDirectory == nil)
+            } else if tool == .conductor {
+                Button {
+                    guard let workingDirectory else { return }
+                    viewModel.configureAndOpen(tool, workingDirectory: workingDirectory)
+                } label: {
+                    if viewModel.activeOperation == tool {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Preparing…")
+                        }
+                    } else {
+                        Label(
+                            status.isConfigured ? "Create Workspace" : "Configure & Create Workspace",
+                            systemImage: "rectangle.stack.badge.plus"
+                        )
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isBusy || viewModel.selectedModelID == nil || workingDirectory == nil)
             } else {
                 Button {
                     guard let workingDirectory else { return }
@@ -767,6 +790,17 @@ private struct IntegrationDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isBusy || viewModel.selectedModelID == nil || workingDirectory == nil)
             }
+        }
+    }
+
+    private var launchDescription: String {
+        switch tool {
+        case .codex:
+            return "Choose Terminal or the Codex desktop app after the server is ready."
+        case .conductor:
+            return "This deep link opens the repository in a new Conductor workspace after the server is ready."
+        default:
+            return "This is the command opened in Terminal after the server is ready."
         }
     }
 
