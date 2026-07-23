@@ -22,7 +22,9 @@ final class NativModel: ObservableObject {
     @Published private(set) var allTimeStats = NativAllTimeStats()
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     @Published private(set) var modelSwitchInProgress = false
+    @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var metricsLoading = false
+    @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
     @Published var settings = NativSettings.load() {
         didSet {
             settings.save()
@@ -33,11 +35,12 @@ final class NativModel: ObservableObject {
     var onMenuStateChanged: (() -> Void)?
 
     private let server = NativProcessController()
-    private let metricsClient = NativMetricsClient()
+    private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
     private var metricsTimer: Timer?
     private var metricsStartupGraceUntil: Date?
     private var settingsAppliedAtServerStart: NativSettings?
+    private var huggingFaceTokenAppliedAtServerStart: String?
     private var previousSessionPromptTokenCount: Int?
     private var previousSessionGeneratedTokenCount: Int?
     private var preservedSessionMetrics: NativMetrics?
@@ -52,6 +55,56 @@ final class NativModel: ObservableObject {
         allTimeStats = NativAllTimeStats.load(from: currentAnalyticsDatabaseURL())
         configureServerCallbacks()
         isRunning = server.isRunning
+        resolveHuggingFaceEnvironmentFromLoginShell()
+    }
+
+    /// GUI apps inherit launchd's environment, which excludes exports from
+    /// shell startup files. Probe the user's login shell once for any missing
+    /// Hugging Face cache or authentication variables. Environment tokens stay
+    /// in memory; only a token entered in Developer settings is persisted.
+    private func resolveHuggingFaceEnvironmentFromLoginShell() {
+        let processEnvironment = ProcessInfo.processInfo.environment
+        let needsCacheEnvironment = !HuggingFaceCache.isConfigured(in: processEnvironment)
+        let needsTokenEnvironment = HuggingFaceAuthentication.token(in: processEnvironment) == nil
+        guard needsCacheEnvironment || needsTokenEnvironment else { return }
+
+        var names: [String] = []
+        if needsCacheEnvironment {
+            names.append(contentsOf: HuggingFaceCache.environmentVariableNames)
+        }
+        if needsTokenEnvironment {
+            names.append(HuggingFaceAuthentication.environmentVariableName)
+        }
+
+        let environmentVariableNames = names
+        Task { [weak self] in
+            let shellEnvironment = await Task.detached(priority: .utility) {
+                ShellEnvironment.resolveFromLoginShell(names: environmentVariableNames)
+            }.value
+            guard !shellEnvironment.isEmpty else { return }
+            guard let self else { return }
+            if needsCacheEnvironment {
+                let resolved = HuggingFaceCache.resolvedSearchPath(
+                    stored: self.settings.modelSearchPath,
+                    environment: shellEnvironment
+                )
+                if resolved != self.settings.modelSearchPath {
+                    self.settings.modelSearchPath = resolved
+                }
+            }
+            if needsTokenEnvironment {
+                self.environmentHuggingFaceToken = HuggingFaceAuthentication.token(
+                    in: shellEnvironment
+                )
+            }
+        }
+    }
+
+    var effectiveHuggingFaceToken: String? {
+        HuggingFaceAuthentication.effectiveToken(
+            customToken: settings.huggingFaceToken,
+            environmentToken: environmentHuggingFaceToken
+        )
     }
 
     var metricsAreStale: Bool {
@@ -63,6 +116,29 @@ final class NativModel: ObservableObject {
 
     var loadedModelDisplay: String {
         metrics?.server.displayLoadedModel ?? "None"
+    }
+
+    var isModelLoading: Bool {
+        settings.normalized().languageModelID != nil
+            && (modelSwitchInProgress || metricsLoading || modelLoadingProgress != nil)
+    }
+
+    var modelLoadingPercentage: Int? {
+        modelLoadingProgress.map { progress in
+            min(max(Int((progress * 100).rounded()), 0), 100)
+        }
+    }
+
+    var modelLoadingPercentageText: String? {
+        modelLoadingPercentage.map { "\($0)%" }
+    }
+
+    var modelLoadingStatusText: String? {
+        guard isModelLoading else { return nil }
+        if let modelLoadingPercentageText {
+            return "Loading model · \(modelLoadingPercentageText)"
+        }
+        return "Loading model…"
     }
 
     var sessionStatsDisplayMetrics: NativMetrics? {
@@ -94,27 +170,43 @@ final class NativModel: ObservableObject {
             return false
         }
         return !settings.hasSameLaunchConfiguration(as: settingsAppliedAtServerStart)
+            || effectiveHuggingFaceToken != huggingFaceTokenAppliedAtServerStart
+    }
+
+    var activeServerPort: Int? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.normalized().serverPort
     }
 
     func startServer() {
         var shouldStartMetrics = false
+        metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
+        modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
+            if let effectiveHuggingFaceToken {
+                launchEnvironment[HuggingFaceAuthentication.environmentVariableName] = effectiveHuggingFaceToken
+            }
             try server.start(
                 arguments: settings.launchArguments,
                 environment: launchEnvironment
             )
             isRunning = true
             settingsAppliedAtServerStart = settings.normalized()
+            huggingFaceTokenAppliedAtServerStart = effectiveHuggingFaceToken
             appendLog("\nStarted mlx-vlm-server.\n")
             shouldStartMetrics = true
         } catch NativError.alreadyRunning {
             isRunning = true
             settingsAppliedAtServerStart = settings.normalized()
+            huggingFaceTokenAppliedAtServerStart = effectiveHuggingFaceToken
             appendLog("\nmlx-vlm-server is already running.\n")
             shouldStartMetrics = true
         } catch {
+            modelLoadingProgress = nil
             appendLog("\nFailed to start mlx-vlm-server: \(error)\n")
         }
 
@@ -125,6 +217,7 @@ final class NativModel: ObservableObject {
     }
 
     func stopServer(preserveSessionStats: Bool = false) {
+        modelLoadingProgress = nil
         if preserveSessionStats {
             preserveCurrentSessionStats()
         } else {
@@ -144,6 +237,7 @@ final class NativModel: ObservableObject {
         isRunning = server.isRunning
         if !isRunning {
             settingsAppliedAtServerStart = nil
+            huggingFaceTokenAppliedAtServerStart = nil
         }
         stopMetricsPolling(clearSession: true)
         notifyMenuStateChanged()
@@ -211,6 +305,7 @@ final class NativModel: ObservableObject {
         }
         isRunning = false
         settingsAppliedAtServerStart = nil
+        huggingFaceTokenAppliedAtServerStart = nil
     }
 
     func resetSettings() {
@@ -258,7 +353,7 @@ final class NativModel: ObservableObject {
     private func configureServerCallbacks() {
         server.onOutput = { [weak self] text in
             Task { @MainActor [weak self] in
-                self?.appendLog(text)
+                self?.handleServerOutput(text)
             }
         }
         server.onTermination = { [weak self] status in
@@ -266,8 +361,10 @@ final class NativModel: ObservableObject {
                 self?.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
                 self?.isRunning = false
                 self?.settingsAppliedAtServerStart = nil
+                self?.huggingFaceTokenAppliedAtServerStart = nil
                 self?.stopMetricsPolling(clearSession: true)
                 self?.metricsLoading = false
+                self?.modelLoadingProgress = nil
                 if self?.isStoppingForModelSwitch != true {
                     self?.modelSwitchInProgress = false
                     self?.clearPreservedSessionStats()
@@ -314,6 +411,7 @@ final class NativModel: ObservableObject {
         lastMetricsFetchAt = nil
         metricsStartupGraceUntil = nil
         metricsLoading = false
+        modelLoadingProgress = nil
 
         if clearSession {
             metrics = nil
@@ -337,6 +435,7 @@ final class NativModel: ObservableObject {
         lastMetricsError = nil
         metricsStartupGraceUntil = nil
         metricsLoading = false
+        modelLoadingProgress = nil
         recordSessionActivity(
             promptTokenCount: fetchedMetrics.summary.promptTokensTotal,
             generatedTokenCount: fetchedMetrics.summary.generatedTokensTotal
@@ -380,6 +479,37 @@ final class NativModel: ObservableObject {
         logText.append(text)
         if logText.count > maxLogCharacters {
             logText.removeFirst(logText.count - maxLogCharacters)
+        }
+    }
+
+    private func handleServerOutput(_ text: String) {
+        let prefix = "__NATIV_MODEL_LOAD_PROGRESS__:"
+        var visibleLines: [Substring] = []
+
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \Character.isNewline) {
+            guard let markerRange = line.range(of: prefix) else {
+                visibleLines.append(line)
+                continue
+            }
+
+            let rawValue = line[markerRange.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value = Double(rawValue) {
+                modelLoadingProgress = min(max(value, 0), 1)
+                if menuIsOpen {
+                    notifyMenuStateChanged()
+                }
+            }
+
+            let leadingText = line[..<markerRange.lowerBound]
+            if !leadingText.isEmpty {
+                visibleLines.append(leadingText)
+            }
+        }
+
+        let visibleText = visibleLines.joined(separator: "\n")
+        if !visibleText.isEmpty {
+            appendLog(visibleText)
         }
     }
 

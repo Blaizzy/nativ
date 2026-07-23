@@ -24,6 +24,7 @@ struct ChatView: View {
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var followsLatestMessage = true
+    @State private var isUserScrollingTranscript = false
 
     var body: some View {
         ModelConfigurationLayout(
@@ -69,18 +70,21 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        model.settings.structuredOutputValidationError == nil
+        !model.isModelLoading
+            && model.settings.structuredOutputValidationError == nil
             && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID)
     }
 
     private var canCompose: Bool {
         model.isRunning
+            && !model.isModelLoading
             && selectedModelID?.isEmpty == false
             && model.settings.structuredOutputValidationError == nil
     }
 
     private var unavailableReason: String? {
-        chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+        model.modelLoadingStatusText
+            ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
             ?? model.settings.structuredOutputValidationError
     }
 
@@ -91,7 +95,8 @@ struct ChatView: View {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
                             isRunning: model.isRunning,
-                            selectedModelID: selectedModelID
+                            selectedModelID: selectedModelID,
+                            modelLoadingProgress: model.isModelLoading ? model.modelLoadingProgress : nil
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 120)
@@ -110,10 +115,24 @@ struct ChatView: View {
             .padding(.bottom, max(18, composerHeight))
         }
         .scrollPosition($transcriptScrollPosition)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.visibleRect.maxY >= geometry.contentSize.height - 160
-        } action: { _, isNearBottom in
-            followsLatestMessage = isNearBottom
+        .onScrollPhaseChange { _, newPhase, context in
+            switch newPhase {
+            case .tracking, .interacting:
+                isUserScrollingTranscript = true
+                followsLatestMessage = false
+            case .decelerating:
+                if isUserScrollingTranscript {
+                    followsLatestMessage = false
+                }
+            case .idle:
+                guard isUserScrollingTranscript else {
+                    return
+                }
+                isUserScrollingTranscript = false
+                followsLatestMessage = isAtTranscriptBottom(context.geometry)
+            case .animating:
+                break
+            }
         }
         .onChange(of: chat.scrollToken) { _, _ in
             if followsLatestMessage {
@@ -129,11 +148,16 @@ struct ChatView: View {
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
     }
+
+    private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
+        geometry.visibleRect.maxY >= geometry.contentSize.height - 8
+    }
 }
 
 @MainActor
 final class ChatViewModel: ObservableObject {
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
+    private static let streamFlushInterval: TimeInterval = 1.0 / 30.0
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -152,7 +176,6 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
 
-    private let client = NativChatClient()
     private let sessionStore = ChatSessionStore()
     private var activeTask: Task<Void, Never>?
     private var activeRequestID: UUID?
@@ -160,6 +183,11 @@ final class ChatViewModel: ObservableObject {
     private var storedSessions: [ChatSession] = []
     private var currentSession: ChatSession?
     private var liveDecodeRateRefreshDates: [UUID: Date] = [:]
+    private var pendingStreamContent: [UUID: String] = [:]
+    private var pendingStreamReasoning: [UUID: String] = [:]
+    private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
+    private var streamFlushDates: [UUID: Date] = [:]
+    private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
 
     init() {
@@ -312,6 +340,38 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func conversationText(for sessionID: UUID) -> String? {
+        guard let session = storedSessions.first(where: { $0.id == sessionID }) else {
+            return nil
+        }
+        var lines = [session.displayTitle, ""]
+        for message in session.messages {
+            let speaker: String
+            switch message.role {
+            case .user:
+                speaker = "You"
+            case .assistant:
+                speaker = message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 60) } ?? "Assistant"
+            case .error:
+                speaker = "Error"
+            }
+            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if content.isEmpty && message.imageAttachments.isEmpty {
+                continue
+            }
+            lines.append("\(speaker):")
+            if !message.imageAttachments.isEmpty {
+                let count = message.imageAttachments.count
+                lines.append("[\(count) attachment\(count == 1 ? "" : "s")]")
+            }
+            if !content.isEmpty {
+                lines.append(content)
+            }
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     func send(using appModel: NativModel) {
         let settings = appModel.settings.normalized()
         guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
@@ -399,6 +459,38 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.append(contentsOf: attachments)
     }
 
+    var canPasteImage: Bool {
+        ChatImageAttachment.canReadImages(from: .general)
+    }
+
+    @discardableResult
+    func attachImages(from pasteboard: NSPasteboard) -> Bool {
+        let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
+        guard !attachments.isEmpty else {
+            return false
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+        return true
+    }
+
+    func pasteImageFromClipboard() {
+        attachImages(from: .general)
+    }
+
+    func captureScreenshot() {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Nativ-Screenshot-\(UUID().uuidString).png")
+
+        Task { [weak self] in
+            let captured = await ChatScreenCapture.captureInteractive(to: fileURL)
+            guard captured, let attachment = try? ChatImageAttachment(contentsOf: fileURL) else {
+                return
+            }
+            self?.pendingImageAttachments.append(attachment)
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     func removePendingImageAttachment(_ id: UUID) {
         pendingImageAttachments.removeAll { $0.id == id }
     }
@@ -436,6 +528,8 @@ final class ChatViewModel: ObservableObject {
             if currentSessionID == queuedRequest.sessionID {
                 bumpScroll()
             }
+
+            let client = NativChatClient(baseURL: queuedRequest.settings.serverBaseURL)
 
             activeTask = Task { @MainActor [weak self] in
                 guard let self else {
@@ -584,42 +678,98 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
-        let hasTextDelta = event.content?.isEmpty == false
-            || event.reasoningContent?.isEmpty == false
-        let shouldRefreshMetrics = shouldRefreshLiveMetrics(
-            event,
-            for: id
-        )
-        guard hasTextDelta || shouldRefreshMetrics else {
+        // Accumulate deltas into buffers and flush to the published message at a
+        // capped cadence. Applying every token synchronously starves the main
+        // run loop, which freezes the transcript, thinking bubble, and "Working"
+        // animation until an input event (issue #11).
+        if let reasoningContent = event.reasoningContent, !reasoningContent.isEmpty {
+            pendingStreamReasoning[id, default: ""] += reasoningContent
+        }
+        if let content = event.content, !content.isEmpty {
+            pendingStreamContent[id, default: ""] += content
+        }
+        if shouldRefreshLiveMetrics(event, for: id) {
+            pendingStreamMetrics[id] = event
+        }
+
+        guard hasPendingStreamUpdate(id) else {
+            return
+        }
+
+        let now = Date()
+        if let lastFlush = streamFlushDates[id],
+           now.timeIntervalSince(lastFlush) < Self.streamFlushInterval {
+            scheduleStreamFlush(id, in: sessionID)
+            return
+        }
+        flushStream(id, in: sessionID)
+    }
+
+    private func hasPendingStreamUpdate(_ id: UUID) -> Bool {
+        pendingStreamContent[id]?.isEmpty == false
+            || pendingStreamReasoning[id]?.isEmpty == false
+            || pendingStreamMetrics[id] != nil
+    }
+
+    private func scheduleStreamFlush(_ id: UUID, in sessionID: UUID) {
+        guard streamFlushTasks[id] == nil else {
+            return
+        }
+        streamFlushTasks[id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.streamFlushInterval * 1_000_000_000))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.streamFlushTasks[id] = nil
+            self.flushStream(id, in: sessionID)
+        }
+    }
+
+    private func flushStream(_ id: UUID, in sessionID: UUID) {
+        streamFlushTasks[id]?.cancel()
+        streamFlushTasks[id] = nil
+
+        let content = pendingStreamContent.removeValue(forKey: id) ?? ""
+        let reasoning = pendingStreamReasoning.removeValue(forKey: id) ?? ""
+        let metrics = pendingStreamMetrics.removeValue(forKey: id)
+        guard !content.isEmpty || !reasoning.isEmpty || metrics != nil else {
             return
         }
 
         updateMessage(id, in: sessionID) { message in
-            if let reasoningContent = event.reasoningContent {
-                message.reasoningContent.append(reasoningContent)
+            if !reasoning.isEmpty {
+                message.reasoningContent.append(reasoning)
             }
-            if let content = event.content {
-                if !content.isEmpty,
-                   !message.reasoningContent.isEmpty,
-                   message.thinkingDuration == nil {
+            if !content.isEmpty {
+                if !message.reasoningContent.isEmpty, message.thinkingDuration == nil {
                     message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
                 }
                 message.content.append(content)
             }
-            if shouldRefreshMetrics {
+            if let metrics {
                 message.responseMetrics = ChatResponseMetrics(
                     totalTokens: message.responseMetrics?.totalTokens,
-                    generatedTokens: event.generatedTokens
+                    generatedTokens: metrics.generatedTokens
                         ?? message.responseMetrics?.generatedTokens,
-                    decodeTokensPerSecond: event.decodeTokensPerSecond
+                    decodeTokensPerSecond: metrics.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB
                 )
             }
         }
-        if hasTextDelta, currentSessionID == sessionID {
+        streamFlushDates[id] = Date()
+        if (!content.isEmpty || !reasoning.isEmpty), currentSessionID == sessionID {
             bumpScroll()
         }
+    }
+
+    private func clearStreamBuffers(_ id: UUID) {
+        streamFlushTasks[id]?.cancel()
+        streamFlushTasks.removeValue(forKey: id)
+        pendingStreamContent.removeValue(forKey: id)
+        pendingStreamReasoning.removeValue(forKey: id)
+        pendingStreamMetrics.removeValue(forKey: id)
+        streamFlushDates.removeValue(forKey: id)
     }
 
     private func shouldRefreshLiveMetrics(
@@ -652,6 +802,8 @@ final class ChatViewModel: ObservableObject {
         responseMetrics: ChatResponseMetrics?,
         isCancelled: Bool
     ) {
+        flushStream(id, in: sessionID)
+        clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         updateMessage(id, in: sessionID) { message in
             message.isStreaming = false
@@ -679,6 +831,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func failAssistantMessage(_ id: UUID, in sessionID: UUID, error: Error) {
+        clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         guard updateMessage(id, in: sessionID, mutate: { message in
             message.role = .error
@@ -1461,9 +1614,15 @@ private struct ChatMessageText: View {
 private struct ChatEmptyTranscriptView: View {
     let isRunning: Bool
     let selectedModelID: String?
+    let modelLoadingProgress: Double?
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 9) {
+            if let modelLoadingProgress {
+                ProgressView(value: modelLoadingProgress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 180)
+            }
             Text(title)
                 .font(.headline)
             Text(detail)
@@ -1473,6 +1632,9 @@ private struct ChatEmptyTranscriptView: View {
     }
 
     private var title: String {
+        if modelLoadingProgress != nil {
+            return "Loading model"
+        }
         if !isRunning {
             return "Server is stopped"
         }
@@ -1483,6 +1645,10 @@ private struct ChatEmptyTranscriptView: View {
     }
 
     private var detail: String {
+        if let modelLoadingProgress {
+            let percentage = Int((modelLoadingProgress * 100).rounded())
+            return "\(selectedModelID ?? "Model") · \(percentage)%"
+        }
         if !isRunning {
             return "Start the server to chat."
         }

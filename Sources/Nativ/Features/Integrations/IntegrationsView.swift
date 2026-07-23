@@ -2,6 +2,19 @@ import AppKit
 import Combine
 import SwiftUI
 
+extension IntegrationModelDescriptor {
+    init(localModel: LocalModel) {
+        self.init(
+            id: localModel.repoID,
+            displayName: localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID,
+            contextWindow: localModel.contextSize,
+            supportsVision: localModel.capabilities.contains(.vision),
+            supportsReasoning: localModel.capabilities.contains(.reasoning),
+            supportsTools: localModel.capabilities.contains(.tools)
+        )
+    }
+}
+
 @MainActor
 final class IntegrationsViewModel: ObservableObject {
     @Published var selectedTool: IntegrationTool?
@@ -15,7 +28,6 @@ final class IntegrationsViewModel: ObservableObject {
 
     let library = LocalModelLibrary()
     private let serverModel: NativModel
-    private let profiles = IntegrationProfileManager()
     private let defaults = UserDefaults.standard
     private var libraryObservation: AnyCancellable?
 
@@ -46,6 +58,21 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     var isBusy: Bool { activeOperation != nil }
+
+    var integrationEndpoint: String {
+        profiles.openAIBaseURL
+    }
+
+    private var integrationServerBaseURL: URL {
+        guard let activeServerPort = serverModel.activeServerPort else {
+            return serverModel.settings.serverBaseURL
+        }
+        return URL(string: "http://127.0.0.1:\(activeServerPort)")!
+    }
+
+    private var profiles: IntegrationProfileManager {
+        IntegrationProfileManager(serverBaseURL: integrationServerBaseURL)
+    }
 
     func appear() {
         library.scan(path: serverModel.settings.modelSearchPath)
@@ -97,9 +124,6 @@ final class IntegrationsViewModel: ObservableObject {
         activeOperation = tool
         do {
             try configureProfile(tool: tool, selectedModelID: selectedModelID)
-            if tool == .codex {
-                try profiles.configureCodexDesktop(selectedModelID: selectedModelID)
-            }
             var status = statuses[tool] ?? .unavailable
             status.isConfigured = true
             statuses[tool] = status
@@ -131,40 +155,6 @@ final class IntegrationsViewModel: ObservableObject {
                 try await prepareServer(modelID: selectedModelID)
                 try profiles.launch(
                     tool: tool,
-                    executableURL: executableURL,
-                    selectedModelID: selectedModelID,
-                    workingDirectory: workingDirectory
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            activeOperation = nil
-        }
-    }
-
-    func configureAndOpenCodexDesktop(workingDirectory: URL) {
-        let tool = IntegrationTool.codex
-        guard let selectedModelID else {
-            errorMessage = IntegrationServiceError.noModel.localizedDescription
-            return
-        }
-        guard let executableURL = statuses[tool]?.executableURL else {
-            errorMessage = IntegrationServiceError.missingExecutable(tool).localizedDescription
-            return
-        }
-
-        rememberWorkingDirectory(workingDirectory, for: tool)
-        activeOperation = tool
-        Task {
-            do {
-                try configureProfile(tool: tool, selectedModelID: selectedModelID)
-                try profiles.configureCodexDesktop(selectedModelID: selectedModelID)
-                var status = statuses[tool] ?? .unavailable
-                status.isConfigured = true
-                statuses[tool] = status
-
-                try await prepareServer(modelID: selectedModelID)
-                try profiles.launchCodexDesktop(
                     executableURL: executableURL,
                     selectedModelID: selectedModelID,
                     workingDirectory: workingDirectory
@@ -226,30 +216,12 @@ final class IntegrationsViewModel: ObservableObject {
         )
     }
 
-    func codexDesktopLaunchCommand(workingDirectory: URL) -> String? {
-        guard
-            let selectedModelID,
-            let executableURL = statuses[.codex]?.executableURL
-        else { return nil }
-        return profiles.codexDesktopLaunchCommand(
-            executableURL: executableURL,
-            selectedModelID: selectedModelID,
-            workingDirectory: workingDirectory
-        )
-    }
-
-    func copyCodexDesktopLaunchCommand(workingDirectory: URL) {
-        guard let command = codexDesktopLaunchCommand(workingDirectory: workingDirectory) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-    }
-
     private func prepareServer(modelID: String) async throws {
         // Keep the process alive and hot-swap its text-generation cache through
         // the management endpoint. The harness also sends this model on every
         // inference request, so subsequent responses stay on the selection.
         // Check the listener before starting a process because an earlier app
-        // session may still own the bundled server on port 8080.
+        // session may still own the bundled server on the configured port.
         if await inferenceEndpointIsReady() {
             try await loadModelThroughEndpoint(modelID)
             return
@@ -285,7 +257,7 @@ final class IntegrationsViewModel: ObservableObject {
             // /v1/models is part of the public inference API and does not
             // require a management API key. It also proves the listener that
             // the harness will use is ready.
-            var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/v1/models")!)
+            var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models"))
             request.timeoutInterval = 3
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -296,7 +268,7 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func loadModelThroughEndpoint(_ modelID: String) async throws {
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/v1/models/load")!)
+        var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models/load"))
         request.httpMethod = "POST"
         request.timeoutInterval = 300
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -644,7 +616,7 @@ private struct IntegrationDetailView: View {
     private var configurationPanel: some View {
         IntegrationPanel(title: "Managed configuration", systemImage: "gearshape.2") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
-                IntegrationConfigurationRow(label: "Endpoint", value: IntegrationProfileManager.openAIBaseURL)
+                IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "Profile", value: IntegrationProfileManager.providerID)
                 IntegrationConfigurationRow(label: "Model loading", value: "On demand · no restart")
                 IntegrationConfigurationRow(label: "Responses", value: "Streaming")
@@ -653,7 +625,7 @@ private struct IntegrationDetailView: View {
                 }
             }
             if tool == .codex {
-                Text("Codex Desktop reads ~/.codex/config.toml. Configuring this integration makes the selected local model its default while preserving unrelated Codex settings.")
+                Text("Nativ writes only ~/.codex/nativ.config.toml. Your default Codex app and ~/.codex/config.toml are left unchanged; the local model is selected only for CLI launches using --profile nativ.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if tool == .conductor {
@@ -686,34 +658,11 @@ private struct IntegrationDetailView: View {
                 }
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 
-                if tool == .codex,
-                   let desktopCommand = viewModel.codexDesktopLaunchCommand(workingDirectory: workingDirectory) {
-                    Text("Desktop app")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    ScrollView(.horizontal) {
-                        Text(desktopCommand)
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                }
-
                 HStack {
                     Text(launchDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    if tool == .codex {
-                        Button {
-                            viewModel.copyCodexDesktopLaunchCommand(workingDirectory: workingDirectory)
-                        } label: {
-                            Label("Copy Desktop", systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(.bordered)
-                    }
                     Button {
                         viewModel.copyLaunchCommand(for: tool, workingDirectory: workingDirectory)
                     } label: {
@@ -795,8 +744,6 @@ private struct IntegrationDetailView: View {
 
     private var launchDescription: String {
         switch tool {
-        case .codex:
-            return "Choose Terminal or the Codex desktop app after the server is ready."
         case .conductor:
             return "This deep link opens the repository in a new Conductor workspace after the server is ready."
         default:

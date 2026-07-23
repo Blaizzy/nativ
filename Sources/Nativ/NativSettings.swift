@@ -2,14 +2,21 @@ import Foundation
 import NativServerKit
 
 struct NativSettings: Codable, Equatable {
-    static let defaultModelSearchPath = "~/.cache/huggingface/hub"
+    /// Default hub cache location, resolved from the environment.
+    /// See `HuggingFaceCache.defaultHubPath`.
+    static var defaultModelSearchPath: String {
+        HuggingFaceCache.defaultHubPath()
+    }
 
     var modelSearchPath: String
+    var additionalModelSearchPaths: [String]
     var languageModelID: String?
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
     var serverAPIKey: String?
+    var huggingFaceToken: String?
+    var serverPort: Int
     var maxTokens: Int
     var maxKVSize: Int
     var systemPrompt: String
@@ -42,11 +49,14 @@ struct NativSettings: Codable, Equatable {
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
+        additionalModelSearchPaths: [String] = [],
         languageModelID: String? = nil,
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
         speechToTextModelID: String? = nil,
         serverAPIKey: String? = nil,
+        huggingFaceToken: String? = nil,
+        serverPort: Int = 8080,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
         systemPrompt: String = "",
@@ -78,11 +88,14 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize: Int = 16
     ) {
         self.modelSearchPath = modelSearchPath
+        self.additionalModelSearchPaths = additionalModelSearchPaths
         self.languageModelID = languageModelID
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
         self.serverAPIKey = serverAPIKey
+        self.huggingFaceToken = huggingFaceToken
+        self.serverPort = serverPort
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
         self.systemPrompt = systemPrompt
@@ -116,11 +129,14 @@ struct NativSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case modelSearchPath
+        case additionalModelSearchPaths
         case languageModelID
         case imageGenerationModelID
         case textToSpeechModelID
         case speechToTextModelID
         case serverAPIKey
+        case huggingFaceToken
+        case serverPort
         case selectedModelID
         case maxTokens
         case maxKVSize
@@ -157,12 +173,16 @@ struct NativSettings: Codable, Equatable {
         let defaults = Self()
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let legacySelectedModelID = try container.decodeIfPresent(String.self, forKey: .selectedModelID)
-        modelSearchPath = try container.decodeIfPresent(String.self, forKey: .modelSearchPath) ?? defaults.modelSearchPath
+        let storedModelSearchPath = try container.decodeIfPresent(String.self, forKey: .modelSearchPath)
+        modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
+        additionalModelSearchPaths = try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths) ?? defaults.additionalModelSearchPaths
         languageModelID = try container.decodeIfPresent(String.self, forKey: .languageModelID) ?? legacySelectedModelID ?? defaults.languageModelID
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
         speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
         serverAPIKey = try container.decodeIfPresent(String.self, forKey: .serverAPIKey) ?? defaults.serverAPIKey
+        huggingFaceToken = try container.decodeIfPresent(String.self, forKey: .huggingFaceToken) ?? defaults.huggingFaceToken
+        serverPort = try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize = try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? defaults.systemPrompt
@@ -197,11 +217,14 @@ struct NativSettings: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
+        try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
         try container.encodeIfPresent(serverAPIKey, forKey: .serverAPIKey)
+        try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
+        try container.encode(serverPort, forKey: .serverPort)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
         try container.encode(systemPrompt, forKey: .systemPrompt)
@@ -258,11 +281,17 @@ struct NativSettings: Codable, Equatable {
         var settings = self
         let trimmedPath = settings.modelSearchPath.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.modelSearchPath = trimmedPath.isEmpty ? Self.defaultModelSearchPath : trimmedPath
+        var seenAdditionalPaths = Set<String>()
+        settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
         settings.serverAPIKey = Self.normalizedModelID(settings.serverAPIKey)
+        settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
+        settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
         settings.systemPrompt = settings.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -296,6 +325,8 @@ struct NativSettings: Codable, Equatable {
         return lhs.modelSearchPath == rhs.modelSearchPath
             && lhs.languageModelID == rhs.languageModelID
             && lhs.serverAPIKey == rhs.serverAPIKey
+            && lhs.huggingFaceToken == rhs.huggingFaceToken
+            && lhs.serverPort == rhs.serverPort
             && lhs.maxTokens == rhs.maxTokens
             && lhs.maxKVSize == rhs.maxKVSize
             && lhs.kvQuantizationEnabled == rhs.kvQuantizationEnabled
@@ -318,6 +349,10 @@ struct NativSettings: Codable, Equatable {
             ))
     }
 
+    var serverBaseURL: URL {
+        URL(string: "http://127.0.0.1:\(min(max(serverPort, 1), 65_535))")!
+    }
+
     var launchEnvironment: [String: String] {
         let settings = normalized()
         var environment = [
@@ -327,6 +362,9 @@ struct NativSettings: Codable, Equatable {
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
         if let serverAPIKey = settings.serverAPIKey {
             environment["MLX_VLM_SERVER_API_KEY"] = serverAPIKey
+        }
+        if let huggingFaceToken = settings.huggingFaceToken {
+            environment[HuggingFaceAuthentication.environmentVariableName] = huggingFaceToken
         }
         if settings.prefixCachingEnabled {
             environment["APC_NUM_BLOCKS"] = "\(settings.prefixCacheBlocks)"
@@ -338,6 +376,7 @@ struct NativSettings: Codable, Equatable {
     var launchArguments: [String] {
         let settings = normalized()
         var arguments = [
+            "--port", "\(settings.serverPort)",
             "--max-tokens", "\(settings.maxTokens)"
         ]
 

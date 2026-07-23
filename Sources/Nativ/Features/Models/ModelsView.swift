@@ -16,12 +16,19 @@ private enum HubAccessFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private struct HubSearchTaskID: Hashable {
+    let section: ModelsPageSection
+    let query: String
+    let sort: HuggingFaceModelSort
+    let authenticationToken: String?
+}
+
 struct ModelsView: View {
     @ObservedObject var model: NativModel
     @Binding var showsConfiguration: Bool
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
-    @StateObject private var downloadManager = HuggingFaceDownloadManager()
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
     @State private var section: ModelsPageSection = .installed
     @State private var localQuery = ""
     @State private var hubQuery = ""
@@ -48,18 +55,21 @@ struct ModelsView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: modelScanPath) {
-            localLibrary.scan(path: model.settings.modelSearchPath)
+            rescanLocalModels()
         }
         .task(id: hubSearchTaskID) {
             guard section == .discover else { return }
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            hubLibrary.search(query: hubQuery, sort: hubSort)
+            hubLibrary.search(
+                query: hubQuery,
+                sort: hubSort,
+                token: model.effectiveHuggingFaceToken
+            )
         }
         .onDisappear {
             localLibrary.cancel()
             hubLibrary.cancel()
-            downloadManager.cancelDownload()
         }
     }
 
@@ -89,8 +99,10 @@ struct ModelsView: View {
             HStack(spacing: 10) {
                 ModelsSearchField(prompt: "Filter installed models", text: $localQuery)
 
+                sourcesMenu
+
                 Button {
-                    localLibrary.scan(path: model.settings.modelSearchPath)
+                    rescanLocalModels()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -139,9 +151,10 @@ struct ModelsView: View {
                             InstalledModelRow(
                                 localModel: localModel,
                                 selectedLanguageModelID: model.settings.normalized().languageModelID,
-                                isModelSwitchInProgress: model.modelSwitchInProgress,
+                                isModelLoading: model.isModelLoading,
+                                modelLoadingPercentage: model.modelLoadingPercentage,
                                 isDeleting: localLibrary.deletingModelIDs.contains(localModel.repoID),
-                                canDelete: !model.modelSwitchInProgress && !isModelInUse(localModel.repoID),
+                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress && !isModelInUse(localModel.repoID),
                                 onLoadModel: { model.switchLanguageModel(to: localModel.repoID) },
                                 onDelete: { deleteInstalledModel(localModel) }
                             )
@@ -218,9 +231,10 @@ struct ModelsView: View {
                                     onDownload: {
                                         downloadManager.download(
                                             repoID: hubModel.id,
-                                            cachePath: model.settings.modelSearchPath
+                                            cachePath: model.settings.modelSearchPath,
+                                            token: model.effectiveHuggingFaceToken
                                         ) {
-                                            localLibrary.scan(path: model.settings.modelSearchPath)
+                                            rescanLocalModels()
                                             NotificationCenter.default.post(
                                                 name: .localModelLibraryDidChange,
                                                 object: nil
@@ -257,7 +271,7 @@ struct ModelsView: View {
                                 .frame(minWidth: 122)
 
                             Button {
-                                hubLibrary.goToNextPage()
+                                hubLibrary.goToNextPage(token: model.effectiveHuggingFaceToken)
                             } label: {
                                 Label("Next", systemImage: "chevron.right")
                                     .labelStyle(.titleAndIcon)
@@ -290,6 +304,7 @@ struct ModelsView: View {
     }
 
     private func deleteInstalledModel(_ localModel: LocalModel) {
+        guard localModel.isDeletable else { return }
         localLibrary.delete(
             model: localModel,
             path: model.settings.modelSearchPath
@@ -318,6 +333,7 @@ struct ModelsView: View {
             ? localLibrary.models
             : localLibrary.models.filter {
                 $0.repoID.localizedCaseInsensitiveContains(query)
+                    || $0.displayName.localizedCaseInsensitiveContains(query)
                     || $0.provider?.displayName.localizedCaseInsensitiveContains(query) == true
             }
 
@@ -538,11 +554,74 @@ struct ModelsView: View {
     }
 
     private var modelScanPath: String {
-        model.settings.normalized().expandedModelSearchPath
+        let settings = model.settings.normalized()
+        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
+            .joined(separator: "\u{0}")
     }
 
-    private var hubSearchTaskID: String {
-        "\(section.rawValue):\(hubQuery):\(hubSort.rawValue)"
+    private var sourcesMenu: some View {
+        Menu {
+            Section("Hugging Face cache") {
+                Text(abbreviatedPath(model.settings.normalized().modelSearchPath))
+            }
+            Section("Model folders") {
+                ForEach(model.settings.normalized().additionalModelSearchPaths, id: \.self) { path in
+                    Menu(abbreviatedPath(path)) {
+                        Button("Remove", role: .destructive) {
+                            removeModelSourceFolder(path)
+                        }
+                    }
+                }
+                Button {
+                    addModelSourceFolder()
+                } label: {
+                    Label("Add Folder…", systemImage: "plus")
+                }
+            }
+        } label: {
+            Label("Sources", systemImage: "folder")
+        }
+        .fixedSize()
+        .help("Folders scanned for MLX models in addition to the Hugging Face cache")
+    }
+
+    private func rescanLocalModels() {
+        localLibrary.scan(
+            path: model.settings.modelSearchPath,
+            additionalPaths: model.settings.normalized().additionalModelSearchPaths
+        )
+    }
+
+    private func addModelSourceFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        panel.message = "Choose a folder containing MLX models."
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        model.settings.additionalModelSearchPaths.append(
+            (url.path as NSString).abbreviatingWithTildeInPath
+        )
+    }
+
+    private func removeModelSourceFolder(_ path: String) {
+        model.settings.additionalModelSearchPaths.removeAll { $0 == path }
+    }
+
+    private func abbreviatedPath(_ path: String) -> String {
+        (LocalModelDiscovery.expandedPath(path) as NSString).abbreviatingWithTildeInPath
+    }
+
+    private var hubSearchTaskID: HubSearchTaskID {
+        HubSearchTaskID(
+            section: section,
+            query: hubQuery,
+            sort: hubSort,
+            authenticationToken: model.effectiveHuggingFaceToken
+        )
     }
 
     private var hubModelsURL: URL {
@@ -613,7 +692,8 @@ private struct ModelsSearchField: View {
 private struct InstalledModelRow: View {
     let localModel: LocalModel
     let selectedLanguageModelID: String?
-    let isModelSwitchInProgress: Bool
+    let isModelLoading: Bool
+    let modelLoadingPercentage: Int?
     let isDeleting: Bool
     let canDelete: Bool
     let onLoadModel: () -> Void
@@ -627,13 +707,13 @@ private struct InstalledModelRow: View {
     }
 
     private var isLoading: Bool {
-        isSelected && isModelSwitchInProgress
+        isSelected && isModelLoading
     }
 
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                guard !isSelected, !isModelSwitchInProgress else { return }
+                guard !isSelected, !isModelLoading else { return }
                 onLoadModel()
             } label: {
                 HStack(spacing: 14) {
@@ -641,12 +721,20 @@ private struct InstalledModelRow: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 7) {
-                            Text(modelName(localModel.repoID))
+                            Text(modelName(localModel.displayName))
                                 .font(.body.weight(.semibold))
                                 .lineLimit(1)
+                            if let sourceLabel = localModel.source.badgeLabel {
+                                ModelPill(
+                                    title: sourceLabel,
+                                    systemImage: "cube",
+                                    color: .purple
+                                )
+                            }
                             if isLoading {
                                 ModelPill(
-                                    title: "Loading model",
+                                    title: modelLoadingPercentage.map { "Loading model · \($0)%" }
+                                        ?? "Loading model",
                                     systemImage: "arrow.triangle.2.circlepath",
                                     color: .orange
                                 )
@@ -759,6 +847,14 @@ private struct HubModelRow: View {
                             .lineLimit(1)
                         if model.isGated {
                             ModelPill(title: "Gated", systemImage: "lock")
+                        }
+                        if let memoryEstimate = model.memoryEstimate, !memoryEstimate.isUsable {
+                            ModelPill(
+                                title: "May not fit in memory",
+                                systemImage: "exclamationmark.triangle.fill",
+                                color: .orange
+                            )
+                            .help("Pre-download estimate. \(memoryEstimate.explanation)")
                         }
                     }
 

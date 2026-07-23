@@ -42,6 +42,18 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     }
 }
 
+enum LocalModelSource: String, Equatable, Sendable {
+    case huggingFaceCache
+    case external
+
+    var badgeLabel: String? {
+        switch self {
+        case .huggingFaceCache: nil
+        case .external: "External"
+        }
+    }
+}
+
 struct LocalModel: Identifiable, Equatable, Sendable {
     var id: String { repoID }
 
@@ -49,13 +61,159 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     let snapshotURL: URL?
     let modifiedAt: Date?
     let sizeBytes: Int64?
+    let parameterCount: Int64?
+    let quantizationBits: Int?
+    let quantizationGroupSize: Int?
     let contextSize: Int?
     let provider: LocalModelProvider?
     let capabilities: Set<LocalModelCapability>
+    var source: LocalModelSource = .huggingFaceCache
+
+    var displayName: String {
+        guard source != .huggingFaceCache, let snapshotURL else {
+            return repoID
+        }
+        let components = snapshotURL.standardizedFileURL.pathComponents.suffix(2)
+        return components.joined(separator: "/")
+    }
+
+    var isDeletable: Bool {
+        source == .huggingFaceCache
+    }
 
     var isEligibleForLanguageModelPicker: Bool {
         !capabilities.contains(.speechToText)
             && !capabilities.contains(.textToSpeech)
+    }
+
+    var parameterSizeLabel: String? {
+        guard let parameterCount, parameterCount > 0 else {
+            return nil
+        }
+        if parameterCount >= 1_000_000_000 {
+            return Self.compactCount(Double(parameterCount) / 1_000_000_000, suffix: "B")
+        }
+        if parameterCount >= 1_000_000 {
+            return Self.compactCount(Double(parameterCount) / 1_000_000, suffix: "M")
+        }
+        return NumberFormatter.localizedString(
+            from: NSNumber(value: parameterCount),
+            number: .decimal
+        )
+    }
+
+    var quantizationLabel: String? {
+        quantizationBits.map { "\($0)-bit" }
+    }
+
+    func memoryEstimate(
+        totalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) -> LocalModelMemoryEstimate? {
+        guard totalMemoryBytes > 0 else {
+            return nil
+        }
+
+        var estimates: [Double] = []
+        if let sizeBytes, sizeBytes > 0 {
+            estimates.append(Double(sizeBytes))
+        }
+
+        if let parameterCount, parameterCount > 0 {
+            let bitsPerParameter = Double(quantizationBits ?? 16)
+            var bytesPerParameter = bitsPerParameter / 8
+
+            // MLX quantization stores a scale and bias (two Float16 values) per group.
+            if quantizationBits != nil,
+               let quantizationGroupSize,
+               quantizationGroupSize > 0 {
+                bytesPerParameter += 4 / Double(quantizationGroupSize)
+            }
+            estimates.append(Double(parameterCount) * bytesPerParameter)
+        }
+
+        guard let estimatedBytes = estimates.max(),
+              estimatedBytes.isFinite,
+              estimatedBytes > 0,
+              estimatedBytes <= Double(Int64.max)
+        else {
+            return nil
+        }
+
+        let memoryBudgetBytes = UInt64(
+            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
+                .rounded(.down)
+        )
+        return LocalModelMemoryEstimate(
+            estimatedModelBytes: UInt64(estimatedBytes.rounded(.up)),
+            memoryBudgetBytes: memoryBudgetBytes,
+            totalMemoryBytes: totalMemoryBytes,
+            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
+        )
+    }
+
+    private static func compactCount(_ value: Double, suffix: String) -> String {
+        if value.rounded() == value {
+            return "\(Int(value))\(suffix)"
+        }
+        return String(format: "%.1f%@", value, suffix)
+    }
+}
+
+struct LocalModelMemoryEstimate: Equatable, Sendable {
+    static let headroomFraction = 0.20
+
+    /// Coarse peak-activation reserve for image-generation pipelines. Diffusion
+    /// activation memory (attention + VAE decode) is roughly dtype-independent
+    /// and grows with resolution, so a weights-only estimate green-lights
+    /// pipelines that OOM at generation. Starting constant — refine per family
+    /// and output resolution later.
+    static let imageGenerationActivationReserveBytes: UInt64 = 6 * 1024 * 1024 * 1024
+
+    static func activationReserveBytes(for capabilities: Set<LocalModelCapability>) -> UInt64 {
+        capabilities.contains(.imageGeneration) ? imageGenerationActivationReserveBytes : 0
+    }
+
+    let estimatedModelBytes: UInt64
+    let memoryBudgetBytes: UInt64
+    let totalMemoryBytes: UInt64
+    var activationReserveBytes: UInt64 = 0
+
+    /// Resident weights plus any peak-activation reserve, saturating on overflow.
+    var workingSetBytes: UInt64 {
+        let sum = estimatedModelBytes.addingReportingOverflow(activationReserveBytes)
+        return sum.overflow ? UInt64.max : sum.partialValue
+    }
+
+    var isUsable: Bool {
+        workingSetBytes <= memoryBudgetBytes
+    }
+
+    var compatibilityLabel: String {
+        isUsable ? "Likely fits in memory" : "May not fit in memory"
+    }
+
+    var explanation: String {
+        let estimated = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: estimatedModelBytes),
+            countStyle: .memory
+        )
+        let budget = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: memoryBudgetBytes),
+            countStyle: .memory
+        )
+        let total = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: totalMemoryBytes),
+            countStyle: .memory
+        )
+        let headroomPercent = Int((Self.headroomFraction * 100).rounded())
+        if activationReserveBytes > 0 {
+            let reserve = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: activationReserveBytes),
+                countStyle: .memory
+            )
+            return "Estimated weights: \(estimated), plus ~\(reserve) peak activation for image generation. Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
+        }
+        return "Estimated model memory: \(estimated). Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
     }
 }
 
@@ -65,10 +223,22 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
 }
 
 enum LocalModelDiscovery {
-    static func scan(path: String) async throws -> [LocalModel] {
+    static func scan(path: String, additionalPaths: [String] = []) async throws -> [LocalModel] {
         let expandedPath = Self.expandedPath(path)
+        let expandedAdditionalPaths = additionalPaths.map(Self.expandedPath)
         return try await Task.detached(priority: .userInitiated) {
-            try Self.scanSynchronously(path: expandedPath)
+            let externalModels = Self.scanAdditionalPathsSynchronously(
+                expandedAdditionalPaths,
+                fileManager: FileManager.default
+            )
+            do {
+                return Self.sortedByDisplayName(try Self.scanSynchronously(path: expandedPath) + externalModels)
+            } catch {
+                guard !externalModels.isEmpty else {
+                    throw error
+                }
+                return Self.sortedByDisplayName(externalModels)
+            }
         }.value
     }
 
@@ -144,11 +314,19 @@ enum LocalModelDiscovery {
             }
 
             let modifiedAt = (try? snapshotURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let memoryMetadata = modelMemoryMetadata(
+                repoID: repoID,
+                snapshotURL: snapshotURL,
+                fileManager: fileManager
+            )
             return LocalModel(
                 repoID: repoID,
                 snapshotURL: snapshotURL,
                 modifiedAt: modifiedAt,
                 sizeBytes: snapshotSize(at: snapshotURL, fileManager: fileManager),
+                parameterCount: memoryMetadata.parameterCount,
+                quantizationBits: memoryMetadata.quantizationBits,
+                quantizationGroupSize: memoryMetadata.quantizationGroupSize,
                 contextSize: contextSize(at: snapshotURL, fileManager: fileManager),
                 provider: modelProvider(
                     repoID: repoID,
@@ -159,8 +337,12 @@ enum LocalModelDiscovery {
             )
         }
 
-        return models.sorted { lhs, rhs in
-            switch lhs.repoID.localizedCaseInsensitiveCompare(rhs.repoID) {
+        return models
+    }
+
+    private static func sortedByDisplayName(_ models: [LocalModel]) -> [LocalModel] {
+        models.sorted { lhs, rhs in
+            switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
             case .orderedAscending:
                 return true
             case .orderedDescending:
@@ -171,11 +353,107 @@ enum LocalModelDiscovery {
         }
     }
 
+    private static func scanAdditionalPathsSynchronously(
+        _ rootPaths: [String],
+        fileManager: FileManager
+    ) -> [LocalModel] {
+        var models: [LocalModel] = []
+        var seenPaths = Set<String>()
+
+        for rootPath in rootPaths {
+            let rootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
+            guard isDirectoryURL(rootURL, fileManager: fileManager) else {
+                continue
+            }
+
+            if isLikelyMLXModelSnapshot(rootURL, fileManager: fileManager) {
+                if let model = externalModel(at: rootURL, fileManager: fileManager, seenPaths: &seenPaths) {
+                    models.append(model)
+                }
+                continue
+            }
+
+            for childURL in directoryContents(of: rootURL, fileManager: fileManager) {
+                if isLikelyMLXModelSnapshot(childURL, fileManager: fileManager) {
+                    if let model = externalModel(at: childURL, fileManager: fileManager, seenPaths: &seenPaths) {
+                        models.append(model)
+                    }
+                    continue
+                }
+
+                for grandchildURL in directoryContents(of: childURL, fileManager: fileManager)
+                where isLikelyMLXModelSnapshot(grandchildURL, fileManager: fileManager) {
+                    if let model = externalModel(at: grandchildURL, fileManager: fileManager, seenPaths: &seenPaths) {
+                        models.append(model)
+                    }
+                }
+            }
+        }
+        return models
+    }
+
+    private static func directoryContents(of url: URL, fileManager: FileManager) -> [URL] {
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return contents.filter { isDirectoryURL($0, fileManager: fileManager) }
+    }
+
+    private static func externalModel(
+        at modelURL: URL,
+        fileManager: FileManager,
+        seenPaths: inout Set<String>
+    ) -> LocalModel? {
+        let standardizedPath = modelURL.standardizedFileURL.path
+        guard seenPaths.insert(standardizedPath).inserted else {
+            return nil
+        }
+
+        let hubStyleID = modelURL.standardizedFileURL.pathComponents.suffix(2).joined(separator: "/")
+        let modifiedAt = (try? modelURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let memoryMetadata = modelMemoryMetadata(
+            repoID: hubStyleID,
+            snapshotURL: modelURL,
+            fileManager: fileManager
+        )
+        return LocalModel(
+            repoID: standardizedPath,
+            snapshotURL: modelURL,
+            modifiedAt: modifiedAt,
+            sizeBytes: snapshotSize(at: modelURL, fileManager: fileManager),
+            parameterCount: memoryMetadata.parameterCount,
+            quantizationBits: memoryMetadata.quantizationBits,
+            quantizationGroupSize: memoryMetadata.quantizationGroupSize,
+            contextSize: contextSize(at: modelURL, fileManager: fileManager),
+            provider: modelProvider(
+                repoID: hubStyleID,
+                snapshotURL: modelURL,
+                fileManager: fileManager
+            ),
+            capabilities: modelCapabilities(at: modelURL, fileManager: fileManager),
+            source: .external
+        )
+    }
+
     private static func configurationMetadataSynchronously(
         repoID: String,
         path: String
     ) -> LocalModelConfigurationMetadata? {
         let fileManager = FileManager.default
+
+        if repoID.hasPrefix("/") {
+            let directURL = URL(fileURLWithPath: repoID, isDirectory: true)
+            guard isDirectoryURL(directURL, fileManager: fileManager) else {
+                return nil
+            }
+            return LocalModelConfigurationMetadata(
+                contextSize: contextSizeFromConfig(at: directURL, fileManager: fileManager),
+                defaultSystemPrompt: defaultSystemPrompt(at: directURL, fileManager: fileManager)
+            )
+        }
+
         let repositoryName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
         let repositoryURL = URL(fileURLWithPath: path, isDirectory: true)
             .appendingPathComponent(repositoryName, isDirectory: true)
@@ -307,6 +585,118 @@ enum LocalModelDiscovery {
         }
 
         return foundFile ? totalBytes : nil
+    }
+
+    private struct ModelMemoryMetadata {
+        let parameterCount: Int64?
+        let quantizationBits: Int?
+        let quantizationGroupSize: Int?
+    }
+
+    private static func modelMemoryMetadata(
+        repoID: String,
+        snapshotURL: URL,
+        fileManager: FileManager
+    ) -> ModelMemoryMetadata {
+        let configURL = snapshotURL.appendingPathComponent("config.json")
+        let config: [String: Any]? = if fileManager.fileExists(atPath: configURL.path),
+                                       let data = try? Data(contentsOf: configURL) {
+            try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } else {
+            nil
+        }
+
+        let quantization = (config?["quantization"] as? [String: Any])
+            ?? (config?["quantization_config"] as? [String: Any])
+        let parameterCount = integer64Value(config?["num_parameters"])
+            ?? integer64Value(config?["parameter_count"])
+            ?? parameterCount(from: repoID)
+        let quantizationBits = integerValue(quantization?["bits"])
+            ?? integerValue(quantization?["nbits"])
+            ?? quantizationBits(from: repoID)
+        let quantizationGroupSize = integerValue(quantization?["group_size"])
+
+        return ModelMemoryMetadata(
+            parameterCount: parameterCount,
+            quantizationBits: quantizationBits,
+            quantizationGroupSize: quantizationGroupSize
+        )
+    }
+
+    private static func integerValue(_ value: Any?) -> Int? {
+        if let value = value as? Int {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.intValue
+        }
+        if let value = value as? String {
+            return Int(value)
+        }
+        return nil
+    }
+
+    private static func integer64Value(_ value: Any?) -> Int64? {
+        if let value = value as? Int64 {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.int64Value
+        }
+        if let value = value as? String {
+            return Int64(value)
+        }
+        return nil
+    }
+
+    static func parameterCount(from repoID: String) -> Int64? {
+        firstNumericModelDescriptor(
+            in: repoID,
+            pattern: #"(?i)(?:^|[/_-])(\d+(?:\.\d+)?)\s*([bm])(?:$|[/_-])"#
+        ) { value, suffix in
+            let multiplier = suffix.lowercased() == "b" ? 1_000_000_000.0 : 1_000_000.0
+            let result = value * multiplier
+            guard result.isFinite, result > 0, result <= Double(Int64.max) else {
+                return nil
+            }
+            return Int64(result.rounded())
+        }
+    }
+
+    static func quantizationBits(from repoID: String) -> Int? {
+        firstNumericModelDescriptor(
+            in: repoID,
+            pattern: #"(?i)(?:^|[/_-])(\d+(?:\.\d+)?)\s*-?bits?(?:$|[/_-])"#
+        ) { value, _ in
+            let bits = Int(value.rounded())
+            return (2...16).contains(bits) ? bits : nil
+        }
+    }
+
+    private static func firstNumericModelDescriptor<Result>(
+        in value: String,
+        pattern: String,
+        transform: (Double, String) -> Result?
+    ) -> Result? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(
+                  in: value,
+                  range: NSRange(value.startIndex..., in: value)
+              ),
+              let numberRange = Range(match.range(at: 1), in: value),
+              let number = Double(value[numberRange])
+        else {
+            return nil
+        }
+
+        let suffix: String
+        if match.numberOfRanges > 2,
+           let suffixRange = Range(match.range(at: 2), in: value) {
+            suffix = String(value[suffixRange])
+        } else {
+            suffix = ""
+        }
+        return transform(number, suffix)
     }
 
     private static func contextSize(at snapshotURL: URL, fileManager: FileManager) -> Int? {
@@ -828,14 +1218,14 @@ final class LocalModelLibrary: ObservableObject {
         scanTask?.cancel()
     }
 
-    func scan(path: String) {
+    func scan(path: String, additionalPaths: [String] = []) {
         scanTask?.cancel()
         isScanning = true
         error = nil
 
         scanTask = Task { [weak self] in
             do {
-                let models = try await LocalModelDiscovery.scan(path: path)
+                let models = try await LocalModelDiscovery.scan(path: path, additionalPaths: additionalPaths)
                 guard !Task.isCancelled else {
                     return
                 }

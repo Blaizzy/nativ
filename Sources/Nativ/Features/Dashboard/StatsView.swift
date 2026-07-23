@@ -82,6 +82,7 @@ struct StatsView: View {
 private struct DashboardModelState: Equatable {
     let isRunning: Bool
     let modelSearchPath: String
+    let additionalModelSearchPaths: [String]
     let analyticsDatabaseURL: URL
     let loadedModelID: String?
     let historicalMetricsRevision: DashboardMetricsRevision?
@@ -90,6 +91,7 @@ private struct DashboardModelState: Equatable {
     init(model: NativModel) {
         isRunning = model.isRunning
         modelSearchPath = model.settings.modelSearchPath
+        additionalModelSearchPaths = model.settings.normalized().additionalModelSearchPaths
         analyticsDatabaseURL = model.analyticsDatabaseURL
         loadedModelID = model.metrics?.server.loadedModel
         historicalMetricsRevision = model.metrics.map {
@@ -421,7 +423,10 @@ private struct DashboardContentView: View, Equatable {
         dashboard.updateAnalyticsDatabaseURL(modelState.analyticsDatabaseURL)
         dashboard.updatePreferredModelID(modelState.loadedModelID)
         if scanModels {
-            dashboard.scanModels(at: modelState.modelSearchPath)
+            dashboard.scanModels(
+                at: modelState.modelSearchPath,
+                additionalPaths: modelState.additionalModelSearchPaths
+            )
         }
         if reloadHistory {
             dashboard.reloadHistorical()

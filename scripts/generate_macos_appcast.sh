@@ -20,7 +20,8 @@ Options:
   -h, --help            Show this help.
 
 CI may provide the exported key through SPARKLE_PRIVATE_KEY. You can also set
-SPARKLE_GENERATE_APPCAST to an explicit generate_appcast executable.
+SPARKLE_GENERATE_APPCAST to an explicit generate_appcast executable and
+NATIV_GITHUB_REPOSITORY to the owner/repository that hosts release assets.
 EOF
 }
 
@@ -111,7 +112,7 @@ if [[ -z "$generate_appcast" ]]; then
 fi
 [[ -x "$generate_appcast" ]] || fail "Sparkle generate_appcast not found at $generate_appcast; resolve packages or set SPARKLE_GENERATE_APPCAST"
 
-temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/mlx-vlm-appcast.XXXXXX")"
+temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/nativ-appcast.XXXXXX")"
 mount_path="$temporary_directory/mount"
 is_mounted=false
 cleanup() {
@@ -155,8 +156,11 @@ if [[ -n "$release_notes" ]]; then
     cp "$release_notes" "${staged_archive%.*}.$notes_extension"
 fi
 
-download_prefix="https://github.com/Marvis-Labs/nativ/releases/download/v${version}/"
-release_link="https://github.com/Marvis-Labs/nativ/releases/tag/v${version}"
+github_repository="${NATIV_GITHUB_REPOSITORY:-${GITHUB_REPOSITORY:-Blaizzy/nativ}}"
+[[ "$github_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || \
+    fail "invalid GitHub repository: $github_repository"
+download_prefix="https://github.com/${github_repository}/releases/download/v${version}/"
+release_link="https://github.com/${github_repository}/releases/tag/v${version}"
 appcast_arguments=(
     --download-url-prefix "$download_prefix"
     --embed-release-notes

@@ -30,6 +30,10 @@ schemes:
       config: Debug
     archive:
       config: Release
+    test:
+      config: Debug
+      targets:
+        - NativTests
 targets:
   NativServerKit:
     type: framework
@@ -82,3 +86,17 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         MARKETING_VERSION: 0.0.1
         CURRENT_PROJECT_VERSION: 1
+  NativTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/NativTests
+      - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
+      - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
+      - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
+      - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
+      - path: Sources/Nativ/Utilities/ShellEnvironment.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests
+        GENERATE_INFOPLIST_FILE: YES
