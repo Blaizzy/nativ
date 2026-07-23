@@ -1,6 +1,27 @@
+import AppKit
 import Combine
 import Sparkle
 import SwiftUI
+
+@MainActor
+enum NativApplicationIcon {
+    static let image: NSImage = {
+        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL) else {
+            return NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        }
+        icon.isTemplate = false
+        return icon
+    }()
+
+    static func registerForInAppUse() {
+        let applicationIconName = NSImage.applicationIconName
+        if let existingImage = NSImage(named: applicationIconName), existingImage !== image {
+            existingImage.setName(nil)
+        }
+        image.setName(applicationIconName)
+    }
+}
 
 @MainActor
 final class SoftwareUpdater {
@@ -11,6 +32,7 @@ final class SoftwareUpdater {
     }
 
     init() {
+        NativApplicationIcon.registerForInAppUse()
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
