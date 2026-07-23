@@ -213,12 +213,15 @@ struct ControlPanelView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                Divider()
+                    .overlay(Color.secondary.opacity(0.25))
+
                 HStack(spacing: 4) {
                     settingsButton
                     serverToggleButton
                     issueReportMenu
-                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
             }
@@ -237,21 +240,16 @@ struct ControlPanelView: View {
                 }
             }
         } label: {
-            Color.clear
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
+            footerIcon(
+                systemName: "ladybug",
+                isHovered: hoveredFooterControl == .reportIssue
+            )
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .tint(.secondary)
+        .foregroundStyle(.secondary)
         .frame(width: 40, height: 40)
-        .overlay {
-            footerIcon(
-                systemName: "ladybug",
-                size: 17,
-                isHovered: hoveredFooterControl == .reportIssue
-            )
-                .allowsHitTesting(false)
-        }
         .onHover { isHovering in
             updateFooterHover(.reportIssue, isHovering: isHovering)
         }
@@ -265,8 +263,7 @@ struct ControlPanelView: View {
         } label: {
             footerIcon(
                 systemName: "gearshape",
-                size: 18,
-                color: selectedTab == .settings ? .accentColor : .secondary,
+                color: .secondary,
                 isHovered: hoveredFooterControl == .settings
             )
         }
@@ -284,8 +281,7 @@ struct ControlPanelView: View {
         } label: {
             footerIcon(
                 systemName: model.isRunning ? "stop.circle" : "play.circle",
-                size: 17,
-                color: model.isRunning ? .red : .green,
+                color: .secondary,
                 isHovered: hoveredFooterControl == .server
             )
         }
@@ -300,12 +296,11 @@ struct ControlPanelView: View {
 
     private func footerIcon(
         systemName: String,
-        size: CGFloat,
         color: Color = .secondary,
         isHovered: Bool
     ) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: size, weight: .medium))
+            .font(.system(size: 15, weight: .medium))
             .foregroundStyle(color)
             .frame(width: 40, height: 40)
             .background {
