@@ -110,7 +110,7 @@ private struct WelcomeView: View {
 
     private var welcomeHeader: some View {
         VStack(spacing: 16) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
+            Image(nsImage: NativApplicationIcon.image)
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
