@@ -430,6 +430,12 @@ private enum SystemDeviceArtworkProvider {
     .appendingPathComponent("Contents/Resources", isDirectory: true)
 
     private static let imageCache = NSCache<NSString, NSImage>()
+    private static let motionPurpleWallpaper = NSImage(
+        contentsOfFile: "/System/Library/Desktop Pictures/.thumbnails/Motion Purple Dark.heic"
+    )
+    private static let proBlackWallpaper = NSImage(
+        contentsOfFile: "/System/Library/Desktop Pictures/.thumbnails/Pro Black.heic"
+    )
 
     static func image(for identity: SystemMonitorIdentity) -> NSImage? {
         guard let resourceName = resourceName(for: identity) else {
@@ -446,11 +452,27 @@ private enum SystemDeviceArtworkProvider {
             return NSImage(named: NSImage.computerName)
         }
 
-        let image = resourceName.contains("macbook")
-            ? croppedLaptopImage(sourceImage)
-            : sourceImage
+        let image: NSImage
+        if resourceName.contains("macbook") {
+            image = croppedLaptopImage(
+                sourceImage,
+                wallpaper: wallpaper(for: identity)
+            )
+        } else {
+            image = sourceImage
+        }
         imageCache.setObject(image, forKey: resourceName as NSString)
         return image
+    }
+
+    private static func wallpaper(
+        for identity: SystemMonitorIdentity
+    ) -> NSImage? {
+        if identity.computerName
+            .localizedCaseInsensitiveContains("MacBook Pro") {
+            return proBlackWallpaper ?? motionPurpleWallpaper
+        }
+        return motionPurpleWallpaper
     }
 
     private static func resourceName(
@@ -488,7 +510,10 @@ private enum SystemDeviceArtworkProvider {
         return nil
     }
 
-    private static func croppedLaptopImage(_ sourceImage: NSImage) -> NSImage {
+    private static func croppedLaptopImage(
+        _ sourceImage: NSImage,
+        wallpaper: NSImage?
+    ) -> NSImage {
         let sourceSize = sourceImage.size
         let sourceRect = NSRect(
             x: sourceSize.width * 0.065,
@@ -504,8 +529,72 @@ private enum SystemDeviceArtworkProvider {
                 operation: .sourceOver,
                 fraction: 1
             )
+            drawLaptopWallpaper(wallpaper, in: outputRect)
             return true
         }
+    }
+
+    private static func drawLaptopWallpaper(
+        _ wallpaper: NSImage?,
+        in rect: NSRect
+    ) {
+        guard let wallpaper else { return }
+
+        let screenRect = NSRect(
+            x: rect.minX + (rect.width * 0.164),
+            y: rect.minY + (rect.height * 0.239),
+            width: rect.width * 0.672,
+            height: rect.height * 0.675
+        )
+        let wallpaperSize = wallpaper.size
+        let targetAspectRatio = screenRect.width / screenRect.height
+        let sourceAspectRatio = wallpaperSize.width / wallpaperSize.height
+        let wallpaperSourceRect: NSRect
+
+        if sourceAspectRatio > targetAspectRatio {
+            let width = wallpaperSize.height * targetAspectRatio
+            wallpaperSourceRect = NSRect(
+                x: (wallpaperSize.width - width) / 2,
+                y: 0,
+                width: width,
+                height: wallpaperSize.height
+            )
+        } else {
+            let height = wallpaperSize.width / targetAspectRatio
+            wallpaperSourceRect = NSRect(
+                x: 0,
+                y: (wallpaperSize.height - height) / 2,
+                width: wallpaperSize.width,
+                height: height
+            )
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(
+            roundedRect: screenRect,
+            xRadius: 0.8,
+            yRadius: 0.8
+        ).addClip()
+        wallpaper.draw(
+            in: screenRect,
+            from: wallpaperSourceRect,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        let notchRect = NSRect(
+            x: screenRect.midX - (screenRect.width * 0.062),
+            y: screenRect.maxY - (screenRect.height * 0.055),
+            width: screenRect.width * 0.124,
+            height: screenRect.height * 0.055
+        )
+        NSColor.black.setFill()
+        NSBezierPath(
+            roundedRect: notchRect,
+            xRadius: 1.8,
+            yRadius: 1.8
+        ).fill()
     }
 }
 
