@@ -393,7 +393,10 @@ struct ControlPanelView: View {
                 case .dashboard:
                     StatsView(model: model, dashboard: dashboard)
                 case .system:
-                    SystemMonitorView(store: systemMonitor)
+                    SystemMonitorView(
+                        store: systemMonitor,
+                        menuBarPreferences: .shared
+                    )
                 case .models:
                     ModelsView(
                         model: model,

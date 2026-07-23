@@ -43,6 +43,7 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
 
 struct SystemMonitorView: View {
     @ObservedObject var store: SystemMonitorStore
+    @ObservedObject var menuBarPreferences: SystemMenuBarPreferences
     @State private var destination: SystemMonitorDestination = .overview
 
     var body: some View {
@@ -74,6 +75,8 @@ struct SystemMonitorView: View {
             }
 
             Spacer()
+
+            menuBarControl
 
             HStack(spacing: 7) {
                 Circle()
@@ -109,6 +112,62 @@ struct SystemMonitorView: View {
         .padding(.horizontal, 28)
         .padding(.top, 24)
         .padding(.bottom, 18)
+    }
+
+    private var menuBarControl: some View {
+        Menu {
+            Section("Menu bar item") {
+                ForEach(SystemMenuBarMetric.allCases) { metric in
+                    Button {
+                        menuBarPreferences.metric = metric
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(metric.title)
+                                if menuBarPreferences.metric == metric {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: metric.systemImage)
+                        }
+                    }
+                }
+            }
+
+            Section("Presentation") {
+                ForEach(SystemMenuBarStyle.allCases) { style in
+                    Button {
+                        menuBarPreferences.style = style
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(style.title)
+                                if menuBarPreferences.style == style {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: style.systemImage)
+                        }
+                    }
+                }
+            }
+            .disabled(menuBarPreferences.metric == .nativ)
+        } label: {
+            Label(menuBarSelectionLabel, systemImage: "menubar.rectangle")
+                .font(.callout.weight(.medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose the live metric shown in the macOS menu bar")
+    }
+
+    private var menuBarSelectionLabel: String {
+        guard menuBarPreferences.metric != .nativ else {
+            return "Menu Bar"
+        }
+        return "\(menuBarPreferences.metric.title) · \(menuBarPreferences.style.title)"
     }
 
     private var destinationBar: some View {

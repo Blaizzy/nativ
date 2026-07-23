@@ -338,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let softwareUpdater = SoftwareUpdater()
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
+    private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
     private var mainWindowOpener: (() -> Void)?
     private var statusItem: NSStatusItem?
     private var serverActionMenuItem: NSMenuItem?
@@ -350,6 +351,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private weak var highlightedMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        runtime.onUpdate = { [weak self] in
+            self?.updateStatusItemButton()
+        }
+        systemMenuBarPreferences.onChange = { [weak self] in
+            self?.updateStatusItemButton()
+        }
         runtime.start()
         model.onMenuStateChanged = { [weak self] in
             guard let self else {
@@ -389,6 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
+        runtime.onUpdate = nil
+        systemMenuBarPreferences.onChange = nil
         runtime.stop()
         model.applicationWillTerminate()
     }
@@ -516,7 +525,185 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         self.statusItem = statusItem
+        updateStatusItemButton()
         rebuildMenu()
+    }
+
+    private func updateStatusItemButton() {
+        guard let statusItem, let button = statusItem.button else { return }
+        let metric = systemMenuBarPreferences.metric
+
+        if metric == .nativ {
+            statusItem.length = NSStatusItem.squareLength
+            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
+            button.image = NSImage(named: "MenuBarLogo")
+            button.image?.isTemplate = true
+            button.image?.size = NSSize(width: 18, height: 18)
+            button.imagePosition = .imageOnly
+            button.toolTip = "Nativ Server"
+            return
+        }
+
+        let usage = menuBarUsage(for: metric)
+        let percent = Int((usage * 100).rounded())
+        button.toolTip = "\(metric.title) \(percent)%"
+
+        switch systemMenuBarPreferences.style {
+        case .percentage:
+            statusItem.length = 38
+            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
+            button.image = menuBarPercentageImage(
+                metricTitle: metric.title,
+                percent: percent
+            )
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleNone
+
+        case .graph:
+            statusItem.length = 48
+            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
+            button.image = menuBarGraphImage(
+                values: menuBarHistory(for: metric),
+                accessibilityDescription: "\(metric.title) usage graph"
+            )
+            button.imagePosition = .imageOnly
+        }
+    }
+
+    private func menuBarPercentageImage(
+        metricTitle: String,
+        percent: Int
+    ) -> NSImage {
+        let size = NSSize(width: 34, height: 20)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+
+            let labelAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let valueAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(
+                    ofSize: 10,
+                    weight: .semibold
+                ),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let labelHeight = NSAttributedString(
+                string: metricTitle,
+                attributes: labelAttributes
+            ).size().height
+            let valueHeight = NSAttributedString(
+                string: "\(percent)%",
+                attributes: valueAttributes
+            ).size().height
+            let spacing: CGFloat = -2
+            let contentHeight = labelHeight + spacing + valueHeight
+            let originY = floor((rect.height - contentHeight) / 2)
+
+            NSAttributedString(
+                string: "\(percent)%",
+                attributes: valueAttributes
+            ).draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY,
+                    width: rect.width,
+                    height: valueHeight
+                )
+            )
+            NSAttributedString(
+                string: metricTitle,
+                attributes: labelAttributes
+            ).draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY + valueHeight + spacing,
+                    width: rect.width,
+                    height: labelHeight
+                )
+            )
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "\(metricTitle) \(percent) percent"
+        return image
+    }
+
+    private func menuBarUsage(for metric: SystemMenuBarMetric) -> Double {
+        switch metric {
+        case .nativ:
+            0
+        case .cpu:
+            runtime.cpuUsage
+        case .gpu:
+            runtime.gpuUsage ?? 0
+        case .ram:
+            runtime.memoryUsageFraction
+        }
+    }
+
+    private func menuBarHistory(for metric: SystemMenuBarMetric) -> [Double] {
+        switch metric {
+        case .nativ:
+            []
+        case .cpu:
+            runtime.cpuHistory
+        case .gpu:
+            runtime.gpuHistory
+        case .ram:
+            runtime.memoryHistory
+        }
+    }
+
+    private func menuBarGraphImage(
+        values: [Double],
+        accessibilityDescription: String
+    ) -> NSImage {
+        let size = NSSize(width: 42, height: 18)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.labelColor.setStroke()
+
+            let frame = NSBezierPath(
+                roundedRect: rect.insetBy(dx: 0.75, dy: 0.75),
+                xRadius: 3.5,
+                yRadius: 3.5
+            )
+            frame.lineWidth = 1
+            frame.stroke()
+
+            guard values.count > 1 else { return true }
+            let plotRect = rect.insetBy(dx: 3, dy: 3)
+            let path = NSBezierPath()
+            for (index, rawValue) in values.enumerated() {
+                let fraction = CGFloat(index) / CGFloat(max(values.count - 1, 1))
+                let value = min(max(rawValue, 0), 1)
+                let point = NSPoint(
+                    x: plotRect.minX + (plotRect.width * fraction),
+                    y: plotRect.minY + (plotRect.height * CGFloat(value))
+                )
+                if index == 0 {
+                    path.move(to: point)
+                } else {
+                    path.line(to: point)
+                }
+            }
+
+            path.lineWidth = 1.25
+            path.lineJoinStyle = .round
+            path.lineCapStyle = .round
+            path.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = accessibilityDescription
+        return image
     }
 
     private func rebuildMenu() {
