@@ -1,3 +1,4 @@
+import AppKit
 import Charts
 import SwiftUI
 
@@ -253,25 +254,7 @@ private struct SystemOverviewPage: View {
         SystemMonitorPage(title: "Dashboard", subtitle: "Hardware at a glance") {
             SystemPanel {
                 VStack(spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.accentColor.opacity(0.18),
-                                        SystemMonitorPalette.purple.opacity(0.10),
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 112, height: 82)
-
-                        Image(systemName: "laptopcomputer")
-                            .font(.system(size: 50, weight: .light))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(Color.accentColor)
-                    }
+                    SystemDeviceArtwork(identity: snapshot.identity)
 
                     VStack(spacing: 4) {
                         Text(snapshot.identity.computerName)
@@ -399,6 +382,130 @@ private struct SystemOverviewPage: View {
             components.append("\(Int(refreshRate.rounded())) Hz")
         }
         return components.joined(separator: " · ")
+    }
+}
+
+private struct SystemDeviceArtwork: View {
+    let identity: SystemMonitorIdentity
+
+    var body: some View {
+        Group {
+            if let image = SystemDeviceArtworkProvider.image(for: identity) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .accessibilityLabel("\(identity.computerName) device image")
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.accentColor.opacity(0.18),
+                                    SystemMonitorPalette.purple.opacity(0.10),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 50, weight: .light))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Color.accentColor)
+                }
+                .frame(width: 112, height: 82)
+                .accessibilityLabel("\(identity.computerName) device")
+            }
+        }
+        .frame(width: 220, height: 126)
+    }
+}
+
+private enum SystemDeviceArtworkProvider {
+    private static let coreTypesResourcesURL = URL(
+        fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle"
+    )
+    .appendingPathComponent("Contents/Resources", isDirectory: true)
+
+    private static let imageCache = NSCache<NSString, NSImage>()
+
+    static func image(for identity: SystemMonitorIdentity) -> NSImage? {
+        guard let resourceName = resourceName(for: identity) else {
+            return NSImage(named: NSImage.computerName)
+        }
+        if let cachedImage = imageCache.object(forKey: resourceName as NSString) {
+            return cachedImage
+        }
+
+        let imageURL = coreTypesResourcesURL
+            .appendingPathComponent(resourceName)
+            .appendingPathExtension("icns")
+        guard let sourceImage = NSImage(contentsOf: imageURL) else {
+            return NSImage(named: NSImage.computerName)
+        }
+
+        let image = resourceName.contains("macbook")
+            ? croppedLaptopImage(sourceImage)
+            : sourceImage
+        imageCache.setObject(image, forKey: resourceName as NSString)
+        return image
+    }
+
+    private static func resourceName(
+        for identity: SystemMonitorIdentity
+    ) -> String? {
+        let machineName = identity.computerName.lowercased()
+
+        if machineName.contains("macbook pro") {
+            let sixteenInchModels: Set<String> = [
+                "MacBookPro16,1", "MacBookPro16,4",
+                "MacBookPro18,1", "MacBookPro18,2",
+                "Mac14,6", "Mac14,10",
+                "Mac15,7", "Mac15,9", "Mac15,11",
+            ]
+            let size = sixteenInchModels.contains(identity.modelIdentifier)
+                ? "16"
+                : "14"
+            return "com.apple.macbookpro-\(size)-2021-space-gray"
+        }
+        if machineName.contains("macbook air") {
+            return "com.apple.macbookair-13-2022-midnight"
+        }
+        if machineName.contains("mac studio") {
+            return "com.apple.macstudio"
+        }
+        if machineName.contains("mac mini") {
+            return "com.apple.macmini-2020"
+        }
+        if machineName.contains("imac") {
+            return "com.apple.imac-2021-silver"
+        }
+        if machineName.contains("mac pro") {
+            return "com.apple.macpro-2019"
+        }
+        return nil
+    }
+
+    private static func croppedLaptopImage(_ sourceImage: NSImage) -> NSImage {
+        let sourceSize = sourceImage.size
+        let sourceRect = NSRect(
+            x: sourceSize.width * 0.065,
+            y: sourceSize.height * 0.15,
+            width: sourceSize.width * 0.87,
+            height: sourceSize.height * 0.56
+        )
+        let outputSize = NSSize(width: 220, height: 140)
+        return NSImage(size: outputSize, flipped: false) { outputRect in
+            sourceImage.draw(
+                in: outputRect,
+                from: sourceRect,
+                operation: .sourceOver,
+                fraction: 1
+            )
+            return true
+        }
     }
 }
 
