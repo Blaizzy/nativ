@@ -24,6 +24,7 @@ struct ChatView: View {
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var followsLatestMessage = true
+    @State private var isUserScrollingTranscript = false
 
     var body: some View {
         ModelConfigurationLayout(
@@ -114,10 +115,24 @@ struct ChatView: View {
             .padding(.bottom, max(18, composerHeight))
         }
         .scrollPosition($transcriptScrollPosition)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.visibleRect.maxY >= geometry.contentSize.height - 160
-        } action: { _, isNearBottom in
-            followsLatestMessage = isNearBottom
+        .onScrollPhaseChange { _, newPhase, context in
+            switch newPhase {
+            case .tracking, .interacting:
+                isUserScrollingTranscript = true
+                followsLatestMessage = false
+            case .decelerating:
+                if isUserScrollingTranscript {
+                    followsLatestMessage = false
+                }
+            case .idle:
+                guard isUserScrollingTranscript else {
+                    return
+                }
+                isUserScrollingTranscript = false
+                followsLatestMessage = isAtTranscriptBottom(context.geometry)
+            case .animating:
+                break
+            }
         }
         .onChange(of: chat.scrollToken) { _, _ in
             if followsLatestMessage {
@@ -132,6 +147,10 @@ struct ChatView: View {
             followsLatestMessage = true
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
+    }
+
+    private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
+        geometry.visibleRect.maxY >= geometry.contentSize.height - 8
     }
 }
 
