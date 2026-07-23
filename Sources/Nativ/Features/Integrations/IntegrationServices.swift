@@ -70,7 +70,7 @@ struct IntegrationProfileManager {
                 let providers = root["provider"] as? [String: Any]
             else { return false }
             return providers[Self.providerID] != nil
-        case .codex, .hermes:
+        case .codex, .hermes, .aider:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
         }
@@ -105,6 +105,8 @@ struct IntegrationProfileManager {
                 ),
                 to: configurationURL(for: tool)
             )
+        case .aider:
+            try configureAider()
         }
     }
 
@@ -170,6 +172,8 @@ struct IntegrationProfileManager {
             return home.appendingPathComponent(".hermes/profiles/nativ/config.yaml")
         case .openCode:
             return integrationsSupportURL.appendingPathComponent("opencode.json")
+        case .aider:
+            return integrationsSupportURL.appendingPathComponent("aider.env")
         }
     }
 
@@ -390,6 +394,11 @@ struct IntegrationProfileManager {
         ]
     }
 
+    private func configureAider() throws {
+        let contents = "OPENAI_API_BASE=\(openAIBaseURL)\nOPENAI_API_KEY=nativ\n"
+        try writeText(contents, to: configurationURL(for: .aider))
+    }
+
     private func launchConfiguration(
         tool: IntegrationTool,
         selectedModelID: String
@@ -414,6 +423,11 @@ struct IntegrationProfileManager {
             return (
                 ["--model", "\(Self.providerID)/\(selectedModelID)"],
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
+            )
+        case .aider:
+            return (
+                ["--env-file", configurationURL(for: tool).path, "--model", "openai/\(selectedModelID)"],
+                [:]
             )
         }
     }

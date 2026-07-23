@@ -6,7 +6,8 @@ final class IntegrationServicesTests: XCTestCase {
         .codex,
         .claudeCode,
         .hermes,
-        .openCode
+        .openCode,
+        .aider
     ]
 
     private var temporaryRoot: URL!
@@ -193,6 +194,19 @@ final class IntegrationServicesTests: XCTestCase {
             export OPENCODE_CONFIG='\(configurationURL.path)'
             '/tools/opencode' '--model' 'nativ/org/local-model'
             """
+        )
+    }
+
+    func testAiderConfigurationAndLaunchCommand() throws {
+        try configure(.aider)
+
+        let configurationURL = manager.configurationURL(for: .aider)
+        let contents = try String(contentsOf: configurationURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("OPENAI_API_BASE=http://127.0.0.1:49152/v1"))
+        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
+        XCTAssertEqual(
+            launchCommand(for: .aider),
+            "cd '/tmp/Nativ Project'\n'/tools/aider' '--env-file' '\(configurationURL.path)' '--model' 'openai/org/local-model'"
         )
     }
 
