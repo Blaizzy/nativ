@@ -5,6 +5,7 @@ import Darwin
 import Foundation
 import IOKit
 import Metal
+import QuartzCore
 
 struct SystemHistorySample: Identifiable, Equatable, Sendable {
     let recordedAt: Date
@@ -26,6 +27,8 @@ struct SystemGPUMetrics: Equatable, Sendable {
     var deviceUsage: Double?
     var rendererUsage: Double?
     var tilerUsage: Double?
+    var aneUsage: Double?
+    var framesPerSecond: Double?
     var allocatedMemoryBytes: UInt64?
 }
 
@@ -109,6 +112,7 @@ struct SystemMonitorIdentity: Equatable, Sendable {
     var performanceCoreCount = 0
     var gpuName = "Apple GPU"
     var gpuCoreCount: Int?
+    var aneCoreCount: Int?
     var nominalCPUFrequencyHz: UInt64?
     var operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
     var displayName = "Built-in display"
@@ -134,6 +138,8 @@ final class SystemMonitorStore: ObservableObject {
     @Published private(set) var gpuHistory: [SystemHistorySample] = []
     @Published private(set) var rendererHistory: [SystemHistorySample] = []
     @Published private(set) var tilerHistory: [SystemHistorySample] = []
+    @Published private(set) var aneHistory: [SystemHistorySample] = []
+    @Published private(set) var fpsHistory: [SystemHistorySample] = []
     @Published private(set) var memoryHistory: [SystemHistorySample] = []
     @Published private(set) var swapHistory: [SystemHistorySample] = []
     @Published private(set) var diskReadHistory: [SystemHistorySample] = []
@@ -141,6 +147,8 @@ final class SystemMonitorStore: ObservableObject {
     @Published private(set) var isSampling = false
 
     private let collector = SystemMetricsCollector()
+    private let displayFPSSampler = SystemDisplayFPSSampler()
+    private let aneSampler = SystemANEUtilizationSampler()
     private var samplingTask: Task<Void, Never>?
     private let historyLimit = 300
 
@@ -151,10 +159,14 @@ final class SystemMonitorStore: ObservableObject {
     func start() {
         guard samplingTask == nil else { return }
         isSampling = true
+        displayFPSSampler.start()
+        aneSampler.start()
         samplingTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let nextSnapshot = await collector.collect()
+                var nextSnapshot = await collector.collect()
+                nextSnapshot.gpu.framesPerSecond = displayFPSSampler.takeFramesPerSecond()
+                nextSnapshot.gpu.aneUsage = aneSampler.takeUtilization()
                 apply(nextSnapshot)
 
                 do {
@@ -169,6 +181,8 @@ final class SystemMonitorStore: ObservableObject {
     func stop() {
         samplingTask?.cancel()
         samplingTask = nil
+        displayFPSSampler.stop()
+        aneSampler.stop()
         isSampling = false
     }
 
@@ -192,6 +206,12 @@ final class SystemMonitorStore: ObservableObject {
         }
         if let value = nextSnapshot.gpu.tilerUsage {
             append(value, at: nextSnapshot.recordedAt, to: &tilerHistory)
+        }
+        if let value = nextSnapshot.gpu.aneUsage {
+            append(value, at: nextSnapshot.recordedAt, to: &aneHistory)
+        }
+        if let value = nextSnapshot.gpu.framesPerSecond {
+            append(value, at: nextSnapshot.recordedAt, to: &fpsHistory)
         }
 
         let swapUsage: Double
@@ -237,6 +257,139 @@ private struct SystemCPUTicks: Sendable {
 private struct SystemDiskCounters: Sendable {
     let readBytes: UInt64
     let writeBytes: UInt64
+}
+
+@MainActor
+private final class SystemDisplayFPSSampler: NSObject {
+    private var displayLink: CADisplayLink?
+    private var firstTimestamp: TimeInterval?
+    private var lastTimestamp: TimeInterval?
+    private var frameCount = 0
+
+    func start() {
+        guard displayLink == nil, let screen = NSScreen.main else { return }
+        let createdDisplayLink = screen.displayLink(
+            target: self,
+            selector: #selector(displayLinkDidFire(_:))
+        )
+        firstTimestamp = nil
+        lastTimestamp = nil
+        frameCount = 0
+        displayLink = createdDisplayLink
+        createdDisplayLink.add(to: .main, forMode: .common)
+    }
+
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+        firstTimestamp = nil
+        lastTimestamp = nil
+        frameCount = 0
+    }
+
+    @objc private func displayLinkDidFire(_ sender: CADisplayLink) {
+        if firstTimestamp == nil {
+            firstTimestamp = sender.timestamp
+        }
+        lastTimestamp = sender.timestamp
+        frameCount += 1
+    }
+
+    func takeFramesPerSecond() -> Double? {
+        guard let firstTimestamp,
+              let lastTimestamp,
+              lastTimestamp > firstTimestamp,
+              frameCount > 1
+        else {
+            return nil
+        }
+
+        let elapsed = lastTimestamp - firstTimestamp
+        guard elapsed > 0 else { return nil }
+        let fps = Double(frameCount - 1) / elapsed
+
+        self.firstTimestamp = lastTimestamp
+        self.lastTimestamp = lastTimestamp
+        frameCount = 1
+        return fps
+    }
+}
+
+private final class SystemANEUtilizationSampler: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "dev.local.Nativ.system-monitor.ane",
+        qos: .utility
+    )
+    private var services: [io_service_t] = []
+    private var timer: DispatchSourceTimer?
+    private var sampleCount = 0
+    private var busySampleCount = 0
+
+    func start() {
+        queue.sync {
+            guard timer == nil else { return }
+
+            let serviceClasses = [
+                "H1xANELoadBalancer",
+                "H11ANEIn",
+                "AppleT6031ANEHAL",
+            ]
+            services = serviceClasses.compactMap { className in
+                guard let matching = IOServiceMatching(className) else { return nil }
+                let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+                return service == IO_OBJECT_NULL ? nil : service
+            }
+            guard !services.isEmpty else { return }
+
+            sampleCount = 0
+            busySampleCount = 0
+            let source = DispatchSource.makeTimerSource(queue: queue)
+            source.schedule(
+                deadline: .now(),
+                repeating: .milliseconds(10),
+                leeway: .milliseconds(2)
+            )
+            source.setEventHandler { [weak self] in
+                self?.sampleBusyState()
+            }
+            timer = source
+            source.resume()
+        }
+    }
+
+    func stop() {
+        queue.sync {
+            timer?.setEventHandler {}
+            timer?.cancel()
+            timer = nil
+            services.forEach { IOObjectRelease($0) }
+            services = []
+            sampleCount = 0
+            busySampleCount = 0
+        }
+    }
+
+    func takeUtilization() -> Double? {
+        queue.sync {
+            guard !services.isEmpty, sampleCount > 0 else { return nil }
+            let utilization = Double(busySampleCount) / Double(sampleCount)
+            sampleCount = 0
+            busySampleCount = 0
+            return min(max(utilization, 0), 1)
+        }
+    }
+
+    private func sampleBusyState() {
+        sampleCount += 1
+        for service in services {
+            var busyState: UInt32 = 0
+            if IOServiceGetBusyState(service, &busyState) == KERN_SUCCESS,
+               busyState > 0 {
+                busySampleCount += 1
+                return
+            }
+        }
+    }
 }
 
 private actor SystemMetricsCollector {
@@ -308,6 +461,14 @@ private actor SystemMetricsCollector {
 
         if let gpuConfiguration = gpuProperty("GPUConfigurationVariable") as? NSDictionary {
             identity.gpuCoreCount = number(gpuConfiguration["num_cores"]).map(Int.init)
+        }
+        if let aneProperties = registryProperty(
+            serviceClass: "H11ANEIn",
+            key: "DeviceProperties"
+        ) as? NSDictionary {
+            identity.aneCoreCount = number(
+                aneProperties["ANEDevicePropertyNumANECores"]
+            ).map(Int.init)
         }
 
         let version = ProcessInfo.processInfo.operatingSystemVersion
@@ -473,7 +634,14 @@ private actor SystemMetricsCollector {
     }
 
     private static func gpuProperty(_ key: String) -> Any? {
-        guard let matching = IOServiceMatching("AGXAccelerator") else { return nil }
+        registryProperty(serviceClass: "AGXAccelerator", key: key)
+    }
+
+    private static func registryProperty(
+        serviceClass: String,
+        key: String
+    ) -> Any? {
+        guard let matching = IOServiceMatching(serviceClass) else { return nil }
         let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
         guard service != IO_OBJECT_NULL else { return nil }
         defer { IOObjectRelease(service) }

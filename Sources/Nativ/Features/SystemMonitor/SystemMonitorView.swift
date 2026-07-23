@@ -156,7 +156,9 @@ struct SystemMonitorView: View {
                 snapshot: store.snapshot,
                 gpuHistory: store.gpuHistory,
                 rendererHistory: store.rendererHistory,
-                tilerHistory: store.tilerHistory
+                tilerHistory: store.tilerHistory,
+                aneHistory: store.aneHistory,
+                fpsHistory: store.fpsHistory
             )
         case .memory:
             SystemMemoryPage(
@@ -475,6 +477,8 @@ private struct SystemGPUPage: View {
     let gpuHistory: [SystemHistorySample]
     let rendererHistory: [SystemHistorySample]
     let tilerHistory: [SystemHistorySample]
+    let aneHistory: [SystemHistorySample]
+    let fpsHistory: [SystemHistorySample]
 
     var body: some View {
         SystemMonitorPage(title: "GPU", subtitle: gpuTitle) {
@@ -506,6 +510,22 @@ private struct SystemGPUPage: View {
                         value: snapshot.gpu.tilerUsage,
                         tint: SystemMonitorPalette.teal
                     )
+                    SystemLabeledProgress(
+                        title: "Neural Engine utilization",
+                        value: snapshot.gpu.aneUsage,
+                        tint: SystemMonitorPalette.orange
+                    )
+
+                    HStack {
+                        Label("Display frame rate", systemImage: "speedometer")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(SystemMonitorFormat.framesPerSecond(
+                            snapshot.gpu.framesPerSecond
+                        ))
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                    }
                 }
             }
 
@@ -523,25 +543,21 @@ private struct SystemGPUPage: View {
                 )
             }
 
-            SystemPercentHistoryChart(
-                title: "Tiler utilization history",
-                samples: tilerHistory,
-                color: SystemMonitorPalette.teal
-            )
-
             adaptivePair {
-                SystemUnavailableMetric(
-                    title: "Neural Engine utilization",
-                    icon: "brain",
-                    message: "System-wide ANE utilization is not exposed by macOS."
+                SystemPercentHistoryChart(
+                    title: "Tiler utilization history",
+                    samples: tilerHistory,
+                    color: SystemMonitorPalette.teal
                 )
             } trailing: {
-                SystemUnavailableMetric(
-                    title: "Frame rate",
-                    icon: "speedometer",
-                    message: "FPS requires instrumentation inside the rendering app."
+                SystemPercentHistoryChart(
+                    title: "Neural Engine utilization history",
+                    samples: aneHistory,
+                    color: SystemMonitorPalette.orange
                 )
             }
+
+            SystemFPSHistoryChart(samples: fpsHistory)
 
             SystemInfoCard(title: "Graphics") {
                 SystemInfoRow("Device", value: snapshot.identity.gpuName)
@@ -555,8 +571,18 @@ private struct SystemGPUPage: View {
                         .map(SystemMonitorFormat.bytes) ?? "Unavailable"
                 )
                 SystemInfoRow(
+                    "Neural Engine cores",
+                    value: snapshot.identity.aneCoreCount.map(String.init) ?? "Unavailable"
+                )
+                SystemInfoRow(
                     "Neural Engine utilization",
-                    value: "Not exposed by macOS"
+                    value: SystemMonitorFormat.optionalPercent(snapshot.gpu.aneUsage)
+                )
+                SystemInfoRow(
+                    "Display frame rate",
+                    value: SystemMonitorFormat.framesPerSecond(
+                        snapshot.gpu.framesPerSecond
+                    )
                 )
             }
         }
@@ -1233,6 +1259,85 @@ private struct SystemDiskHistoryChart: View {
     }
 }
 
+private struct SystemFPSHistoryChart: View {
+    let samples: [SystemHistorySample]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("FPS history")
+                    .font(.headline)
+                Spacer()
+                if let current = samples.last?.value {
+                    Text(SystemMonitorFormat.framesPerSecond(current))
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if samples.isEmpty {
+                SystemChartPlaceholder()
+            } else {
+                Chart(samples) { sample in
+                    AreaMark(
+                        x: .value("Time", sample.recordedAt),
+                        y: .value("Frames per second", sample.value)
+                    )
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                SystemMonitorPalette.blue.opacity(0.44),
+                                SystemMonitorPalette.blue.opacity(0.06),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .interpolationMethod(.catmullRom)
+
+                    LineMark(
+                        x: .value("Time", sample.recordedAt),
+                        y: .value("Frames per second", sample.value)
+                    )
+                    .foregroundStyle(SystemMonitorPalette.blue)
+                    .lineStyle(.init(lineWidth: 1.5))
+                    .interpolationMethod(.catmullRom)
+                }
+                .chartYScale(domain: 0...fpsAxisMaximum)
+                .chartYAxis {
+                    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                        AxisGridLine()
+                            .foregroundStyle(Color.secondary.opacity(0.12))
+                        AxisValueLabel {
+                            if let fps = value.as(Double.self) {
+                                Text("\(Int(fps.rounded())) fps")
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 5)) {
+                        AxisGridLine()
+                            .foregroundStyle(Color.secondary.opacity(0.08))
+                        AxisValueLabel(format: .dateTime.hour().minute())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(minHeight: 190)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .systemMonitorPanel()
+    }
+
+    private var fpsAxisMaximum: Double {
+        let observedMaximum = samples.map(\.value).max() ?? 0
+        return max(30, ceil(observedMaximum / 30) * 30)
+    }
+}
+
 private struct SystemChartPlaceholder: View {
     var body: some View {
         VStack(spacing: 8) {
@@ -1243,34 +1348,6 @@ private struct SystemChartPlaceholder: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 170)
-    }
-}
-
-private struct SystemUnavailableMetric: View {
-    let title: String
-    let icon: String
-    let message: String
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 40, height: 40)
-                .background(Color.secondary.opacity(0.10), in: .rect(cornerRadius: 10))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
-        .systemMonitorPanel()
     }
 }
 
@@ -1300,6 +1377,11 @@ private enum SystemMonitorFormat {
 
     static func optionalPercent(_ value: Double?) -> String {
         value.map(percent) ?? "--"
+    }
+
+    static func framesPerSecond(_ value: Double?) -> String {
+        guard let value, value.isFinite, value >= 0 else { return "--" }
+        return "\(Int(value.rounded())) FPS"
     }
 
     static func decimal(_ value: Double) -> String {
