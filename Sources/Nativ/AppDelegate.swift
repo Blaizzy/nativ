@@ -539,9 +539,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateStatusItemButton() {
         guard let statusItem, let button = statusItem.button else { return }
-        let metric = systemMenuBarPreferences.metric
+        let items = systemMenuBarPreferences.orderedItems
 
-        if metric == .nativ {
+        if items.isEmpty {
             statusItem.length = NSStatusItem.squareLength
             button.title = ""
             button.attributedTitle = NSAttributedString(string: "")
@@ -553,32 +553,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        let usage = menuBarUsage(for: metric)
-        let percent = Int((usage * 100).rounded())
-        button.toolTip = "\(metric.title) \(percent)%"
+        let renderedItems = items.map { item in
+            let usage = menuBarUsage(for: item.metric)
+            let percent = Int((usage * 100).rounded())
+            let description = "\(item.metric.title) \(percent)%"
+            let image: NSImage
 
-        switch systemMenuBarPreferences.style {
-        case .percentage:
-            statusItem.length = 38
-            button.title = ""
-            button.attributedTitle = NSAttributedString(string: "")
-            button.image = menuBarPercentageImage(
-                metricTitle: metric.title,
-                percent: percent
-            )
-            button.imagePosition = .imageOnly
-            button.imageScaling = .scaleNone
-
-        case .graph:
-            statusItem.length = 48
-            button.title = ""
-            button.attributedTitle = NSAttributedString(string: "")
-            button.image = menuBarGraphImage(
-                values: menuBarHistory(for: metric),
-                accessibilityDescription: "\(metric.title) usage graph"
-            )
-            button.imagePosition = .imageOnly
+            switch item.style {
+            case .percentage:
+                image = menuBarPercentageImage(
+                    metricTitle: item.metric.title,
+                    percent: percent
+                )
+            case .graph:
+                image = menuBarGraphImage(
+                    values: menuBarHistory(for: item.metric),
+                    accessibilityDescription: "\(item.metric.title) usage graph"
+                )
+            }
+            return (image: image, description: description)
         }
+
+        let accessibilityDescription = renderedItems
+            .map { $0.description }
+            .joined(separator: ", ")
+        let compositeImage = menuBarCompositeImage(
+            renderedItems.map { $0.image },
+            accessibilityDescription: accessibilityDescription
+        )
+
+        statusItem.length = compositeImage.size.width + 6
+        button.title = ""
+        button.attributedTitle = NSAttributedString(string: "")
+        button.image = compositeImage
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.toolTip = accessibilityDescription
+    }
+
+    private func menuBarCompositeImage(
+        _ images: [NSImage],
+        accessibilityDescription: String
+    ) -> NSImage {
+        let spacing: CGFloat = 4
+        let height = images.map(\.size.height).max() ?? 20
+        let contentWidth = images.reduce(CGFloat.zero) {
+            $0 + $1.size.width
+        }
+        let width = contentWidth + (spacing * CGFloat(max(images.count - 1, 0)))
+        let size = NSSize(width: width, height: height)
+        let compositeImage = NSImage(size: size, flipped: false) { rect in
+            var originX = rect.minX
+            for image in images {
+                let imageRect = NSRect(
+                    x: originX,
+                    y: rect.midY - (image.size.height / 2),
+                    width: image.size.width,
+                    height: image.size.height
+                )
+                image.draw(in: imageRect)
+                originX += image.size.width + spacing
+            }
+            return true
+        }
+        compositeImage.isTemplate = true
+        compositeImage.accessibilityDescription = accessibilityDescription
+        return compositeImage
     }
 
     private func menuBarPercentageImage(

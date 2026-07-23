@@ -61,37 +61,105 @@ enum SystemMenuBarStyle: String, CaseIterable, Identifiable {
     }
 }
 
+struct SystemMenuBarItem: Hashable, Identifiable {
+    let metric: SystemMenuBarMetric
+    let style: SystemMenuBarStyle
+
+    var id: String {
+        "\(metric.rawValue).\(style.rawValue)"
+    }
+
+    init(metric: SystemMenuBarMetric, style: SystemMenuBarStyle) {
+        self.metric = metric
+        self.style = style
+    }
+
+    init?(id: String) {
+        let components = id.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              let metric = SystemMenuBarMetric(rawValue: String(components[0])),
+              metric != .nativ,
+              let style = SystemMenuBarStyle(rawValue: String(components[1])) else {
+            return nil
+        }
+        self.metric = metric
+        self.style = style
+    }
+}
+
 @MainActor
 final class SystemMenuBarPreferences: ObservableObject {
     static let shared = SystemMenuBarPreferences()
 
-    @Published var metric: SystemMenuBarMetric {
+    @Published private(set) var items: Set<SystemMenuBarItem> {
         didSet {
-            defaults.set(metric.rawValue, forKey: Self.metricKey)
-            onChange?()
-        }
-    }
-
-    @Published var style: SystemMenuBarStyle {
-        didSet {
-            defaults.set(style.rawValue, forKey: Self.styleKey)
+            defaults.set(items.map(\.id).sorted(), forKey: Self.itemsKey)
             onChange?()
         }
     }
 
     var onChange: (() -> Void)?
 
+    private static let itemsKey = "systemMenuBarItems"
     private static let metricKey = "systemMenuBarMetric"
     private static let styleKey = "systemMenuBarStyle"
     private let defaults: UserDefaults
 
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        metric = defaults.string(forKey: Self.metricKey)
-            .flatMap(SystemMenuBarMetric.init(rawValue:))
-            ?? .nativ
-        style = defaults.string(forKey: Self.styleKey)
-            .flatMap(SystemMenuBarStyle.init(rawValue:))
-            ?? .percentage
+
+        if let storedItems = defaults.stringArray(forKey: Self.itemsKey) {
+            items = Set(storedItems.compactMap(SystemMenuBarItem.init(id:)))
+        } else {
+            let legacyMetric = defaults.string(forKey: Self.metricKey)
+                .flatMap(SystemMenuBarMetric.init(rawValue:))
+                ?? .nativ
+            let legacyStyle = defaults.string(forKey: Self.styleKey)
+                .flatMap(SystemMenuBarStyle.init(rawValue:))
+                ?? .percentage
+            if legacyMetric == .nativ {
+                items = []
+            } else {
+                items = [SystemMenuBarItem(
+                    metric: legacyMetric,
+                    style: legacyStyle
+                )]
+            }
+        }
+    }
+
+    var orderedItems: [SystemMenuBarItem] {
+        SystemMenuBarMetric.allCases
+            .filter { $0 != .nativ }
+            .flatMap { metric in
+                SystemMenuBarStyle.allCases.compactMap { style in
+                    let item = SystemMenuBarItem(metric: metric, style: style)
+                    return items.contains(item) ? item : nil
+                }
+            }
+    }
+
+    func contains(metric: SystemMenuBarMetric, style: SystemMenuBarStyle) -> Bool {
+        items.contains(SystemMenuBarItem(metric: metric, style: style))
+    }
+
+    func setEnabled(
+        _ isEnabled: Bool,
+        metric: SystemMenuBarMetric,
+        style: SystemMenuBarStyle
+    ) {
+        guard metric != .nativ else { return }
+        var updatedItems = items
+        let item = SystemMenuBarItem(metric: metric, style: style)
+        if isEnabled {
+            updatedItems.insert(item)
+        } else {
+            updatedItems.remove(item)
+        }
+        items = updatedItems
+    }
+
+    func useNativIcon() {
+        items = []
     }
 }

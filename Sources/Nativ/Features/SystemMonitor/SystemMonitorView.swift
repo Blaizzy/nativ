@@ -116,58 +116,71 @@ struct SystemMonitorView: View {
 
     private var menuBarControl: some View {
         Menu {
-            Section("Menu bar item") {
-                ForEach(SystemMenuBarMetric.allCases) { metric in
-                    Button {
-                        menuBarPreferences.metric = metric
-                    } label: {
-                        Label {
-                            HStack {
-                                Text(metric.title)
-                                if menuBarPreferences.metric == metric {
-                                    Image(systemName: "checkmark")
-                                }
+            Section("Menu bar") {
+                Button {
+                    menuBarPreferences.useNativIcon()
+                } label: {
+                    Label {
+                        HStack {
+                            Text("Nativ icon")
+                            if menuBarPreferences.items.isEmpty {
+                                Image(systemName: "checkmark")
                             }
-                        } icon: {
-                            Image(systemName: metric.systemImage)
                         }
+                    } icon: {
+                        Image(systemName: SystemMenuBarMetric.nativ.systemImage)
                     }
                 }
             }
 
-            Section("Presentation") {
-                ForEach(SystemMenuBarStyle.allCases) { style in
-                    Button {
-                        menuBarPreferences.style = style
-                    } label: {
-                        Label {
-                            HStack {
-                                Text(style.title)
-                                if menuBarPreferences.style == style {
-                                    Image(systemName: "checkmark")
+            ForEach(
+                SystemMenuBarMetric.allCases.filter { $0 != .nativ }
+            ) { metric in
+                Section(metric.title) {
+                    ForEach(SystemMenuBarStyle.allCases) { style in
+                        let isEnabled = menuBarPreferences.contains(
+                            metric: metric,
+                            style: style
+                        )
+                        Button {
+                            menuBarPreferences.setEnabled(
+                                !isEnabled,
+                                metric: metric,
+                                style: style
+                            )
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(style.title)
+                                    if isEnabled {
+                                        Image(systemName: "checkmark")
+                                    }
                                 }
+                            } icon: {
+                                Image(systemName: style.systemImage)
                             }
-                        } icon: {
-                            Image(systemName: style.systemImage)
                         }
                     }
                 }
             }
-            .disabled(menuBarPreferences.metric == .nativ)
         } label: {
             Label(menuBarSelectionLabel, systemImage: "menubar.rectangle")
                 .font(.callout.weight(.medium))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Choose the live metric shown in the macOS menu bar")
+        .help("Choose one or more live metrics for the macOS menu bar")
     }
 
     private var menuBarSelectionLabel: String {
-        guard menuBarPreferences.metric != .nativ else {
+        let items = menuBarPreferences.orderedItems
+        guard let firstItem = items.first else {
             return "Menu Bar"
         }
-        return "\(menuBarPreferences.metric.title) · \(menuBarPreferences.style.title)"
+        guard items.count > 1 else {
+            return "\(firstItem.metric.title) · \(firstItem.style.title)"
+        }
+        return "Menu Bar · \(items.count) items"
     }
 
     private var destinationBar: some View {
