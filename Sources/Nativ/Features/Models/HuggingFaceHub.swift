@@ -462,14 +462,11 @@ final class HuggingFaceModelLibrary: ObservableObject {
             error = nil
             return
         }
+        guard let nextPageURL else { return }
 
         searchTask?.cancel()
         isSearching = true
         error = nil
-        guard let nextPageURL else {
-            isSearching = false
-            return
-        }
 
         searchTask = Task { [weak self] in
             guard let self else { return }

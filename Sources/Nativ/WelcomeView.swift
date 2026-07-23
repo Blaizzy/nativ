@@ -50,8 +50,12 @@ private struct WelcomeView: View {
 
     @ObservedObject var model: NativModel
     @StateObject private var modelLibrary = LocalModelLibrary()
+    @StateObject private var hubLibrary = HuggingFaceModelLibrary()
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
     @State private var step = Step.model
     @State private var selectedModelID: String?
+    @State private var downloadedRecommendedModelID: String?
+    @State private var didRequestRecommendedModels = false
     @State private var showsAPIKeyEditor = false
     @State private var serverAPIKey: String
     @FocusState private var isAPIKeyFieldFocused: Bool
@@ -94,8 +98,13 @@ private struct WelcomeView: View {
         .task(id: modelSearchPath) {
             modelLibrary.scan(path: model.settings.modelSearchPath)
         }
+        .onChange(of: modelLibrary.isScanning) { _, isScanning in
+            guard !isScanning else { return }
+            loadRecommendedModelsIfNeeded()
+        }
         .onDisappear {
             modelLibrary.cancel()
+            hubLibrary.cancel()
         }
     }
 
@@ -146,16 +155,17 @@ private struct WelcomeView: View {
 
                         Spacer()
 
-                        if modelLibrary.isScanning {
+                        if modelLibrary.isScanning || hubLibrary.isSearching {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
                             Button {
-                                modelLibrary.scan(path: model.settings.modelSearchPath)
+                                refreshModelChoices()
                             } label: {
                                 Image(systemName: "arrow.clockwise")
                             }
                             .buttonStyle(.borderless)
+                            .disabled(downloadManager.downloadingModelID != nil)
                             .help("Refresh installed models")
                         }
                     }
@@ -181,6 +191,10 @@ private struct WelcomeView: View {
                                 ) {
                                     selectedModelID = localModel.repoID
                                 }
+                            }
+
+                            if shouldShowRecommendedModels {
+                                recommendedModelsSection
                             }
                         }
                         .padding(12)
@@ -208,6 +222,70 @@ private struct WelcomeView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
+                .disabled(downloadManager.downloadingModelID != nil)
+                .help(downloadManager.downloadingModelID == nil
+                    ? "Continue setup"
+                    : "Finish or cancel the model download before continuing")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recommendedModelsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recommended downloads")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Hugging Face")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 4)
+
+            if hubLibrary.isSearching && recommendedModels.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Finding models for this Mac…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 54)
+            } else if recommendedModels.isEmpty {
+                Label(
+                    hubLibrary.error == nil
+                        ? "No recommended models are available right now."
+                        : "Couldn’t load recommended models.",
+                    systemImage: hubLibrary.error == nil
+                        ? "shippingbox"
+                        : "wifi.exclamationmark"
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 54)
+            } else {
+                ForEach(recommendedModels) { hubModel in
+                    WelcomeDownloadModelRow(
+                        model: hubModel,
+                        isDownloaded: downloadedRecommendedModelID == hubModel.id,
+                        isSelected: selectedModelID == hubModel.id,
+                        isDownloading: downloadManager.downloadingModelID == hubModel.id,
+                        downloadProgress: downloadManager.downloadingModelID == hubModel.id
+                            ? downloadManager.downloadProgress
+                            : 0,
+                        anotherDownloadIsActive: downloadManager.downloadingModelID != nil,
+                        downloadError: downloadManager.errorByModelID[hubModel.id],
+                        onSelect: { selectedModelID = hubModel.id },
+                        onDownload: { downloadRecommendedModel(hubModel) },
+                        onCancel: { downloadManager.removeDownload() }
+                    )
+                }
             }
         }
     }
@@ -352,8 +430,36 @@ private struct WelcomeView: View {
         }
     }
 
+    private var shouldShowRecommendedModels: Bool {
+        !modelLibrary.isScanning && pickerModels.isEmpty
+    }
+
+    private var recommendedModels: [HuggingFaceModel] {
+        let candidates = hubLibrary.models.filter { hubModel in
+            !hubModel.isPrivate
+                && !hubModel.isGated
+                && hubModel.capabilities.contains(.text)
+                && (hubModel.libraryName?.localizedCaseInsensitiveContains("mlx") == true
+                    || hubModel.tags.contains(where: { $0.localizedCaseInsensitiveContains("mlx") })
+                    || hubModel.id.lowercased().hasPrefix("mlx-community/"))
+        }
+        return Array(candidates.sorted { lhs, rhs in
+            let lhsFits = lhs.memoryEstimate?.isUsable != false
+            let rhsFits = rhs.memoryEstimate?.isUsable != false
+            if lhsFits != rhsFits {
+                return lhsFits
+            }
+            return lhs.downloads > rhs.downloads
+        }.prefix(6))
+    }
+
     private var modelSearchPath: String {
         model.settings.normalized().expandedModelSearchPath
+    }
+
+    private var missingDefaultModelCache: Bool {
+        modelLibrary.error == LocalModelDiscoveryError.pathNotFound("").errorDescription
+            && modelSearchPath == LocalModelDiscovery.expandedPath(NativSettings.defaultModelSearchPath)
     }
 
     private var normalizedAPIKey: String? {
@@ -362,12 +468,12 @@ private struct WelcomeView: View {
     }
 
     private var modelScanMessage: (text: String, systemImage: String, isError: Bool)? {
-        if let error = modelLibrary.error {
+        if let error = modelLibrary.error, !missingDefaultModelCache {
             return (error, "exclamationmark.triangle.fill", true)
         }
         if !modelLibrary.isScanning, pickerModels.isEmpty {
             return (
-                "No compatible language models are installed. You can continue with load on demand.",
+                "No compatible language models are installed. Download one above or continue with load on demand.",
                 "info.circle",
                 false
             )
@@ -377,6 +483,41 @@ private struct WelcomeView: View {
 
     private func finish(serverAPIKey: String?) {
         onComplete(selectedModelID, serverAPIKey)
+    }
+
+    private func refreshModelChoices() {
+        modelLibrary.scan(path: model.settings.modelSearchPath)
+        if pickerModels.isEmpty {
+            requestRecommendedModels()
+        }
+    }
+
+    private func loadRecommendedModelsIfNeeded() {
+        guard pickerModels.isEmpty, !didRequestRecommendedModels else { return }
+        requestRecommendedModels()
+    }
+
+    private func requestRecommendedModels() {
+        didRequestRecommendedModels = true
+        hubLibrary.search(
+            query: "mlx-community",
+            sort: .downloads,
+            token: model.effectiveHuggingFaceToken
+        )
+    }
+
+    private func downloadRecommendedModel(_ hubModel: HuggingFaceModel) {
+        selectedModelID = nil
+        downloadManager.download(
+            repoID: hubModel.id,
+            cachePath: model.settings.modelSearchPath,
+            token: model.effectiveHuggingFaceToken
+        ) {
+            downloadedRecommendedModelID = hubModel.id
+            selectedModelID = hubModel.id
+            modelLibrary.scan(path: model.settings.modelSearchPath)
+            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        }
     }
 }
 
@@ -554,6 +695,144 @@ private struct WelcomeModelPickerRow: View {
             return "\(title), \(selection)"
         }
         return "\(title), \(memoryEstimate.compatibilityLabel), \(selection)"
+    }
+}
+
+private struct WelcomeDownloadModelRow: View {
+    let model: HuggingFaceModel
+    let isDownloaded: Bool
+    let isSelected: Bool
+    let isDownloading: Bool
+    let downloadProgress: Double
+    let anotherDownloadIsActive: Bool
+    let downloadError: String?
+    let onSelect: () -> Void
+    let onDownload: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                modelIcon
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
+                        Text(modelName)
+                            .font(.body.weight(.medium))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+
+                        if let memoryEstimate = model.memoryEstimate,
+                           !memoryEstimate.isUsable {
+                            WelcomeMemoryFitBadge(estimate: memoryEstimate)
+                        }
+                    }
+
+                    Text(modelDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 10)
+
+                if isDownloaded && isSelected {
+                    Label("Selected", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.green)
+                        .fixedSize()
+                } else if isDownloaded {
+                    Button("Use", action: onSelect)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else if isDownloading {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            ProgressView(value: downloadProgress)
+                                .frame(width: 74)
+                            Text(downloadProgress > 0
+                                ? "\(Int((downloadProgress * 100).rounded()))%"
+                                : "Starting…")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+
+                        Button(action: onCancel) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Cancel and remove download")
+                    }
+                    .fixedSize()
+                } else {
+                    Button("Download", action: onDownload)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(anotherDownloadIsActive)
+                        .help("Download \(model.id) to the configured cache")
+                }
+            }
+
+            if let downloadError {
+                Label(downloadError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+                    .padding(.leading, 48)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(minHeight: 54)
+        .background(Color.secondary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private var modelIcon: some View {
+        if let provider = model.provider,
+           let image = LocalModelProviderIcon.image(for: provider) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 22, height: 22)
+                .frame(width: 36, height: 36)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+        } else {
+            Image(systemName: "arrow.down.app.fill")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+        }
+    }
+
+    private var modelName: String {
+        model.id.split(separator: "/").last.map(String.init) ?? model.id
+    }
+
+    private var modelDetail: String {
+        var details: [String] = []
+        if let provider = model.provider {
+            details.append(provider.displayName)
+        }
+        if let sizeBytes = model.sizeBytes {
+            details.append(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))
+        }
+        details.append("\(compactCount(model.downloads)) downloads")
+        return details.joined(separator: " · ")
+    }
+
+    private func compactCount(_ value: Int) -> String {
+        switch value {
+        case 1_000_000...:
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        case 1_000...:
+            return String(format: "%.1fK", Double(value) / 1_000)
+        default:
+            return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+        }
     }
 }
 
