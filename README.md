@@ -19,7 +19,7 @@
   <img alt="MLX" src="https://img.shields.io/badge/Powered%20by-MLX-6E5AE6">
 </p>
 
-Nativ is a native macOS workspace for running AI models locally on Apple silicon. It bundles an [`mlx-vlm`](https://github.com/Blaizzy/mlx-vlm) server, finds compatible models in your Hugging Face cache, and wraps the whole experience in a polished SwiftUI app.
+Nativ is a native macOS workspace for running AI models locally on Apple silicon. It bundles an [`mlx-vlm`](https://github.com/Blaizzy/mlx-vlm) server, finds compatible models in your Hugging Face cache (honoring `HF_HUB_CACHE` and `HF_HOME`), and wraps the whole experience in a polished SwiftUI app.
 
 Use Nativ as a private chat app, a model manager, a performance dashboard, or an OpenAI- and Anthropic-compatible local inference server for the tools you already use.
 
@@ -28,11 +28,11 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | Feature | What you get |
 |---|---|
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
-| **Model library** | Discover installed MLX models, browse compatible models on Hugging Face, download them, inspect capabilities, switch models, or remove old ones. |
+| **Model library** | Discover installed MLX models , browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
 | **Coding-tool integrations** | Configure and launch Codex, Claude Code, Pi, Hermes, and OpenCode against models served by Nativ. |
-| **Developer workspace** | Inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
+| **Developer workspace** | Set the server port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, and open the main app without breaking focus. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
@@ -62,6 +62,7 @@ To run the app:
 - A Mac with Apple silicon.
 - macOS 26 or newer.
 - Enough unified memory for the model you choose.
+- Optional: a Hugging Face token (set in the app or via `HF_TOKEN`) to download gated models.
 
 To build from source, you will also need:
 
@@ -78,7 +79,7 @@ Download the latest DMG from [GitHub Releases](https://github.com/Blaizzy/nativ/
 
 On first launch:
 
-1. Choose an installed language model, or continue with load-on-demand.
+1. Choose an installed language model, download a recommended one, or continue with load-on-demand.
 2. Optionally generate an API key to protect the server's management endpoints.
 3. Open **Models** to download or select a compatible model.
 4. Start chatting, inspect analytics, or connect one of the supported coding tools.
@@ -96,7 +97,7 @@ The first build can take a while because `NativServerKit` creates a relocatable 
 
 ## Use Nativ as a local API server
 
-By default, the app exposes its server at `http://127.0.0.1:8080`. The Developer page lists every available endpoint and lets you copy URLs directly.
+By default, the app exposes its server at `http://127.0.0.1:8080`. You can change the port in the Developer page, which also lists every available endpoint and lets you copy URLs directly.
 
 For example, with a model selected:
 
