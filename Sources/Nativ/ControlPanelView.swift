@@ -432,7 +432,10 @@ struct ControlPanelView: View {
                         titleLeadingInset: detailTitleLeadingInset
                     )
                 case .system:
-                    SystemMonitorView(store: systemMonitor)
+                    SystemMonitorView(
+                        store: systemMonitor,
+                        menuBarPreferences: .shared
+                    )
                 case .models:
                     ModelsView(
                         model: model,
