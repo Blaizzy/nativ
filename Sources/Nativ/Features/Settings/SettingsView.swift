@@ -20,7 +20,7 @@ struct SettingsView: View {
     }
 
     private var pageHeader: some View {
-        HStack(spacing: 18) {
+        VStack(spacing: 14) {
             Image(nsImage: NSApplication.shared.applicationIconImage)
                 .resizable()
                 .interpolation(.high)
@@ -29,7 +29,7 @@ struct SettingsView: View {
                 .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
                 .accessibilityLabel("Nativ app icon")
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(spacing: 5) {
                 Text("Nativ")
                     .font(.largeTitle.weight(.semibold))
                 Text(appVersionLabel)
@@ -39,7 +39,9 @@ struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var generalSettings: some View {
