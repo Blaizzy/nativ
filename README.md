@@ -30,6 +30,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Model library** | Discover installed MLX models, browse compatible models on Hugging Face, download them, inspect capabilities, switch models, or remove old ones. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
+| **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, and SMART health. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
 | **Coding-tool integrations** | Configure and launch Codex, Claude Code, Pi, Hermes, and OpenCode against models served by Nativ. |
 | **Developer workspace** | Inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
@@ -133,7 +134,8 @@ Sources/
 │   │   ├── Developer/
 │   │   ├── ImageGeneration/
 │   │   ├── Integrations/
-│   │   └── Models/
+│   │   ├── Models/
+│   │   └── SystemMonitor/
 │   ├── Assets.xcassets/
 │   ├── ModelProviderIcons/
 │   └── Utilities/

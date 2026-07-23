@@ -1,0 +1,1379 @@
+import Charts
+import SwiftUI
+
+private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
+    case overview
+    case cpu
+    case gpu
+    case memory
+    case disk
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overview:
+            "Dashboard"
+        case .cpu:
+            "CPU"
+        case .gpu:
+            "GPU"
+        case .memory:
+            "RAM"
+        case .disk:
+            "Disk"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview:
+            "square.grid.2x2"
+        case .cpu:
+            "cpu"
+        case .gpu:
+            "display"
+        case .memory:
+            "memorychip"
+        case .disk:
+            "internaldrive"
+        }
+    }
+}
+
+struct SystemMonitorView: View {
+    @ObservedObject var store: SystemMonitorStore
+    @State private var destination: SystemMonitorDestination = .overview
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            destinationBar
+            Divider()
+            page
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            store.start()
+        }
+        .onDisappear {
+            store.stop()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("System Monitor")
+                    .font(.title2.weight(.semibold))
+                Text("Live performance and hardware health for this Mac")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(store.isSampling ? SystemMonitorPalette.positive : Color.secondary)
+                    .frame(width: 7, height: 7)
+                Text(store.isSampling ? "Live" : "Paused")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                if store.isSampling {
+                    store.stop()
+                } else {
+                    store.start()
+                }
+            } label: {
+                Image(systemName: store.isSampling ? "pause.fill" : "play.fill")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help(store.isSampling ? "Pause monitoring" : "Resume monitoring")
+
+            Button {
+                store.refresh()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("Refresh now")
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+    }
+
+    private var destinationBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                ForEach(SystemMonitorDestination.allCases) { item in
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            destination = item
+                        }
+                    } label: {
+                        Label(item.title, systemImage: item.systemImage)
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 13)
+                            .frame(height: 32)
+                            .foregroundStyle(destination == item ? Color.white : Color.primary)
+                            .background {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(
+                                        destination == item
+                                            ? Color.accentColor
+                                            : Color.clear
+                                    )
+                            }
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(destination == item ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 9)
+        }
+    }
+
+    @ViewBuilder
+    private var page: some View {
+        switch destination {
+        case .overview:
+            SystemOverviewPage(snapshot: store.snapshot)
+        case .cpu:
+            SystemCPUPage(snapshot: store.snapshot, history: store.cpuHistory)
+        case .gpu:
+            SystemGPUPage(
+                snapshot: store.snapshot,
+                gpuHistory: store.gpuHistory,
+                rendererHistory: store.rendererHistory,
+                tilerHistory: store.tilerHistory
+            )
+        case .memory:
+            SystemMemoryPage(
+                snapshot: store.snapshot,
+                memoryHistory: store.memoryHistory,
+                swapHistory: store.swapHistory
+            )
+        case .disk:
+            SystemDiskPage(
+                snapshot: store.snapshot,
+                readHistory: store.diskReadHistory,
+                writeHistory: store.diskWriteHistory
+            )
+        }
+    }
+}
+
+private struct SystemOverviewPage: View {
+    let snapshot: SystemMonitorSnapshot
+
+    var body: some View {
+        SystemMonitorPage(title: "Dashboard", subtitle: "Hardware at a glance") {
+            SystemPanel {
+                VStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.accentColor.opacity(0.18),
+                                        SystemMonitorPalette.purple.opacity(0.10),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 112, height: 82)
+
+                        Image(systemName: "laptopcomputer")
+                            .font(.system(size: 50, weight: .light))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(Color.accentColor)
+                    }
+
+                    VStack(spacing: 4) {
+                        Text(snapshot.identity.computerName)
+                            .font(.title2.weight(.semibold))
+                        Text(snapshot.identity.chipName)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text(snapshot.identity.operatingSystem)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 210), spacing: 14)],
+                spacing: 14
+            ) {
+                SystemOverviewMetric(
+                    title: "CPU",
+                    value: SystemMonitorFormat.percent(snapshot.cpu.totalUsage),
+                    detail: "\(snapshot.identity.physicalCoreCount) cores",
+                    icon: "cpu",
+                    tint: SystemMonitorPalette.blue
+                )
+                SystemOverviewMetric(
+                    title: "GPU",
+                    value: SystemMonitorFormat.optionalPercent(snapshot.gpu.deviceUsage),
+                    detail: gpuDetail,
+                    icon: "display",
+                    tint: SystemMonitorPalette.purple
+                )
+                SystemOverviewMetric(
+                    title: "Memory",
+                    value: SystemMonitorFormat.percent(snapshot.memory.usage),
+                    detail: "\(SystemMonitorFormat.bytes(snapshot.memory.usedBytes)) used",
+                    icon: "memorychip",
+                    tint: SystemMonitorPalette.orange
+                )
+                SystemOverviewMetric(
+                    title: "Disk",
+                    value: SystemMonitorFormat.percent(snapshot.disk.usage),
+                    detail: "\(SystemMonitorFormat.bytes(snapshot.disk.availableBytes)) free",
+                    icon: "internaldrive",
+                    tint: SystemMonitorPalette.red
+                )
+            }
+
+            adaptivePair {
+                SystemInfoCard(title: "Hardware") {
+                    SystemInfoRow(
+                        "Processor",
+                        value: "\(snapshot.identity.chipName) · \(coreSummary)"
+                    )
+                    SystemInfoRow(
+                        "Memory",
+                        value: SystemMonitorFormat.bytes(snapshot.memory.totalBytes)
+                    )
+                    SystemInfoRow(
+                        "Graphics",
+                        value: graphicsSummary
+                    )
+                    SystemInfoRow(
+                        "Disk",
+                        value: "\(snapshot.identity.disk.volumeName) · \(SystemMonitorFormat.bytes(snapshot.disk.totalBytes))"
+                    )
+                    SystemInfoRow(
+                        "Display",
+                        value: displaySummary
+                    )
+                }
+            } trailing: {
+                SystemInfoCard(title: "Device") {
+                    SystemInfoRow("Model identifier", value: snapshot.identity.modelIdentifier)
+                    SystemInfoRow(
+                        "Model number",
+                        value: snapshot.identity.modelNumber ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Production year",
+                        value: snapshot.identity.productionYear.map(String.init) ?? "Unavailable"
+                    )
+                    SystemInfoRow("Serial number", value: snapshot.identity.serialNumber)
+                    SystemInfoRow("File system", value: snapshot.identity.disk.fileSystem)
+                    SystemInfoRow(
+                        "Storage health",
+                        value: snapshot.identity.disk.smartStatus ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Uptime",
+                        value: SystemMonitorFormat.uptime(snapshot.uptime)
+                    )
+                }
+            }
+        }
+    }
+
+    private var coreSummary: String {
+        if snapshot.identity.efficiencyCoreCount > 0
+            || snapshot.identity.performanceCoreCount > 0 {
+            return "\(snapshot.identity.efficiencyCoreCount)E / \(snapshot.identity.performanceCoreCount)P"
+        }
+        return "\(snapshot.identity.physicalCoreCount) cores"
+    }
+
+    private var graphicsSummary: String {
+        if let count = snapshot.identity.gpuCoreCount {
+            return "\(snapshot.identity.gpuName) · \(count) cores"
+        }
+        return snapshot.identity.gpuName
+    }
+
+    private var gpuDetail: String {
+        snapshot.identity.gpuCoreCount.map { "\($0) cores" } ?? snapshot.identity.gpuName
+    }
+
+    private var displaySummary: String {
+        var components = [
+            snapshot.identity.displayName,
+            snapshot.identity.displayResolution,
+        ]
+        if let refreshRate = snapshot.identity.displayRefreshRate {
+            components.append("\(Int(refreshRate.rounded())) Hz")
+        }
+        return components.joined(separator: " · ")
+    }
+}
+
+private struct SystemCPUPage: View {
+    let snapshot: SystemMonitorSnapshot
+    let history: [SystemHistorySample]
+
+    var body: some View {
+        SystemMonitorPage(
+            title: "CPU",
+            subtitle: "\(snapshot.identity.chipName) · \(snapshot.identity.physicalCoreCount) cores"
+        ) {
+            SystemPanel {
+                HStack(spacing: 24) {
+                    SystemUsageGauge(
+                        value: snapshot.cpu.totalUsage,
+                        tint: SystemMonitorPalette.blue
+                    )
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(snapshot.identity.chipName)
+                            .font(.headline)
+
+                        GeometryReader { geometry in
+                            HStack(spacing: 0) {
+                                Rectangle()
+                                    .fill(SystemMonitorPalette.red)
+                                    .frame(
+                                        width: geometry.size.width * snapshot.cpu.systemUsage
+                                    )
+                                Rectangle()
+                                    .fill(SystemMonitorPalette.blue)
+                                    .frame(width: geometry.size.width * snapshot.cpu.userUsage)
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.18))
+                            }
+                            .clipShape(.rect(cornerRadius: 4))
+                        }
+                        .frame(height: 13)
+
+                        HStack(spacing: 18) {
+                            SystemLegendItem(
+                                title: "System",
+                                value: SystemMonitorFormat.percent(snapshot.cpu.systemUsage),
+                                color: SystemMonitorPalette.red
+                            )
+                            SystemLegendItem(
+                                title: "User",
+                                value: SystemMonitorFormat.percent(snapshot.cpu.userUsage),
+                                color: SystemMonitorPalette.blue
+                            )
+                            SystemLegendItem(
+                                title: "Idle",
+                                value: SystemMonitorFormat.percent(snapshot.cpu.idleUsage),
+                                color: Color.secondary.opacity(0.45)
+                            )
+                        }
+                    }
+                }
+            }
+
+            SystemPercentHistoryChart(
+                title: "Usage history",
+                samples: history,
+                color: SystemMonitorPalette.blue
+            )
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Load per core")
+                    .font(.headline)
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 280), spacing: 14)],
+                    spacing: 12
+                ) {
+                    ForEach(Array(snapshot.cpu.coreUsage.enumerated()), id: \.offset) {
+                        index,
+                        usage in
+                        SystemCoreLoadRow(
+                            title: coreTitle(index),
+                            value: usage,
+                            tint: isEfficiencyCore(index)
+                                ? SystemMonitorPalette.teal
+                                : SystemMonitorPalette.purple
+                        )
+                    }
+                }
+                .padding(14)
+                .systemMonitorPanel()
+            }
+
+            adaptivePair {
+                SystemInfoCard(title: "Average load") {
+                    SystemInfoRow(
+                        "1 minute",
+                        value: SystemMonitorFormat.decimal(snapshot.cpu.loadAverages[safe: 0] ?? 0)
+                    )
+                    SystemInfoRow(
+                        "5 minutes",
+                        value: SystemMonitorFormat.decimal(snapshot.cpu.loadAverages[safe: 1] ?? 0)
+                    )
+                    SystemInfoRow(
+                        "15 minutes",
+                        value: SystemMonitorFormat.decimal(snapshot.cpu.loadAverages[safe: 2] ?? 0)
+                    )
+                }
+            } trailing: {
+                SystemInfoCard(title: "Configuration") {
+                    SystemInfoRow(
+                        "Efficiency cores",
+                        value: "\(snapshot.identity.efficiencyCoreCount)"
+                    )
+                    SystemInfoRow(
+                        "Performance cores",
+                        value: "\(snapshot.identity.performanceCoreCount)"
+                    )
+                    SystemInfoRow(
+                        "Logical processors",
+                        value: "\(snapshot.identity.logicalCoreCount)"
+                    )
+                    SystemInfoRow(
+                        "Nominal frequency",
+                        value: snapshot.identity.nominalCPUFrequencyHz
+                            .map(SystemMonitorFormat.frequency) ?? "Not exposed by macOS"
+                    )
+                }
+            }
+        }
+    }
+
+    private func isEfficiencyCore(_ index: Int) -> Bool {
+        index < snapshot.identity.efficiencyCoreCount
+    }
+
+    private func coreTitle(_ index: Int) -> String {
+        if isEfficiencyCore(index) {
+            return "Efficiency core \(index + 1)"
+        }
+        let performanceIndex = index - snapshot.identity.efficiencyCoreCount + 1
+        return "Performance core \(max(performanceIndex, 1))"
+    }
+}
+
+private struct SystemGPUPage: View {
+    let snapshot: SystemMonitorSnapshot
+    let gpuHistory: [SystemHistorySample]
+    let rendererHistory: [SystemHistorySample]
+    let tilerHistory: [SystemHistorySample]
+
+    var body: some View {
+        SystemMonitorPage(title: "GPU", subtitle: gpuTitle) {
+            SystemPanel {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Label(snapshot.identity.gpuName, systemImage: "display")
+                            .font(.headline)
+                        Spacer()
+                        if let memory = snapshot.gpu.allocatedMemoryBytes {
+                            Text("\(SystemMonitorFormat.bytes(memory)) allocated")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    SystemLabeledProgress(
+                        title: "GPU utilization",
+                        value: snapshot.gpu.deviceUsage,
+                        tint: SystemMonitorPalette.blue
+                    )
+                    SystemLabeledProgress(
+                        title: "Render utilization",
+                        value: snapshot.gpu.rendererUsage,
+                        tint: SystemMonitorPalette.purple
+                    )
+                    SystemLabeledProgress(
+                        title: "Tiler utilization",
+                        value: snapshot.gpu.tilerUsage,
+                        tint: SystemMonitorPalette.teal
+                    )
+                }
+            }
+
+            adaptivePair {
+                SystemPercentHistoryChart(
+                    title: "GPU utilization history",
+                    samples: gpuHistory,
+                    color: SystemMonitorPalette.blue
+                )
+            } trailing: {
+                SystemPercentHistoryChart(
+                    title: "Render utilization history",
+                    samples: rendererHistory,
+                    color: SystemMonitorPalette.purple
+                )
+            }
+
+            SystemPercentHistoryChart(
+                title: "Tiler utilization history",
+                samples: tilerHistory,
+                color: SystemMonitorPalette.teal
+            )
+
+            adaptivePair {
+                SystemUnavailableMetric(
+                    title: "Neural Engine utilization",
+                    icon: "brain",
+                    message: "System-wide ANE utilization is not exposed by macOS."
+                )
+            } trailing: {
+                SystemUnavailableMetric(
+                    title: "Frame rate",
+                    icon: "speedometer",
+                    message: "FPS requires instrumentation inside the rendering app."
+                )
+            }
+
+            SystemInfoCard(title: "Graphics") {
+                SystemInfoRow("Device", value: snapshot.identity.gpuName)
+                SystemInfoRow(
+                    "GPU cores",
+                    value: snapshot.identity.gpuCoreCount.map(String.init) ?? "Unavailable"
+                )
+                SystemInfoRow(
+                    "Allocated unified memory",
+                    value: snapshot.gpu.allocatedMemoryBytes
+                        .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                )
+                SystemInfoRow(
+                    "Neural Engine utilization",
+                    value: "Not exposed by macOS"
+                )
+            }
+        }
+    }
+
+    private var gpuTitle: String {
+        if let count = snapshot.identity.gpuCoreCount {
+            return "\(snapshot.identity.gpuName) · \(count) cores"
+        }
+        return snapshot.identity.gpuName
+    }
+}
+
+private struct SystemMemoryPage: View {
+    let snapshot: SystemMonitorSnapshot
+    let memoryHistory: [SystemHistorySample]
+    let swapHistory: [SystemHistorySample]
+
+    var body: some View {
+        SystemMonitorPage(
+            title: "RAM",
+            subtitle: "\(SystemMonitorFormat.bytes(snapshot.memory.totalBytes)) unified memory"
+        ) {
+            SystemPanel {
+                HStack(spacing: 24) {
+                    SystemUsageGauge(
+                        value: snapshot.memory.usage,
+                        tint: SystemMonitorPalette.blue
+                    )
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Used: \(SystemMonitorFormat.bytes(snapshot.memory.usedBytes))")
+                                .font(.headline)
+                            Spacer()
+                            Text("Total: \(SystemMonitorFormat.bytes(snapshot.memory.totalBytes))")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        GeometryReader { geometry in
+                            HStack(spacing: 0) {
+                                memorySegment(
+                                    snapshot.memory.activeBytes,
+                                    color: SystemMonitorPalette.blue,
+                                    width: geometry.size.width
+                                )
+                                memorySegment(
+                                    snapshot.memory.wiredBytes,
+                                    color: SystemMonitorPalette.orange,
+                                    width: geometry.size.width
+                                )
+                                memorySegment(
+                                    snapshot.memory.compressedBytes,
+                                    color: SystemMonitorPalette.red,
+                                    width: geometry.size.width
+                                )
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.18))
+                            }
+                            .clipShape(.rect(cornerRadius: 4))
+                        }
+                        .frame(height: 13)
+
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 16) {
+                                memoryLegend
+                            }
+                            VStack(alignment: .leading, spacing: 7) {
+                                memoryLegend
+                            }
+                        }
+                    }
+                }
+            }
+
+            SystemPercentHistoryChart(
+                title: "Memory usage history",
+                samples: memoryHistory,
+                color: SystemMonitorPalette.blue
+            )
+
+            adaptivePair {
+                SystemInfoCard(title: "Memory pressure") {
+                    HStack(spacing: 18) {
+                        Gauge(value: snapshot.memory.usage) {
+                            EmptyView()
+                        } currentValueLabel: {
+                            Image(systemName: "gauge.with.dots.needle.33percent")
+                        }
+                        .gaugeStyle(.accessoryCircular)
+                        .tint(pressureColor)
+                        .frame(width: 78, height: 78)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(snapshot.memory.pressureLabel)
+                                .font(.title3.weight(.semibold))
+                            Text("Based on active, wired, and compressed memory")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                }
+            } trailing: {
+                SystemPercentHistoryChart(
+                    title: "Swap history",
+                    samples: swapHistory,
+                    color: SystemMonitorPalette.purple,
+                    footer: "\(SystemMonitorFormat.bytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.bytes(snapshot.memory.swapTotalBytes))"
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func memorySegment(_ bytes: UInt64, color: Color, width: CGFloat) -> some View {
+        if snapshot.memory.totalBytes > 0 {
+            Rectangle()
+                .fill(color)
+                .frame(
+                    width: width * Double(bytes) / Double(snapshot.memory.totalBytes)
+                )
+        }
+    }
+
+    @ViewBuilder
+    private var memoryLegend: some View {
+        SystemLegendItem(
+            title: "Active",
+            value: SystemMonitorFormat.bytes(snapshot.memory.activeBytes),
+            color: SystemMonitorPalette.blue
+        )
+        SystemLegendItem(
+            title: "Wired",
+            value: SystemMonitorFormat.bytes(snapshot.memory.wiredBytes),
+            color: SystemMonitorPalette.orange
+        )
+        SystemLegendItem(
+            title: "Compressed",
+            value: SystemMonitorFormat.bytes(snapshot.memory.compressedBytes),
+            color: SystemMonitorPalette.red
+        )
+        SystemLegendItem(
+            title: "Available",
+            value: SystemMonitorFormat.bytes(snapshot.memory.freeBytes),
+            color: Color.secondary.opacity(0.45)
+        )
+    }
+
+    private var pressureColor: Color {
+        switch snapshot.memory.pressureLabel {
+        case "Normal":
+            SystemMonitorPalette.positive
+        case "Elevated":
+            SystemMonitorPalette.orange
+        default:
+            SystemMonitorPalette.red
+        }
+    }
+}
+
+private struct SystemDiskPage: View {
+    let snapshot: SystemMonitorSnapshot
+    let readHistory: [SystemHistorySample]
+    let writeHistory: [SystemHistorySample]
+
+    var body: some View {
+        SystemMonitorPage(
+            title: "Disk",
+            subtitle: "\(snapshot.identity.disk.volumeName) · \(snapshot.identity.disk.fileSystem)"
+        ) {
+            SystemPanel {
+                HStack(spacing: 24) {
+                    SystemUsageGauge(
+                        value: snapshot.disk.usage,
+                        tint: diskUsageColor
+                    )
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(snapshot.identity.disk.volumeName)
+                                    .font(.headline)
+                                Text(snapshot.identity.disk.fileSystem)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(SystemMonitorFormat.bytes(snapshot.disk.totalBytes))
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        ProgressView(value: snapshot.disk.usage)
+                            .tint(diskUsageColor)
+
+                        HStack(spacing: 20) {
+                            SystemLegendItem(
+                                title: "Used",
+                                value: SystemMonitorFormat.bytes(snapshot.disk.usedBytes),
+                                color: diskUsageColor
+                            )
+                            SystemLegendItem(
+                                title: "Free",
+                                value: SystemMonitorFormat.bytes(snapshot.disk.availableBytes),
+                                color: Color.secondary.opacity(0.45)
+                            )
+                        }
+                    }
+                }
+            }
+
+            SystemDiskHistoryChart(
+                readSamples: readHistory,
+                writeSamples: writeHistory,
+                currentRead: snapshot.disk.readBytesPerSecond,
+                currentWrite: snapshot.disk.writeBytesPerSecond
+            )
+
+            adaptivePair {
+                SystemInfoCard(title: "Details") {
+                    SystemInfoRow(
+                        "Read",
+                        value: SystemMonitorFormat.byteRate(snapshot.disk.readBytesPerSecond),
+                        color: SystemMonitorPalette.blue
+                    )
+                    SystemInfoRow(
+                        "Write",
+                        value: SystemMonitorFormat.byteRate(snapshot.disk.writeBytesPerSecond),
+                        color: SystemMonitorPalette.red
+                    )
+                    SystemInfoRow(
+                        "Total read since boot",
+                        value: SystemMonitorFormat.bytes(snapshot.disk.cumulativeReadBytes)
+                    )
+                    SystemInfoRow(
+                        "Total written since boot",
+                        value: SystemMonitorFormat.bytes(snapshot.disk.cumulativeWriteBytes)
+                    )
+                    SystemInfoRow(
+                        "Model",
+                        value: snapshot.identity.disk.model
+                    )
+                    SystemInfoRow(
+                        "Connection type",
+                        value: snapshot.identity.disk.connection
+                    )
+                    SystemInfoRow(
+                        "BSD name",
+                        value: snapshot.identity.disk.deviceIdentifier
+                    )
+                    SystemInfoRow(
+                        "Encrypted",
+                        value: SystemMonitorFormat.boolean(snapshot.identity.disk.isEncrypted)
+                    )
+                    SystemInfoRow(
+                        "Writable",
+                        value: SystemMonitorFormat.boolean(snapshot.identity.disk.isWritable)
+                    )
+                }
+            } trailing: {
+                SystemInfoCard(title: "SMART") {
+                    SystemInfoRow(
+                        "Status",
+                        value: snapshot.identity.disk.smartStatus ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Total read",
+                        value: snapshot.identity.disk.lifetimeReadBytes
+                            .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Total written",
+                        value: snapshot.identity.disk.lifetimeWrittenBytes
+                            .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Temperature",
+                        value: snapshot.identity.disk.temperatureCelsius
+                            .map { "\($0)°C" } ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Health",
+                        value: snapshot.identity.disk.healthPercent
+                            .map { "\($0)%" } ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Power cycles",
+                        value: snapshot.identity.disk.powerCycles
+                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Power on hours",
+                        value: snapshot.identity.disk.powerOnHours
+                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Available spare",
+                        value: snapshot.identity.disk.availableSparePercent
+                            .map { "\($0)%" } ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Unsafe shutdowns",
+                        value: snapshot.identity.disk.unsafeShutdowns
+                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                    )
+                    SystemInfoRow(
+                        "Media errors",
+                        value: snapshot.identity.disk.mediaErrors
+                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                    )
+                }
+            }
+        }
+    }
+
+    private var diskUsageColor: Color {
+        snapshot.disk.usage >= 0.90
+            ? SystemMonitorPalette.red
+            : SystemMonitorPalette.blue
+    }
+}
+
+private struct SystemMonitorPage<Content: View>: View {
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.title2.weight(.semibold))
+                    Text(subtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                content
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 1500, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+}
+
+private struct SystemPanel<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .systemMonitorPanel()
+    }
+}
+
+private struct SystemOverviewMetric: View {
+    let title: String
+    let value: String
+    let detail: String
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 13) {
+            Image(systemName: icon)
+                .font(.system(size: 19, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 38, height: 38)
+                .background(tint.opacity(0.12), in: .rect(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .systemMonitorPanel()
+    }
+}
+
+private struct SystemInfoCard<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+            VStack(spacing: 0) {
+                content
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .systemMonitorPanel()
+    }
+}
+
+private struct SystemInfoRow: View {
+    let title: String
+    let value: String
+    let color: Color?
+
+    init(_ title: String, value: String, color: Color? = nil) {
+        self.title = title
+        self.value = value
+        self.color = color
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            if let color {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+            }
+
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 16)
+            Text(value)
+                .font(.callout.weight(.medium))
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+}
+
+private struct SystemUsageGauge: View {
+    let value: Double
+    let tint: Color
+
+    var body: some View {
+        Gauge(value: value) {
+            EmptyView()
+        } currentValueLabel: {
+            Text(SystemMonitorFormat.percent(value))
+                .font(.title3.weight(.semibold).monospacedDigit())
+        }
+        .gaugeStyle(.accessoryCircularCapacity)
+        .tint(tint)
+        .frame(width: 86, height: 86)
+    }
+}
+
+private struct SystemLegendItem: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text(title)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+        }
+        .font(.caption)
+    }
+}
+
+private struct SystemLabeledProgress: View {
+    let title: String
+    let value: Double?
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(SystemMonitorFormat.optionalPercent(value))
+                    .font(.callout.weight(.semibold).monospacedDigit())
+            }
+            ProgressView(value: value ?? 0)
+                .tint(tint)
+        }
+    }
+}
+
+private struct SystemCoreLoadRow: View {
+    let title: String
+    let value: Double
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack {
+                Text(title)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(SystemMonitorFormat.percent(value))
+                    .font(.callout.weight(.semibold).monospacedDigit())
+            }
+            ProgressView(value: value)
+                .tint(tint)
+        }
+    }
+}
+
+private struct SystemPercentHistoryChart: View {
+    let title: String
+    let samples: [SystemHistorySample]
+    let color: Color
+    var footer: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                Spacer()
+                if let footer {
+                    Text(footer)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if samples.isEmpty {
+                SystemChartPlaceholder()
+            } else {
+                Chart(samples) { sample in
+                    AreaMark(
+                        x: .value("Time", sample.recordedAt),
+                        y: .value("Usage", sample.value * 100)
+                    )
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [color.opacity(0.42), color.opacity(0.06)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .interpolationMethod(.catmullRom)
+
+                    LineMark(
+                        x: .value("Time", sample.recordedAt),
+                        y: .value("Usage", sample.value * 100)
+                    )
+                    .foregroundStyle(color)
+                    .lineStyle(.init(lineWidth: 1.5))
+                    .interpolationMethod(.catmullRom)
+                }
+                .chartYScale(domain: 0...100)
+                .chartYAxis {
+                    AxisMarks(values: [0, 25, 50, 75, 100]) { value in
+                        AxisGridLine()
+                            .foregroundStyle(Color.secondary.opacity(0.12))
+                        AxisValueLabel {
+                            if let percent = value.as(Int.self) {
+                                Text("\(percent)%")
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 5)) {
+                        AxisGridLine()
+                            .foregroundStyle(Color.secondary.opacity(0.08))
+                        AxisValueLabel(format: .dateTime.hour().minute())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(minHeight: 170)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .systemMonitorPanel()
+    }
+}
+
+private struct SystemDiskHistoryChart: View {
+    let readSamples: [SystemHistorySample]
+    let writeSamples: [SystemHistorySample]
+    let currentRead: Double
+    let currentWrite: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Read / Write history")
+                    .font(.headline)
+                Spacer()
+                SystemLegendItem(
+                    title: "Read",
+                    value: SystemMonitorFormat.byteRate(currentRead),
+                    color: SystemMonitorPalette.blue
+                )
+                SystemLegendItem(
+                    title: "Write",
+                    value: SystemMonitorFormat.byteRate(currentWrite),
+                    color: SystemMonitorPalette.red
+                )
+            }
+
+            if readSamples.isEmpty && writeSamples.isEmpty {
+                SystemChartPlaceholder()
+            } else {
+                Chart {
+                    ForEach(readSamples) { sample in
+                        LineMark(
+                            x: .value("Time", sample.recordedAt),
+                            y: .value("Bytes per second", sample.value),
+                            series: .value("Series", "Read")
+                        )
+                        .foregroundStyle(SystemMonitorPalette.blue)
+                        .interpolationMethod(.catmullRom)
+                    }
+                    ForEach(writeSamples) { sample in
+                        LineMark(
+                            x: .value("Time", sample.recordedAt),
+                            y: .value("Bytes per second", sample.value),
+                            series: .value("Series", "Write")
+                        )
+                        .foregroundStyle(SystemMonitorPalette.red)
+                        .interpolationMethod(.catmullRom)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                        AxisGridLine()
+                            .foregroundStyle(Color.secondary.opacity(0.12))
+                        AxisValueLabel {
+                            if let bytes = value.as(Double.self) {
+                                Text(SystemMonitorFormat.byteRate(bytes))
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 5)) {
+                        AxisGridLine()
+                            .foregroundStyle(Color.secondary.opacity(0.08))
+                        AxisValueLabel(format: .dateTime.hour().minute())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(minHeight: 190)
+            }
+        }
+        .padding(16)
+        .systemMonitorPanel()
+    }
+}
+
+private struct SystemChartPlaceholder: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Collecting live samples…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 170)
+    }
+}
+
+private struct SystemUnavailableMetric: View {
+    let title: String
+    let icon: String
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 40, height: 40)
+                .background(Color.secondary.opacity(0.10), in: .rect(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
+        .systemMonitorPanel()
+    }
+}
+
+@ViewBuilder
+private func adaptivePair<Leading: View, Trailing: View>(
+    @ViewBuilder leading: () -> Leading,
+    @ViewBuilder trailing: () -> Trailing
+) -> some View {
+    ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 14) {
+            leading()
+                .frame(maxWidth: .infinity)
+            trailing()
+                .frame(maxWidth: .infinity)
+        }
+        VStack(alignment: .leading, spacing: 14) {
+            leading()
+            trailing()
+        }
+    }
+}
+
+private enum SystemMonitorFormat {
+    static func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    static func optionalPercent(_ value: Double?) -> String {
+        value.map(percent) ?? "--"
+    }
+
+    static func decimal(_ value: Double) -> String {
+        String(format: "%.2f", value)
+    }
+
+    static func bytes(_ value: UInt64) -> String {
+        ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: value),
+            countStyle: .file
+        )
+    }
+
+    static func byteRate(_ value: Double) -> String {
+        guard value.isFinite, value >= 0 else { return "--" }
+        return "\(bytes(UInt64(value.rounded()))) /s"
+    }
+
+    static func uptime(_ interval: TimeInterval) -> String {
+        let totalHours = max(Int(interval / 3_600), 0)
+        let days = totalHours / 24
+        let hours = totalHours % 24
+        if days > 0 {
+            return "\(days) days, \(hours) hours"
+        }
+        return "\(hours) hours"
+    }
+
+    static func frequency(_ hertz: UInt64) -> String {
+        let gigahertz = Double(hertz) / 1_000_000_000
+        return String(format: "%.2f GHz", gigahertz)
+    }
+
+    static func boolean(_ value: Bool?) -> String {
+        guard let value else { return "Unavailable" }
+        return value ? "Yes" : "No"
+    }
+
+    static func integer(_ value: UInt64) -> String {
+        value.formatted()
+    }
+}
+
+private enum SystemMonitorPalette {
+    static let blue = Color(red: 0.10, green: 0.48, blue: 0.96)
+    static let purple = Color(red: 0.38, green: 0.32, blue: 0.95)
+    static let teal = Color(red: 0.03, green: 0.71, blue: 0.75)
+    static let orange = Color(red: 1.00, green: 0.55, blue: 0.17)
+    static let red = Color(red: 1.00, green: 0.23, blue: 0.28)
+    static let positive = Color(red: 0.18, green: 0.72, blue: 0.38)
+}
+
+private struct SystemMonitorPanelModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            }
+    }
+}
+
+private extension View {
+    func systemMonitorPanel() -> some View {
+        modifier(SystemMonitorPanelModifier())
+    }
+}
+
+private extension Array {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
