@@ -62,6 +62,7 @@ final class ControlPanelNavigation: ObservableObject {
 
 private enum FooterControl {
     case settings
+    case support
     case server
     case reportIssue
 }
@@ -218,6 +219,7 @@ struct ControlPanelView: View {
 
                 HStack(spacing: 4) {
                     settingsButton
+                    supportButton
                     serverToggleButton
                     issueReportMenu
                 }
@@ -292,6 +294,27 @@ struct ControlPanelView: View {
         }
         .help(model.isRunning ? "Stop Server" : "Start Server")
         .accessibilityLabel(model.isRunning ? "Stop Server" : "Start Server")
+    }
+
+    private var supportButton: some View {
+        Button {
+            guard let url = URL(string: "https://github.com/Blaizzy/nativ") else {
+                return
+            }
+            NSWorkspace.shared.open(url)
+        } label: {
+            footerIcon(
+                systemName: hoveredFooterControl == .support ? "heart.fill" : "heart",
+                color: .secondary,
+                isHovered: hoveredFooterControl == .support
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering in
+            updateFooterHover(.support, isHovering: isHovering)
+        }
+        .help("Star Nativ on GitHub")
+        .accessibilityLabel("Star Nativ on GitHub")
     }
 
     private func footerIcon(
