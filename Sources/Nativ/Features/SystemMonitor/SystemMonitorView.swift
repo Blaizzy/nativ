@@ -117,19 +117,20 @@ struct SystemMonitorView: View {
     private var menuBarControl: some View {
         Menu {
             Section("Menu bar") {
-                Button {
-                    menuBarPreferences.useNativIcon()
-                } label: {
-                    Label {
-                        HStack {
-                            Text("Nativ icon")
-                            if menuBarPreferences.items.isEmpty {
-                                Image(systemName: "checkmark")
+                Toggle(
+                    isOn: Binding(
+                        get: { menuBarPreferences.items.isEmpty },
+                        set: { isEnabled in
+                            if isEnabled {
+                                menuBarPreferences.useNativIcon()
                             }
                         }
-                    } icon: {
-                        Image(systemName: SystemMenuBarMetric.nativ.systemImage)
-                    }
+                    )
+                ) {
+                    Label(
+                        "Nativ icon",
+                        systemImage: SystemMenuBarMetric.nativ.systemImage
+                    )
                 }
             }
 
@@ -138,27 +139,24 @@ struct SystemMonitorView: View {
             ) { metric in
                 Section(metric.title) {
                     ForEach(SystemMenuBarStyle.allCases) { style in
-                        let isEnabled = menuBarPreferences.contains(
-                            metric: metric,
-                            style: style
-                        )
-                        Button {
-                            menuBarPreferences.setEnabled(
-                                !isEnabled,
-                                metric: metric,
-                                style: style
-                            )
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(style.title)
-                                    if isEnabled {
-                                        Image(systemName: "checkmark")
-                                    }
+                        Toggle(
+                            isOn: Binding(
+                                get: {
+                                    menuBarPreferences.contains(
+                                        metric: metric,
+                                        style: style
+                                    )
+                                },
+                                set: { isEnabled in
+                                    menuBarPreferences.setEnabled(
+                                        isEnabled,
+                                        metric: metric,
+                                        style: style
+                                    )
                                 }
-                            } icon: {
-                                Image(systemName: style.systemImage)
-                            }
+                            )
+                        ) {
+                            Label(style.title, systemImage: style.systemImage)
                         }
                     }
                 }
