@@ -367,10 +367,11 @@ private struct IntegrationCatalogView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Integrations")
-                        .font(.largeTitle.bold())
+                        .font(.title2.weight(.semibold))
                     Text("Run your coding tools with models served from this Mac.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -386,9 +387,9 @@ private struct IntegrationCatalogView: View {
                 .buttonStyle(.bordered)
                 .disabled(viewModel.isRefreshingStatuses)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 22)
-            .padding(.bottom, 18)
+            .padding(.horizontal, 22)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
 
             Divider()
 
