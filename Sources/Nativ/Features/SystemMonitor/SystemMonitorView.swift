@@ -272,7 +272,13 @@ private struct SystemOverviewPage: View {
             }
 
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 210), spacing: 14)],
+                columns: Array(
+                    repeating: GridItem(
+                        .flexible(minimum: 140),
+                        spacing: 14
+                    ),
+                    count: 4
+                ),
                 spacing: 14
             ) {
                 SystemOverviewMetric(
@@ -304,6 +310,8 @@ private struct SystemOverviewPage: View {
                     tint: SystemMonitorPalette.red
                 )
             }
+            .frame(maxWidth: 1200)
+            .frame(maxWidth: .infinity, alignment: .center)
 
             adaptivePair {
                 SystemInfoCard(title: "Hardware") {
