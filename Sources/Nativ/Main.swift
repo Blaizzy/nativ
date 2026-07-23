@@ -88,7 +88,6 @@ enum Main {
 
 private struct NativApplication: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    private let softwareUpdater = SoftwareUpdater()
 
     var body: some Scene {
         Window("Nativ", id: "main") {
@@ -100,7 +99,7 @@ private struct NativApplication: App {
         .windowBackgroundDragBehavior(.enabled)
         .commands {
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesCommand(updater: softwareUpdater.updater)
+                CheckForUpdatesCommand(updater: appDelegate.softwareUpdater.updater)
             }
 
             CommandGroup(replacing: .newItem) {

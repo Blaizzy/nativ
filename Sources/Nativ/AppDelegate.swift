@@ -335,6 +335,7 @@ private final class ModelMenuSectionHeaderView: NSView {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = NativModel()
+    let softwareUpdater = SoftwareUpdater()
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private var mainWindowOpener: (() -> Void)?
@@ -436,7 +437,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openModelsFromMenu(_ sender: Any?) {
-        openSettings()
+        controlPanelNavigation.open(.models)
+        showMainWindow()
     }
 
     @objc private func openWelcomeFromMenu(_ sender: Any?) {
@@ -456,6 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             model: model,
             navigation: controlPanelNavigation,
             runtime: runtime,
+            softwareUpdater: softwareUpdater,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)
             }
@@ -467,7 +470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func openSettings() {
-        controlPanelNavigation.open(.models)
+        controlPanelNavigation.open(.settings)
         showMainWindow()
     }
 

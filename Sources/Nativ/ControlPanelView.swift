@@ -9,6 +9,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case models = "Models"
     case integrations = "Integrations"
     case developer = "Developer"
+    case settings = "Settings"
 
     static var allCases: [ControlPanelTab] {
         [.chat, .dashboard, .models, .integrations, .developer]
@@ -30,6 +31,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "puzzlepiece.extension"
         case .developer:
             "hammer"
+        case .settings:
+            "gearshape"
         }
     }
 }
@@ -57,15 +60,24 @@ final class ControlPanelNavigation: ObservableObject {
     }
 }
 
+private enum FooterControl {
+    case settings
+    case server
+    case reportIssue
+}
+
 struct ControlPanelView: View {
     let model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
+    let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var dashboard = DashboardViewModel()
+    @StateObject private var launchAtLogin = LaunchAtLoginController()
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
+    @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
@@ -101,6 +113,26 @@ struct ControlPanelView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             isFullScreen = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin.refresh()
+        }
+        .alert(
+            "Unable to Update Start at Login",
+            isPresented: Binding(
+                get: { launchAtLogin.errorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        launchAtLogin.errorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                launchAtLogin.errorMessage = nil
+            }
+        } message: {
+            Text(launchAtLogin.errorMessage ?? "An unknown error occurred.")
         }
     }
 
@@ -181,31 +213,115 @@ struct ControlPanelView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                Divider()
-                Menu {
-                    ForEach(IssueReportCategory.allCases) { category in
-                        Button {
-                            reportIssue(category: category)
-                        } label: {
-                            Label(category.displayName, systemImage: category.systemImage)
-                        }
-                    }
-                } label: {
-                    Label("Report an Issue", systemImage: "ladybug")
-                        .font(.callout)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                HStack(spacing: 4) {
+                    settingsButton
+                    serverToggleButton
+                    issueReportMenu
+                    Spacer(minLength: 0)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .help("Report a problem with prefilled app diagnostics")
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
             }
         }
         .navigationTitle("Nativ")
         .background(ControlPanelSidebarSurfaceReader())
+    }
+
+    private var issueReportMenu: some View {
+        Menu {
+            ForEach(IssueReportCategory.allCases) { category in
+                Button {
+                    reportIssue(category: category)
+                } label: {
+                    Label(category.displayName, systemImage: category.systemImage)
+                }
+            }
+        } label: {
+            Color.clear
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 40, height: 40)
+        .overlay {
+            footerIcon(
+                systemName: "ladybug",
+                size: 17,
+                isHovered: hoveredFooterControl == .reportIssue
+            )
+                .allowsHitTesting(false)
+        }
+        .onHover { isHovering in
+            updateFooterHover(.reportIssue, isHovering: isHovering)
+        }
+        .help("Report an Issue")
+        .accessibilityLabel("Report an Issue")
+    }
+
+    private var settingsButton: some View {
+        Button {
+            applySidebarSelection(.tab(.settings))
+        } label: {
+            footerIcon(
+                systemName: "gearshape",
+                size: 18,
+                color: selectedTab == .settings ? .accentColor : .secondary,
+                isHovered: hoveredFooterControl == .settings
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering in
+            updateFooterHover(.settings, isHovering: isHovering)
+        }
+        .help("Settings")
+        .accessibilityLabel("Settings")
+    }
+
+    private var serverToggleButton: some View {
+        Button {
+            model.toggleServer()
+        } label: {
+            footerIcon(
+                systemName: model.isRunning ? "stop.circle" : "play.circle",
+                size: 17,
+                color: model.isRunning ? .red : .green,
+                isHovered: hoveredFooterControl == .server
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(model.modelSwitchInProgress)
+        .onHover { isHovering in
+            updateFooterHover(.server, isHovering: isHovering)
+        }
+        .help(model.isRunning ? "Stop Server" : "Start Server")
+        .accessibilityLabel(model.isRunning ? "Stop Server" : "Start Server")
+    }
+
+    private func footerIcon(
+        systemName: String,
+        size: CGFloat,
+        color: Color = .secondary,
+        isHovered: Bool
+    ) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(color)
+            .frame(width: 40, height: 40)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+            }
+            .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+    }
+
+    private func updateFooterHover(_ control: FooterControl, isHovering: Bool) {
+        if isHovering {
+            hoveredFooterControl = control
+        } else if hoveredFooterControl == control {
+            hoveredFooterControl = nil
+        }
     }
 
     private func reportIssue(category: IssueReportCategory) {
@@ -261,6 +377,11 @@ struct ControlPanelView: View {
                         model: model,
                         runtime: runtime,
                         showsConfiguration: $isModelConfigurationVisible
+                    )
+                case .settings:
+                    SettingsView(
+                        softwareUpdater: softwareUpdater,
+                        launchAtLogin: launchAtLogin
                     )
                 }
             }
@@ -695,5 +816,10 @@ private extension View {
 }
 
 #Preview {
-    ControlPanelView(model: .init(), navigation: .init(), runtime: .init())
+    ControlPanelView(
+        model: .init(),
+        navigation: .init(),
+        runtime: .init(),
+        softwareUpdater: .init()
+    )
 }
