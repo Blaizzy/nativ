@@ -68,27 +68,34 @@ struct DeveloperView: View {
             spacing: 10
         ) {
             RuntimeInfoCard(
-                value: runtime.chipName,
+                title: "Apple chip",
+                value: chipDisplayName,
+                detail: nil,
                 systemImage: "cpu",
                 tint: .blue
             )
 
             RuntimeInfoCard(
+                title: "Memory",
                 value: "\(byteCount(runtime.usedMemoryBytes)) of \(byteCount(runtime.totalMemoryBytes))",
+                detail: "\(memoryUsagePercent)%",
                 systemImage: "memorychip",
                 tint: memoryUsageTint,
-                progress: runtime.memoryUsageFraction,
-                progressLabel: "\(memoryUsagePercent)%"
+                progress: runtime.memoryUsageFraction
             )
 
             RuntimeInfoCard(
-                value: "macOS \(runtime.macOSVersion)",
+                title: "macOS",
+                value: runtime.macOSVersion,
+                detail: runtime.macOSBuild,
                 systemImage: "macbook",
                 tint: .teal
             )
 
             RuntimeInfoCard(
-                value: "mlx-vlm \(runtime.mlxVLMVersion)",
+                title: "mlx-vlm",
+                value: runtime.mlxVLMVersion,
+                detail: nil,
                 systemImage: "shippingbox",
                 tint: .orange
             )
@@ -358,6 +365,14 @@ struct DeveloperView: View {
 
     private var memoryUsagePercent: Int {
         Int((runtime.memoryUsageFraction * 100).rounded())
+    }
+
+    private var chipDisplayName: String {
+        let applePrefix = "Apple "
+        guard runtime.chipName.hasPrefix(applePrefix) else {
+            return runtime.chipName
+        }
+        return String(runtime.chipName.dropFirst(applePrefix.count))
     }
 
     private var memoryUsageTint: Color {
@@ -803,21 +818,26 @@ private struct LogToolbarActionButton: View {
 }
 
 private struct RuntimeInfoCard: View {
+    let title: String
     let value: String
+    let detail: String?
     let systemImage: String
     let tint: Color
     var progress: Double?
-    var progressLabel: String?
 
     var body: some View {
-        HStack(alignment: progress == nil ? .center : .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(tint.opacity(0.12)))
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+
                 Text(value)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
@@ -829,21 +849,27 @@ private struct RuntimeInfoCard: View {
                             .progressViewStyle(.linear)
                             .tint(tint)
 
-                        if let progressLabel {
-                            Text(progressLabel)
+                        if let detail {
+                            Text(detail)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                                 .fixedSize()
                         }
                     }
+                    .padding(.top, 2)
+                } else if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 64, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: 82, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 11)
                 .fill(Color(nsColor: .controlBackgroundColor))
