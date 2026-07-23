@@ -69,18 +69,21 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        model.settings.structuredOutputValidationError == nil
+        !model.isModelLoading
+            && model.settings.structuredOutputValidationError == nil
             && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID)
     }
 
     private var canCompose: Bool {
         model.isRunning
+            && !model.isModelLoading
             && selectedModelID?.isEmpty == false
             && model.settings.structuredOutputValidationError == nil
     }
 
     private var unavailableReason: String? {
-        chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+        model.modelLoadingStatusText
+            ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
             ?? model.settings.structuredOutputValidationError
     }
 
@@ -91,7 +94,8 @@ struct ChatView: View {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
                             isRunning: model.isRunning,
-                            selectedModelID: selectedModelID
+                            selectedModelID: selectedModelID,
+                            modelLoadingProgress: model.isModelLoading ? model.modelLoadingProgress : nil
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 120)
@@ -1591,9 +1595,15 @@ private struct ChatMessageText: View {
 private struct ChatEmptyTranscriptView: View {
     let isRunning: Bool
     let selectedModelID: String?
+    let modelLoadingProgress: Double?
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 9) {
+            if let modelLoadingProgress {
+                ProgressView(value: modelLoadingProgress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 180)
+            }
             Text(title)
                 .font(.headline)
             Text(detail)
@@ -1603,6 +1613,9 @@ private struct ChatEmptyTranscriptView: View {
     }
 
     private var title: String {
+        if modelLoadingProgress != nil {
+            return "Loading model"
+        }
         if !isRunning {
             return "Server is stopped"
         }
@@ -1613,6 +1626,10 @@ private struct ChatEmptyTranscriptView: View {
     }
 
     private var detail: String {
+        if let modelLoadingProgress {
+            let percentage = Int((modelLoadingProgress * 100).rounded())
+            return "\(selectedModelID ?? "Model") · \(percentage)%"
+        }
         if !isRunning {
             return "Start the server to chat."
         }

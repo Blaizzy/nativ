@@ -419,7 +419,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 try Task.checkCancellation()
                 self.buffer = page.models
                 self.nextPageURL = page.nextPageURL
-                try await self.fillBuffer(upTo: self.pageSize)
+                try await self.fillBuffer(upTo: self.pageSize, token: token)
                 try Task.checkCancellation()
                 self.models = self.slice(forPage: 1)
                 self.error = nil
@@ -492,10 +492,10 @@ final class HuggingFaceModelLibrary: ObservableObject {
         }
     }
 
-    private func fillBuffer(upTo count: Int) async throws {
+    private func fillBuffer(upTo count: Int, token: String?) async throws {
         var fetches = 0
         while buffer.count < count, let url = nextPageURL, fetches < 8 {
-            let nextPage = try await client.page(at: url, token: nil)
+            let nextPage = try await client.page(at: url, token: token)
             try Task.checkCancellation()
             buffer.append(contentsOf: nextPage.models)
             nextPageURL = nextPage.nextPageURL

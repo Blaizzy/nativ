@@ -14,11 +14,14 @@ from threading import Lock
 from types import SimpleNamespace
 from typing import Any
 
+import mlx.core as mx
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
+from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
+import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
 
 
@@ -30,11 +33,107 @@ TRACKED_PATHS = {
     "/v1/responses",
 }
 METRICS_PATHS = {"/metrics", "/v1/metrics"}
+MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
+MODEL_LOAD_EVAL_BATCH_BYTES = 64 * 1024 * 1024
 
 _BASE_METRICS_CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
     "nativ_base_metrics_capture",
     default=None,
 )
+_MODEL_LOAD_PROGRESS: ContextVar["ModelLoadProgress | None"] = ContextVar(
+    "nativ_model_load_progress",
+    default=None,
+)
+_ORIGINAL_MX_EVAL = mx.eval
+
+
+def emit_model_load_progress(value: float) -> None:
+    """Write a machine-readable progress event for the native app."""
+    progress = min(max(value, 0.0), 1.0)
+    payload = f"{MODEL_LOAD_PROGRESS_PREFIX}{progress:.6f}\n".encode()
+    os.write(1, payload)
+
+
+class ModelLoadProgress:
+    """Report tensor materialization progress without changing MLX semantics."""
+
+    def __init__(self) -> None:
+        self.last_percentage = -1
+
+    def report(self, value: float) -> None:
+        percentage = min(max(int(value * 100), 0), 100)
+        if percentage <= self.last_percentage:
+            return
+        self.last_percentage = percentage
+        emit_model_load_progress(percentage / 100)
+
+
+def model_load_aware_eval(*trees: Any) -> None:
+    """Evaluate a loading model in bounded batches so byte progress is observable."""
+    progress = _MODEL_LOAD_PROGRESS.get()
+    if progress is None:
+        _ORIGINAL_MX_EVAL(*trees)
+        return
+
+    arrays = [
+        value
+        for _, value in tree_flatten(trees)
+        if isinstance(value, mx.array)
+    ]
+    total_bytes = sum(max(int(array.nbytes), 1) for array in arrays)
+    if not arrays or total_bytes <= 0:
+        _ORIGINAL_MX_EVAL(*trees)
+        return
+
+    evaluated_bytes = 0
+    batch: list[mx.array] = []
+    batch_bytes = 0
+    for array in arrays:
+        array_bytes = max(int(array.nbytes), 1)
+        batch.append(array)
+        batch_bytes += array_bytes
+        if batch_bytes < MODEL_LOAD_EVAL_BATCH_BYTES:
+            continue
+
+        _ORIGINAL_MX_EVAL(*batch)
+        evaluated_bytes += batch_bytes
+        progress.report(0.05 + 0.90 * evaluated_bytes / total_bytes)
+        batch = []
+        batch_bytes = 0
+
+    if batch:
+        _ORIGINAL_MX_EVAL(*batch)
+        evaluated_bytes += batch_bytes
+        progress.report(0.05 + 0.90 * evaluated_bytes / total_bytes)
+
+
+def install_model_load_progress() -> None:
+    """Instrument the text-model loader used by the continuous batcher."""
+    if getattr(base_generation, "_nativ_model_load_progress_installed", False):
+        return
+
+    original_load = base_generation.load
+    original_initialize_model = base_generation.ResponseGenerator._initialize_model
+
+    def load_with_progress(*args: Any, **kwargs: Any):
+        progress = ModelLoadProgress()
+        progress.report(0)
+        token = _MODEL_LOAD_PROGRESS.set(progress)
+        try:
+            result = original_load(*args, **kwargs)
+            progress.report(0.95)
+            return result
+        finally:
+            _MODEL_LOAD_PROGRESS.reset(token)
+
+    def initialize_model_with_progress(self: Any) -> None:
+        original_initialize_model(self)
+        emit_model_load_progress(1)
+
+    mx.eval = model_load_aware_eval
+    base_generation.load = load_with_progress
+    base_generation.ResponseGenerator._initialize_model = initialize_model_with_progress
+    base_generation._nativ_model_load_progress_installed = True
 
 
 class MetricsAccessLogFilter(logging.Filter):
@@ -1195,6 +1294,7 @@ def main() -> None:
         base_cli.argparse = original_argparse
 
 
+install_model_load_progress()
 install_metrics_overlay()
 
 
