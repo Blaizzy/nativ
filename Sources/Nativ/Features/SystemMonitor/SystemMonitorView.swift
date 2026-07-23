@@ -309,7 +309,7 @@ private struct SystemOverviewPage: View {
                 SystemOverviewMetric(
                     title: "Memory",
                     value: SystemMonitorFormat.percent(snapshot.memory.usage),
-                    detail: "\(SystemMonitorFormat.bytes(snapshot.memory.usedBytes)) used",
+                    detail: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.usedBytes)) used",
                     icon: "memorychip",
                     tint: SystemMonitorPalette.orange
                 )
@@ -330,7 +330,7 @@ private struct SystemOverviewPage: View {
                     )
                     SystemInfoRow(
                         "Memory",
-                        value: SystemMonitorFormat.bytes(snapshot.memory.totalBytes)
+                        value: SystemMonitorFormat.memoryBytes(snapshot.memory.totalBytes)
                     )
                     SystemInfoRow(
                         "Graphics",
@@ -559,7 +559,7 @@ private struct SystemGPUPage: View {
                             .font(.headline)
                         Spacer()
                         if let memory = snapshot.gpu.allocatedMemoryBytes {
-                            Text("\(SystemMonitorFormat.bytes(memory)) allocated")
+                            Text("\(SystemMonitorFormat.memoryBytes(memory)) allocated")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -638,7 +638,7 @@ private struct SystemGPUPage: View {
                 SystemInfoRow(
                     "Allocated unified memory",
                     value: snapshot.gpu.allocatedMemoryBytes
-                        .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                        .map(SystemMonitorFormat.memoryBytes) ?? "Unavailable"
                 )
                 SystemInfoRow(
                     "Neural Engine cores",
@@ -674,7 +674,7 @@ private struct SystemMemoryPage: View {
     var body: some View {
         SystemMonitorPage(
             title: "RAM",
-            subtitle: "\(SystemMonitorFormat.bytes(snapshot.memory.totalBytes)) unified memory"
+            subtitle: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.totalBytes)) unified memory"
         ) {
             SystemPanel {
                 HStack(spacing: 24) {
@@ -685,10 +685,14 @@ private struct SystemMemoryPage: View {
 
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
-                            Text("Used: \(SystemMonitorFormat.bytes(snapshot.memory.usedBytes))")
+                            Text(
+                                "Used: \(SystemMonitorFormat.memoryBytes(snapshot.memory.usedBytes))"
+                            )
                                 .font(.headline)
                             Spacer()
-                            Text("Total: \(SystemMonitorFormat.bytes(snapshot.memory.totalBytes))")
+                            Text(
+                                "Total: \(SystemMonitorFormat.memoryBytes(snapshot.memory.totalBytes))"
+                            )
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
@@ -763,7 +767,7 @@ private struct SystemMemoryPage: View {
                     title: "Swap history",
                     samples: swapHistory,
                     color: SystemMonitorPalette.purple,
-                    footer: "\(SystemMonitorFormat.bytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.bytes(snapshot.memory.swapTotalBytes))"
+                    footer: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.memoryBytes(snapshot.memory.swapTotalBytes))"
                 )
             }
         }
@@ -784,22 +788,22 @@ private struct SystemMemoryPage: View {
     private var memoryLegend: some View {
         SystemLegendItem(
             title: "Active",
-            value: SystemMonitorFormat.bytes(snapshot.memory.activeBytes),
+            value: SystemMonitorFormat.memoryBytes(snapshot.memory.activeBytes),
             color: SystemMonitorPalette.blue
         )
         SystemLegendItem(
             title: "Wired",
-            value: SystemMonitorFormat.bytes(snapshot.memory.wiredBytes),
+            value: SystemMonitorFormat.memoryBytes(snapshot.memory.wiredBytes),
             color: SystemMonitorPalette.orange
         )
         SystemLegendItem(
             title: "Compressed",
-            value: SystemMonitorFormat.bytes(snapshot.memory.compressedBytes),
+            value: SystemMonitorFormat.memoryBytes(snapshot.memory.compressedBytes),
             color: SystemMonitorPalette.red
         )
         SystemLegendItem(
             title: "Available",
-            value: SystemMonitorFormat.bytes(snapshot.memory.freeBytes),
+            value: SystemMonitorFormat.memoryBytes(snapshot.memory.freeBytes),
             color: Color.secondary.opacity(0.45)
         )
     }
@@ -1462,6 +1466,13 @@ private enum SystemMonitorFormat {
         ByteCountFormatter.string(
             fromByteCount: Int64(clamping: value),
             countStyle: .file
+        )
+    }
+
+    static func memoryBytes(_ value: UInt64) -> String {
+        ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: value),
+            countStyle: .memory
         )
     }
 
