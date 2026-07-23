@@ -42,6 +42,14 @@ Inference runs on your Mac after a model has been downloaded. Model downloads an
 
 Support for dedicated audio-only and image-generation-only models is coming soon.
 
+## Roadmap and status
+
+- [Feature support matrix](SUPPORT_MATRIX.md) — what is shipped, experimental, or planned.
+- [Roadmap](ROADMAP.md) — committed and exploratory work, with the issue backlog.
+- [Changelog](CHANGELOG.md) — release history.
+
+All three are generated from [`nativ.yml`](nativ.yml), the single source of truth for capabilities and their status.
+
 ## How it works
 
 ```mermaid

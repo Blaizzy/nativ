@@ -1,0 +1,331 @@
+# nativ.yml — single source of truth for Nativ's capabilities, roadmap, and issue graph.
+#
+# The support matrix, roadmap, and changelog are rendered from this file — edit here, not
+# in the generated docs. Contributors completing a planned feature should flip the relevant
+# `status` and check off `tasks` in the same PR; CI validates the file and, when an item is
+# completed, flags any issue that `depends_on` it as ready to start.
+#
+# status vocabulary:
+#   shipped       — available in the current release
+#   experimental  — usable but unstable / behind a flag / in active development
+#   planned        — committed, not yet started or in progress
+#   exploratory   — under investigation, no commitment yet
+
+meta:
+  repo: Blaizzy/nativ
+  app_version: "0.0.1"
+  platform:
+    apple_silicon: required          # M1 or later
+    macos_min: "26.0"                # app deployment target; shared components build to 14.0
+  # Upstream MLX packages Nativ builds on. `role: bundled` ships inside the embedded server.
+  providers:
+    mlx-vlm:
+      role: bundled
+      version: ">=0.6.5"
+      repo: Blaizzy/mlx-vlm
+    mlx-audio:
+      role: bundled                  # pinned in the server bundle; feature integration still planned
+      version: "==0.4.3"
+      repo: Blaizzy/mlx-audio
+    mlx-embeddings:
+      role: planned                  # not yet integrated into Nativ
+      version: null
+      repo: Blaizzy/mlx-embeddings
+
+# ---------------------------------------------------------------------------------------
+# Capabilities — what a user can actually do. Each names the provider it rests on and the
+# issues that track it. `tasks` are the concrete, checkable steps for planned features.
+# ---------------------------------------------------------------------------------------
+capabilities:
+  - id: chat-vision
+    title: Local chat & vision
+    status: shipped
+    provider: mlx-vlm
+    note: Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history.
+
+  - id: model-library
+    title: Model library
+    status: shipped
+    provider: mlx-vlm
+    note: Discover installed MLX models, browse compatible Hugging Face models, download, inspect capabilities, switch, or remove.
+
+  - id: performance-analytics
+    title: Performance analytics
+    status: shipped
+    provider: nativ
+    note: Request volume, token usage, time-to-first-token, decode speed, per-model performance, and recent activity.
+
+  - id: openai-api
+    title: OpenAI-compatible API
+    status: shipped
+    provider: mlx-vlm
+    note: /v1/chat/completions, /v1/responses (+ input_tokens, cancel, input_items), /v1/models.
+
+  - id: anthropic-api
+    title: Anthropic-compatible API
+    status: shipped
+    provider: mlx-vlm
+    note: /v1/messages and /v1/messages/count_tokens.
+
+  - id: coding-integrations
+    title: Coding-tool integrations
+    status: shipped
+    provider: nativ
+    note: Configure and launch Codex, Claude Code, Pi, Hermes, and OpenCode against models served by Nativ.
+
+  - id: developer-workspace
+    title: Developer workspace
+    status: shipped
+    provider: nativ
+    note: Runtime details, copyable endpoint URLs, live server-log search/filter, and server-health monitoring.
+
+  - id: menu-bar
+    title: Menu bar controls
+    status: shipped
+    provider: nativ
+    note: Start/stop the server, change the loaded model, check serving stats, and open the app without breaking focus.
+
+  - id: advanced-inference
+    title: Advanced inference controls
+    status: shipped
+    provider: mlx-vlm
+    note: Sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding.
+
+  - id: custom-server-port
+    title: Custom local server port
+    status: experimental
+    provider: nativ
+    note: Choose the local server port from the Developer page (in progress on feature/custom-server-port; not yet on main).
+
+  - id: gated-hf-download
+    title: Gated Hugging Face model downloads
+    status: planned
+    provider: nativ
+    issues: [23]
+    note: Authenticate with Hugging Face to download license-gated / access-requested models from within Nativ.
+
+  - id: audio-models
+    title: Dedicated audio models (speech recognition & speech generation)
+    status: planned
+    provider: mlx-audio
+    issues: [15]
+    # Not yet wired into Nativ. The OpenAI audio routes are already exposed by the bundled
+    # server, but there is no dedicated audio-model runtime; blocker is Nativ-side integration,
+    # not an upstream mlx-audio issue.
+    note: Coming soon. API surface (/v1/audio/*) is present; the dedicated audio-model runtime is not yet integrated.
+    tasks:
+      - { done: false, text: "Detect audio capabilities; distinguish transcription, translation, and text-to-speech." }
+      - { done: false, text: "Discover, download, display, select, load, and unload compatible audio models." }
+      - { done: false, text: "Route audio models through a dedicated runtime, not the language/vision path." }
+      - { done: false, text: "Serve /v1/audio/transcriptions, /v1/audio/translations, /v1/audio/speech by capability." }
+      - { done: false, text: "Handle audio file validation, formats, generated output, cancellation, and errors." }
+      - { done: false, text: "Add audio request and performance data to analytics." }
+
+  - id: embeddings
+    title: Dedicated embedding models
+    status: planned
+    provider: mlx-embeddings
+    issues: [16]
+    # Not yet wired into Nativ, and mlx-embeddings is not yet bundled. Blocker is Nativ-side
+    # integration, not an upstream mlx-embeddings issue.
+    note: Not yet supported. Requires bundling mlx-embeddings and a dedicated embedding runtime.
+    tasks:
+      - { done: false, text: "Detect embedding capabilities from local and Hugging Face metadata." }
+      - { done: false, text: "Keep embedding models out of language-model selection; show them in the library with the correct type." }
+      - { done: false, text: "Add a dedicated load/unload runtime path for embedding models." }
+      - { done: false, text: "Implement OpenAI-compatible POST /v1/embeddings (string or array -> vectors, metadata, usage)." }
+      - { done: false, text: "Surface model state, load failures, and unsupported architectures in app and logs." }
+      - { done: false, text: "Track embedding requests in analytics without assuming generated-token metrics." }
+
+  - id: image-generation
+    title: Dedicated image-generation models
+    status: planned
+    provider: mlx-vlm
+    issues: [14, 44, 46]
+    note: Coming soon. /v1/images/* routes and the ImageGeneration workspace are scaffolded; the dedicated diffusion runtime and memory-aware fit estimate are not yet complete.
+    tasks:
+      - { done: false, text: "Detect image-generation models from local and Hugging Face metadata." }
+      - { done: false, text: "Discover, download, display, select, load, and unload compatible models." }
+      - { done: false, text: "Add a dedicated image-generation runtime, not the language/vision path." }
+      - { done: false, text: "Implement OpenAI-compatible POST /v1/images/generations (prompt, size, seed, step, output format)." }
+      - { done: false, text: "Wire the workspace: progress, cancellation, previews, and save/export." }
+      - { done: false, text: "Report load failures, generation failures, and unsupported parameters." }
+      - { done: false, text: "Track image-generation requests and timing in analytics." }
+      - { done: false, text: "Make the memory fit estimate activation-aware for diffusion (peak reserve, not weights-only). [#46]" }
+
+  - id: model-metadata-api
+    title: Model metadata in /v1/models (context window, tools, vision)
+    status: planned
+    provider: mlx-vlm
+    issues: [56]
+    note: Expose per-model max context window and tool/function-calling and vision support in /v1/models so OpenAI-compatible clients (e.g. the community VSCode extension) need not hardcode them.
+    tasks:
+      - { done: false, text: "Add max context window / max output tokens to each /v1/models entry." }
+      - { done: false, text: "Advertise tool / function-calling support per model in /v1/models." }
+      - { done: false, text: "Advertise vision (image input) support per model in /v1/models." }
+      - { done: false, text: "Verify OpenAI-compatible tool calling end-to-end so the VSCode 'Agent' mode works." }
+
+# ---------------------------------------------------------------------------------------
+# Issues — the full open backlog with notes and dependency edges.
+#   depends_on : cannot start until the listed items are completed/closed (drives coalescing)
+#   part_of    : a sub-issue of a larger tracking issue
+#   capability : the capability this issue advances
+#   area       : app | server | website | platform | docs | runtime
+# ---------------------------------------------------------------------------------------
+issues:
+  - number: 4
+    title: Models fail to load with "Model type not supported"
+    type: [enhancement]
+    area: runtime
+    capability: model-library
+    note: Server goes online then offline on load; BERT-style and other unsupported types are surfaced as hard failures rather than clear guidance.
+
+  - number: 11
+    title: UI gets crunchy and stops updating unless fed input events
+    type: [bug]
+    area: app
+    capability: chat-vision
+    note: SwiftUI stops redrawing at a smooth rate during inference and freezes without an input event; the "Working..." animation glitches.
+
+  - number: 13
+    title: 405 when messaging in chat
+    type: [bug]
+    area: server
+    capability: chat-vision
+    note: HTTP 405 (nginx) on chat with gemma-4-31b-it; points at a proxy/route-method mismatch in front of the chat endpoint.
+
+  - number: 14
+    title: Support image generation models
+    type: [enhancement]
+    area: runtime
+    capability: image-generation
+    note: Umbrella issue for first-class dedicated image-generation support, discovery through generation and export.
+
+  - number: 15
+    title: Support audio models
+    type: [enhancement]
+    area: runtime
+    capability: audio-models
+    note: Umbrella issue for first-class dedicated audio models (speech recognition and speech generation).
+
+  - number: 16
+    title: Support embedding models
+    type: [enhancement]
+    area: runtime
+    capability: embeddings
+    note: Umbrella issue for first-class dedicated embedding models and an OpenAI-compatible /v1/embeddings endpoint.
+
+  - number: 22
+    title: Add support for Core AI and Apple Foundation Models
+    type: [enhancement, feature-request]
+    area: runtime
+    status: exploratory
+    note: Requested integration of Apple's on-device Foundation Models / Core AI alongside the MLX runtime.
+
+  - number: 23
+    title: Support downloading gated Hugging Face models
+    type: [enhancement, feature-request]
+    area: app
+    capability: gated-hf-download
+    note: Add a secure HF token flow, detect gated repos before download, and distinguish auth vs license vs denied-access failures.
+
+  - number: 24
+    title: Support macOS Sequoia by lowering the deployment target
+    type: [enhancement]
+    area: platform
+    note: App targets macOS 26 while shared components build to 14; audit macOS 26-only APIs and add fallbacks so Sequoia (15) users can run Nativ.
+
+  - number: 26
+    title: Reduce and document the Nativ app bundle footprint
+    type: [enhancement]
+    area: app
+    note: ~1 GB bundle (largely the embedded Python runtime); produce a size breakdown, strip release artifacts, and document why Python is required.
+
+  - number: 27
+    title: Publish reproducible MLX performance benchmarks by Apple chip generation
+    type: [documentation, enhancement]
+    area: docs
+    note: Benchmark M1-M4+ across model sizes/quant/context with a llama.cpp baseline; record TTFT, prefill, decode, and memory.
+
+  - number: 28
+    title: Evaluate DS4 as a backend for DeepSeek V4 Flash
+    type: [enhancement]
+    area: runtime
+    status: exploratory
+    note: Investigate DS4 vs the MLX runtime for DeepSeek V4 Flash on Apple silicon; produce a go/no-go and integration design.
+
+  - number: 29
+    title: Create a Mac hardware, model, and local-use-case guide
+    type: [documentation, enhancement]
+    area: docs
+    note: Guide model/quant choices by memory tier (16/18, 24/32, 48/64+ GB), with heat, power, responsiveness, and workload expectations.
+
+  - number: 30
+    title: Explore an iPad and iPhone version of Nativ
+    type: [enhancement]
+    area: platform
+    status: exploratory
+    note: Feasibility of porting the Swift UI + MLX stack to iPadOS/iOS; identify macOS-only dependencies and realistic on-device model sizes.
+
+  - number: 31
+    title: Add a public roadmap, changelog, and feature support matrix
+    type: [documentation, enhancement]
+    area: docs
+    note: This manifest and its rendered docs. Users should assess maturity and support without reading commit history.
+
+  - number: 32
+    title: Rewrite the landing page with concrete, unambiguous product messaging
+    type: [documentation]
+    area: website
+    note: Replace "frontier intelligence" and generic slogans with concrete capabilities, limitations, and realistic model claims.
+
+  - number: 34
+    title: Fix landing-page overflow and responsive mobile layout
+    type: [bug]
+    area: website
+    note: Remove horizontal overflow and fix mobile rendering at 320/375/390/430 px; add viewport screenshot/browser tests.
+
+  - number: 35
+    title: Replace the contradictory "Universal · Apple Silicon" platform label
+    type: [bug]
+    area: website
+    note: '"Universal" implies Intel+Apple silicon; use "Apple silicon · M1 or later" and state macOS + memory requirements alongside it.'
+
+  - number: 44
+    title: "Image-generation model support: memory-architecture suggestions & gotchas"
+    type: [enhancement, feature-request]
+    area: runtime
+    capability: image-generation
+    children: [46]
+    note: External contributor guidance on diffusion serving/memory (staged component load/evict, tiled VAE decode, activation-peak sizing).
+
+  - number: 46
+    title: Image-gen fit estimate is weights-only and misleads for diffusion
+    type: [enhancement]
+    area: app
+    capability: image-generation
+    part_of: 44
+    depends_on: [14]
+    note: Weights-only fit estimate can pass "likely fits" then OOM at generation; needs an activation-peak reserve and multi-component aggregation.
+
+  - number: 56
+    title: /v1/models data - VSCode extension (Language Model Chat Provider)
+    type: [enhancement, feature-request]
+    area: server
+    capability: model-metadata-api
+    note: Community VSCode Language Model Chat Provider works for Ask/Plan; Agent mode is blocked and context/tools/vision are hardcoded because /v1/models lacks that metadata. The pin-icon refresh lag is a VSCode-side bug (also seen with Ollama), not actionable in Nativ.
+
+# ---------------------------------------------------------------------------------------
+# Changelog — one entry per release, newest first. Add an entry when you cut a release.
+# ---------------------------------------------------------------------------------------
+changelog:
+  - version: "0.0.1"
+    date: "2026-07"
+    notes:
+      - Initial public release.
+      - Local chat and vision with streaming, image attachments, reasoning output, and persistent history.
+      - Model library — discover, browse, download, inspect, switch, and remove MLX models.
+      - Performance analytics dashboard.
+      - OpenAI- and Anthropic-compatible local API server.
+      - Coding-tool integrations (Codex, Claude Code, Pi, Hermes, OpenCode), developer workspace, and menu bar controls.
+      - Advanced inference controls — sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding.

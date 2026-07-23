@@ -1,0 +1,40 @@
+name: Manifest dependency coalescing
+
+on:
+  issues:
+    types: [closed]
+  push:
+    branches: [main]
+    paths:
+      - "nativ.yml"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: manifest-coalesce
+  cancel-in-progress: false
+
+jobs:
+  coalesce:
+    if: github.repository == 'Blaizzy/nativ'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pyyaml>=6"
+      - name: Coalesce (issue closed)
+        if: github.event_name == 'issues'
+        run: python3 scripts/coalesce_dependencies.py --closed-issue "${{ github.event.issue.number }}"
+      - name: Coalesce (manifest edit)
+        if: github.event_name == 'push'
+        run: |
+          git show "${{ github.event.before }}:nativ.yml" > /tmp/prev-nativ.yml 2>/dev/null || true
+          python3 scripts/coalesce_dependencies.py --previous /tmp/prev-nativ.yml --current nativ.yml

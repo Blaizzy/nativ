@@ -1,0 +1,40 @@
+name: Manifest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "nativ.yml"
+      - "SUPPORT_MATRIX.md"
+      - "ROADMAP.md"
+      - "CHANGELOG.md"
+      - "scripts/render_manifest.py"
+      - ".github/workflows/manifest.yml"
+  pull_request:
+    paths:
+      - "nativ.yml"
+      - "SUPPORT_MATRIX.md"
+      - "ROADMAP.md"
+      - "CHANGELOG.md"
+      - "scripts/render_manifest.py"
+      - ".github/workflows/manifest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manifest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pyyaml>=6"
+      - name: Validate nativ.yml and check generated docs are in sync
+        run: python3 scripts/render_manifest.py --check
