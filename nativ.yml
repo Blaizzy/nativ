@@ -41,13 +41,13 @@ capabilities:
     title: Local chat & vision
     status: shipped
     provider: mlx-vlm
-    note: Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history.
+    note: Streaming conversations, image attachments (including clipboard paste and screenshot capture, PR #39), reasoning output, response metrics, and persistent chat history.
 
   - id: model-library
     title: Model library
     status: shipped
     provider: mlx-vlm
-    note: Discover installed MLX models, browse compatible Hugging Face models, download, inspect capabilities, switch, or remove.
+    note: Discover installed MLX models (including those installed by LM Studio, PR #21), browse compatible Hugging Face models, download, inspect capabilities, switch, or remove.
 
   - id: performance-analytics
     title: Performance analytics
@@ -77,7 +77,7 @@ capabilities:
     title: Developer workspace
     status: shipped
     provider: nativ
-    note: Runtime details, copyable endpoint URLs, live server-log search/filter, and server-health monitoring.
+    note: Set the server port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search/filter live server logs, and monitor server health.
 
   - id: menu-bar
     title: Menu bar controls
@@ -93,16 +93,16 @@ capabilities:
 
   - id: custom-server-port
     title: Custom local server port
-    status: experimental
+    status: shipped
     provider: nativ
-    note: Choose the local server port from the Developer page (in progress on feature/custom-server-port; not yet on main).
+    note: Choose the local server port from the Developer page (PRs #19, #51).
 
   - id: gated-hf-download
     title: Gated Hugging Face model downloads
-    status: planned
+    status: shipped
     provider: nativ
     issues: [23]
-    note: Authenticate with Hugging Face to download license-gated / access-requested models from within Nativ.
+    note: Add a Hugging Face token (in the Developer view or via HF_TOKEN) to download gated models (PR #49). Issue #23 tracks remaining polish.
 
   - id: audio-models
     title: Dedicated audio models (speech recognition & speech generation)
@@ -151,7 +151,7 @@ capabilities:
       - { done: false, text: "Wire the workspace: progress, cancellation, previews, and save/export." }
       - { done: false, text: "Report load failures, generation failures, and unsupported parameters." }
       - { done: false, text: "Track image-generation requests and timing in analytics." }
-      - { done: false, text: "Make the memory fit estimate activation-aware for diffusion (peak reserve, not weights-only). [#46]" }
+      - { done: true, text: "Make the memory fit estimate activation-aware for diffusion (peak reserve, not weights-only). [#46, PR #47]" }
 
   - id: model-metadata-api
     title: Model metadata in /v1/models (context window, tools, vision)
@@ -306,7 +306,7 @@ issues:
     capability: image-generation
     part_of: 44
     depends_on: [14]
-    note: Weights-only fit estimate can pass "likely fits" then OOM at generation; needs an activation-peak reserve and multi-component aggregation.
+    note: Weights-only fit estimate can pass "likely fits" then OOM at generation. Activation-peak reserve landed in merged PR #47; issue remains open for multi-component (text encoder + transformer + VAE) aggregation.
 
   - number: 56
     title: /v1/models data - VSCode extension (Language Model Chat Provider)
@@ -314,6 +314,12 @@ issues:
     area: server
     capability: model-metadata-api
     note: Community VSCode Language Model Chat Provider works for Ask/Plan; Agent mode is blocked and context/tools/vision are hardcoded because /v1/models lacks that metadata. The pin-icon refresh lag is a VSCode-side bug (also seen with Ollama), not actionable in Nativ.
+
+  - number: 57
+    title: Allow installation as Homebrew Cask
+    type: [enhancement]
+    area: platform
+    note: Publish a Homebrew Cask so Nativ can be installed and auto-updated via `brew install --cask`, alongside the DMG download and build-from-source paths.
 
 # ---------------------------------------------------------------------------------------
 # Changelog — one entry per release, newest first. Add an entry when you cut a release.

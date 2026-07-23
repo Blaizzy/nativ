@@ -4,12 +4,6 @@
 
 Committed and exploratory work, rendered from `nativ.yml`. Shipped capabilities are in [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md).
 
-## Experimental
-
-### Custom local server port
-
-Choose the local server port from the Developer page (in progress on feature/custom-server-port; not yet on main).
-
 ## Planned
 
 ### Dedicated audio models (speech recognition & speech generation) (#15)
@@ -45,11 +39,7 @@ Coming soon. /v1/images/* routes and the ImageGeneration workspace are scaffolde
 - [ ] Wire the workspace: progress, cancellation, previews, and save/export.
 - [ ] Report load failures, generation failures, and unsupported parameters.
 - [ ] Track image-generation requests and timing in analytics.
-- [ ] Make the memory fit estimate activation-aware for diffusion (peak reserve, not weights-only). [#46]
-
-### Gated Hugging Face model downloads (#23)
-
-Authenticate with Hugging Face to download license-gated / access-requested models from within Nativ.
+- [x] Make the memory fit estimate activation-aware for diffusion (peak reserve, not weights-only). [#46, PR #47]
 
 ### Model metadata in /v1/models (context window, tools, vision) (#56)
 
@@ -79,6 +69,7 @@ Expose per-model max context window and tool/function-calling and vision support
 
 - [#24](https://github.com/Blaizzy/nativ/issues/24) Support macOS Sequoia by lowering the deployment target
 - [#30](https://github.com/Blaizzy/nativ/issues/30) Explore an iPad and iPhone version of Nativ
+- [#57](https://github.com/Blaizzy/nativ/issues/57) Allow installation as Homebrew Cask
 
 ### runtime
 
