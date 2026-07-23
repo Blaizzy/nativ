@@ -695,6 +695,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
 
+            if let fillPath = path.copy() as? NSBezierPath {
+                fillPath.line(to: NSPoint(x: plotRect.maxX, y: plotRect.minY))
+                fillPath.line(to: NSPoint(x: plotRect.minX, y: plotRect.minY))
+                fillPath.close()
+                NSColor.labelColor.withAlphaComponent(0.22).setFill()
+                fillPath.fill()
+            }
+
+            NSColor.labelColor.setStroke()
             path.lineWidth = 1.25
             path.lineJoinStyle = .round
             path.lineCapStyle = .round
