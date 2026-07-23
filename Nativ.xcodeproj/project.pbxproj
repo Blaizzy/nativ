@@ -11,6 +11,7 @@
 		0AB78A4BB9F2D08433653C7C /* HuggingFaceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A832F692EF1E810D78BD6B6C /* HuggingFaceCacheTests.swift */; };
 		0B11412D6A9FB77B9A204E7C /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3D808CCA7AE53C7245C3D7 /* Formatting.swift */; };
 		11A14C51AE4E0170FBA89709 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6BB0CD839020E3F5FF4F8DED /* Assets.xcassets */; };
+		77B9284EE48D020C2B5A2DF3 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DE77E6246A3E3A186C3E8F54 /* AppIcon.icon */; };
 		137BF3A5342405863C49CC10 /* ModelProviderIcons in Resources */ = {isa = PBXBuildFile; fileRef = DB24BFEFF23914DA8BDB0E1C /* ModelProviderIcons */; };
 		1423FD497A75A14770FCA9E1 /* LocalModelDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE984320AE8CCF8783DD30CE /* LocalModelDiscovery.swift */; };
 		1A6F5207528E44EA9FF8F831 /* NativChatClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E6FD97A66F91B3B667B3FE /* NativChatClient.swift */; };
@@ -114,6 +115,7 @@
 		D97F637262DB138A253DEA6F /* ChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposer.swift; sourceTree = "<group>"; };
 		DB24BFEFF23914DA8BDB0E1C /* ModelProviderIcons */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ModelProviderIcons; path = Sources/Nativ/ModelProviderIcons; sourceTree = SOURCE_ROOT; };
 		DE575DB2DCD07A1864311714 /* Nativ.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nativ.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DE77E6246A3E3A186C3E8F54 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		E46B388273DDFAD7C6C0F4E1 /* IssueReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueReport.swift; sourceTree = "<group>"; };
 		E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceCache.swift; sourceTree = "<group>"; };
 		EE151F7A36DA21A32ABCFD63 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
@@ -151,6 +153,7 @@
 			isa = PBXGroup;
 			children = (
 				B0E2EE61C1652C49ECC69658 /* AppDelegate.swift */,
+				DE77E6246A3E3A186C3E8F54 /* AppIcon.icon */,
 				6BB0CD839020E3F5FF4F8DED /* Assets.xcassets */,
 				B7C7712D68B2782589312766 /* ControlPanelView.swift */,
 				677360D86DDAFAB194A995E7 /* Main.swift */,
@@ -430,6 +433,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				77B9284EE48D020C2B5A2DF3 /* AppIcon.icon in Resources */,
 				11A14C51AE4E0170FBA89709 /* Assets.xcassets in Resources */,
 				359208BE69EFF7BF033D4BA6 /* LICENSES.txt in Resources */,
 				137BF3A5342405863C49CC10 /* ModelProviderIcons in Resources */,

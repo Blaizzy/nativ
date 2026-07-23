@@ -6,10 +6,9 @@
       <stop offset="1" stop-color="#181818"/>
     </linearGradient>
   </defs>
-  <!-- macOS Dock icons need transparent safe-area padding around the full tile. -->
+  <!-- Supply an opaque canvas and let macOS apply the app-icon mask. -->
+  <rect width="24" height="24" fill="url(#icon-surface)"/>
   <g transform="translate(1.68 1.68) scale(.86)">
-    <rect x=".35" y=".35" width="23.3" height="23.3" rx="5.25"
-          fill="url(#icon-surface)" stroke="#FFFFFF" stroke-opacity=".22" stroke-width=".12"/>
     <g fill="#FFFFFF">
       <path d="M4.2 16.6H7.2L10.7 7.4H7.7L4.2 16.6Z"/>
       <path d="M10.9 7.4H13.6L17.1 16.6H14.1L10.9 7.4Z"/>
