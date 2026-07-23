@@ -604,7 +604,9 @@ private struct ChatModelPickerMenuControl: NSViewRepresentable {
                 positioning: nil,
                 at: NSPoint(
                     x: -8,
-                    y: sender.bounds.maxY + menu.size.height + 4
+                    y: sender.isFlipped
+                        ? sender.bounds.minY - menu.size.height - 4
+                        : sender.bounds.maxY + menu.size.height + 4
                 ),
                 in: sender
             )
