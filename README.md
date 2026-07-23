@@ -31,7 +31,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Model library** | Discover installed MLX models , browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
-| **Coding-tool integrations** | Configure and launch Codex, Claude Code, Pi, Hermes, and OpenCode against models served by Nativ. |
+| **Coding-tool integrations** | Configure and launch Codex, Claude Code, Conductor, Pi, Hermes, and OpenCode against models served by Nativ. |
 | **Developer workspace** | Set the server port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, and open the main app without breaking focus. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |

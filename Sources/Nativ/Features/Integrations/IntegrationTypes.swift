@@ -4,6 +4,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case pi
     case codex
     case claudeCode
+    case conductor
     case hermes
     case openCode
 
@@ -14,6 +15,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .pi: "Pi"
         case .codex: "Codex"
         case .claudeCode: "Claude Code"
+        case .conductor: "Conductor"
         case .hermes: "Hermes"
         case .openCode: "OpenCode"
         }
@@ -24,6 +26,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .pi: "pi"
         case .codex: "codex"
         case .claudeCode: "claude"
+        case .conductor: "conductor"
         case .hermes: "hermes"
         case .openCode: "opencode"
         }
@@ -36,6 +39,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .pi: "Minimal, extensible coding agent"
         case .codex: "OpenAI coding agent for the terminal"
         case .claudeCode: "Anthropic's agentic coding tool"
+        case .conductor: "Run coding agents in parallel workspaces"
         case .hermes: "Open agent with tools, skills, and memory"
         case .openCode: "Open-source coding agent"
         }
@@ -46,6 +50,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .pi: URL(string: "https://pi.dev/docs/latest")!
         case .codex: URL(string: "https://developers.openai.com/codex/cli")!
         case .claudeCode: URL(string: "https://code.claude.com/docs/en/setup")!
+        case .conductor: URL(string: "https://www.conductor.build/docs/installation")!
         case .hermes: URL(string: "https://github.com/NousResearch/hermes-agent")!
         case .openCode: URL(string: "https://opencode.ai/docs")!
         }
@@ -77,6 +82,7 @@ enum IntegrationServiceError: LocalizedError {
     case modelLoadFailed(String, String)
     case modelLoadTimedOut(String)
     case terminalLaunchFailed(String)
+    case desktopLaunchFailed(IntegrationTool, String)
 
     var errorDescription: String? {
         switch self {
@@ -94,6 +100,8 @@ enum IntegrationServiceError: LocalizedError {
             return "Loading \(model) took longer than five minutes. The coding tool was not opened."
         case .terminalLaunchFailed(let message):
             return "Couldn’t open Terminal: \(message)"
+        case .desktopLaunchFailed(let tool, let message):
+            return "Couldn’t open \(tool.displayName): \(message)"
         }
     }
 }

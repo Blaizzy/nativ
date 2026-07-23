@@ -5,6 +5,7 @@ final class IntegrationServicesTests: XCTestCase {
         .pi,
         .codex,
         .claudeCode,
+        .conductor,
         .hermes,
         .openCode
     ]
@@ -140,6 +141,56 @@ final class IntegrationServicesTests: XCTestCase {
             export ANTHROPIC_BASE_URL='http://127.0.0.1:49152'
             '/tools/claude' '--settings' '\(configurationURL.path)' '--model' 'org/local-model'
             """
+        )
+    }
+
+    func testConductorConfigurationUsesDynamicPathsAndModels() throws {
+        let configurationURL = manager.configurationURL(for: .conductor)
+        try FileManager.default.createDirectory(
+            at: configurationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let existing = """
+        "$schema" = "https://conductor.build/schemas/settings.schema.json"
+        environment_variable_files = ["/tmp/existing.env"]
+        default_provider_model = "claude:existing/model"
+
+        [models]
+        visible_provider_models = "{\\"claude\\":[],\\"codex\\":[],\\"cursor\\":[],\\"opencode\\":[\\"opencode:other/model\\",\\"opencode:nativ/stale/model\\"],\\"pi\\":[]}"
+        """
+        try Data((existing + "\n").utf8).write(to: configurationURL)
+
+        try configure(.conductor)
+
+        let configuration = try String(contentsOf: configurationURL, encoding: .utf8)
+        let environmentURL = applicationSupportDirectory
+            .appendingPathComponent("Nativ/Integrations/conductor.env")
+        XCTAssertTrue(configuration.contains(environmentURL.path))
+        XCTAssertTrue(configuration.contains("/tmp/existing.env"))
+        XCTAssertTrue(configuration.contains("default_provider_model = \"claude:existing/model\""))
+        XCTAssertTrue(configuration.contains("opencode:other/model"))
+        XCTAssertTrue(configuration.contains("opencode:nativ/\(selectedModel.id)"))
+        XCTAssertTrue(configuration.contains("opencode:nativ/\(basicModel.id)"))
+        XCTAssertFalse(configuration.contains("opencode:nativ/stale/model"))
+
+        let environment = try String(contentsOf: environmentURL, encoding: .utf8)
+        XCTAssertTrue(environment.contains("OPENAI_BASE_URL=http://127.0.0.1:49152/v1"))
+        XCTAssertTrue(environment.contains("ANTHROPIC_BASE_URL=http://127.0.0.1:49152"))
+        XCTAssertTrue(
+            environment.contains(
+                "OPENCODE_CONFIG=\"\(applicationSupportDirectory.path)/Nativ/Integrations/opencode.json\""
+            )
+        )
+
+        let openCode = try json(at: manager.configurationURL(for: .openCode))
+        let providers = try XCTUnwrap(openCode["provider"] as? [String: Any])
+        let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
+        let models = try XCTUnwrap(provider["models"] as? [String: Any])
+        XCTAssertEqual(Set(models.keys), [selectedModel.id, basicModel.id])
+
+        XCTAssertEqual(
+            launchCommand(for: .conductor),
+            "/usr/bin/open -a '/tools/conductor' 'conductor://prompt=&path=%2Ftmp%2FNativ%20Project'"
         )
     }
 

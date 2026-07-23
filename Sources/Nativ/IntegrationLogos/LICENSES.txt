@@ -3,6 +3,7 @@ Integration marks are bundled solely to identify their respective tools.
 Pi mark: https://pi.dev/favicon.svg
 Codex/OpenAI mark: https://developers.openai.com/favicon.svg
 Claude mark: https://claude.ai/favicon.svg
+Conductor mark: https://www.conductor.build/brandkit
 Hermes mark: https://github.com/NousResearch/hermes-agent/blob/main/acp_registry/icon.svg
 OpenCode mark: https://github.com/anomalyco/opencode/blob/dev/packages/ui/src/assets/favicon/favicon-v3.svg
 
