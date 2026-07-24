@@ -1,6 +1,7 @@
 import AppKit
 import NativServerKit
 import SwiftUI
+import WidgetKit
 
 @MainActor
 private final class ModelMenuIconView: NSView {
@@ -348,11 +349,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var modelScanInProgress = false
     private var modelScanError: String?
     private var lastScannedModelPath: String?
+    private var lastWidgetTimelineReloadAt: Date?
     private weak var highlightedMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()
+            self?.publishWidgetSnapshot()
         }
         systemMenuBarPreferences.onChange = { [weak self] in
             self?.updateStatusItemButton()
@@ -362,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else {
                 return
             }
+            self.publishWidgetSnapshot()
             if self.model.menuIsOpen {
                 self.refreshVisibleMenuState()
             } else {
@@ -1246,6 +1250,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         field.maximumNumberOfLines = 1
         field.usesSingleLineMode = true
         return field
+    }
+
+    private func publishWidgetSnapshot() {
+        let metrics = model.sessionStatsDisplayMetrics
+        let summary = metrics?.summary
+        let tokenActivity = model.sessionStatsDisplayTokenActivity
+            .suffix(120)
+            .map {
+                NativWidgetTokenActivitySample(
+                    recordedAt: $0.recordedAt,
+                    promptTokens: $0.promptTokens,
+                    generatedTokens: $0.generatedTokens
+                )
+            }
+
+        let status: String
+        if model.isModelLoading {
+            status = model.modelLoadingPercentageText.map { "Loading \($0)" }
+                ?? "Loading"
+        } else {
+            status = model.isRunning ? "Running" : "Server Off"
+        }
+
+        let snapshot = NativWidgetSnapshot(
+            updatedAt: Date(),
+            session: NativWidgetSessionSnapshot(
+                isRunning: model.isRunning,
+                status: status,
+                modelName: metrics?.server.displayLoadedModel
+                    ?? model.selectedModelDisplay,
+                processedTokens: summary?.totalProcessedTokens ?? 0,
+                promptTokens: summary?.promptTokensTotal ?? 0,
+                generatedTokens: summary?.generatedTokensTotal ?? 0,
+                averageDecodeTokensPerSecond:
+                    summary?.averageDecodeTokensPerSecond ?? 0,
+                completedRequests: summary?.requestsCompleted ?? 0,
+                failedRequests: summary?.requestsFailed ?? 0,
+                inFlightRequests: summary?.inFlight ?? 0,
+                uptimeSeconds: summary?.uptimeSeconds ?? 0,
+                tokenActivity: tokenActivity
+            ),
+            system: NativWidgetSystemSnapshot(
+                cpuUsage: runtime.cpuUsage,
+                gpuUsage: runtime.gpuUsage,
+                memoryUsage: runtime.memoryUsageFraction,
+                usedMemoryBytes: runtime.usedMemoryBytes,
+                totalMemoryBytes: runtime.totalMemoryBytes,
+                cpuHistory: runtime.cpuHistory,
+                gpuHistory: runtime.gpuHistory,
+                memoryHistory: runtime.memoryHistory
+            )
+        )
+        NativWidgetSnapshotStore.save(snapshot)
+
+        let now = Date()
+        guard lastWidgetTimelineReloadAt.map({
+            now.timeIntervalSince($0) >= 15
+        }) ?? true else {
+            return
+        }
+        lastWidgetTimelineReloadAt = now
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func disabledMenuItem(_ title: String) -> NSMenuItem {

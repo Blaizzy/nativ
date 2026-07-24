@@ -10,6 +10,7 @@
 		052BF04D854F36CDA740635F /* MarkdownFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0259C7C842DE5ADC12B367 /* MarkdownFormatting.swift */; };
 		0AB78A4BB9F2D08433653C7C /* HuggingFaceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A832F692EF1E810D78BD6B6C /* HuggingFaceCacheTests.swift */; };
 		0B11412D6A9FB77B9A204E7C /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3D808CCA7AE53C7245C3D7 /* Formatting.swift */; };
+		1161F2D0766C47FCD21FB95A /* NativWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81835CA92C5C4355D5DC456 /* NativWidgets.swift */; };
 		11A14C51AE4E0170FBA89709 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6BB0CD839020E3F5FF4F8DED /* Assets.xcassets */; };
 		137BF3A5342405863C49CC10 /* ModelProviderIcons in Resources */ = {isa = PBXBuildFile; fileRef = DB24BFEFF23914DA8BDB0E1C /* ModelProviderIcons */; };
 		1423FD497A75A14770FCA9E1 /* LocalModelDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE984320AE8CCF8783DD30CE /* LocalModelDiscovery.swift */; };
@@ -33,6 +34,7 @@
 		58AEDA213E27344F01AE5A6B /* NativServerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		61598EC22589683F1A54B047 /* ChatConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */; };
 		692EA024371CB249BE53DB86 /* NativAnalyticsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C30476FCFDB8FC736643EEB /* NativAnalyticsStore.swift */; };
+		6F95D93232781ABB745EF25D /* NativWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B598B319F21D64B9084561FE /* NativWidgetSnapshot.swift */; };
 		71659335E55225ABCBB4E993 /* IssueReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46B388273DDFAD7C6C0F4E1 /* IssueReport.swift */; };
 		77B9284EE48D020C2B5A2DF3 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DE77E6246A3E3A186C3E8F54 /* AppIcon.icon */; };
 		7936A52CFFF5AB09FC9CDDCD /* HuggingFaceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */; };
@@ -41,6 +43,7 @@
 		8B86659B490F58DEC1363135 /* NativServerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; };
 		A2606518E424E92625661281 /* ChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97F637262DB138A253DEA6F /* ChatComposer.swift */; };
 		A2DF29E907CC0CEF6EF86FBD /* HuggingFaceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */; };
+		A33F5AF5D7A98F7A0E1A43D9 /* NativWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B598B319F21D64B9084561FE /* NativWidgetSnapshot.swift */; };
 		B15353CDE6204176664DB3B2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E2EE61C1652C49ECC69658 /* AppDelegate.swift */; };
 		B47F34B1273BEEAA4D5DD314 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F553434CA19B929108FF740F /* ChatView.swift */; };
 		B55A6BE5C7B03181E2CD03D6 /* HuggingFaceHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7FC582B0E18D226E87A1FE /* HuggingFaceHub.swift */; };
@@ -60,12 +63,20 @@
 		E64F3E5C624F0C949AE70C60 /* SoftwareUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822185ADAAC5DA3F034179B0 /* SoftwareUpdater.swift */; };
 		E96652149FDCCF65899280A8 /* IntegrationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41417C210BF817681A8C6D87 /* IntegrationsView.swift */; };
 		ED1F61AA671F9F65A2F34ADB /* NativSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594711E024396C78703CE05A /* NativSettings.swift */; };
+		F0E01A5818127B100C17DAA3 /* NativWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E66FC68B7E12AEDAD6E40472 /* NativWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		F2D992CF4F2CDFF9BEA13C3B /* ServerPortProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330FEA0F4955A2486E0C3A22 /* ServerPortProbe.swift */; };
 		F5EB384AAC13043938A0A7EB /* IntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8DD9E277F67490B9744732 /* IntegrationTypes.swift */; };
 		FD18166B4B3FAEB77E0D8C69 /* CodexCLIProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		64879CDCAE3744746E2E958E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A30563972FBD2EB1154D2853 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BDA181F045CC3555CF0664C2;
+			remoteInfo = NativWidgets;
+		};
 		73204BCB16724EF63D7B0EA1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A30563972FBD2EB1154D2853 /* Project object */;
@@ -76,6 +87,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		00B40326036D546FDB02B19B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				F0E01A5818127B100C17DAA3 /* NativWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		701689C4416CD1373701CBFD /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -127,6 +149,7 @@
 		AAC852B29463217932AE0212 /* NativModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativModel.swift; sourceTree = "<group>"; };
 		ADEC2FFE7F1CFAC59170AC63 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
 		B0E2EE61C1652C49ECC69658 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		B598B319F21D64B9084561FE /* NativWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativWidgetSnapshot.swift; sourceTree = "<group>"; };
 		B7C7712D68B2782589312766 /* ControlPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelView.swift; sourceTree = "<group>"; };
 		BD0259C7C842DE5ADC12B367 /* MarkdownFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFormatting.swift; sourceTree = "<group>"; };
 		CD8DD9E277F67490B9744732 /* IntegrationTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationTypes.swift; sourceTree = "<group>"; };
@@ -136,11 +159,13 @@
 		DE575DB2DCD07A1864311714 /* Nativ.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nativ.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DE77E6246A3E3A186C3E8F54 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		E46B388273DDFAD7C6C0F4E1 /* IssueReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueReport.swift; sourceTree = "<group>"; };
+		E66FC68B7E12AEDAD6E40472 /* NativWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NativWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceCache.swift; sourceTree = "<group>"; };
 		EE151F7A36DA21A32ABCFD63 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		EE984320AE8CCF8783DD30CE /* LocalModelDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelDiscovery.swift; sourceTree = "<group>"; };
 		F0CD53CDD71732DE956F55DC /* LocalModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelProvider.swift; sourceTree = "<group>"; };
 		F553434CA19B929108FF740F /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		F81835CA92C5C4355D5DC456 /* NativWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativWidgets.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -235,6 +260,14 @@
 			path = Configuration;
 			sourceTree = "<group>";
 		};
+		3F75E2BAA0BA8C06E2B889A3 /* NativShared */ = {
+			isa = PBXGroup;
+			children = (
+				B598B319F21D64B9084561FE /* NativWidgetSnapshot.swift */,
+			);
+			path = NativShared;
+			sourceTree = "<group>";
+		};
 		40D3B01A6A8BFAE6E98FDD3C /* IssueReport */ = {
 			isa = PBXGroup;
 			children = (
@@ -269,6 +302,14 @@
 			path = Tests;
 			sourceTree = "<group>";
 		};
+		700B5A02F32E4D34AFB37C77 /* NativWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				F81835CA92C5C4355D5DC456 /* NativWidgets.swift */,
+			);
+			path = NativWidgets;
+			sourceTree = "<group>";
+		};
 		78E0E819BEDF0A48F9ED67A5 = {
 			isa = PBXGroup;
 			children = (
@@ -301,6 +342,7 @@
 				DE575DB2DCD07A1864311714 /* Nativ.app */,
 				5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */,
 				879B4B75CA9BE0A82C259451 /* NativTests.xctest */,
+				E66FC68B7E12AEDAD6E40472 /* NativWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -310,6 +352,8 @@
 			children = (
 				17C190606A42E8E7B7B1018F /* Nativ */,
 				2D909FD10E461D70DFB098BB /* NativServerKit */,
+				3F75E2BAA0BA8C06E2B889A3 /* NativShared */,
+				700B5A02F32E4D34AFB37C77 /* NativWidgets */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -394,12 +438,14 @@
 				8EDCF4385201C62BF65E7466 /* Sources */,
 				4326294893A83DE89EE26630 /* Resources */,
 				4F34357D7EA36E3D6AA05210 /* Frameworks */,
+				00B40326036D546FDB02B19B /* Embed Foundation Extensions */,
 				701689C4416CD1373701CBFD /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				E563404EC8A614EB1E31A170 /* PBXTargetDependency */,
+				374C2B8C94A55CEE1B6851AA /* PBXTargetDependency */,
 			);
 			name = Nativ;
 			packageProductDependencies = (
@@ -427,6 +473,23 @@
 			productReference = 879B4B75CA9BE0A82C259451 /* NativTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		BDA181F045CC3555CF0664C2 /* NativWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D645D284930A83DDA90896C4 /* Build configuration list for PBXNativeTarget "NativWidgets" */;
+			buildPhases = (
+				4569E4E88B52526A7EFB167A /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NativWidgets;
+			packageProductDependencies = (
+			);
+			productName = NativWidgets;
+			productReference = E66FC68B7E12AEDAD6E40472 /* NativWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -441,6 +504,10 @@
 						ProvisioningStyle = Automatic;
 					};
 					465C23BB3ADA415A5004AAD9 = {
+						DevelopmentTeam = V8MWN7GKJ5;
+						ProvisioningStyle = Automatic;
+					};
+					BDA181F045CC3555CF0664C2 = {
 						DevelopmentTeam = V8MWN7GKJ5;
 						ProvisioningStyle = Automatic;
 					};
@@ -466,6 +533,7 @@
 			targets = (
 				1622B274F4DF5A85C2FDB081 /* NativServerKit */,
 				465C23BB3ADA415A5004AAD9 /* Nativ */,
+				BDA181F045CC3555CF0664C2 /* NativWidgets */,
 				51AD42FA29E71F2450386688 /* NativTests */,
 			);
 		};
@@ -518,6 +586,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4569E4E88B52526A7EFB167A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6F95D93232781ABB745EF25D /* NativWidgetSnapshot.swift in Sources */,
+				1161F2D0766C47FCD21FB95A /* NativWidgets.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8EDCF4385201C62BF65E7466 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -550,6 +627,7 @@
 				692EA024371CB249BE53DB86 /* NativAnalyticsStore.swift in Sources */,
 				4EDF6704EAAC24ED6A205F7F /* NativModel.swift in Sources */,
 				ED1F61AA671F9F65A2F34ADB /* NativSettings.swift in Sources */,
+				A33F5AF5D7A98F7A0E1A43D9 /* NativWidgetSnapshot.swift in Sources */,
 				F2D992CF4F2CDFF9BEA13C3B /* ServerPortProbe.swift in Sources */,
 				5620EDCF472DEF4388E8E526 /* SettingsView.swift in Sources */,
 				C8B10834D4DF407907FCCF6C /* ShellEnvironment.swift in Sources */,
@@ -580,6 +658,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		374C2B8C94A55CEE1B6851AA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BDA181F045CC3555CF0664C2 /* NativWidgets */;
+			targetProxy = 64879CDCAE3744746E2E958E /* PBXContainerItemProxy */;
+		};
 		E563404EC8A614EB1E31A170 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 1622B274F4DF5A85C2FDB081 /* NativServerKit */;
@@ -687,12 +770,59 @@
 			};
 			name = Release;
 		};
+		3D4636A69106BFC6B0708EB6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 42F2A46C219AE81DB14EEF3A /* Signing.xcconfig */;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = Configuration/NativWidgets.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Configuration/NativWidgets-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(NATIV_WIDGETS_BUNDLE_IDENTIFIER)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		4ABA3C8F60AC6B731A0BE271 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 42F2A46C219AE81DB14EEF3A /* Signing.xcconfig */;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = Configuration/NativWidgets.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Configuration/NativWidgets-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(NATIV_WIDGETS_BUNDLE_IDENTIFIER)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 		547452550D70784A1668AC5D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 42F2A46C219AE81DB14EEF3A /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Configuration/Nativ.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -716,6 +846,7 @@
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Configuration/Nativ.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -865,6 +996,15 @@
 			buildConfigurations = (
 				0096B28867400495F72A65BB /* Debug */,
 				E6D9A3CA47B83EF029B13356 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D645D284930A83DDA90896C4 /* Build configuration list for PBXNativeTarget "NativWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3D4636A69106BFC6B0708EB6 /* Debug */,
+				4ABA3C8F60AC6B731A0BE271 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

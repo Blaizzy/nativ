@@ -66,11 +66,14 @@ targets:
       - path: Sources/Nativ
         excludes:
           - ModelProviderIcons
+      - path: Sources/NativShared
       - path: Sources/Nativ/ModelProviderIcons
         type: folder
         buildPhase: resources
     dependencies:
       - target: NativServerKit
+      - target: NativWidgets
+        embed: true
       - package: Sparkle
         product: Sparkle
       - package: textual
@@ -80,12 +83,33 @@ targets:
         ARCHS: arm64
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
+        CODE_SIGN_ENTITLEMENTS: Configuration/Nativ.entitlements
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/Nativ-Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         MARKETING_VERSION: 0.0.1
         CURRENT_PROJECT_VERSION: 1
+  NativWidgets:
+    type: app-extension
+    platform: macOS
+    configFiles:
+      Debug: Configuration/Signing.xcconfig
+      Release: Configuration/Signing.xcconfig
+    sources:
+      - path: Sources/NativWidgets
+      - path: Sources/NativShared
+    settings:
+      base:
+        ARCHS: arm64
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_WIDGETS_BUNDLE_IDENTIFIER)
+        CODE_SIGN_ENTITLEMENTS: Configuration/NativWidgets.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Configuration/NativWidgets-Info.plist
+        MARKETING_VERSION: 0.0.1
+        CURRENT_PROJECT_VERSION: 1
+        SKIP_INSTALL: YES
   NativTests:
     type: bundle.unit-test
     platform: macOS
