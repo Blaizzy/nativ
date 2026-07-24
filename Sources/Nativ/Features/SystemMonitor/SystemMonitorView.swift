@@ -14,7 +14,7 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .overview:
-            "Dashboard"
+            "Overview"
         case .cpu:
             "CPU"
         case .gpu:
@@ -249,7 +249,7 @@ private struct SystemOverviewPage: View {
     let snapshot: SystemMonitorSnapshot
 
     var body: some View {
-        SystemMonitorPage(title: "Dashboard", subtitle: "Hardware at a glance") {
+        SystemMonitorPage(title: "Overview", subtitle: "Hardware at a glance") {
             SystemPanel {
                 VStack(spacing: 14) {
                     SystemDeviceArtwork(identity: snapshot.identity)
