@@ -79,6 +79,13 @@ struct IntegrationProfileManager {
                 let providers = root["providers"] as? [String: Any]
             else { return false }
             return providers[Self.providerID] != nil
+        case .openClaw:
+            guard
+                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let modelsRoot = root["models"] as? [String: Any],
+                let providers = modelsRoot["providers"] as? [String: Any]
+            else { return false }
+            return providers[Self.providerID] != nil
         case .codex, .hermes, .aider, .qwenCode:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
@@ -122,6 +129,8 @@ struct IntegrationProfileManager {
             try configureCrush(selectedModelID: selectedModelID, models: models, maxOutputTokens: maxOutputTokens)
         case .qwenCode:
             try configureQwenCode(selectedModelID: selectedModelID)
+        case .openClaw:
+            try configureOpenClaw(models: models)
         }
     }
 
@@ -195,6 +204,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("crush.json")
         case .qwenCode:
             return integrationsSupportURL.appendingPathComponent("qwen.env")
+        case .openClaw:
+            return home.appendingPathComponent(".openclaw/openclaw.json")
         }
     }
 
@@ -476,6 +487,37 @@ struct IntegrationProfileManager {
         try writeText(contents, to: configurationURL(for: .qwenCode))
     }
 
+    private func configureOpenClaw(models: [IntegrationModelDescriptor]) throws {
+        let url = configurationURL(for: .openClaw)
+        var root: [String: Any] = [:]
+        if fileManager.fileExists(atPath: url.path) {
+            let data = try Data(contentsOf: url)
+            guard let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw IntegrationServiceError.invalidConfiguration(url)
+            }
+            root = existing
+        }
+        var modelsRoot = root["models"] as? [String: Any] ?? [:]
+        var providers = modelsRoot["providers"] as? [String: Any] ?? [:]
+        providers[Self.providerID] = [
+            "baseUrl": openAIBaseURL,
+            "apiKey": "nativ",
+            "api": "openai-completions",
+            "models": models.map(openClawModel)
+        ]
+        modelsRoot["providers"] = providers
+        root["models"] = modelsRoot
+        try writeJSON(root, to: url)
+    }
+
+    private func openClawModel(_ model: IntegrationModelDescriptor) -> [String: Any] {
+        var value: [String: Any] = ["id": model.id, "name": model.displayName]
+        if let contextWindow = model.contextWindow {
+            value["contextWindow"] = contextWindow
+        }
+        return value
+    }
+
     private func launchConfiguration(
         tool: IntegrationTool,
         selectedModelID: String
@@ -522,6 +564,8 @@ struct IntegrationProfileManager {
                     "OPENAI_MODEL": selectedModelID
                 ]
             )
+        case .openClaw:
+            return (["agent", "--model", "\(Self.providerID)/\(selectedModelID)"], [:])
         }
     }
 

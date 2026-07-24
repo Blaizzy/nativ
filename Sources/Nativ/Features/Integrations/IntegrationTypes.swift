@@ -10,6 +10,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case goose
     case crush
     case qwenCode
+    case openClaw
 
     var id: String { rawValue }
 
@@ -24,6 +25,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .goose: "Goose"
         case .crush: "Crush"
         case .qwenCode: "Qwen Code"
+        case .openClaw: "OpenClaw"
         }
     }
 
@@ -38,6 +40,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .goose: "goose"
         case .crush: "crush"
         case .qwenCode: "qwen"
+        case .openClaw: "openclaw"
         }
     }
 
@@ -54,6 +57,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .goose: "Extensible on-machine AI agent"
         case .crush: "Glamourous terminal coding agent"
         case .qwenCode: "Agentic coding CLI tuned for Qwen"
+        case .openClaw: "Open personal AI agent and gateway"
         }
     }
 
@@ -68,6 +72,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .goose: URL(string: "https://github.com/block/goose")!
         case .crush: URL(string: "https://github.com/charmbracelet/crush")!
         case .qwenCode: URL(string: "https://github.com/QwenLM/qwen-code")!
+        case .openClaw: URL(string: "https://docs.openclaw.ai/")!
         }
     }
 

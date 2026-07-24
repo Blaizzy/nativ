@@ -10,7 +10,8 @@ final class IntegrationServicesTests: XCTestCase {
         .aider,
         .goose,
         .crush,
-        .qwenCode
+        .qwenCode,
+        .openClaw
     ]
 
     private var temporaryRoot: URL!
@@ -285,6 +286,28 @@ final class IntegrationServicesTests: XCTestCase {
             export OPENAI_MODEL='org/local-model'
             '/tools/qwen'
             """
+        )
+    }
+
+    func testOpenClawConfigurationAndLaunchCommand() throws {
+        try configure(.openClaw)
+
+        let configurationURL = manager.configurationURL(for: .openClaw)
+        let root = try json(at: configurationURL)
+        let modelsRoot = try XCTUnwrap(root["models"] as? [String: Any])
+        let providers = try XCTUnwrap(modelsRoot["providers"] as? [String: Any])
+        let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
+        XCTAssertEqual(provider["baseUrl"] as? String, "http://127.0.0.1:49152/v1")
+        XCTAssertEqual(provider["api"] as? String, "openai-completions")
+        XCTAssertEqual(provider["apiKey"] as? String, "nativ")
+        let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
+        XCTAssertEqual(models.count, 2)
+        XCTAssertEqual(models[0]["id"] as? String, selectedModel.id)
+        XCTAssertEqual(models[0]["contextWindow"] as? Int, selectedModel.contextWindow)
+        XCTAssertNil(models[1]["contextWindow"])
+        XCTAssertEqual(
+            launchCommand(for: .openClaw),
+            "cd '/tmp/Nativ Project'\n'/tools/openclaw' 'agent' '--model' 'nativ/org/local-model'"
         )
     }
 
