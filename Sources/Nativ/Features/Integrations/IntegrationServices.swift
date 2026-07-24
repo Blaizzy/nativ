@@ -78,6 +78,8 @@ struct IntegrationProfileManager {
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
         case .vscode:
             return false
+        case .cline:
+            return false
         }
     }
 
@@ -111,6 +113,8 @@ struct IntegrationProfileManager {
                 to: configurationURL(for: tool)
             )
         case .vscode:
+            break
+        case .cline:
             break
         }
     }
@@ -179,6 +183,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("opencode.json")
         case .vscode:
             return integrationsSupportURL.appendingPathComponent("vscode-guided.json")
+        case .cline:
+            return integrationsSupportURL.appendingPathComponent("cline-guided.json")
         }
     }
 
@@ -425,6 +431,8 @@ struct IntegrationProfileManager {
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
             )
         case .vscode:
+            return ([], [:])
+        case .cline:
             return ([], [:])
         }
     }
