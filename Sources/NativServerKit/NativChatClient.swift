@@ -432,6 +432,10 @@ public final class NativChatClient {
         self.session = URLSession(configuration: configuration)
     }
 
+    deinit {
+        session.finishTasksAndInvalidate()
+    }
+
     public func completeChat(_ request: MLXChatCompletionRequest) async throws -> MLXChatCompletion {
         var payload = request
         payload.stream = false

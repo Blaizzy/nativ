@@ -506,6 +506,10 @@ public final class NativMetricsClient {
         self.session = URLSession(configuration: configuration)
     }
 
+    deinit {
+        session.finishTasksAndInvalidate()
+    }
+
     public func fetchMetrics(apiKey: String? = nil) async throws -> NativMetrics {
         let paths = ["metrics", "v1/metrics"]
         var lastError: Error?
