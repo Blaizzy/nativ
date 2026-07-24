@@ -16,6 +16,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case vscode
     case cline
     case cursor
+    case jetbrains
 
     var id: String { rawValue }
 
@@ -36,6 +37,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .vscode: "VS Code"
         case .cline: "Cline"
         case .cursor: "Cursor"
+        case .jetbrains: "JetBrains"
         }
     }
 
@@ -56,6 +58,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .vscode: "code"
         case .cline: "cline"
         case .cursor: "cursor"
+        case .jetbrains: "jetbrains"
         }
     }
 
@@ -78,6 +81,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .vscode: "Copilot BYOK via an OpenAI-compatible endpoint"
         case .cline: "OpenAI-compatible provider in the Cline extension"
         case .cursor: "OpenAI-compatible endpoint in Cursor's AI panel"
+        case .jetbrains: "OpenAI-compatible endpoint in JetBrains AI Assistant"
         }
     }
 
@@ -98,6 +102,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .vscode: URL(string: "https://code.visualstudio.com/docs/copilot/language-models")!
         case .cline: URL(string: "https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev")!
         case .cursor: URL(string: "https://docs.cursor.com/settings/models")!
+        case .jetbrains: URL(string: "https://www.jetbrains.com/help/ai-assistant/configure-openai-compatible-models.html")!
         }
     }
 
@@ -113,6 +118,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .vscode: true
         case .cline: true
         case .cursor: true
+        case .jetbrains: true
         default: false
         }
     }
@@ -148,6 +154,13 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
                 "Enable \u{201C}Override OpenAI Base URL\u{201D} and set the Base URL and API key shown above.",
                 "Add your model name, then select it in the chat model picker."
             ]
+        case .jetbrains:
+            [
+                "Start Nativ's server and load a model from the Models page.",
+                "In your JetBrains IDE, open Settings \u{2192} Tools \u{2192} AI Assistant \u{2192} Models.",
+                "Under Providers & API keys, add an \u{201C}OpenAI Compatible\u{201D} provider with the Base URL and API key shown above.",
+                "Select your model, then use it from the AI Assistant chat."
+            ]
         default:
             []
         }
@@ -158,6 +171,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .vscode: "Copilot BYOK requires the GitHub Copilot extension, signed in."
         case .cline: "Cline runs inside VS Code and compatible editors."
         case .cursor: "Only Cursor's chat/AI panel honors a custom OpenAI endpoint \u{2014} Tab and inline edits stay on Cursor's own models."
+        case .jetbrains: "Requires the AI Assistant plugin (recent JetBrains IDE versions)."
         default: nil
         }
     }

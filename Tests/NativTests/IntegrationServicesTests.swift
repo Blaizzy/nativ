@@ -13,7 +13,11 @@ final class IntegrationServicesTests: XCTestCase {
         .qwenCode,
         .openClaw,
         .zed,
-        .continueDev
+        .continueDev,
+        .vscode,
+        .cline,
+        .cursor,
+        .jetbrains
     ]
 
     private var temporaryRoot: URL!
