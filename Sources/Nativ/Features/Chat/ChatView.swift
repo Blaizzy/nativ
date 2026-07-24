@@ -1494,7 +1494,8 @@ private struct ChatMessageRow: View {
                 if !message.imageAttachments.isEmpty {
                     ChatImageAttachmentStack(
                         attachments: message.imageAttachments,
-                        isUserMessage: message.role == .user
+                        isUserMessage: message.role == .user,
+                        showsSaveButton: message.role == .tool
                     )
                 }
 
@@ -2093,11 +2094,15 @@ private struct ChatResponseMetricPill: View {
 private struct ChatImageAttachmentStack: View {
     let attachments: [ChatImageAttachment]
     let isUserMessage: Bool
+    let showsSaveButton: Bool
 
     var body: some View {
         VStack(alignment: isUserMessage ? .trailing : .leading, spacing: 6) {
             ForEach(attachments) { attachment in
-                ChatImageAttachmentView(attachment: attachment)
+                ChatImageAttachmentView(
+                    attachment: attachment,
+                    showsSaveButton: showsSaveButton
+                )
             }
         }
     }
@@ -2105,10 +2110,55 @@ private struct ChatImageAttachmentStack: View {
 
 private struct ChatImageAttachmentView: View {
     let attachment: ChatImageAttachment
+    let showsSaveButton: Bool
+    @State private var saveErrorMessage: String?
+    @State private var showsSaveError = false
+    @State private var isSaveButtonHovered = false
 
     private let maximumSideLength: CGFloat = 300
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            preview
+
+            if showsSaveButton, attachment.imageData != nil {
+                Button(action: saveImage) {
+                    Image(systemName: "square.and.arrow.down")
+                        .foregroundStyle(
+                            isSaveButtonHovered
+                                ? Color.primary
+                                : Color(nsColor: .secondaryLabelColor)
+                        )
+                        .frame(width: 30, height: 28)
+                        .contentShape(.rect)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(
+                                    isSaveButtonHovered
+                                        ? Color(nsColor: .separatorColor)
+                                        : .clear,
+                                    lineWidth: 0.75
+                                )
+                        }
+                }
+                .buttonStyle(.plain)
+                .help("Save image")
+                .accessibilityLabel("Save image")
+                .onHover { isSaveButtonHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: isSaveButtonHovered)
+            }
+        }
+        .help(attachment.filename)
+        .accessibilityLabel(attachment.filename)
+        .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveErrorMessage ?? "The image could not be saved.")
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
         Group {
             if let image {
                 let size = displaySize(for: image)
@@ -2136,8 +2186,6 @@ private struct ChatImageAttachmentView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .help(attachment.filename)
-        .accessibilityLabel(attachment.filename)
     }
 
     private var image: NSImage? {
@@ -2157,6 +2205,32 @@ private struct ChatImageAttachmentView: View {
             width: image.size.width * scale,
             height: image.size.height * scale
         )
+    }
+
+    private func saveImage() {
+        guard let imageData = attachment.imageData else {
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [imageType]
+        panel.nameFieldStringValue = attachment.filename
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            try imageData.write(to: url, options: .atomic)
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            showsSaveError = true
+        }
+    }
+
+    private var imageType: UTType {
+        UTType(mimeType: attachment.mimeType)
+            ?? UTType(filenameExtension: URL(fileURLWithPath: attachment.filename).pathExtension)
+            ?? .png
     }
 }
 
