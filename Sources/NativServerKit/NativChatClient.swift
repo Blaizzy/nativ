@@ -32,21 +32,40 @@ public struct MLXChatMessage: Codable, Equatable, Sendable {
     public var role: String
     public var content: MLXChatMessageContent?
     public var reasoningContent: String?
+    public var toolCalls: [MLXChatToolCall]?
+    public var toolCallID: String?
+    public var name: String?
 
-    public init(role: String, content: String?, reasoningContent: String? = nil) {
+    public init(
+        role: String,
+        content: String?,
+        reasoningContent: String? = nil,
+        toolCalls: [MLXChatToolCall]? = nil,
+        toolCallID: String? = nil,
+        name: String? = nil
+    ) {
         self.role = role
         self.content = content.map(MLXChatMessageContent.text)
         self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.name = name
     }
 
     public init(
         role: String,
         content: MLXChatMessageContent?,
-        reasoningContent: String? = nil
+        reasoningContent: String? = nil,
+        toolCalls: [MLXChatToolCall]? = nil,
+        toolCallID: String? = nil,
+        name: String? = nil
     ) {
         self.role = role
         self.content = content
         self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.name = name
     }
 
     public var textContent: String? {
@@ -58,14 +77,20 @@ public struct MLXChatMessage: Codable, Equatable, Sendable {
         case content
         case reasoningContent = "reasoning_content"
         case reasoning
+        case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
+        case name
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        role = try container.decode(String.self, forKey: .role)
+        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "assistant"
         content = try container.decodeIfPresent(MLXChatMessageContent.self, forKey: .content)
         reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent)
             ?? container.decodeIfPresent(String.self, forKey: .reasoning)
+        toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls)
+        toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -73,6 +98,78 @@ public struct MLXChatMessage: Codable, Equatable, Sendable {
         try container.encode(role, forKey: .role)
         try container.encodeIfPresent(content, forKey: .content)
         try container.encodeIfPresent(reasoningContent, forKey: .reasoningContent)
+        try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
+        try container.encodeIfPresent(name, forKey: .name)
+    }
+}
+
+public struct MLXChatFunctionCall: Codable, Equatable, Sendable {
+    public var name: String?
+    public var arguments: String?
+
+    public init(name: String?, arguments: String?) {
+        self.name = name
+        self.arguments = arguments
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case arguments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        if let string = try? container.decodeIfPresent(String.self, forKey: .arguments) {
+            arguments = string
+        } else if let value = try container.decodeIfPresent(MLXJSONValue.self, forKey: .arguments) {
+            let data = try JSONEncoder().encode(value)
+            arguments = String(decoding: data, as: UTF8.self)
+        } else {
+            arguments = nil
+        }
+    }
+}
+
+public struct MLXChatToolCall: Codable, Equatable, Sendable {
+    public var index: Int?
+    public var id: String?
+    public var type: String?
+    public var function: MLXChatFunctionCall?
+
+    public init(
+        index: Int? = nil,
+        id: String?,
+        type: String? = "function",
+        function: MLXChatFunctionCall?
+    ) {
+        self.index = index
+        self.id = id
+        self.type = type
+        self.function = function
+    }
+}
+
+public struct MLXChatFunctionDefinition: Codable, Equatable, Sendable {
+    public var name: String
+    public var description: String
+    public var parameters: MLXJSONValue
+
+    public init(name: String, description: String, parameters: MLXJSONValue) {
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+    }
+}
+
+public struct MLXChatToolDefinition: Codable, Equatable, Sendable {
+    public var type: String
+    public var function: MLXChatFunctionDefinition
+
+    public init(function: MLXChatFunctionDefinition) {
+        self.type = "function"
+        self.function = function
     }
 }
 
@@ -224,6 +321,7 @@ public struct MLXChatCompletion: Equatable, Sendable {
     public let model: String?
     public let content: String
     public let reasoningContent: String?
+    public let toolCalls: [MLXChatToolCall]
     public let finishReason: String?
     public let usage: MLXChatUsage?
     public let requestElapsedSeconds: Double?
@@ -238,17 +336,20 @@ public struct MLXChatCompletion: Equatable, Sendable {
 public struct MLXChatStreamDelta: Equatable, Sendable {
     public let content: String?
     public let reasoningContent: String?
+    public let toolCalls: [MLXChatToolCall]?
     public let decodeTokensPerSecond: Double?
     public let generatedTokens: Int?
 
     public init(
         content: String? = nil,
         reasoningContent: String? = nil,
+        toolCalls: [MLXChatToolCall]? = nil,
         decodeTokensPerSecond: Double? = nil,
         generatedTokens: Int? = nil
     ) {
         self.content = content
         self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
         self.decodeTokensPerSecond = decodeTokensPerSecond
         self.generatedTokens = generatedTokens
     }
@@ -355,6 +456,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var thinkingStartToken: String?
     public var thinkingEndToken: String?
     public var responseFormat: MLXChatResponseFormat?
+    public var tools: [MLXChatToolDefinition]?
+    public var toolChoice: String?
     public var stream: Bool
     public var streamOptions: MLXChatStreamOptions?
 
@@ -372,6 +475,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
         thinkingStartToken: String? = nil,
         thinkingEndToken: String? = nil,
         responseFormat: MLXChatResponseFormat? = nil,
+        tools: [MLXChatToolDefinition]? = nil,
+        toolChoice: String? = nil,
         stream: Bool = false,
         streamOptions: MLXChatStreamOptions? = nil
     ) {
@@ -388,6 +493,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
         self.thinkingStartToken = thinkingStartToken
         self.thinkingEndToken = thinkingEndToken
         self.responseFormat = responseFormat
+        self.tools = tools
+        self.toolChoice = toolChoice
         self.stream = stream
         self.streamOptions = streamOptions
     }
@@ -406,6 +513,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
         case thinkingStartToken = "thinking_start_token"
         case thinkingEndToken = "thinking_end_token"
         case responseFormat = "response_format"
+        case tools
+        case toolChoice = "tool_choice"
         case stream
         case streamOptions = "stream_options"
     }
@@ -454,13 +563,15 @@ public final class NativChatClient {
         }
         let resolvedContent = try validatedAssistantContent(
             content: choice.message.textContent ?? "",
-            reasoningContent: choice.message.reasoningContent
+            reasoningContent: choice.message.reasoningContent,
+            toolCalls: choice.message.toolCalls
         )
 
         return MLXChatCompletion(
             model: decoded.model,
             content: resolvedContent.content,
             reasoningContent: resolvedContent.reasoningContent,
+            toolCalls: choice.message.toolCalls ?? [],
             finishReason: choice.finishReason,
             usage: decoded.resolvedUsage,
             requestElapsedSeconds: Date().timeIntervalSince(requestStartedAt)
@@ -504,6 +615,7 @@ public final class NativChatClient {
         var timings: MLXChatTimings?
         var responseModel: String?
         var streamedGeneratedTokens = 0
+        var toolCallAccumulator = MLXChatToolCallAccumulator()
 
         for try await line in bytes.lines {
             try Task.checkCancellation()
@@ -534,6 +646,7 @@ public final class NativChatClient {
                 finishReason = choice.finishReason ?? finishReason
                 let contentDelta = choice.delta.textContent
                 let reasoningDelta = choice.delta.reasoningContent
+                let toolCallDeltas = choice.delta.toolCalls
                 if let contentDelta, !contentDelta.isEmpty {
                     content += contentDelta
                 }
@@ -545,13 +658,18 @@ public final class NativChatClient {
                 if hasGeneratedToken {
                     streamedGeneratedTokens += 1
                 }
+                if let toolCallDeltas, !toolCallDeltas.isEmpty {
+                    toolCallAccumulator.merge(toolCallDeltas)
+                }
                 if contentDelta?.isEmpty == false
                     || reasoningDelta?.isEmpty == false
+                    || toolCallDeltas?.isEmpty == false
                     || decodeTokensPerSecond != nil {
                     await onEvent(
                         MLXChatStreamDelta(
                             content: contentDelta,
                             reasoningContent: reasoningDelta,
+                            toolCalls: toolCallDeltas,
                             decodeTokensPerSecond: decodeTokensPerSecond,
                             generatedTokens: chunk.usage?.completionTokens
                                 ?? streamedGeneratedTokens
@@ -571,13 +689,15 @@ public final class NativChatClient {
 
         let resolvedContent = try validatedAssistantContent(
             content: content,
-            reasoningContent: reasoningContent.isEmpty ? nil : reasoningContent
+            reasoningContent: reasoningContent.isEmpty ? nil : reasoningContent,
+            toolCalls: toolCallAccumulator.toolCalls
         )
 
         return MLXChatCompletion(
             model: responseModel,
             content: resolvedContent.content,
             reasoningContent: resolvedContent.reasoningContent,
+            toolCalls: toolCallAccumulator.toolCalls,
             finishReason: finishReason,
             usage: resolvedUsage(usage: usage, timings: timings),
             requestElapsedSeconds: Date().timeIntervalSince(requestStartedAt)
@@ -586,9 +706,10 @@ public final class NativChatClient {
 
     private func validatedAssistantContent(
         content: String,
-        reasoningContent: String?
+        reasoningContent: String?,
+        toolCalls: [MLXChatToolCall]?
     ) throws -> (content: String, reasoningContent: String?) {
-        if !content.isEmpty || reasoningContent?.isEmpty == false {
+        if !content.isEmpty || reasoningContent?.isEmpty == false || toolCalls?.isEmpty == false {
             return (content, reasoningContent)
         }
         throw NativChatError.missingAssistantContent
@@ -700,6 +821,54 @@ private struct ChatStreamChunk: Decodable {
             case finishReason = "finish_reason"
             case delta
         }
+    }
+}
+
+struct MLXChatToolCallAccumulator {
+    private var callsByIndex: [Int: MLXChatToolCall] = [:]
+
+    var toolCalls: [MLXChatToolCall] {
+        callsByIndex.keys.sorted().compactMap { callsByIndex[$0] }
+    }
+
+    mutating func merge(_ deltas: [MLXChatToolCall]) {
+        for (position, delta) in deltas.enumerated() {
+            let index = delta.index
+                ?? callsByIndex.first(where: { $0.value.id == delta.id && delta.id != nil })?.key
+                ?? position
+            var call = callsByIndex[index]
+                ?? MLXChatToolCall(index: index, id: nil, type: nil, function: nil)
+
+            if let id = delta.id, !id.isEmpty {
+                call.id = id
+            }
+            if let type = delta.type, !type.isEmpty {
+                call.type = type
+            }
+            if let functionDelta = delta.function {
+                var function = call.function ?? MLXChatFunctionCall(name: nil, arguments: nil)
+                function.name = mergedFragment(current: function.name, incoming: functionDelta.name)
+                function.arguments = mergedFragment(
+                    current: function.arguments,
+                    incoming: functionDelta.arguments
+                )
+                call.function = function
+            }
+            callsByIndex[index] = call
+        }
+    }
+
+    private func mergedFragment(current: String?, incoming: String?) -> String? {
+        guard let incoming, !incoming.isEmpty else {
+            return current
+        }
+        guard let current, !current.isEmpty else {
+            return incoming
+        }
+        if current == incoming {
+            return current
+        }
+        return current + incoming
     }
 }
 

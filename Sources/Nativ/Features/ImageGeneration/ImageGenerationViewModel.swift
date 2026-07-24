@@ -31,6 +31,100 @@ struct ImageRequestSettings: Equatable, Codable, Sendable {
     var seedText = ""
 }
 
+struct ImageGenerationExecutor {
+    func run(
+        baseURL: URL,
+        modelID: String,
+        prompt: String,
+        references: [ChatImageAttachment],
+        settings: ImageRequestSettings,
+        seed: Int?
+    ) async throws -> [GeneratedImage] {
+        let client = NativImageClient(baseURL: baseURL)
+        let response: MLXImageResponse
+        if references.isEmpty {
+            response = try await client.generate(MLXImageGenerationRequest(
+                model: modelID,
+                prompt: prompt,
+                n: settings.count,
+                width: settings.width,
+                height: settings.height,
+                steps: settings.steps,
+                seed: seed,
+                guidance: settings.guidance
+            ))
+        } else {
+            let paths = try references.map(Self.materializeReference).map(\.path)
+            response = try await client.edit(MLXImageEditRequest(
+                model: modelID,
+                prompt: prompt,
+                image: paths,
+                n: settings.count,
+                width: settings.width,
+                height: settings.height,
+                steps: settings.steps,
+                seed: seed,
+                guidance: settings.guidance
+            ))
+        }
+
+        try Task.checkCancellation()
+        return try Self.makeGeneratedImages(from: response)
+    }
+
+    private static func materializeReference(_ attachment: ChatImageAttachment) throws -> URL {
+        guard let data = attachment.imageData else {
+            throw NativImageError.missingImageData
+        }
+        let fileManager = FileManager.default
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let directory = caches
+            .appendingPathComponent("Nativ", isDirectory: true)
+            .appendingPathComponent("ImageGeneration", isDirectory: true)
+            .appendingPathComponent("References", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let fileExtension = UTType(mimeType: attachment.mimeType)?.preferredFilenameExtension
+            ?? URL(fileURLWithPath: attachment.filename).pathExtension.nonEmpty
+            ?? "png"
+        let url = directory.appendingPathComponent("\(attachment.id.uuidString).\(fileExtension)")
+        if !fileManager.fileExists(atPath: url.path) {
+            try data.write(to: url, options: .atomic)
+        }
+        return url
+    }
+
+    private static func makeGeneratedImages(from response: MLXImageResponse) throws -> [GeneratedImage] {
+        let images = response.data.compactMap { item -> GeneratedImage? in
+            let data: Data?
+            if let base64 = item.b64JSON {
+                data = Data(base64Encoded: base64)
+            } else if let path = item.path {
+                data = try? Data(contentsOf: URL(fileURLWithPath: path))
+            } else {
+                data = nil
+            }
+            guard let data, NSImage(data: data) != nil else {
+                return nil
+            }
+            return GeneratedImage(
+                imageData: data,
+                mimeType: item.mimeType,
+                width: item.width,
+                height: item.height,
+                seed: item.seed,
+                path: item.path,
+                revisedPrompt: item.revisedPrompt
+            )
+        }
+        guard !images.isEmpty else {
+            throw NativImageError.missingImageData
+        }
+        return images
+    }
+}
+
 enum ImageGenerationTurnStatus: String, Equatable, Codable, Sendable {
     case inProgress
     case completed
@@ -304,42 +398,21 @@ final class ImageGenerationViewModel: ObservableObject {
         bumpScroll()
 
         activeTask?.cancel()
-        let client = NativImageClient(baseURL: appModel.settings.serverBaseURL)
+        let serverBaseURL = appModel.settings.serverBaseURL
         activeTask = Task { @MainActor [weak self, weak appModel] in
             guard let self else {
                 return
             }
 
             do {
-                let response: MLXImageResponse
-                if references.isEmpty {
-                    response = try await client.generate(MLXImageGenerationRequest(
-                        model: requestModelID,
-                        prompt: requestPrompt,
-                        n: settings.count,
-                        width: settings.width,
-                        height: settings.height,
-                        steps: settings.steps,
-                        seed: requestSeed,
-                        guidance: settings.guidance
-                    ))
-                } else {
-                    let paths = try references.map(materializeReference).map(\.path)
-                    response = try await client.edit(MLXImageEditRequest(
-                        model: requestModelID,
-                        prompt: requestPrompt,
-                        image: paths,
-                        n: settings.count,
-                        width: settings.width,
-                        height: settings.height,
-                        steps: settings.steps,
-                        seed: requestSeed,
-                        guidance: settings.guidance
-                    ))
-                }
-
-                try Task.checkCancellation()
-                let outputs = try makeGeneratedImages(from: response)
+                let outputs = try await ImageGenerationExecutor().run(
+                    baseURL: serverBaseURL,
+                    modelID: requestModelID,
+                    prompt: requestPrompt,
+                    references: references,
+                    settings: settings,
+                    seed: requestSeed
+                )
                 updateTurn(turn.id) { current in
                     current.outputs = outputs
                     current.status = .completed
@@ -566,29 +639,6 @@ final class ImageGenerationViewModel: ObservableObject {
         return nil
     }
 
-    private func materializeReference(_ attachment: ChatImageAttachment) throws -> URL {
-        guard let data = attachment.imageData else {
-            throw NativImageError.missingImageData
-        }
-        let fileManager = FileManager.default
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let directory = caches
-            .appendingPathComponent("Nativ", isDirectory: true)
-            .appendingPathComponent("ImageGeneration", isDirectory: true)
-            .appendingPathComponent("References", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let fileExtension = UTType(mimeType: attachment.mimeType)?.preferredFilenameExtension
-            ?? URL(fileURLWithPath: attachment.filename).pathExtension.nonEmpty
-            ?? "png"
-        let url = directory.appendingPathComponent("\(attachment.id.uuidString).\(fileExtension)")
-        if !fileManager.fileExists(atPath: url.path) {
-            try data.write(to: url, options: .atomic)
-        }
-        return url
-    }
-
     private func finishCancelledTurn(_ turnID: UUID) {
         updateTurn(turnID) { turn in
             turn.status = .cancelled
@@ -713,35 +763,6 @@ final class ImageGenerationViewModel: ObservableObject {
     private func normalized(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func makeGeneratedImages(from response: MLXImageResponse) throws -> [GeneratedImage] {
-        let images = response.data.compactMap { item -> GeneratedImage? in
-            let data: Data?
-            if let base64 = item.b64JSON {
-                data = Data(base64Encoded: base64)
-            } else if let path = item.path {
-                data = try? Data(contentsOf: URL(fileURLWithPath: path))
-            } else {
-                data = nil
-            }
-            guard let data, NSImage(data: data) != nil else {
-                return nil
-            }
-            return GeneratedImage(
-                imageData: data,
-                mimeType: item.mimeType,
-                width: item.width,
-                height: item.height,
-                seed: item.seed,
-                path: item.path,
-                revisedPrompt: item.revisedPrompt
-            )
-        }
-        guard !images.isEmpty else {
-            throw NativImageError.missingImageData
-        }
-        return images
     }
 
     private static func preferredImageTypeIdentifier(for provider: NSItemProvider) -> String? {
