@@ -6,6 +6,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case claudeCode
     case hermes
     case openCode
+    case vscode
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .claudeCode: "Claude Code"
         case .hermes: "Hermes"
         case .openCode: "OpenCode"
+        case .vscode: "VS Code"
         }
     }
 
@@ -26,6 +28,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .claudeCode: "claude"
         case .hermes: "hermes"
         case .openCode: "opencode"
+        case .vscode: "code"
         }
     }
 
@@ -38,6 +41,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .claudeCode: "Anthropic's agentic coding tool"
         case .hermes: "Open agent with tools, skills, and memory"
         case .openCode: "Open-source coding agent"
+        case .vscode: "Copilot BYOK via an OpenAI-compatible endpoint"
         }
     }
 
@@ -48,6 +52,42 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .claudeCode: URL(string: "https://code.claude.com/docs/en/setup")!
         case .hermes: URL(string: "https://github.com/NousResearch/hermes-agent")!
         case .openCode: URL(string: "https://opencode.ai/docs")!
+        case .vscode: URL(string: "https://code.visualstudio.com/docs/copilot/language-models")!
+        }
+    }
+
+    var isGuidedSetup: Bool {
+        switch self {
+        case .vscode: true
+        default: false
+        }
+    }
+
+    var appBundleIdentifier: String? {
+        switch self {
+        case .vscode: "com.microsoft.VSCode"
+        default: nil
+        }
+    }
+
+    var guidedSetupSteps: [String] {
+        switch self {
+        case .vscode:
+            [
+                "Start Nativ's server and load a model from the Models page.",
+                "In VS Code, open the Command Palette and run \u{201C}Chat: Manage Language Models\u{201D}.",
+                "Choose \u{201C}OpenAI Compatible\u{201D}, set the Base URL and API key shown above, then pick your model.",
+                "Or install a community \u{201C}OpenAI Compatible\u{201D} chat extension and point it at the same Base URL and key."
+            ]
+        default:
+            []
+        }
+    }
+
+    var guidedSetupCaveat: String? {
+        switch self {
+        case .vscode: "Copilot BYOK requires the GitHub Copilot extension, signed in."
+        default: nil
         }
     }
 }

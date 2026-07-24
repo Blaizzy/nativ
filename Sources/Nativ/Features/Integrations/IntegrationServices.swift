@@ -33,6 +33,9 @@ struct IntegrationProfileManager {
     }
 
     func status(for tool: IntegrationTool) async -> IntegrationToolStatus {
+        if tool.isGuidedSetup {
+            return IntegrationToolStatus(executableURL: nil, version: nil, isConfigured: false)
+        }
         let resolvedExecutableURL: URL?
         if let bundledURL = bundledExecutableURL(for: tool) {
             resolvedExecutableURL = bundledURL
@@ -73,6 +76,8 @@ struct IntegrationProfileManager {
         case .codex, .hermes:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
+        case .vscode:
+            return false
         }
     }
 
@@ -105,6 +110,8 @@ struct IntegrationProfileManager {
                 ),
                 to: configurationURL(for: tool)
             )
+        case .vscode:
+            break
         }
     }
 
@@ -170,6 +177,8 @@ struct IntegrationProfileManager {
             return home.appendingPathComponent(".hermes/profiles/nativ/config.yaml")
         case .openCode:
             return integrationsSupportURL.appendingPathComponent("opencode.json")
+        case .vscode:
+            return integrationsSupportURL.appendingPathComponent("vscode-guided.json")
         }
     }
 
@@ -415,6 +424,8 @@ struct IntegrationProfileManager {
                 ["--model", "\(Self.providerID)/\(selectedModelID)"],
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
             )
+        case .vscode:
+            return ([], [:])
         }
     }
 
