@@ -99,7 +99,7 @@ struct IntegrationProfileManager {
         case .codex, .hermes, .aider, .qwenCode, .continueDev:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
-        case .vscode:
+        case .vscode, .jetbrains:
             return false
         case .cline:
             return false
@@ -149,7 +149,7 @@ struct IntegrationProfileManager {
             try configureZed(models: models)
         case .continueDev:
             try configureContinue(selectedModelID: selectedModelID, models: models)
-        case .vscode:
+        case .vscode, .jetbrains:
             break
         case .cline:
             break
@@ -236,6 +236,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("vscode-guided.json")
         case .cline:
             return integrationsSupportURL.appendingPathComponent("cline-guided.json")
+        case .jetbrains:
+            return integrationsSupportURL.appendingPathComponent("jetbrains-guided.json")
         }
     }
 
@@ -646,7 +648,7 @@ struct IntegrationProfileManager {
             return (["."], ["NATIV_API_KEY": "nativ"])
         case .continueDev:
             return (["--config", configurationURL(for: tool).path], [:])
-        case .vscode:
+        case .vscode, .jetbrains:
             return ([], [:])
         case .cline:
             return ([], [:])
