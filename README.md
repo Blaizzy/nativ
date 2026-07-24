@@ -4,6 +4,8 @@
 
 <h1 align="center">Nativ</h1>
 
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
 <p align="center">
   <strong>Local AI, native to your Mac.</strong>
 </p>
