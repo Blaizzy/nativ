@@ -203,6 +203,7 @@ struct ChatComposer: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            .shadow(color: Color.accentColor.opacity(0.16), radius: 26, x: 0, y: 10)
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {
