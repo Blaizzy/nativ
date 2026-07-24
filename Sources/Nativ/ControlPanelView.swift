@@ -377,9 +377,11 @@ struct ControlPanelView: View {
             sections: IssueDiagnostics.collect(category: category, model: model, runtime: runtime),
             serverOutput: IssueDiagnostics.serverOutputTail(model: model)
         )
-        if body.count > IssueReportBuilder.urlBodyCharacterBudget {
+        let clipboard = (category == .crash ? IssueDiagnostics.latestCrashRawReport() : nil)
+            ?? (body.count > IssueReportBuilder.urlBodyCharacterBudget ? body : nil)
+        if let clipboard {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(body, forType: .string)
+            NSPasteboard.general.setString(clipboard, forType: .string)
         }
         guard let url = IssueReportBuilder.githubIssueURL(
             title: "",

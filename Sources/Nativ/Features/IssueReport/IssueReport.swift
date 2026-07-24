@@ -121,7 +121,8 @@ enum IssueDiagnostics {
             "KV quantization: \(settings.kvQuantizationEnabled ? "\(Int(settings.kvBits))-bit, group \(settings.kvGroupSize)" : "off")",
             "Speculative decoding: \(settings.speculativeDecodingEnabled && !settings.draftModelID.isEmpty ? settings.draftModelID : "off")",
             "Prefix caching: \(settings.prefixCachingEnabled ? "on" : "off")",
-            "Thinking: \(settings.thinkingEnabled ? "on" : "off")"
+            "Thinking: \(settings.thinkingEnabled ? "on" : "off")",
+            "Launch arguments: \(settings.launchArguments.joined(separator: " "))"
         ]
         if model.settingsRequireRestart {
             lines.append("Pending settings change: server restart required")
@@ -140,39 +141,27 @@ enum IssueDiagnostics {
     }
 
     private static func inferenceSection(model: NativModel) -> IssueDiagnosticsSection? {
-        guard let metrics = model.metrics else {
-            if let error = model.lastMetricsError {
-                return IssueDiagnosticsSection(title: "Inference", lines: ["Metrics unavailable: \(error)"])
+        var lines: [String] = []
+        if let metrics = model.metrics {
+            lines.append(contentsOf: NativStats.sessionEntries(metrics).map { "\($0.label): \($0.value)" })
+            if let latest = metrics.latest {
+                lines.append("— Latest request —")
+                lines.append(contentsOf: NativStats.latestRequestEntries(latest).map { "\($0.label): \($0.value)" })
             }
-            return nil
+            lines.append("— Runtime —")
+            lines.append(contentsOf: NativStats.runtimeEntries(metrics.server).map { "\($0.label): \($0.value)" })
+        } else if let error = model.lastMetricsError {
+            lines.append("Metrics unavailable: \(error)")
         }
-        var lines = NativStats.sessionEntries(metrics).map { "\($0.label): \($0.value)" }
-        if let latest = metrics.latest {
-            lines.append("— Latest request —")
-            lines.append(contentsOf: NativStats.latestRequestEntries(latest).map { "\($0.label): \($0.value)" })
+        if model.allTimeStats.hasValues {
+            lines.append("— All-time —")
+            lines.append(contentsOf: NativStats.allTimeEntries(model.allTimeStats).map { "\($0.label): \($0.value)" })
         }
-        return IssueDiagnosticsSection(title: "Inference", lines: lines)
+        return lines.isEmpty ? nil : IssueDiagnosticsSection(title: "Inference", lines: lines)
     }
 
     private static func crashSection() -> IssueDiagnosticsSection? {
-        let fileManager = FileManager.default
-        let reportsURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
-        guard let reportURLs = try? fileManager.contentsOfDirectory(
-            at: reportsURL,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-
-        let nativReports = reportURLs
-            .filter { $0.lastPathComponent.hasPrefix("Nativ") }
-            .sorted { lhs, rhs in
-                let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                return lhsDate > rhsDate
-            }
+        let nativReports = newestNativReports()
         guard !nativReports.isEmpty else {
             return IssueDiagnosticsSection(title: "Crash reports", lines: ["No Nativ crash reports found in ~/Library/Logs/DiagnosticReports."])
         }
@@ -185,14 +174,99 @@ enum IssueDiagnostics {
         }
         if let newest = nativReports.first,
            let contents = try? String(contentsOf: newest, encoding: .utf8) {
-            let excerpt = contents
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .prefix(12)
-                .map(String.init)
-            lines.append("— Newest report excerpt —")
-            lines.append(contentsOf: excerpt)
+            if let summary = parsedCrashSummary(contents) {
+                lines.append("— Newest report —")
+                lines.append(contentsOf: summary)
+                lines.append("(full report copied to your clipboard)")
+            } else {
+                let excerpt = contents
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .prefix(12)
+                    .map(String.init)
+                lines.append("— Newest report excerpt —")
+                lines.append(contentsOf: excerpt)
+            }
         }
         return IssueDiagnosticsSection(title: "Crash reports", lines: lines)
+    }
+
+    static func latestCrashRawReport() -> String? {
+        guard let newest = newestNativReports().first,
+              let contents = try? String(contentsOf: newest, encoding: .utf8) else {
+            return nil
+        }
+        return IssueReportBuilder.redactingHomeDirectory(contents)
+    }
+
+    private static func newestNativReports() -> [URL] {
+        let fileManager = FileManager.default
+        let reportsURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        guard let reportURLs = try? fileManager.contentsOfDirectory(
+            at: reportsURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return reportURLs
+            .filter { $0.lastPathComponent.hasPrefix("Nativ") }
+            .sorted { lhs, rhs in
+                let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return lhsDate > rhsDate
+            }
+    }
+
+    private static func parsedCrashSummary(_ contents: String) -> [String]? {
+        let parts = contents.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let bodyData = String(parts[1]).data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]
+        else {
+            return nil
+        }
+
+        var lines: [String] = []
+        if let exception = payload["exception"] as? [String: Any] {
+            let type = exception["type"] as? String ?? "unknown"
+            if let signal = exception["signal"] as? String {
+                lines.append("Exception: \(type) (\(signal))")
+            } else {
+                lines.append("Exception: \(type)")
+            }
+        }
+        if let termination = payload["termination"] as? [String: Any] {
+            if let indicator = termination["indicator"] as? String {
+                lines.append("Reason: \(indicator)")
+            } else if let namespace = termination["namespace"] as? String {
+                let code = termination["code"] as? Int
+                lines.append("Reason: \(namespace)\(code.map { " code \($0)" } ?? "")")
+            }
+        }
+
+        let images = payload["usedImages"] as? [[String: Any]] ?? []
+        if let threads = payload["threads"] as? [[String: Any]],
+           let crashed = threads.first(where: { ($0["triggered"] as? Bool) == true }),
+           let frames = crashed["frames"] as? [[String: Any]], !frames.isEmpty {
+            lines.append("Crashed thread:")
+            for (index, frame) in frames.prefix(20).enumerated() {
+                let imageIndex = frame["imageIndex"] as? Int
+                let imageName = imageIndex.flatMap { i -> String? in
+                    guard i >= 0, i < images.count else { return nil }
+                    return images[i]["name"] as? String
+                } ?? "?"
+                let detail: String
+                if let symbol = frame["symbol"] as? String {
+                    detail = "\(symbol) + \(frame["symbolLocation"] as? Int ?? 0)"
+                } else {
+                    detail = "0x… + \(frame["imageOffset"] as? Int ?? 0)"
+                }
+                lines.append("\(index)  \(imageName)  \(detail)")
+            }
+        }
+
+        return lines.isEmpty ? nil : lines
     }
 }
 
