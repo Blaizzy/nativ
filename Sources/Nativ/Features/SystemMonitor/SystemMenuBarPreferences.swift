@@ -34,11 +34,23 @@ enum SystemMenuBarMetric: String, CaseIterable, Identifiable {
             "memorychip"
         }
     }
+
+    var menuBarStyles: [SystemMenuBarStyle] {
+        switch self {
+        case .nativ:
+            []
+        case .cpu, .gpu:
+            [.percentage, .graph]
+        case .ram:
+            [.percentage, .graph, .gigabytes]
+        }
+    }
 }
 
 enum SystemMenuBarStyle: String, CaseIterable, Identifiable {
     case percentage
     case graph
+    case gigabytes
 
     var id: String { rawValue }
 
@@ -48,6 +60,8 @@ enum SystemMenuBarStyle: String, CaseIterable, Identifiable {
             "Percentage"
         case .graph:
             "Mini graph"
+        case .gigabytes:
+            "GB"
         }
     }
 
@@ -57,6 +71,8 @@ enum SystemMenuBarStyle: String, CaseIterable, Identifiable {
             "percent"
         case .graph:
             "chart.xyaxis.line"
+        case .gigabytes:
+            "memorychip"
         }
     }
 }
@@ -79,7 +95,8 @@ struct SystemMenuBarItem: Hashable, Identifiable {
         guard components.count == 2,
               let metric = SystemMenuBarMetric(rawValue: String(components[0])),
               metric != .nativ,
-              let style = SystemMenuBarStyle(rawValue: String(components[1])) else {
+              let style = SystemMenuBarStyle(rawValue: String(components[1])),
+              metric.menuBarStyles.contains(style) else {
             return nil
         }
         self.metric = metric
@@ -132,7 +149,7 @@ final class SystemMenuBarPreferences: ObservableObject {
         SystemMenuBarMetric.allCases
             .filter { $0 != .nativ }
             .flatMap { metric in
-                SystemMenuBarStyle.allCases.compactMap { style in
+                metric.menuBarStyles.compactMap { style in
                     let item = SystemMenuBarItem(metric: metric, style: style)
                     return items.contains(item) ? item : nil
                 }
@@ -148,7 +165,9 @@ final class SystemMenuBarPreferences: ObservableObject {
         metric: SystemMenuBarMetric,
         style: SystemMenuBarStyle
     ) {
-        guard metric != .nativ else { return }
+        guard metric != .nativ, metric.menuBarStyles.contains(style) else {
+            return
+        }
         var updatedItems = items
         let item = SystemMenuBarItem(metric: metric, style: style)
         if isEnabled {

@@ -556,20 +556,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let renderedItems = items.map { item in
             let usage = menuBarUsage(for: item.metric)
             let percent = Int((usage * 100).rounded())
-            let description = "\(item.metric.title) \(percent)%"
+            let description: String
             let image: NSImage
 
             switch item.style {
             case .percentage:
+                description = "\(item.metric.title) \(percent)%"
                 image = menuBarPercentageImage(
                     metricTitle: item.metric.title,
                     percent: percent
                 )
             case .graph:
+                description = "\(item.metric.title) \(percent)% usage graph"
                 image = menuBarGraphImage(
                     values: menuBarHistory(for: item.metric),
                     accessibilityDescription: "\(item.metric.title) usage graph"
                 )
+            case .gigabytes:
+                let value = menuBarMemoryUsedText()
+                description = "RAM \(value)"
+                image = menuBarGigabytesImage(value: value)
             }
             return (image: image, description: description)
         }
@@ -681,6 +687,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         image.isTemplate = true
         image.accessibilityDescription = "\(metricTitle) \(percent) percent"
+        return image
+    }
+
+    private func menuBarMemoryUsedText() -> String {
+        guard runtime.usedMemoryBytes > 0 else {
+            return "--GB"
+        }
+        let usedGigabytes = Double(runtime.usedMemoryBytes) / 1_073_741_824
+        return String(format: "%.0fGB", usedGigabytes)
+    }
+
+    private func menuBarGigabytesImage(value: String) -> NSImage {
+        let size = NSSize(width: 48, height: 20)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+
+            let labelAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let valueAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(
+                    ofSize: 9,
+                    weight: .semibold
+                ),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let label = NSAttributedString(
+                string: "RAM",
+                attributes: labelAttributes
+            )
+            let valueLabel = NSAttributedString(
+                string: value,
+                attributes: valueAttributes
+            )
+            let spacing: CGFloat = -2
+            let contentHeight = label.size().height
+                + spacing
+                + valueLabel.size().height
+            let originY = floor((rect.height - contentHeight) / 2)
+
+            valueLabel.draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY,
+                    width: rect.width,
+                    height: valueLabel.size().height
+                )
+            )
+            label.draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY + valueLabel.size().height + spacing,
+                    width: rect.width,
+                    height: label.size().height
+                )
+            )
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "RAM \(value)"
         return image
     }
 

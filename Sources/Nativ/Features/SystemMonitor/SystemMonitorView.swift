@@ -139,7 +139,7 @@ struct SystemMonitorView: View {
                 SystemMenuBarMetric.allCases.filter { $0 != .nativ }
             ) { metric in
                 Section(metric.title) {
-                    ForEach(SystemMenuBarStyle.allCases) { style in
+                    ForEach(metric.menuBarStyles) { style in
                         Toggle(
                             isOn: Binding(
                                 get: {
