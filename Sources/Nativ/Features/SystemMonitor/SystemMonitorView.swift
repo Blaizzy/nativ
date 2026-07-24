@@ -226,8 +226,6 @@ struct SystemMonitorView: View {
             SystemGPUPage(
                 snapshot: store.snapshot,
                 gpuHistory: store.gpuHistory,
-                rendererHistory: store.rendererHistory,
-                tilerHistory: store.tilerHistory,
                 aneHistory: store.aneHistory,
                 fpsHistory: store.fpsHistory
             )
@@ -749,8 +747,6 @@ private struct SystemCPUPage: View {
 private struct SystemGPUPage: View {
     let snapshot: SystemMonitorSnapshot
     let gpuHistory: [SystemHistorySample]
-    let rendererHistory: [SystemHistorySample]
-    let tilerHistory: [SystemHistorySample]
     let aneHistory: [SystemHistorySample]
     let fpsHistory: [SystemHistorySample]
 
@@ -773,16 +769,6 @@ private struct SystemGPUPage: View {
                         title: "GPU utilization",
                         value: snapshot.gpu.deviceUsage,
                         tint: SystemMonitorPalette.blue
-                    )
-                    SystemLabeledProgress(
-                        title: "Render utilization",
-                        value: snapshot.gpu.rendererUsage,
-                        tint: SystemMonitorPalette.purple
-                    )
-                    SystemLabeledProgress(
-                        title: "Tiler utilization",
-                        value: snapshot.gpu.tilerUsage,
-                        tint: SystemMonitorPalette.teal
                     )
                     SystemLabeledProgress(
                         title: "Neural Engine utilization",
@@ -808,20 +794,6 @@ private struct SystemGPUPage: View {
                     title: "GPU utilization history",
                     samples: gpuHistory,
                     color: SystemMonitorPalette.blue
-                )
-            } trailing: {
-                SystemPercentHistoryChart(
-                    title: "Render utilization history",
-                    samples: rendererHistory,
-                    color: SystemMonitorPalette.purple
-                )
-            }
-
-            adaptivePair {
-                SystemPercentHistoryChart(
-                    title: "Tiler utilization history",
-                    samples: tilerHistory,
-                    color: SystemMonitorPalette.teal
                 )
             } trailing: {
                 SystemPercentHistoryChart(

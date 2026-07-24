@@ -25,8 +25,6 @@ struct SystemCPUMetrics: Equatable, Sendable {
 
 struct SystemGPUMetrics: Equatable, Sendable {
     var deviceUsage: Double?
-    var rendererUsage: Double?
-    var tilerUsage: Double?
     var aneUsage: Double?
     var framesPerSecond: Double?
     var allocatedMemoryBytes: UInt64?
@@ -136,8 +134,6 @@ final class SystemMonitorStore: ObservableObject {
     @Published private(set) var snapshot = SystemMonitorSnapshot()
     @Published private(set) var cpuHistory: [SystemHistorySample] = []
     @Published private(set) var gpuHistory: [SystemHistorySample] = []
-    @Published private(set) var rendererHistory: [SystemHistorySample] = []
-    @Published private(set) var tilerHistory: [SystemHistorySample] = []
     @Published private(set) var aneHistory: [SystemHistorySample] = []
     @Published private(set) var fpsHistory: [SystemHistorySample] = []
     @Published private(set) var memoryHistory: [SystemHistorySample] = []
@@ -200,12 +196,6 @@ final class SystemMonitorStore: ObservableObject {
 
         if let value = nextSnapshot.gpu.deviceUsage {
             append(value, at: nextSnapshot.recordedAt, to: &gpuHistory)
-        }
-        if let value = nextSnapshot.gpu.rendererUsage {
-            append(value, at: nextSnapshot.recordedAt, to: &rendererHistory)
-        }
-        if let value = nextSnapshot.gpu.tilerUsage {
-            append(value, at: nextSnapshot.recordedAt, to: &tilerHistory)
         }
         if let value = nextSnapshot.gpu.aneUsage {
             append(value, at: nextSnapshot.recordedAt, to: &aneHistory)
@@ -627,8 +617,6 @@ private actor SystemMetricsCollector {
         }
         return SystemGPUMetrics(
             deviceUsage: percentage(statistics["Device Utilization %"]),
-            rendererUsage: percentage(statistics["Renderer Utilization %"]),
-            tilerUsage: percentage(statistics["Tiler Utilization %"]),
             allocatedMemoryBytes: number(statistics["Alloc system memory"])
         )
     }
