@@ -28,7 +28,8 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | Feature | What you get |
 |---|---|
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
-| **Model library** | Discover installed MLX models , browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. |
+| **Image generation and editing** | Generate and edit images locally with compatible MLX image models in a dedicated Images tab. |
+| **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, and speech models at once, with a warning if the combination would exceed your Mac's memory. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
 | **Coding-tool integrations** | Configure and launch Codex, Claude Code, Pi, Hermes, and OpenCode against models served by Nativ. |
@@ -40,7 +41,7 @@ Inference runs on your Mac after a model has been downloaded. Model downloads an
 
 ## Coming soon
 
-Support for dedicated audio-only and image-generation-only models is coming soon.
+Support for dedicated audio-only models is coming soon, along with calling image generation as a tool directly from Chat.
 
 ## How it works
 
