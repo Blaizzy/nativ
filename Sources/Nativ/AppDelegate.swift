@@ -692,10 +692,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func menuBarMemoryUsedText() -> String {
         guard runtime.usedMemoryBytes > 0 else {
-            return "--GB"
+            return "--\u{2009}GB"
         }
         let usedGigabytes = Double(runtime.usedMemoryBytes) / 1_073_741_824
-        return String(format: "%.0fGB", usedGigabytes)
+        return String(format: "%.0f\u{2009}GB", usedGigabytes)
     }
 
     private func menuBarGigabytesImage(value: String) -> NSImage {
