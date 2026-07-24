@@ -87,7 +87,7 @@ struct ChatComposer: View {
     let unavailableReason: String?
     let canCompose: Bool
     let canSend: Bool
-    let onSend: () -> Void
+    let onSend: (Bool) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
     private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
@@ -126,7 +126,7 @@ struct ChatComposer: View {
                     ChatComposerTextEditor(
                         text: $viewModel.draft,
                         isEnabled: canCompose,
-                        onSubmit: onSend,
+                        onSubmit: send,
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
@@ -178,7 +178,7 @@ struct ChatComposer: View {
                         if showsStopButton {
                             viewModel.cancel()
                         } else {
-                            onSend()
+                            send()
                         }
                     } label: {
                         Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
@@ -458,6 +458,10 @@ struct ChatComposer: View {
 
     private func workingStatus(elapsed: TimeInterval) -> String {
         "Working for \(NativFormatting.elapsedDuration(elapsed))..."
+    }
+
+    private func send() {
+        onSend(selectedLocalModel?.capabilities.contains(.tools) == true)
     }
 
     private var editorHeight: CGFloat {

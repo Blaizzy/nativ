@@ -106,7 +106,15 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     enum Role: String, Equatable, Codable {
         case user
         case assistant
+        case tool
         case error
+    }
+
+    enum ToolStatus: String, Equatable, Codable {
+        case running
+        case succeeded
+        case failed
+        case cancelled
     }
 
     let id: UUID
@@ -120,6 +128,10 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var thinkingDuration: TimeInterval?
     var imageAttachments: [ChatImageAttachment]
     var responseMetrics: ChatResponseMetrics?
+    var toolCalls: [MLXChatToolCall]
+    var toolCallID: String?
+    var toolName: String?
+    var toolStatus: ToolStatus?
 
     init(
         id: UUID = UUID(),
@@ -132,7 +144,11 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         isThinkingEnabled: Bool = false,
         thinkingDuration: TimeInterval? = nil,
         imageAttachments: [ChatImageAttachment] = [],
-        responseMetrics: ChatResponseMetrics? = nil
+        responseMetrics: ChatResponseMetrics? = nil,
+        toolCalls: [MLXChatToolCall] = [],
+        toolCallID: String? = nil,
+        toolName: String? = nil,
+        toolStatus: ToolStatus? = nil
     ) {
         self.id = id
         self.role = role
@@ -145,6 +161,10 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         self.thinkingDuration = thinkingDuration
         self.imageAttachments = imageAttachments
         self.responseMetrics = responseMetrics
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.toolName = toolName
+        self.toolStatus = toolStatus
     }
 
     enum CodingKeys: String, CodingKey {
@@ -159,6 +179,10 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case thinkingDuration
         case imageAttachments
         case responseMetrics
+        case toolCalls
+        case toolCallID
+        case toolName
+        case toolStatus
     }
 
     init(from decoder: Decoder) throws {
@@ -174,6 +198,10 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         thinkingDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .thinkingDuration)
         imageAttachments = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) ?? []
         responseMetrics = try container.decodeIfPresent(ChatResponseMetrics.self, forKey: .responseMetrics)
+        toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls) ?? []
+        toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
+        toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
 
         if role == .error,
            content == NativChatError.missingAssistantContent.localizedDescription,
@@ -196,6 +224,10 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(thinkingDuration, forKey: .thinkingDuration)
         try container.encode(imageAttachments, forKey: .imageAttachments)
         try container.encodeIfPresent(responseMetrics, forKey: .responseMetrics)
+        try container.encode(toolCalls, forKey: .toolCalls)
+        try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
+        try container.encodeIfPresent(toolName, forKey: .toolName)
+        try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
     }
 
     var apiMessage: MLXChatMessage? {
@@ -212,13 +244,24 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
 
             return MLXChatMessage(role: "user", content: content)
         case .assistant:
-            guard !content.isEmpty || !reasoningContent.isEmpty else {
+            guard !content.isEmpty || !reasoningContent.isEmpty || !toolCalls.isEmpty else {
                 return nil
             }
             return MLXChatMessage(
                 role: "assistant",
                 content: content,
-                reasoningContent: reasoningContent.isEmpty ? nil : reasoningContent
+                reasoningContent: reasoningContent.isEmpty ? nil : reasoningContent,
+                toolCalls: toolCalls.isEmpty ? nil : toolCalls
+            )
+        case .tool:
+            guard let toolCallID else {
+                return nil
+            }
+            return MLXChatMessage(
+                role: "tool",
+                content: content,
+                toolCallID: toolCallID,
+                name: toolName
             )
         case .error:
             return nil
