@@ -442,6 +442,9 @@ private struct IntegrationCard: View {
                     if isLoading {
                         ProgressView().controlSize(.small)
                         Text("Checking…")
+                    } else if tool.isGuidedSetup {
+                        Image(systemName: "sparkles")
+                        Text("Guided setup")
                     } else if status.executableURL == nil {
                         Image(systemName: "arrow.down.circle")
                         Text("Not installed")
@@ -501,7 +504,7 @@ private struct IntegrationDetailView: View {
                     Text(tool.summary).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                IntegrationAvailabilityBadge(status: status)
+                IntegrationAvailabilityBadge(status: status, isGuidedSetup: tool.isGuidedSetup)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 18)
@@ -510,7 +513,10 @@ private struct IntegrationDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if status.executableURL == nil, !viewModel.isRefreshingStatuses {
+                    if tool.isGuidedSetup {
+                        guidedSetupPanel
+                        modelPanel
+                    } else if status.executableURL == nil, !viewModel.isRefreshingStatuses {
                         missingToolPanel
                     } else {
                         modelPanel
@@ -528,6 +534,54 @@ private struct IntegrationDetailView: View {
         .onAppear {
             workingDirectory = viewModel.workingDirectory(for: tool)
                 ?? FileManager.default.homeDirectoryForCurrentUser
+        }
+    }
+
+    private var guidedSetupPanel: some View {
+        IntegrationPanel(title: "Guided setup", systemImage: "sparkles") {
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
+                IntegrationConfigurationRow(label: "API key", value: "nativ")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(tool.guidedSetupSteps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(index + 1).")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(step)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            if let caveat = tool.guidedSetupCaveat {
+                Label(caveat, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button("Open \(tool.displayName)") {
+                    openGuidedApp()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Setup guide") {
+                    NSWorkspace.shared.open(tool.installURL)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func openGuidedApp() {
+        if let bundleID = tool.appBundleIdentifier,
+           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            NSWorkspace.shared.open(appURL)
+        } else {
+            NSWorkspace.shared.open(tool.installURL)
         }
     }
 
@@ -758,13 +812,14 @@ private struct IntegrationLogo: View {
 
 private struct IntegrationAvailabilityBadge: View {
     let status: IntegrationToolStatus
+    var isGuidedSetup: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(status.executableURL == nil ? Color.secondary : (status.isConfigured ? .green : .orange))
+                .fill(isGuidedSetup ? Color.accentColor : (status.executableURL == nil ? Color.secondary : (status.isConfigured ? .green : .orange)))
                 .frame(width: 7, height: 7)
-            Text(status.executableURL == nil ? "Not installed" : (status.isConfigured ? "Configured" : "Not configured"))
+            Text(isGuidedSetup ? "Guided setup" : (status.executableURL == nil ? "Not installed" : (status.isConfigured ? "Configured" : "Not configured")))
         }
         .font(.caption.weight(.semibold))
         .padding(.horizontal, 10)

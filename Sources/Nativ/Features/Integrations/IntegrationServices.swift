@@ -33,6 +33,9 @@ struct IntegrationProfileManager {
     }
 
     func status(for tool: IntegrationTool) async -> IntegrationToolStatus {
+        if tool.isGuidedSetup {
+            return IntegrationToolStatus(executableURL: nil, version: nil, isConfigured: false)
+        }
         let resolvedExecutableURL: URL?
         if let bundledURL = bundledExecutableURL(for: tool) {
             resolvedExecutableURL = bundledURL
@@ -96,6 +99,8 @@ struct IntegrationProfileManager {
         case .codex, .hermes, .aider, .qwenCode, .continueDev:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
+        case .vscode:
+            return false
         }
     }
 
@@ -142,6 +147,8 @@ struct IntegrationProfileManager {
             try configureZed(models: models)
         case .continueDev:
             try configureContinue(selectedModelID: selectedModelID, models: models)
+        case .vscode:
+            break
         }
     }
 
@@ -221,6 +228,8 @@ struct IntegrationProfileManager {
             return home.appendingPathComponent(".config/zed/settings.json")
         case .continueDev:
             return integrationsSupportURL.appendingPathComponent("continue-config.yaml")
+        case .vscode:
+            return integrationsSupportURL.appendingPathComponent("vscode-guided.json")
         }
     }
 
@@ -631,6 +640,8 @@ struct IntegrationProfileManager {
             return (["."], ["NATIV_API_KEY": "nativ"])
         case .continueDev:
             return (["--config", configurationURL(for: tool).path], [:])
+        case .vscode:
+            return ([], [:])
         }
     }
 
