@@ -10,5 +10,6 @@ Goose mark: https://github.com/block/goose/blob/main/ui/desktop/src/images/icon.
 Crush mark: https://github.com/charmbracelet/crush/blob/main/internal/ui/notification/crush-icon-solo.png
 Qwen Code mark: https://github.com/QwenLM/qwen-code/blob/main/packages/chrome-extension/public/icons/icon-128.png
 OpenClaw mark: https://github.com/openclaw/openclaw/blob/main/apps/ios/Sources/Assets.xcassets/AppIcon.appiconset/258.png
+Zed mark: https://github.com/zed-industries/zed/blob/main/assets/images/zed_logo.svg
 
 All product names, logos, and trademarks remain the property of their respective owners.

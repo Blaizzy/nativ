@@ -86,6 +86,13 @@ struct IntegrationProfileManager {
                 let providers = modelsRoot["providers"] as? [String: Any]
             else { return false }
             return providers[Self.providerID] != nil
+        case .zed:
+            guard
+                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let languageModels = root["language_models"] as? [String: Any],
+                let openAICompatible = languageModels["openai_compatible"] as? [String: Any]
+            else { return false }
+            return openAICompatible[Self.providerID] != nil
         case .codex, .hermes, .aider, .qwenCode:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
@@ -131,6 +138,8 @@ struct IntegrationProfileManager {
             try configureQwenCode(selectedModelID: selectedModelID)
         case .openClaw:
             try configureOpenClaw(models: models)
+        case .zed:
+            try configureZed(models: models)
         }
     }
 
@@ -206,6 +215,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("qwen.env")
         case .openClaw:
             return home.appendingPathComponent(".openclaw/openclaw.json")
+        case .zed:
+            return home.appendingPathComponent(".config/zed/settings.json")
         }
     }
 
@@ -518,6 +529,35 @@ struct IntegrationProfileManager {
         return value
     }
 
+    private func configureZed(models: [IntegrationModelDescriptor]) throws {
+        let url = configurationURL(for: .zed)
+        var root: [String: Any] = [:]
+        if fileManager.fileExists(atPath: url.path) {
+            let data = try Data(contentsOf: url)
+            guard let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw IntegrationServiceError.invalidConfiguration(url)
+            }
+            root = existing
+        }
+        var languageModels = root["language_models"] as? [String: Any] ?? [:]
+        var openAICompatible = languageModels["openai_compatible"] as? [String: Any] ?? [:]
+        openAICompatible[Self.providerID] = [
+            "api_url": openAIBaseURL,
+            "available_models": models.map(zedModel)
+        ]
+        languageModels["openai_compatible"] = openAICompatible
+        root["language_models"] = languageModels
+        try writeJSON(root, to: url)
+    }
+
+    private func zedModel(_ model: IntegrationModelDescriptor) -> [String: Any] {
+        [
+            "name": model.id,
+            "display_name": model.displayName,
+            "max_tokens": model.contextWindow ?? 131_072
+        ]
+    }
+
     private func launchConfiguration(
         tool: IntegrationTool,
         selectedModelID: String
@@ -566,6 +606,8 @@ struct IntegrationProfileManager {
             )
         case .openClaw:
             return (["agent", "--model", "\(Self.providerID)/\(selectedModelID)"], [:])
+        case .zed:
+            return (["."], ["NATIV_API_KEY": "nativ"])
         }
     }
 

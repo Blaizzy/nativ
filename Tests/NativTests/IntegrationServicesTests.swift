@@ -11,7 +11,8 @@ final class IntegrationServicesTests: XCTestCase {
         .goose,
         .crush,
         .qwenCode,
-        .openClaw
+        .openClaw,
+        .zed
     ]
 
     private var temporaryRoot: URL!
@@ -308,6 +309,31 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(
             launchCommand(for: .openClaw),
             "cd '/tmp/Nativ Project'\n'/tools/openclaw' 'agent' '--model' 'nativ/org/local-model'"
+        )
+    }
+
+    func testZedConfigurationAndLaunchCommand() throws {
+        try configure(.zed)
+
+        let configurationURL = manager.configurationURL(for: .zed)
+        let root = try json(at: configurationURL)
+        let languageModels = try XCTUnwrap(root["language_models"] as? [String: Any])
+        let openAICompatible = try XCTUnwrap(languageModels["openai_compatible"] as? [String: Any])
+        let provider = try XCTUnwrap(openAICompatible["nativ"] as? [String: Any])
+        XCTAssertEqual(provider["api_url"] as? String, "http://127.0.0.1:49152/v1")
+        let models = try XCTUnwrap(provider["available_models"] as? [[String: Any]])
+        XCTAssertEqual(models.count, 2)
+        XCTAssertEqual(models[0]["name"] as? String, selectedModel.id)
+        XCTAssertEqual(models[0]["display_name"] as? String, selectedModel.displayName)
+        XCTAssertEqual(models[0]["max_tokens"] as? Int, selectedModel.contextWindow)
+        XCTAssertEqual(models[1]["max_tokens"] as? Int, 131_072)
+        XCTAssertEqual(
+            launchCommand(for: .zed),
+            """
+            cd '/tmp/Nativ Project'
+            export NATIV_API_KEY='nativ'
+            '/tools/zed' '.'
+            """
         )
     }
 
