@@ -15,6 +15,8 @@ struct DeveloperView: View {
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
     @State private var isSelectedEndpointAvailable = true
+    @State private var pendingServerRestartID: UUID?
+    @State private var serverRestartCountdown: Int?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -188,6 +190,8 @@ struct DeveloperView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
+            serverRestartIndicator
+
             if showsEndpointInUseWarning {
                 Label(
                     "\(model.settings.serverBaseURL.absoluteString) is unavailable — the server can’t use that address.",
@@ -223,6 +227,26 @@ struct DeveloperView: View {
         )
         .task(id: serverEndpointProbeID) {
             await restartServerAfterEndpointChange()
+        }
+    }
+
+    @ViewBuilder
+    private var serverRestartIndicator: some View {
+        if let serverRestartCountdown {
+            let timeUnit = serverRestartCountdown == 1 ? "second" : "seconds"
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+
+                Text("Applying endpoint change — restarting server in \(serverRestartCountdown) \(timeUnit)…")
+                    .font(.footnote.weight(.medium))
+            }
+            .foregroundStyle(.blue)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+            .accessibilityElement(children: .combine)
         }
     }
 
@@ -308,13 +332,25 @@ struct DeveloperView: View {
             return
         }
 
-        do {
-            try await Task.sleep(for: .seconds(3))
-        } catch {
-            return
+        let restartID = UUID()
+        pendingServerRestartID = restartID
+        defer {
+            if pendingServerRestartID == restartID {
+                pendingServerRestartID = nil
+                serverRestartCountdown = nil
+            }
         }
-        guard !Task.isCancelled, model.isRunning else {
-            return
+
+        for secondsRemaining in stride(from: 3, through: 1, by: -1) {
+            serverRestartCountdown = secondsRemaining
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, model.isRunning else {
+                return
+            }
         }
 
         let currentSettings = model.settings.normalized()
