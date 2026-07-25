@@ -82,8 +82,8 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     }
 
     var isEligibleForLanguageModelPicker: Bool {
-        !capabilities.contains(.speechToText)
-            && !capabilities.contains(.textToSpeech)
+        (capabilities.contains(.text) || capabilities.contains(.vision))
+            && !capabilities.contains(.imageGeneration)
     }
 
     var parameterSizeLabel: String? {
@@ -934,8 +934,10 @@ enum LocalModelDiscovery {
             "causallm", "conditionalgeneration", "language", "llm", "gpt",
             "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
         ]
+        let generativeArchitectures = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
         if primaryTask.includesLanguageCapability(
             fallbackMatch: textDescriptors.contains(where: descriptors.contains)
+                || generativeArchitectures.contains(where: descriptors.contains)
         ) {
             capabilities.insert(.text)
         }
