@@ -718,6 +718,10 @@ private enum ServerEndpointMethod: String {
     case post = "POST"
     case delete = "DELETE"
 
+    var displayTitle: String {
+        self == .delete ? "DEL" : rawValue
+    }
+
     var tint: Color {
         switch self {
         case .get: .blue
@@ -736,7 +740,7 @@ private struct ServerEndpointRow: View {
     var body: some View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
-                Text(endpoint.method.rawValue)
+                Text(endpoint.method.displayTitle)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
