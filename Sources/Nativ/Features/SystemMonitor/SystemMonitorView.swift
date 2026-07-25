@@ -326,6 +326,11 @@ private struct SystemOverviewPage: View {
                         value: graphicsSummary
                     )
                     SystemInfoRow(
+                        "Neural Engine",
+                        value: snapshot.identity.aneCoreCount
+                            .map { "\($0) cores" } ?? "Unavailable"
+                    )
+                    SystemInfoRow(
                         "Disk",
                         value: "\(snapshot.identity.disk.volumeName) · \(SystemMonitorFormat.bytes(snapshot.disk.totalBytes))"
                     )
@@ -804,33 +809,6 @@ private struct SystemGPUPage: View {
             }
 
             SystemFPSHistoryChart(samples: fpsHistory)
-
-            SystemInfoCard(title: "Graphics") {
-                SystemInfoRow("Device", value: snapshot.identity.gpuName)
-                SystemInfoRow(
-                    "GPU cores",
-                    value: snapshot.identity.gpuCoreCount.map(String.init) ?? "Unavailable"
-                )
-                SystemInfoRow(
-                    "Allocated unified memory",
-                    value: snapshot.gpu.allocatedMemoryBytes
-                        .map(SystemMonitorFormat.memoryBytes) ?? "Unavailable"
-                )
-                SystemInfoRow(
-                    "Neural Engine cores",
-                    value: snapshot.identity.aneCoreCount.map(String.init) ?? "Unavailable"
-                )
-                SystemInfoRow(
-                    "Neural Engine utilization",
-                    value: SystemMonitorFormat.optionalPercent(snapshot.gpu.aneUsage)
-                )
-                SystemInfoRow(
-                    "Display frame rate",
-                    value: SystemMonitorFormat.framesPerSecond(
-                        snapshot.gpu.framesPerSecond
-                    )
-                )
-            }
         }
     }
 
