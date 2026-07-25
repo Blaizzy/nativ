@@ -33,6 +33,7 @@ final class NativModel: ObservableObject {
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
     @Published private(set) var metricsLoading = false
     @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
+    @Published private(set) var serverRestartCountdown: Int?
     @Published var settings = NativSettings.load() {
         didSet {
             settings.save()
@@ -55,6 +56,8 @@ final class NativModel: ObservableObject {
     private var preservedSessionTokenActivity: [SessionTokenActivitySample] = []
     private var isStoppingForModelSwitch = false
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
+    private var pendingServerRestartID: UUID?
+    private var serverRestartTask: Task<Void, Never>?
 
     private let maxLogCharacters = 250_000
     private let maxSessionActivitySamples = 120
@@ -251,6 +254,7 @@ final class NativModel: ObservableObject {
     }
 
     func stopServer(preserveSessionStats: Bool = false) {
+        cancelPendingServerRestart()
         modelLoadingProgress = nil
         if preserveSessionStats {
             preserveCurrentSessionStats()
@@ -297,6 +301,76 @@ final class NativModel: ObservableObject {
             return
         }
         startServer()
+    }
+
+    func scheduleServerRestartForEndpointChange() {
+        cancelPendingServerRestart()
+        guard isRunning else {
+            return
+        }
+
+        let scheduledSettings = settings.normalized()
+        let endpointHasChanged = scheduledSettings.serverHost != activeServerHost
+            || scheduledSettings.serverPort != activeServerPort
+        guard endpointHasChanged else {
+            return
+        }
+
+        let restartID = UUID()
+        pendingServerRestartID = restartID
+        serverRestartCountdown = 3
+        serverRestartTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.clearPendingServerRestart(id: restartID)
+            }
+
+            for secondsRemaining in stride(from: 3, through: 1, by: -1) {
+                guard !Task.isCancelled, self.isRunning else {
+                    return
+                }
+                self.serverRestartCountdown = secondsRemaining
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+            }
+
+            let currentSettings = self.settings.normalized()
+            guard currentSettings.serverHost == scheduledSettings.serverHost,
+                  currentSettings.serverPort == scheduledSettings.serverPort
+            else {
+                return
+            }
+
+            let endpointStillNeedsRestart = currentSettings.serverHost != self.activeServerHost
+                || currentSettings.serverPort != self.activeServerPort
+            guard endpointStillNeedsRestart else {
+                return
+            }
+
+            self.clearPendingServerRestart(id: restartID)
+            self.restartServer()
+        }
+    }
+
+    private func cancelPendingServerRestart() {
+        serverRestartTask?.cancel()
+        serverRestartTask = nil
+        pendingServerRestartID = nil
+        serverRestartCountdown = nil
+    }
+
+    private func clearPendingServerRestart(id: UUID) {
+        guard pendingServerRestartID == id else {
+            return
+        }
+        serverRestartTask = nil
+        pendingServerRestartID = nil
+        serverRestartCountdown = nil
     }
 
     func switchLanguageModel(to modelID: String?) {

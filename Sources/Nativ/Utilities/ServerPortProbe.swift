@@ -1,11 +1,17 @@
 import Darwin
 import Foundation
 
+enum ServerEndpointAvailability: Equatable {
+    case available
+    case addressInUse
+    case invalidAddress
+}
+
 enum ServerPortProbe {
-    /// Whether a TCP listener can bind the given host and port right now.
-    static func isAvailable(host: String, port: Int) -> Bool {
+    /// Classifies whether a TCP listener can bind the given host and port right now.
+    static func availability(host: String, port: Int) -> ServerEndpointAvailability {
         guard (1...65_535).contains(port) else {
-            return false
+            return .invalidAddress
         }
 
         var hints = addrinfo()
@@ -18,23 +24,28 @@ enum ServerPortProbe {
         guard getaddrinfo(host, String(port), &hints, &addresses) == 0,
               let firstAddress = addresses
         else {
-            return false
+            return .invalidAddress
         }
         defer { freeaddrinfo(firstAddress) }
 
+        var foundAddressInUse = false
         var address: UnsafeMutablePointer<addrinfo>? = firstAddress
         while let candidate = address {
             let info = candidate.pointee
             let descriptor = socket(info.ai_family, info.ai_socktype, info.ai_protocol)
             if descriptor >= 0 {
                 let bindResult = Darwin.bind(descriptor, info.ai_addr, info.ai_addrlen)
+                let bindError = errno
                 close(descriptor)
                 if bindResult == 0 {
-                    return true
+                    return .available
+                }
+                if bindError == EADDRINUSE {
+                    foundAddressInUse = true
                 }
             }
             address = info.ai_next
         }
-        return false
+        return foundAddressInUse ? .addressInUse : .invalidAddress
     }
 }

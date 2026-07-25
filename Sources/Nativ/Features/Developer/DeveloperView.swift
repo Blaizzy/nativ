@@ -14,9 +14,7 @@ struct DeveloperView: View {
     @State private var logQuery = ""
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
-    @State private var isSelectedEndpointAvailable = true
-    @State private var pendingServerRestartID: UUID?
-    @State private var serverRestartCountdown: Int?
+    @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
 
     var body: some View {
         ModelConfigurationLayout(
@@ -192,9 +190,9 @@ struct DeveloperView: View {
 
             serverRestartIndicator
 
-            if showsEndpointInUseWarning {
+            if let endpointAvailabilityWarning {
                 Label(
-                    "\(model.settings.serverBaseURL.absoluteString) is unavailable — the server can’t use that address.",
+                    endpointAvailabilityWarning,
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.footnote)
@@ -225,21 +223,21 @@ struct DeveloperView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .task(id: serverEndpointProbeID) {
-            await restartServerAfterEndpointChange()
+        .onChange(of: serverEndpointProbeID) {
+            model.scheduleServerRestartForEndpointChange()
         }
     }
 
     @ViewBuilder
     private var serverRestartIndicator: some View {
-        if let serverRestartCountdown {
-            let timeUnit = serverRestartCountdown == 1 ? "second" : "seconds"
+        if let countdown = model.serverRestartCountdown {
+            let timeUnit = countdown == 1 ? "second" : "seconds"
 
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
 
-                Text("Applying endpoint change — restarting server in \(serverRestartCountdown) \(timeUnit)…")
+                Text("Applying endpoint change — restarting server in \(countdown) \(timeUnit)…")
                     .font(.footnote.weight(.medium))
             }
             .foregroundStyle(.blue)
@@ -280,15 +278,15 @@ struct DeveloperView: View {
                 }
         }
         .help("The port the local server listens on. Changes restart a running server after 3 seconds.")
-        .task(id: serverEndpointProbeID) {
+        .task(id: serverEndpointAvailabilityProbeID) {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             let settings = model.settings.normalized()
-            let available = await Task.detached {
-                ServerPortProbe.isAvailable(host: settings.serverHost, port: settings.serverPort)
+            let availability = await Task.detached {
+                ServerPortProbe.availability(host: settings.serverHost, port: settings.serverPort)
             }.value
             guard !Task.isCancelled else { return }
-            isSelectedEndpointAvailable = available
+            selectedEndpointAvailability = availability
         }
     }
 
@@ -313,59 +311,27 @@ struct DeveloperView: View {
         return "\(settings.serverHost):\(settings.serverPort)"
     }
 
-    private var showsEndpointInUseWarning: Bool {
+    private var serverEndpointAvailabilityProbeID: String {
+        let activeEndpoint = model.activeServerBaseURL?.absoluteString ?? "offline"
+        return "\(serverEndpointProbeID):\(activeEndpoint)"
+    }
+
+    private var endpointAvailabilityWarning: String? {
         let settings = model.settings.normalized()
         let isActiveEndpoint = settings.serverHost == model.activeServerHost
             && settings.serverPort == model.activeServerPort
-        return !isSelectedEndpointAvailable && !isActiveEndpoint
-    }
-
-    private func restartServerAfterEndpointChange() async {
-        guard model.isRunning else {
-            return
+        guard !isActiveEndpoint, model.serverRestartCountdown == nil else {
+            return nil
         }
 
-        let scheduledSettings = model.settings.normalized()
-        let endpointHasChanged = scheduledSettings.serverHost != model.activeServerHost
-            || scheduledSettings.serverPort != model.activeServerPort
-        guard endpointHasChanged else {
-            return
+        switch selectedEndpointAvailability {
+        case .available:
+            return nil
+        case .addressInUse:
+            return "\(settings.serverBaseURL.absoluteString) is already in use — Nativ can’t bind to that address."
+        case .invalidAddress:
+            return "\(settings.serverBaseURL.absoluteString) can’t be used — check the host and port."
         }
-
-        let restartID = UUID()
-        pendingServerRestartID = restartID
-        defer {
-            if pendingServerRestartID == restartID {
-                pendingServerRestartID = nil
-                serverRestartCountdown = nil
-            }
-        }
-
-        for secondsRemaining in stride(from: 3, through: 1, by: -1) {
-            serverRestartCountdown = secondsRemaining
-            do {
-                try await Task.sleep(for: .seconds(1))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, model.isRunning else {
-                return
-            }
-        }
-
-        let currentSettings = model.settings.normalized()
-        guard currentSettings.serverHost == scheduledSettings.serverHost,
-              currentSettings.serverPort == scheduledSettings.serverPort
-        else {
-            return
-        }
-
-        let endpointStillNeedsRestart = currentSettings.serverHost != model.activeServerHost
-            || currentSettings.serverPort != model.activeServerPort
-        guard endpointStillNeedsRestart else {
-            return
-        }
-        model.restartServer()
     }
 
     private var endpointCategoryPicker: some View {
