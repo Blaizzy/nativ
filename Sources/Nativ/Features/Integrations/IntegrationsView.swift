@@ -149,6 +149,7 @@ final class IntegrationsViewModel: ObservableObject {
         }
 
         rememberWorkingDirectory(workingDirectory, for: tool)
+        serverModel.clearModelLoadFailure(for: selectedModelID)
         activeOperation = tool
         Task {
             do {
@@ -165,6 +166,10 @@ final class IntegrationsViewModel: ObservableObject {
                     workingDirectory: workingDirectory
                 )
             } catch {
+                serverModel.reportModelLoadFailure(
+                    modelID: selectedModelID,
+                    error: error
+                )
                 errorMessage = error.localizedDescription
             }
             activeOperation = nil
@@ -312,18 +317,16 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func serverErrorMessage(from data: Data) -> String? {
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let detail = object["detail"] as? String,
-           !detail.isEmpty {
+        let text = String(decoding: data, as: UTF8.self)
+        if let detail = NativServerErrorMessage.detail(from: text) {
             return detail
         }
-        guard let text = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty
         else {
             return nil
         }
-        return text
+        return trimmedText
     }
 
     private func workingDirectoryKey(for tool: IntegrationTool) -> String {

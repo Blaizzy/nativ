@@ -1010,6 +1010,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return submenu
         }
 
+        if let failure = model.modelLoadFailure {
+            let titleItem = disabledMenuItem(failure.title)
+            titleItem.image = menuIcon(
+                "exclamationmark.triangle.fill",
+                description: "Model loading failed"
+            )
+            titleItem.toolTip = failure.message
+            submenu.addItem(titleItem)
+
+            let messageItem = disabledMenuItem(
+                NativFormatting.truncateModelName(failure.message, maxLength: 64)
+            )
+            messageItem.toolTip = failure.message
+            submenu.addItem(messageItem)
+            submenu.addItem(.separator())
+        }
+
         submenu.addItem(modelOptionMenuItem(title: "Load on demand", modelID: nil))
 
         let selectedModelID = model.settings.normalized().languageModelID
@@ -1120,6 +1137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return "Model: Loading \(percentage)"
             }
             return "Model: Loading…"
+        }
+        if model.modelLoadFailure != nil {
+            return "Model: Load failed"
         }
         return "Model: \(selectedModelMenuTitle)"
     }
@@ -1485,9 +1505,12 @@ private struct SessionStatsContainerView: View {
                     modelName: model.selectedModelDisplay,
                     isHighlighted: highlightState.isHighlighted,
                     section: section,
-                    statusText: model.settings.normalized().languageModelID == nil
+                    statusText: model.modelLoadFailure != nil
+                        ? "Load failed"
+                        : model.settings.normalized().languageModelID == nil
                         ? "Starting server…"
-                        : model.modelLoadingStatusText ?? "Loading model…"
+                        : model.modelLoadingStatusText ?? "Loading model…",
+                    failure: model.modelLoadFailure
                 )
             }
         }
@@ -1746,6 +1769,7 @@ private struct SessionStatsLoadingMenuView: View {
     let isHighlighted: Bool
     let section: SessionStatsSection
     let statusText: String
+    let failure: ModelLoadFailure?
 
     private var primaryTextColor: Color {
         SessionStatsMenuPalette.primary(isHighlighted)
@@ -1764,13 +1788,16 @@ private struct SessionStatsLoadingMenuView: View {
     }
 
     private var modelIndicatorColor: Color {
+        if failure != nil {
+            return .red
+        }
         switch modelName {
         case "On demand":
-            .orange
+            return .orange
         case "None":
-            .red
+            return .red
         default:
-            .green
+            return .green
         }
     }
 
@@ -1789,13 +1816,24 @@ private struct SessionStatsLoadingMenuView: View {
             case .body:
                 ZStack(alignment: .topTrailing) {
                     VStack(spacing: 10) {
-                        ProgressView()
-                            .controlSize(.regular)
-                            .tint(primaryTextColor)
-                        Text("Session stats will appear when the server is ready.")
-                            .font(.caption)
-                            .foregroundStyle(secondaryTextColor)
-                            .multilineTextAlignment(.center)
+                        if let failure {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.orange)
+                            Text(failure.message)
+                                .font(.caption)
+                                .foregroundStyle(secondaryTextColor)
+                                .multilineTextAlignment(.center)
+                                .textSelection(.enabled)
+                        } else {
+                            ProgressView()
+                                .controlSize(.regular)
+                                .tint(primaryTextColor)
+                            Text("Session stats will appear when the server is ready.")
+                                .font(.caption)
+                                .foregroundStyle(secondaryTextColor)
+                                .multilineTextAlignment(.center)
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -1811,8 +1849,12 @@ private struct SessionStatsLoadingMenuView: View {
         .foregroundStyle(primaryTextColor)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(section == .header
-            ? "Nativ Server is loading \(modelName)"
-            : "Waiting for session statistics")
+            ? failure == nil
+                ? "Nativ Server is loading \(modelName)"
+                : "Nativ Server could not load \(modelName)"
+            : failure == nil
+                ? "Waiting for session statistics"
+                : failure?.message ?? "Model loading failed")
     }
 
     private var header: some View {
@@ -1836,9 +1878,14 @@ private struct SessionStatsLoadingMenuView: View {
             Spacer(minLength: 16)
 
             HStack(spacing: 5) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(primaryTextColor)
+                if failure == nil {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(primaryTextColor)
+                } else {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
                 Text(statusText)
                     .font(.headline)
             }
