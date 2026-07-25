@@ -31,6 +31,7 @@ final class NativModel: ObservableObject {
     @Published private(set) var modelSwitchTargetID: String?
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
+    @Published private(set) var modelPreloadFailureNotice: String?
     @Published private(set) var metricsLoading = false
     @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
     @Published var settings = NativSettings.load() {
@@ -54,6 +55,9 @@ final class NativModel: ObservableObject {
     private var preservedSessionMetrics: NativMetrics?
     private var preservedSessionTokenActivity: [SessionTokenActivitySample] = []
     private var isStoppingForModelSwitch = false
+    private var isRecoveringWithoutPreload = false
+    private var didAttemptPreloadRecovery = false
+    private var sawModelLoadFailureInOutput = false
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
 
     private let maxLogCharacters = 250_000
@@ -200,10 +204,21 @@ final class NativModel: ObservableObject {
         return settingsAppliedAtServerStart.normalized().serverPort
     }
 
-    func startServer() {
+    func startServer(recoveringWithoutPreload: Bool = false) {
         var shouldStartMetrics = false
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
-        modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
+        if !recoveringWithoutPreload {
+            didAttemptPreloadRecovery = false
+            sawModelLoadFailureInOutput = false
+            modelPreloadFailureNotice = nil
+        }
+        isRecoveringWithoutPreload = recoveringWithoutPreload
+        let launchArguments = recoveringWithoutPreload
+            ? launchArgumentsWithoutPreload()
+            : settings.launchArguments
+        modelLoadingProgress = (recoveringWithoutPreload || settings.normalized().languageModelID == nil)
+            ? nil
+            : 0
         do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
@@ -211,7 +226,7 @@ final class NativModel: ObservableObject {
                 launchEnvironment[HuggingFaceAuthentication.environmentVariableName] = effectiveHuggingFaceToken
             }
             try server.start(
-                arguments: settings.launchArguments,
+                arguments: launchArguments,
                 environment: launchEnvironment
             )
             isRunning = true
@@ -234,6 +249,26 @@ final class NativModel: ObservableObject {
             startMetricsPolling()
         }
         notifyMenuStateChanged()
+    }
+
+    /// Launch arguments with the language-model pre-load (and any speculative draft)
+    /// removed, so the server can start on-demand after a model fails to pre-load.
+    private func launchArgumentsWithoutPreload() -> [String] {
+        var recoverySettings = settings
+        recoverySettings.languageModelID = nil
+        recoverySettings.speculativeDecodingEnabled = false
+        return recoverySettings.launchArguments
+    }
+
+    /// True when the server exited during startup because the configured model
+    /// failed to load — in which case we restart once without pre-loading it.
+    private func shouldRecoverFromPreloadFailure(status: Int32) -> Bool {
+        status != 0
+            && !didAttemptPreloadRecovery
+            && !isRecoveringWithoutPreload
+            && !isStoppingForModelSwitch
+            && sawModelLoadFailureInOutput
+            && settingsAppliedAtServerStart?.languageModelID != nil
     }
 
     func stopServer(preserveSessionStats: Bool = false) {
@@ -482,19 +517,42 @@ final class NativModel: ObservableObject {
         }
         server.onTermination = { [weak self] status in
             Task { @MainActor [weak self] in
-                self?.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
-                self?.isRunning = false
-                self?.settingsAppliedAtServerStart = nil
-                self?.huggingFaceTokenAppliedAtServerStart = nil
-                self?.stopMetricsPolling(clearSession: true)
-                self?.metricsLoading = false
-                self?.modelLoadingProgress = nil
-                if self?.isStoppingForModelSwitch != true {
-                    self?.modelSwitchInProgress = false
-                    self?.modelSwitchTargetID = nil
-                    self?.clearPreservedSessionStats()
+                guard let self else {
+                    return
                 }
-                self?.notifyMenuStateChanged()
+                self.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
+
+                // A model that mlx-vlm can't load (unsupported `model_type`, e.g. an
+                // encoder like bert or an unimplemented arch) aborts server startup.
+                // Recover once by restarting without pre-loading it, so a bad model
+                // selection can't keep the server — and the whole app — down.
+                if self.shouldRecoverFromPreloadFailure(status: status) {
+                    let failedModelID = self.settingsAppliedAtServerStart?.languageModelID
+                    self.didAttemptPreloadRecovery = true
+                    self.isRunning = false
+                    self.stopMetricsPolling(clearSession: true)
+                    self.metricsLoading = false
+                    self.modelLoadingProgress = nil
+                    self.modelPreloadFailureNotice = failedModelID.map {
+                        "Couldn’t load \($0). The server is running without a preloaded model — pick another model to try again."
+                    } ?? "Couldn’t preload the selected model. The server is running without it."
+                    self.appendLog("\nThe configured model failed to load — restarting the server without preloading it.\n")
+                    self.startServer(recoveringWithoutPreload: true)
+                    return
+                }
+
+                self.isRunning = false
+                self.settingsAppliedAtServerStart = nil
+                self.huggingFaceTokenAppliedAtServerStart = nil
+                self.stopMetricsPolling(clearSession: true)
+                self.metricsLoading = false
+                self.modelLoadingProgress = nil
+                if self.isStoppingForModelSwitch != true {
+                    self.modelSwitchInProgress = false
+                    self.modelSwitchTargetID = nil
+                    self.clearPreservedSessionStats()
+                }
+                self.notifyMenuStateChanged()
             }
         }
     }
@@ -609,6 +667,11 @@ final class NativModel: ObservableObject {
     }
 
     private func handleServerOutput(_ text: String) {
+        if text.contains("Application startup failed")
+            || text.contains("Failed to load model")
+            || text.contains("not supported") {
+            sawModelLoadFailureInOutput = true
+        }
         let prefix = "__NATIV_MODEL_LOAD_PROGRESS__:"
         var visibleLines: [Substring] = []
 
