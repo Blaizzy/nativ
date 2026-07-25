@@ -46,6 +46,7 @@ struct SystemMonitorView: View {
     @ObservedObject var store: SystemMonitorStore
     @ObservedObject var menuBarPreferences: SystemMenuBarPreferences
     @State private var destination: SystemMonitorDestination = .overview
+    @State private var isMenuBarControlHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,23 +164,59 @@ struct SystemMonitorView: View {
                 }
             }
         } label: {
-            Label(menuBarSelectionLabel, systemImage: "menubar.rectangle")
-                .font(.callout.weight(.medium))
+            HStack(spacing: 8) {
+                Image(systemName: "menubar.rectangle")
+                    .foregroundStyle(Color.accentColor)
+
+                Text("Customize Menu Bar")
+                    .foregroundStyle(.primary)
+
+                Text("\(menuBarItemCount)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Color.accentColor, in: Capsule())
+
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout.weight(.semibold))
+            .padding(.horizontal, 11)
+            .frame(height: 34)
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(
+                        Color.accentColor.opacity(
+                            isMenuBarControlHovered ? 0.14 : 0.07
+                        )
+                    )
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(
+                        Color.accentColor.opacity(
+                            isMenuBarControlHovered ? 0.65 : 0.32
+                        ),
+                        lineWidth: 1
+                    )
+            }
+            .contentShape(.rect)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .fixedSize()
-        .help("Choose one or more live metrics for the macOS menu bar")
+        .onHover { isHovered in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isMenuBarControlHovered = isHovered
+            }
+        }
+        .help("Choose which metrics appear in the macOS menu bar")
     }
 
-    private var menuBarSelectionLabel: String {
-        let items = menuBarPreferences.orderedItems
-        guard let firstItem = items.first else {
-            return "Menu Bar"
-        }
-        guard items.count > 1 else {
-            return "\(firstItem.metric.title) · \(firstItem.style.title)"
-        }
-        return "Menu Bar · \(items.count) items"
+    private var menuBarItemCount: Int {
+        max(menuBarPreferences.orderedItems.count, 1)
     }
 
     private var destinationBar: some View {
