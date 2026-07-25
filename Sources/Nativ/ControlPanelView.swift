@@ -1169,14 +1169,17 @@ private final class ControlPanelSurfaceReaderView: NSView {
     private func configureFullScreenTitlebarFill() {
         guard isFullScreen, let window else { return }
 
-        let toolbarWindow = NSApp.windows.first {
+        guard let toolbarWindow = NSApp.windows.first(where: {
             $0 !== window
                 && $0.isVisible
                 && $0.frame.height > 0
                 && $0.frame.height <= 100
                 && abs($0.frame.width - window.frame.width) < 1
+        }), let contentView = toolbarWindow.contentView else {
+            return
         }
-        guard let contentView = toolbarWindow?.contentView else { return }
+        toolbarWindow.titlebarSeparatorStyle = .none
+        hideFullScreenTitlebarSeparators(in: contentView)
 
         var titlebarGlass: NSGlassEffectView?
         var largestArea: CGFloat = 0
@@ -1211,9 +1214,9 @@ private final class ControlPanelSurfaceReaderView: NSView {
                 "NativFullScreenTitlebarFill"
             )
             fill.autoresizingMask = [.width, .height]
-            fill.material = .sidebar
-            fill.blendingMode = .behindWindow
-            fill.state = .active
+            fill.material = .contentBackground
+            fill.blendingMode = .withinWindow
+            fill.state = .followsWindowActiveState
             container.addSubview(fill, positioned: .above, relativeTo: titlebarGlass)
 
             titlebarFillView = fill
@@ -1222,9 +1225,28 @@ private final class ControlPanelSurfaceReaderView: NSView {
 
         guard let fill = titlebarFillView as? NSVisualEffectView else { return }
         fill.frame = container.bounds
-        fill.material = .sidebar
-        fill.blendingMode = .behindWindow
-        fill.state = .active
+        fill.material = .contentBackground
+        fill.blendingMode = .withinWindow
+        fill.state = .followsWindowActiveState
+    }
+
+    private func hideFullScreenTitlebarSeparators(in contentView: NSView) {
+        var views = [contentView]
+        var index = 0
+
+        while index < views.count {
+            let view = views[index]
+            index += 1
+            views.append(contentsOf: view.subviews)
+
+            let className = NSStringFromClass(type(of: view))
+            let isSeparator =
+                className.contains("NSTitlebarSeparatorView")
+                || className.contains("NSLayerBasedFillColorView")
+            if isSeparator, view.bounds.height <= 1 {
+                view.isHidden = true
+            }
+        }
     }
 }
 
