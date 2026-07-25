@@ -1057,8 +1057,19 @@ private final class ControlPanelSurfaceReaderView: NSView {
                 || (firstView === container && secondView === glassSurface)
 
             guard directlyPositionsSurface else { continue }
-            if constraint.constant != 0 {
-                constraint.constant = 0
+            let extendsPastBottomEdge =
+                isFullScreen
+                && constraint.firstAttribute == .bottom
+                && constraint.secondAttribute == .bottom
+            let targetConstant: CGFloat
+            if extendsPastBottomEdge {
+                targetConstant = firstView === glassSurface ? -1 : 1
+            } else {
+                targetConstant = 0
+            }
+
+            if constraint.constant != targetConstant {
+                constraint.constant = targetConstant
                 changedConstraint = true
             }
         }
@@ -1104,7 +1115,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
         )
 
         if let edgeInsets = isFullScreen
-            ? NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+            ? NSEdgeInsets(top: 0, left: 0, bottom: -1, right: 0)
             : defaultBackdropEdgeInsets {
             backdropView.setValue(
                 NSValue(edgeInsets: edgeInsets),
