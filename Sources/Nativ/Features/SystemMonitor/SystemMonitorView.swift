@@ -1337,6 +1337,7 @@ private struct SystemPercentHistoryChart: View {
     let samples: [SystemHistorySample]
     let color: Color
     var footer: String?
+    @State private var hoveredSample: SystemHistorySample?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1354,28 +1355,73 @@ private struct SystemPercentHistoryChart: View {
             if samples.isEmpty {
                 SystemChartPlaceholder()
             } else {
-                Chart(samples) { sample in
-                    AreaMark(
-                        x: .value("Time", sample.recordedAt),
-                        y: .value("Usage", sample.value * 100)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [color.opacity(0.42), color.opacity(0.06)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                Chart {
+                    ForEach(samples) { sample in
+                        AreaMark(
+                            x: .value("Time", sample.recordedAt),
+                            y: .value("Usage", sample.value * 100)
                         )
-                    )
-                    .interpolationMethod(.catmullRom)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [color.opacity(0.42), color.opacity(0.06)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .interpolationMethod(.catmullRom)
 
-                    LineMark(
-                        x: .value("Time", sample.recordedAt),
-                        y: .value("Usage", sample.value * 100)
-                    )
-                    .foregroundStyle(color)
-                    .lineStyle(.init(lineWidth: 1.5))
-                    .interpolationMethod(.catmullRom)
+                        LineMark(
+                            x: .value("Time", sample.recordedAt),
+                            y: .value("Usage", sample.value * 100)
+                        )
+                        .foregroundStyle(color)
+                        .lineStyle(.init(lineWidth: 1.5))
+                        .interpolationMethod(.catmullRom)
+                    }
+
+                    if let hoveredSample {
+                        RuleMark(
+                            x: .value("Hovered time", hoveredSample.recordedAt)
+                        )
+                        .foregroundStyle(Color.secondary.opacity(0.45))
+                        .lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                        .annotation(
+                            position: .top,
+                            alignment: .center,
+                            overflowResolution: .init(
+                                x: .fit(to: .chart),
+                                y: .disabled
+                            )
+                        ) {
+                            SystemChartHoverTooltip(
+                                recordedAt: hoveredSample.recordedAt,
+                                rows: [
+                                    SystemChartHoverRow(
+                                        title: title.replacingOccurrences(
+                                            of: " history",
+                                            with: ""
+                                        ),
+                                        value: SystemMonitorFormat.percent(
+                                            hoveredSample.value
+                                        ),
+                                        color: color
+                                    ),
+                                ]
+                            )
+                        }
+
+                        PointMark(
+                            x: .value("Hovered time", hoveredSample.recordedAt),
+                            y: .value("Hovered usage", hoveredSample.value * 100)
+                        )
+                        .foregroundStyle(color)
+                        .symbolSize(38)
+                    }
                 }
+                .chartXScale(
+                    domain: systemChartTimeDomain(for: [samples]),
+                    range: .plotDimension(startPadding: 0, endPadding: 0)
+                )
                 .chartYScale(domain: 0...100)
                 .chartYAxis {
                     AxisMarks(values: [0, 25, 50, 75, 100]) { value in
@@ -1397,6 +1443,17 @@ private struct SystemPercentHistoryChart: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .chartOverlay { proxy in
+                    SystemChartHoverOverlay(
+                        proxy: proxy,
+                        dataRevision: samples.last?.recordedAt
+                    ) { date in
+                        let nextSample = date.flatMap(samples.nearest(to:))
+                        if hoveredSample != nextSample {
+                            hoveredSample = nextSample
+                        }
+                    }
+                }
                 .frame(minHeight: 170)
             }
         }
@@ -1411,6 +1468,7 @@ private struct SystemDiskHistoryChart: View {
     let writeSamples: [SystemHistorySample]
     let currentRead: Double
     let currentWrite: Double
+    @State private var hoveredDate: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1452,7 +1510,50 @@ private struct SystemDiskHistoryChart: View {
                         .foregroundStyle(SystemMonitorPalette.red)
                         .interpolationMethod(.catmullRom)
                     }
+
+                    if let hoveredDate {
+                        RuleMark(x: .value("Hovered time", hoveredDate))
+                            .foregroundStyle(Color.secondary.opacity(0.45))
+                            .lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                            .annotation(
+                                position: .top,
+                                alignment: .center,
+                                overflowResolution: .init(
+                                    x: .fit(to: .chart),
+                                    y: .disabled
+                                )
+                            ) {
+                                SystemChartHoverTooltip(
+                                    recordedAt: hoveredDate,
+                                    rows: diskHoverRows(at: hoveredDate)
+                                )
+                            }
+
+                        if let hoveredRead = readSamples.nearest(to: hoveredDate) {
+                            PointMark(
+                                x: .value("Read time", hoveredRead.recordedAt),
+                                y: .value("Read rate", hoveredRead.value)
+                            )
+                            .foregroundStyle(SystemMonitorPalette.blue)
+                            .symbolSize(38)
+                        }
+
+                        if let hoveredWrite = writeSamples.nearest(to: hoveredDate) {
+                            PointMark(
+                                x: .value("Write time", hoveredWrite.recordedAt),
+                                y: .value("Write rate", hoveredWrite.value)
+                            )
+                            .foregroundStyle(SystemMonitorPalette.red)
+                            .symbolSize(38)
+                        }
+                    }
                 }
+                .chartXScale(
+                    domain: systemChartTimeDomain(
+                        for: [readSamples, writeSamples]
+                    ),
+                    range: .plotDimension(startPadding: 0, endPadding: 0)
+                )
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 5)) { value in
                         AxisGridLine()
@@ -1473,16 +1574,59 @@ private struct SystemDiskHistoryChart: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .chartOverlay { proxy in
+                    SystemChartHoverOverlay(
+                        proxy: proxy,
+                        dataRevision: latestSampleDate
+                    ) { date in
+                        if hoveredDate != date {
+                            hoveredDate = date
+                        }
+                    }
+                }
                 .frame(minHeight: 190)
             }
         }
         .padding(16)
         .systemMonitorPanel()
     }
+
+    private func diskHoverRows(at date: Date) -> [SystemChartHoverRow] {
+        var rows: [SystemChartHoverRow] = []
+        if let read = readSamples.nearest(to: date) {
+            rows.append(
+                SystemChartHoverRow(
+                    title: "Read",
+                    value: SystemMonitorFormat.byteRate(read.value),
+                    color: SystemMonitorPalette.blue
+                )
+            )
+        }
+        if let write = writeSamples.nearest(to: date) {
+            rows.append(
+                SystemChartHoverRow(
+                    title: "Write",
+                    value: SystemMonitorFormat.byteRate(write.value),
+                    color: SystemMonitorPalette.red
+                )
+            )
+        }
+        return rows
+    }
+
+    private var latestSampleDate: Date? {
+        [
+            readSamples.last?.recordedAt,
+            writeSamples.last?.recordedAt,
+        ]
+        .compactMap { $0 }
+        .max()
+    }
 }
 
 private struct SystemFPSHistoryChart: View {
     let samples: [SystemHistorySample]
+    @State private var hoveredSample: SystemHistorySample?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1500,31 +1644,73 @@ private struct SystemFPSHistoryChart: View {
             if samples.isEmpty {
                 SystemChartPlaceholder()
             } else {
-                Chart(samples) { sample in
-                    AreaMark(
-                        x: .value("Time", sample.recordedAt),
-                        y: .value("Frames per second", sample.value)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [
-                                SystemMonitorPalette.blue.opacity(0.44),
-                                SystemMonitorPalette.blue.opacity(0.06),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
+                Chart {
+                    ForEach(samples) { sample in
+                        AreaMark(
+                            x: .value("Time", sample.recordedAt),
+                            y: .value("Frames per second", sample.value)
                         )
-                    )
-                    .interpolationMethod(.catmullRom)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [
+                                    SystemMonitorPalette.blue.opacity(0.44),
+                                    SystemMonitorPalette.blue.opacity(0.06),
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .interpolationMethod(.catmullRom)
 
-                    LineMark(
-                        x: .value("Time", sample.recordedAt),
-                        y: .value("Frames per second", sample.value)
-                    )
-                    .foregroundStyle(SystemMonitorPalette.blue)
-                    .lineStyle(.init(lineWidth: 1.5))
-                    .interpolationMethod(.catmullRom)
+                        LineMark(
+                            x: .value("Time", sample.recordedAt),
+                            y: .value("Frames per second", sample.value)
+                        )
+                        .foregroundStyle(SystemMonitorPalette.blue)
+                        .lineStyle(.init(lineWidth: 1.5))
+                        .interpolationMethod(.catmullRom)
+                    }
+
+                    if let hoveredSample {
+                        RuleMark(
+                            x: .value("Hovered time", hoveredSample.recordedAt)
+                        )
+                        .foregroundStyle(Color.secondary.opacity(0.45))
+                        .lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                        .annotation(
+                            position: .top,
+                            alignment: .center,
+                            overflowResolution: .init(
+                                x: .fit(to: .chart),
+                                y: .disabled
+                            )
+                        ) {
+                            SystemChartHoverTooltip(
+                                recordedAt: hoveredSample.recordedAt,
+                                rows: [
+                                    SystemChartHoverRow(
+                                        title: "Frame rate",
+                                        value: SystemMonitorFormat.framesPerSecond(
+                                            hoveredSample.value
+                                        ),
+                                        color: SystemMonitorPalette.blue
+                                    ),
+                                ]
+                            )
+                        }
+
+                        PointMark(
+                            x: .value("Hovered time", hoveredSample.recordedAt),
+                            y: .value("Hovered FPS", hoveredSample.value)
+                        )
+                        .foregroundStyle(SystemMonitorPalette.blue)
+                        .symbolSize(38)
+                    }
                 }
+                .chartXScale(
+                    domain: systemChartTimeDomain(for: [samples]),
+                    range: .plotDimension(startPadding: 0, endPadding: 0)
+                )
                 .chartYScale(domain: 0...fpsAxisMaximum)
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 5)) { value in
@@ -1546,6 +1732,17 @@ private struct SystemFPSHistoryChart: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .chartOverlay { proxy in
+                    SystemChartHoverOverlay(
+                        proxy: proxy,
+                        dataRevision: samples.last?.recordedAt
+                    ) { date in
+                        let nextSample = date.flatMap(samples.nearest(to:))
+                        if hoveredSample != nextSample {
+                            hoveredSample = nextSample
+                        }
+                    }
+                }
                 .frame(minHeight: 190)
             }
         }
@@ -1557,6 +1754,154 @@ private struct SystemFPSHistoryChart: View {
     private var fpsAxisMaximum: Double {
         let observedMaximum = samples.map(\.value).max() ?? 0
         return max(30, ceil(observedMaximum / 30) * 30)
+    }
+}
+
+private struct SystemChartHoverOverlay: View {
+    let proxy: ChartProxy
+    let dataRevision: Date?
+    let onDateChange: (Date?) -> Void
+    @State private var pointerLocation: CGPoint?
+
+    var body: some View {
+        GeometryReader { geometry in
+            Rectangle()
+                .fill(Color.clear)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case let .active(location):
+                        pointerLocation = location
+                        onDateChange(date(at: location, in: geometry))
+                    case .ended:
+                        pointerLocation = nil
+                        onDateChange(nil)
+                    }
+                }
+                .onChange(of: dataRevision) { _, _ in
+                    guard let pointerLocation else { return }
+                    onDateChange(date(at: pointerLocation, in: geometry))
+                }
+        }
+    }
+
+    private func date(at location: CGPoint, in geometry: GeometryProxy) -> Date? {
+        guard let plotFrame = proxy.plotFrame else {
+            return nil
+        }
+        let plotRect = geometry[plotFrame]
+        guard plotRect.contains(location) else {
+            return nil
+        }
+        let xPosition = location.x - plotRect.minX
+        return proxy.value(atX: xPosition)
+    }
+}
+
+private func systemChartTimeDomain(
+    for sampleGroups: [[SystemHistorySample]]
+) -> ClosedRange<Date> {
+    let boundaryDates = sampleGroups.flatMap { samples in
+        [
+            samples.first?.recordedAt,
+            samples.last?.recordedAt,
+        ]
+        .compactMap { $0 }
+    }
+
+    guard
+        let firstDate = boundaryDates.min(),
+        let lastDate = boundaryDates.max()
+    else {
+        let now = Date()
+        return now.addingTimeInterval(-1)...now
+    }
+
+    guard firstDate < lastDate else {
+        let paddedStart = firstDate.addingTimeInterval(-0.5)
+        let paddedEnd = lastDate.addingTimeInterval(0.5)
+        return paddedStart...paddedEnd
+    }
+    return firstDate...lastDate
+}
+
+private struct SystemChartHoverRow: Identifiable {
+    let title: String
+    let value: String
+    let color: Color
+
+    var id: String { title }
+}
+
+private struct SystemChartHoverTooltip: View {
+    let recordedAt: Date
+    let rows: [SystemChartHoverRow]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(recordedAt, format: .dateTime.hour().minute().second())
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            ForEach(rows) { row in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(row.color)
+                        .frame(width: 6, height: 6)
+                    Text(row.title)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 10)
+                    Text(row.value)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                }
+                .font(.caption)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(minWidth: 128)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.12))
+        }
+        .shadow(color: Color.black.opacity(0.12), radius: 8, y: 3)
+    }
+}
+
+private extension Array where Element == SystemHistorySample {
+    func nearest(to date: Date) -> SystemHistorySample? {
+        guard !isEmpty else {
+            return nil
+        }
+
+        var lowerBound = 0
+        var upperBound = count
+        while lowerBound < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if self[middle].recordedAt < date {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
+        }
+
+        if lowerBound == 0 {
+            return self[0]
+        }
+        if lowerBound == count {
+            return self[count - 1]
+        }
+
+        let previous = self[lowerBound - 1]
+        let next = self[lowerBound]
+        let previousDistance = abs(previous.recordedAt.timeIntervalSince(date))
+        let nextDistance = abs(next.recordedAt.timeIntervalSince(date))
+        return previousDistance <= nextDistance ? previous : next
     }
 }
 
