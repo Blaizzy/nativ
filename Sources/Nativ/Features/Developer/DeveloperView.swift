@@ -187,6 +187,7 @@ struct DeveloperView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .background(PanelHeaderAccent(tint: .blue))
 
             serverRestartIndicator
 
@@ -376,12 +377,13 @@ struct DeveloperView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .background(PanelHeaderAccent(tint: .teal))
     }
 
     private func logPanelTitle(_ output: LogOutput) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "terminal")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.teal)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Server Output")
@@ -474,6 +476,39 @@ struct DeveloperView: View {
     }
 }
 
+private struct PanelHeaderAccent: View {
+    let tint: Color
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                LinearGradient(
+                    colors: [.clear, tint.opacity(0.12)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(maxWidth: 420)
+            }
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [tint.opacity(0.25), tint.opacity(0.85)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 120, height: 3)
+                .padding(.top, 2)
+                .padding(.trailing, 16)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct HuggingFaceAuthenticationPanel: View {
     @Binding var customToken: String
     let hasEnvironmentToken: Bool
@@ -512,6 +547,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .background(PanelHeaderAccent(tint: .purple))
 
             Divider()
 
