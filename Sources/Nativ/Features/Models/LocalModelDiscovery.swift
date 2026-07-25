@@ -82,8 +82,10 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     }
 
     var isEligibleForLanguageModelPicker: Bool {
-        (capabilities.contains(.text) || capabilities.contains(.vision))
-            && !capabilities.contains(.imageGeneration)
+        // Any text-generative model qualifies (chat + omni), even if it also carries an
+        // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
+        capabilities.contains(.text)
+            || (capabilities.contains(.vision) && !capabilities.contains(.imageGeneration))
     }
 
     var parameterSizeLabel: String? {
