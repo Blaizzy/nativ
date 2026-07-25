@@ -614,7 +614,10 @@ struct IntegrationProfileManager {
         case .pi:
             return (["--provider", Self.providerID, "--model", selectedModelID], [:])
         case .codex:
-            return (["--profile", Self.providerID, "--model", selectedModelID], [:])
+            return (
+                ["--profile", Self.providerID, "--model", selectedModelID],
+                [CodexCLIProfile.apiKeyEnvironmentVariable: apiKey]
+            )
         case .claudeCode:
             return (
                 ["--settings", configurationURL(for: tool).path, "--model", selectedModelID],

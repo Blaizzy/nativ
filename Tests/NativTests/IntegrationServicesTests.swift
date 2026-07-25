@@ -85,6 +85,10 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["apiKey"] as? String, "nativ_configured_token")
         XCTAssertTrue(
+            launchCommand(for: .codex)
+                .contains("export NATIV_API_KEY='nativ_configured_token'")
+        )
+        XCTAssertTrue(
             launchCommand(for: .goose)
                 .contains("export NATIV_API_KEY='nativ_configured_token'")
         )
@@ -147,7 +151,11 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(profile.components(separatedBy: "# Managed by Nativ.").count - 1, 1)
         XCTAssertEqual(
             launchCommand(for: .codex),
-            "cd '/tmp/Nativ Project'\n'/tools/codex' '--profile' 'nativ' '--model' 'org/local-model'"
+            """
+            cd '/tmp/Nativ Project'
+            export NATIV_API_KEY='nativ'
+            '/tools/codex' '--profile' 'nativ' '--model' 'org/local-model'
+            """
         )
     }
 
