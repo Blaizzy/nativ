@@ -133,6 +133,18 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         XCTAssertNil(HuggingFaceAuthentication.token(in: ["HF_TOKEN": " \n "]))
     }
 
+    func testTokenSummaryMasksCredentialAndShowsLength() {
+        XCTAssertEqual(
+            HuggingFaceAuthentication.tokenSummary(" hf_1234567890abcdef\n"),
+            "hf_••••••••cdef · 19 characters"
+        )
+        XCTAssertEqual(
+            HuggingFaceAuthentication.tokenSummary("short"),
+            "•••••••• · 5 characters"
+        )
+        XCTAssertNil(HuggingFaceAuthentication.tokenSummary(" \n "))
+    }
+
     func testSystemCredentialPrefersEnvironmentToken() {
         var readCredentialFile = false
 

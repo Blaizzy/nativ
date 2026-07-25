@@ -145,6 +145,17 @@ enum HuggingFaceAuthentication {
         return trimmed
     }
 
+    static func tokenSummary(_ token: String?) -> String? {
+        guard let token = normalizedToken(token) else {
+            return nil
+        }
+
+        let prefix = token.hasPrefix("hf_") ? "hf_" : ""
+        let suffix = token.count > 8 ? String(token.suffix(4)) : ""
+        let characterLabel = token.count == 1 ? "character" : "characters"
+        return "\(prefix)••••••••\(suffix) · \(token.count) \(characterLabel)"
+    }
+
     private static func expandHome(in path: String, homeDirectory: String) -> String {
         if path == "~" {
             return homeDirectory

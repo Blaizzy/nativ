@@ -150,7 +150,7 @@ struct DeveloperView: View {
                 get: { model.settings.huggingFaceToken ?? "" },
                 set: { model.settings.huggingFaceToken = $0.isEmpty ? nil : $0 }
             ),
-            systemTokenSource: model.systemHuggingFaceCredential?.source
+            systemCredential: model.systemHuggingFaceCredential
         )
     }
 
@@ -511,18 +511,28 @@ private struct PanelHeaderAccent: View {
 
 private struct HuggingFaceAuthenticationPanel: View {
     @Binding var customToken: String
-    let systemTokenSource: HuggingFaceTokenSource?
+    let systemCredential: HuggingFaceCredential?
     @State private var isCustomTokenExpanded: Bool
     @State private var hasSelectedDisclosureState = false
 
-    init(customToken: Binding<String>, systemTokenSource: HuggingFaceTokenSource?) {
+    init(customToken: Binding<String>, systemCredential: HuggingFaceCredential?) {
         _customToken = customToken
-        self.systemTokenSource = systemTokenSource
-        _isCustomTokenExpanded = State(initialValue: systemTokenSource == nil)
+        self.systemCredential = systemCredential
+        _isCustomTokenExpanded = State(initialValue: systemCredential == nil)
     }
 
     private var hasCustomToken: Bool {
         HuggingFaceAuthentication.normalizedToken(customToken) != nil
+    }
+
+    private var systemTokenSource: HuggingFaceTokenSource? {
+        systemCredential?.source
+    }
+
+    private var activeTokenSummary: String? {
+        HuggingFaceAuthentication.tokenSummary(
+            hasCustomToken ? customToken : systemCredential?.token
+        )
     }
 
     var body: some View {
@@ -541,9 +551,19 @@ private struct HuggingFaceAuthenticationPanel: View {
 
                 Spacer()
 
-                Label(authenticationStatus, systemImage: authenticationStatusImage)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(authenticationStatusColor)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Label(authenticationStatus, systemImage: authenticationStatusImage)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(authenticationStatusColor)
+
+                    if let activeTokenSummary {
+                        Text(activeTokenSummary)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .privacySensitive()
+                    }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
