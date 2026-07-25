@@ -18,6 +18,20 @@ private struct PendingModelPreloadSwitch {
     let onSelectionAccepted: () -> Void
 }
 
+struct ModelLoadFailure: Equatable, Identifiable, Sendable {
+    let id = UUID()
+    let modelID: String?
+    let message: String
+
+    var title: String {
+        guard let modelID else {
+            return "Couldn’t load model"
+        }
+        let name = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        return "Couldn’t load \(name)"
+    }
+}
+
 @MainActor
 final class NativModel: ObservableObject {
     @Published private(set) var isRunning = false
@@ -30,6 +44,7 @@ final class NativModel: ObservableObject {
     @Published private(set) var modelSwitchInProgress = false
     @Published private(set) var modelSwitchTargetID: String?
     @Published private(set) var modelLoadingProgress: Double?
+    @Published private(set) var modelLoadFailure: ModelLoadFailure?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
     @Published private(set) var metricsLoading = false
     @Published private(set) var systemHuggingFaceCredential =
@@ -59,8 +74,10 @@ final class NativModel: ObservableObject {
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
+    private var currentServerOutput = ""
 
     private let maxLogCharacters = 250_000
+    private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
 
     init() {
@@ -262,6 +279,8 @@ final class NativModel: ObservableObject {
 
     func startServer() {
         var shouldStartMetrics = false
+        clearModelLoadFailure()
+        currentServerOutput = ""
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         do {
@@ -477,6 +496,7 @@ final class NativModel: ObservableObject {
         guard !modelSwitchInProgress else {
             return
         }
+        clearModelLoadFailure()
 
         var nextSettings = settings
         nextSettings.setModelID(modelID, for: slot)
@@ -584,6 +604,30 @@ final class NativModel: ObservableObject {
         logText = ""
     }
 
+    func reportModelLoadFailure(modelID: String?, error: Error) {
+        reportModelLoadFailure(modelID: modelID, message: error.localizedDescription)
+    }
+
+    func reportModelLoadFailure(modelID: String?, message: String) {
+        guard let message = NativServerErrorMessage.modelLoadFailure(in: message) else {
+            return
+        }
+        setModelLoadFailure(modelID: modelID, message: message)
+    }
+
+    func clearModelLoadFailure(for modelID: String? = nil) {
+        guard let currentFailure = modelLoadFailure else {
+            return
+        }
+        if let modelID,
+           let failedModelID = currentFailure.modelID,
+           failedModelID != modelID {
+            return
+        }
+        self.modelLoadFailure = nil
+        notifyMenuStateChanged()
+    }
+
     func refreshMetricsIfRunning(force: Bool = false) {
         isRunning = server.isRunning
         guard isRunning else {
@@ -628,6 +672,20 @@ final class NativModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, !self.server.isRunning else {
                     return
+                }
+                let wasLoadingModel = self.modelSwitchInProgress
+                    || self.metricsLoading
+                    || self.modelLoadingProgress != nil
+                if wasLoadingModel,
+                   status != 0,
+                   !self.isStoppingForModelSwitch,
+                   let message = NativServerErrorMessage.modelLoadFailure(
+                       in: self.currentServerOutput
+                    ) {
+                    self.setModelLoadFailure(
+                        modelID: self.modelSwitchTargetID,
+                        message: message
+                    )
                 }
                 self.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
                 self.isRunning = false
@@ -783,7 +841,19 @@ final class NativModel: ObservableObject {
         let visibleText = visibleLines.joined(separator: "\n")
         if !visibleText.isEmpty {
             appendLog(visibleText)
+            currentServerOutput.append(visibleText)
+            if currentServerOutput.count > maxCurrentServerOutputCharacters {
+                currentServerOutput.removeFirst(
+                    currentServerOutput.count - maxCurrentServerOutputCharacters
+                )
+            }
         }
+    }
+
+    private func setModelLoadFailure(modelID: String?, message: String) {
+        modelLoadFailure = ModelLoadFailure(modelID: modelID, message: message)
+        appendLog("\n\(message)\n")
+        notifyMenuStateChanged()
     }
 
     private func recordSessionActivity(promptTokenCount: Int, generatedTokenCount: Int) {

@@ -355,6 +355,61 @@ final class NativChatToolProtocolTests: XCTestCase {
             #"{"prompt":"A lighthouse"}"#
         )
     }
+
+    func testServerErrorMessageExtractsFastAPIDetail() {
+        let body =
+            #"{"detail":"Failed to load model: Model type bert not supported."}"#
+
+        XCTAssertEqual(
+            NativServerErrorMessage.detail(from: body),
+            "Failed to load model: Model type bert not supported."
+        )
+        XCTAssertEqual(
+            NativChatError.httpStatus(400, body).localizedDescription,
+            "Failed to load model: Model type bert not supported."
+        )
+        XCTAssertEqual(
+            NativImageError.httpStatus(400, body).localizedDescription,
+            "Failed to load model: Model type bert not supported."
+        )
+    }
+
+    func testServerErrorMessagePreservesHTTPFallback() {
+        XCTAssertEqual(
+            NativServerErrorMessage.endpointFailure(
+                endpoint: "Chat endpoint",
+                statusCode: 503,
+                responseBody: ""
+            ),
+            "Chat endpoint returned HTTP 503"
+        )
+        XCTAssertEqual(
+            NativServerErrorMessage.endpointFailure(
+                endpoint: "Image endpoint",
+                statusCode: 500,
+                responseBody: "backend unavailable"
+            ),
+            "Image endpoint returned HTTP 500: backend unavailable"
+        )
+    }
+
+    func testModelLoadFailureIsExtractedFromServerLogs() {
+        let output = """
+            INFO: Waiting for application startup.
+            ERROR loading model mlx-community/BERT: Model type bert not supported.
+            ERROR: Application startup failed.
+            """
+
+        XCTAssertEqual(
+            NativServerErrorMessage.modelLoadFailure(in: output),
+            "Failed to load model: Model type bert not supported."
+        )
+        XCTAssertNil(
+            NativServerErrorMessage.modelLoadFailure(
+                in: "Chat endpoint returned HTTP 400: Prompt is too long."
+            )
+        )
+    }
 }
 
 extension Array where Element == String {

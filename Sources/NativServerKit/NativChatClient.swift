@@ -11,11 +11,11 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
         case .invalidResponse:
             return "Invalid chat response"
         case .httpStatus(let statusCode, let body):
-            let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedBody.isEmpty {
-                return "Chat endpoint returned HTTP \(statusCode)"
-            }
-            return "Chat endpoint returned HTTP \(statusCode): \(trimmedBody)"
+            return NativServerErrorMessage.endpointFailure(
+                endpoint: "Chat endpoint",
+                statusCode: statusCode,
+                responseBody: body
+            )
         case .missingAssistantContent:
             return "Chat response did not include assistant content"
         case .malformedStreamEvent(let event):

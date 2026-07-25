@@ -361,6 +361,7 @@ final class ImageGenerationViewModel: ObservableObject {
         else {
             return
         }
+        appModel.clearModelLoadFailure(for: requestModelID)
 
         var settings = requestSettings
         settings.count = min(max(settings.count, 1), 10)
@@ -437,6 +438,10 @@ final class ImageGenerationViewModel: ObservableObject {
             } catch let error as URLError where error.code == .cancelled {
                 finishCancelledTurn(turn.id)
             } catch {
+                appModel?.reportModelLoadFailure(
+                    modelID: requestModelID,
+                    error: error
+                )
                 updateTurn(turn.id) { current in
                     current.status = .failed
                     current.errorMessage = error.localizedDescription

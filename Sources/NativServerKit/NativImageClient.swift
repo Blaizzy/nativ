@@ -10,11 +10,11 @@ public enum NativImageError: Error, LocalizedError, CustomStringConvertible {
         case .invalidResponse:
             return "Invalid image response"
         case .httpStatus(let statusCode, let body):
-            let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedBody.isEmpty {
-                return "Image endpoint returned HTTP \(statusCode)"
-            }
-            return "Image endpoint returned HTTP \(statusCode): \(trimmedBody)"
+            return NativServerErrorMessage.endpointFailure(
+                endpoint: "Image endpoint",
+                statusCode: statusCode,
+                responseBody: body
+            )
         case .missingImageData:
             return "Image response did not include image data"
         }
