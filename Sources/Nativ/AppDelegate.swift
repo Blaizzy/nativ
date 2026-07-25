@@ -956,7 +956,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let headerItem = NSMenuItem(title: "Session Status", action: nil, keyEquivalent: "")
         let headerView = NSHostingView(rootView: SessionStatsContainerView(
             model: model,
-            runtime: runtime,
             highlightState: SessionStatsHighlightState(),
             section: .header
         ))
@@ -969,7 +968,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let bodyView = SessionStatsHostingView(
             rootView: SessionStatsContainerView(
                 model: model,
-                runtime: runtime,
                 highlightState: highlightState,
                 section: .body
             ),
@@ -1461,7 +1459,6 @@ private enum SessionStatsSection {
 
 private struct SessionStatsContainerView: View {
     @ObservedObject var model: NativModel
-    @ObservedObject var runtime: SystemRuntimeMonitor
     @ObservedObject var highlightState: SessionStatsHighlightState
     let section: SessionStatsSection
 
@@ -1474,7 +1471,6 @@ private struct SessionStatsContainerView: View {
             if let metrics = model.sessionStatsDisplayMetrics {
                 SessionStatsMenuView(
                     metrics: metrics,
-                    runtime: runtime,
                     tokenActivity: model.sessionStatsDisplayTokenActivity,
                     isLoading: isLoading,
                     loadingStatusText: model.modelLoadingStatusText,
@@ -1487,7 +1483,6 @@ private struct SessionStatsContainerView: View {
             } else {
                 SessionStatsLoadingMenuView(
                     modelName: model.selectedModelDisplay,
-                    runtime: runtime,
                     isHighlighted: highlightState.isHighlighted,
                     section: section,
                     statusText: model.settings.normalized().languageModelID == nil
@@ -1511,7 +1506,6 @@ private struct SessionStatsContainerView: View {
 
 private struct SessionStatsMenuView: View {
     let metrics: NativMetrics
-    @ObservedObject var runtime: SystemRuntimeMonitor
     let tokenActivity: [SessionTokenActivitySample]
     let isLoading: Bool
     let loadingStatusText: String?
@@ -1541,6 +1535,20 @@ private struct SessionStatsMenuView: View {
 
     private var totalTokens: Int {
         metrics.summary.totalProcessedTokens
+    }
+
+    private var displayModelSubtitle: String? {
+        let subtitle = displayModel == "None" ? "On demand" : displayModel
+        return NativFormatting.truncateModelName(subtitle, maxLength: 24)
+    }
+
+    private var displayModelIndicatorColor: Color {
+        switch displayModel {
+        case "None", "On demand":
+            .orange
+        default:
+            .green
+        }
     }
 
     var body: some View {
@@ -1603,33 +1611,30 @@ private struct SessionStatsMenuView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Nativ Server")
                     .font(.headline)
-                SessionMemoryUsageLabel(
-                    runtime: runtime,
-                    textColor: secondaryTextColor
-                )
+                if let displayModelSubtitle {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(displayModelIndicatorColor)
+                            .frame(width: 6, height: 6)
+                        Text(displayModelSubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(1)
+                    }
+                }
             }
 
             Spacer(minLength: 16)
 
-            VStack(alignment: .trailing, spacing: 1) {
+            if isLoading {
                 HStack(spacing: 5) {
-                    if isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(primaryTextColor)
-                    }
-                    Text(isLoading ? loadingStatusText ?? "Loading model…" : "Running")
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(primaryTextColor)
+                    Text(loadingStatusText ?? "Loading model…")
                         .font(.headline)
                 }
-                Text(NativFormatting.truncateModelName(
-                    displayModel,
-                    maxLength: 20
-                ))
-                .font(.subheadline)
-                .foregroundStyle(secondaryTextColor)
-                .lineLimit(1)
             }
-
         }
     }
 
@@ -1738,7 +1743,6 @@ private struct SessionStatsMenuView: View {
 
 private struct SessionStatsLoadingMenuView: View {
     let modelName: String
-    @ObservedObject var runtime: SystemRuntimeMonitor
     let isHighlighted: Bool
     let section: SessionStatsSection
     let statusText: String
@@ -1753,6 +1757,21 @@ private struct SessionStatsLoadingMenuView: View {
 
     private var dividerColor: Color {
         SessionStatsMenuPalette.divider(isHighlighted)
+    }
+
+    private var modelSubtitle: String? {
+        return NativFormatting.truncateModelName(modelName, maxLength: 20)
+    }
+
+    private var modelIndicatorColor: Color {
+        switch modelName {
+        case "On demand":
+            .orange
+        case "None":
+            .red
+        default:
+            .green
+        }
     }
 
     var body: some View {
@@ -1801,96 +1820,29 @@ private struct SessionStatsLoadingMenuView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Nativ Server")
                     .font(.headline)
-                SessionMemoryUsageLabel(
-                    runtime: runtime,
-                    textColor: secondaryTextColor
-                )
+                if let modelSubtitle {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(modelIndicatorColor)
+                            .frame(width: 6, height: 6)
+                        Text(modelSubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(1)
+                    }
+                }
             }
 
             Spacer(minLength: 16)
 
-            VStack(alignment: .trailing, spacing: 1) {
-                HStack(spacing: 5) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(primaryTextColor)
-                    Text(statusText)
-                        .font(.headline)
-                }
-                Text(NativFormatting.truncateModelName(modelName, maxLength: 20))
-                    .font(.subheadline)
-                    .foregroundStyle(secondaryTextColor)
-                    .lineLimit(1)
+            HStack(spacing: 5) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(primaryTextColor)
+                Text(statusText)
+                    .font(.headline)
             }
         }
-    }
-}
-
-private struct SessionMemoryUsageLabel: View {
-    @ObservedObject var runtime: SystemRuntimeMonitor
-    let textColor: Color
-
-    private var usageFraction: Double {
-        runtime.memoryUsageFraction
-    }
-
-    private var compactValue: String {
-        guard runtime.usedMemoryBytes > 0, runtime.totalMemoryBytes > 0 else {
-            return "--"
-        }
-        return String(
-            format: "%.1f / %.0f GB",
-            gibibytes(runtime.usedMemoryBytes),
-            gibibytes(runtime.totalMemoryBytes)
-        )
-    }
-
-    private var detailedValue: String {
-        guard runtime.usedMemoryBytes > 0, runtime.totalMemoryBytes > 0 else {
-            return "Memory usage unavailable"
-        }
-        return String(
-            format: "Memory usage: %.1f GB of %.0f GB (%d%%)",
-            gibibytes(runtime.usedMemoryBytes),
-            gibibytes(runtime.totalMemoryBytes),
-            Int((usageFraction * 100).rounded())
-        )
-    }
-
-    private var iconColor: Color {
-        switch usageFraction {
-        case 0.85...:
-            return .red
-        case 0.70...:
-            return .orange
-        default:
-            return .green
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "memorychip")
-                .foregroundStyle(iconColor)
-            ProgressView(value: usageFraction)
-                .progressViewStyle(.linear)
-                .tint(iconColor)
-                .frame(width: 54)
-            Text(compactValue)
-                .monospacedDigit()
-                .foregroundStyle(textColor)
-        }
-        .font(.caption)
-        .lineLimit(1)
-        .fixedSize()
-        .help(detailedValue)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Memory usage")
-        .accessibilityValue(detailedValue)
-    }
-
-    private func gibibytes(_ bytes: UInt64) -> Double {
-        Double(bytes) / Double(1024 * 1024 * 1024)
     }
 }
 
