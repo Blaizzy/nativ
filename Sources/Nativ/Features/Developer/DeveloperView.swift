@@ -742,7 +742,7 @@ private struct ServerEndpointRow: View {
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .font(.callout.monospaced())
+                    .font(.footnote.monospaced())
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
