@@ -70,6 +70,7 @@ struct ModelsView: View {
                 pageHeader
                 Divider()
                 activeDownloadBanner
+                modelLoadFailureBanner
 
                 switch section {
                 case .installed:
@@ -96,6 +97,22 @@ struct ModelsView: View {
         .onDisappear {
             localLibrary.cancel()
             hubLibrary.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private var modelLoadFailureBanner: some View {
+        if let failure = model.modelLoadFailure {
+            ModelsNotice(
+                title: failure.title,
+                message: failure.message,
+                systemImage: "exclamationmark.triangle.fill",
+                color: .orange,
+                onDismiss: { model.clearModelLoadFailure() }
+            )
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
+            Divider()
         }
     }
 
@@ -880,6 +897,7 @@ private struct InstalledModelRow: View {
 
     @State private var isHovered = false
     @State private var showsDeleteConfirmation = false
+    @State private var showsUnsupportedModelInformation = false
 
     private var isSelected: Bool {
         !selectedPreloadSlots.isEmpty
@@ -892,11 +910,11 @@ private struct InstalledModelRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                guard let preferredPreloadSlot,
-                    !isSelectionDisabled
-                else {
+                guard let preferredPreloadSlot else {
+                    showsUnsupportedModelInformation = true
                     return
                 }
+                guard !isSelectionDisabled else { return }
                 onSetPreload(
                     preferredPreloadSlot,
                     !selectedPreloadSlots.contains(preferredPreloadSlot)
@@ -922,6 +940,13 @@ private struct InstalledModelRow: View {
                                     title: modelLoadingPercentage.map { "Loading model · \($0)%" }
                                         ?? "Loading model",
                                     systemImage: "arrow.triangle.2.circlepath",
+                                    color: .orange
+                                )
+                            }
+                            if preloadSlots.isEmpty {
+                                ModelPill(
+                                    title: "Not supported",
+                                    systemImage: "exclamationmark.triangle",
                                     color: .orange
                                 )
                             }
@@ -1011,6 +1036,13 @@ private struct InstalledModelRow: View {
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
         .modelRowBackground(isHighlighted: isSelected, isHovered: isHovered)
+        .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
+            )
+        }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
             Button("Delete Model", role: .destructive, action: onDelete)
             Button("Cancel", role: .cancel) {}
@@ -1323,6 +1355,7 @@ private struct ModelsNotice: View {
     let message: String
     let systemImage: String
     let color: Color
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -1335,6 +1368,14 @@ private struct ModelsNotice: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(0.08)))

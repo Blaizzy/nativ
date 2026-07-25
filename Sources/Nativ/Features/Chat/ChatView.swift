@@ -612,6 +612,7 @@ final class ChatViewModel: ObservableObject {
         else {
             return
         }
+        appModel.clearModelLoadFailure(for: modelID)
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
@@ -775,6 +776,10 @@ final class ChatViewModel: ObservableObject {
                 } catch let error as URLError where error.code == .cancelled {
                     finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
                 } catch {
+                    appModel?.reportModelLoadFailure(
+                        modelID: queuedRequest.settings.languageModelID,
+                        error: error
+                    )
                     if let activeAssistantMessageID {
                         failAssistantMessage(
                             activeAssistantMessageID,
