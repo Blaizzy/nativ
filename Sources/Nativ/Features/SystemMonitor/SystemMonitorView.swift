@@ -697,42 +697,6 @@ private struct SystemCPUPage: View {
                 .systemMonitorPanel()
             }
 
-            adaptivePair {
-                SystemInfoCard(title: "Average load") {
-                    SystemInfoRow(
-                        "1 minute",
-                        value: SystemMonitorFormat.decimal(snapshot.cpu.loadAverages[safe: 0] ?? 0)
-                    )
-                    SystemInfoRow(
-                        "5 minutes",
-                        value: SystemMonitorFormat.decimal(snapshot.cpu.loadAverages[safe: 1] ?? 0)
-                    )
-                    SystemInfoRow(
-                        "15 minutes",
-                        value: SystemMonitorFormat.decimal(snapshot.cpu.loadAverages[safe: 2] ?? 0)
-                    )
-                }
-            } trailing: {
-                SystemInfoCard(title: "Configuration") {
-                    SystemInfoRow(
-                        "Efficiency cores",
-                        value: "\(snapshot.identity.efficiencyCoreCount)"
-                    )
-                    SystemInfoRow(
-                        "Performance cores",
-                        value: "\(snapshot.identity.performanceCoreCount)"
-                    )
-                    SystemInfoRow(
-                        "Logical processors",
-                        value: "\(snapshot.identity.logicalCoreCount)"
-                    )
-                    SystemInfoRow(
-                        "Nominal frequency",
-                        value: snapshot.identity.nominalCPUFrequencyHz
-                            .map(SystemMonitorFormat.frequency) ?? "Not exposed by macOS"
-                    )
-                }
-            }
         }
     }
 
