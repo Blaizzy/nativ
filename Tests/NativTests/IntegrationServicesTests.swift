@@ -70,6 +70,26 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(Set(IntegrationTool.allCases), Self.coveredTools)
     }
 
+    func testConfiguredServerAPIKeyIsUsedByProfilesAndLaunchEnvironment() throws {
+        manager = IntegrationProfileManager(
+            serverBaseURL: serverBaseURL,
+            serverAPIKey: "  nativ_configured_token\n",
+            homeDirectory: homeDirectory,
+            applicationSupportDirectory: applicationSupportDirectory
+        )
+
+        try configure(.pi)
+
+        let root = try json(at: manager.configurationURL(for: .pi))
+        let providers = try XCTUnwrap(root["providers"] as? [String: Any])
+        let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
+        XCTAssertEqual(provider["apiKey"] as? String, "nativ_configured_token")
+        XCTAssertTrue(
+            launchCommand(for: .goose)
+                .contains("export NATIV_API_KEY='nativ_configured_token'")
+        )
+    }
+
     func testPiConfigurationAndLaunchCommand() throws {
         let configurationURL = manager.configurationURL(for: .pi)
         try FileManager.default.createDirectory(
@@ -350,7 +370,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertTrue(contents.contains("provider: openai"))
         XCTAssertTrue(contents.contains("apiBase: \"http://nativ.test:49152/v1\""))
         XCTAssertTrue(contents.contains("model: \"org/local-model\""))
-        XCTAssertTrue(contents.contains("apiKey: nativ"))
+        XCTAssertTrue(contents.contains("apiKey: \"nativ\""))
         XCTAssertEqual(
             launchCommand(for: .continueDev),
             "cd '/tmp/Nativ Project'\n'/tools/cn' '--config' '\(configurationURL.path)'"

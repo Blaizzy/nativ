@@ -1,5 +1,15 @@
 import Foundation
 
+public enum NativServerAuthorization {
+    public static func authorize(_ request: inout URLRequest, apiKey: String?) {
+        guard let apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !apiKey.isEmpty else {
+            return
+        }
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    }
+}
+
 public enum NativError: Error, CustomStringConvertible {
     case missingDistribution(Bundle)
     case missingExecutable(URL)
@@ -532,9 +542,7 @@ public final class NativMetricsClient {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        if let apiKey, !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {

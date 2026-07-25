@@ -8,6 +8,7 @@ struct IntegrationProfileManager {
     private let homeDirectory: URL
     private let applicationSupportDirectory: URL
     let serverBaseURL: URL
+    let apiKey: String
 
     var openAIBaseURL: String {
         serverBaseURL.appendingPathComponent("v1").absoluteString
@@ -19,6 +20,7 @@ struct IntegrationProfileManager {
 
     init(
         serverBaseURL: URL,
+        serverAPIKey: String? = nil,
         fileManager: FileManager = .default,
         homeDirectory: URL? = nil,
         applicationSupportDirectory: URL? = nil
@@ -27,6 +29,12 @@ struct IntegrationProfileManager {
         self.fileManager = fileManager
         self.homeDirectory = resolvedHomeDirectory
         self.serverBaseURL = serverBaseURL
+        let normalizedAPIKey = serverAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedAPIKey, !normalizedAPIKey.isEmpty {
+            self.apiKey = normalizedAPIKey
+        } else {
+            self.apiKey = "nativ"
+        }
         self.applicationSupportDirectory = applicationSupportDirectory
             ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? resolvedHomeDirectory
@@ -337,7 +345,7 @@ struct IntegrationProfileManager {
         providers[Self.providerID] = [
             "baseUrl": openAIBaseURL,
             "api": "openai-completions",
-            "apiKey": "nativ",
+            "apiKey": apiKey,
             "compat": [
                 "supportsDeveloperRole": false,
                 "supportsReasoningEffort": false,
@@ -366,7 +374,7 @@ struct IntegrationProfileManager {
     private func claudeSettings(selectedModelID: String) -> [String: Any] {
         [
             "env": [
-                "ANTHROPIC_AUTH_TOKEN": "nativ",
+                "ANTHROPIC_AUTH_TOKEN": apiKey,
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_BASE_URL": anthropicBaseURL,
                 "ANTHROPIC_MODEL": selectedModelID,
@@ -396,13 +404,13 @@ struct IntegrationProfileManager {
           default: \(yamlString(selectedModelID))
           provider: custom
           base_url: \(yamlString(openAIBaseURL))
-          api_key: nativ
+          api_key: \(yamlString(apiKey))
         display:
           streaming: true
         custom_providers:
           - name: nativ
             base_url: \(yamlString(openAIBaseURL))
-            api_key: nativ
+            api_key: \(yamlString(apiKey))
             api_mode: chat_completions
             models:
         \(modelLines)
@@ -452,7 +460,7 @@ struct IntegrationProfileManager {
                     "name": "Nativ",
                     "options": [
                         "baseURL": openAIBaseURL,
-                        "apiKey": "nativ"
+                        "apiKey": apiKey
                     ],
                     "models": modelCatalog
                 ]
@@ -461,7 +469,7 @@ struct IntegrationProfileManager {
     }
 
     private func configureAider() throws {
-        let contents = "OPENAI_API_BASE=\(openAIBaseURL)\nOPENAI_API_KEY=nativ\n"
+        let contents = "OPENAI_API_BASE=\(openAIBaseURL)\nOPENAI_API_KEY=\(apiKey)\n"
         try writeText(contents, to: configurationURL(for: .aider))
     }
 
@@ -508,7 +516,7 @@ struct IntegrationProfileManager {
                 Self.providerID: [
                     "type": "openai-compat",
                     "base_url": openAIBaseURL,
-                    "api_key": "nativ",
+                    "api_key": apiKey,
                     "models": providerModels
                 ]
             ]
@@ -517,7 +525,7 @@ struct IntegrationProfileManager {
     }
 
     private func configureQwenCode(selectedModelID: String) throws {
-        let contents = "OPENAI_API_KEY=nativ\nOPENAI_BASE_URL=\(openAIBaseURL)\nOPENAI_MODEL=\(selectedModelID)\n"
+        let contents = "OPENAI_API_KEY=\(apiKey)\nOPENAI_BASE_URL=\(openAIBaseURL)\nOPENAI_MODEL=\(selectedModelID)\n"
         try writeText(contents, to: configurationURL(for: .qwenCode))
     }
 
@@ -535,7 +543,7 @@ struct IntegrationProfileManager {
         var providers = modelsRoot["providers"] as? [String: Any] ?? [:]
         providers[Self.providerID] = [
             "baseUrl": openAIBaseURL,
-            "apiKey": "nativ",
+            "apiKey": apiKey,
             "api": "openai-completions",
             "models": models.map(openClawModel)
         ]
@@ -589,7 +597,7 @@ struct IntegrationProfileManager {
             lines.append("    provider: openai")
             lines.append("    apiBase: \(yamlString(openAIBaseURL))")
             lines.append("    model: \(yamlString(model.id))")
-            lines.append("    apiKey: nativ")
+            lines.append("    apiKey: \(yamlString(apiKey))")
             lines.append("    roles:")
             lines.append("      - chat")
             lines.append("      - edit")
@@ -611,7 +619,7 @@ struct IntegrationProfileManager {
             return (
                 ["--settings", configurationURL(for: tool).path, "--model", selectedModelID],
                 [
-                    "ANTHROPIC_AUTH_TOKEN": "nativ",
+                    "ANTHROPIC_AUTH_TOKEN": apiKey,
                     "ANTHROPIC_API_KEY": "",
                     "ANTHROPIC_BASE_URL": anthropicBaseURL
                 ]
@@ -631,7 +639,7 @@ struct IntegrationProfileManager {
         case .goose:
             return (
                 ["session", "start", "--provider", Self.providerID],
-                ["NATIV_API_KEY": "nativ", "GOOSE_MODEL": selectedModelID]
+                ["NATIV_API_KEY": apiKey, "GOOSE_MODEL": selectedModelID]
             )
         case .crush:
             return ([], ["CRUSH_GLOBAL_CONFIG": configurationURL(for: tool).path])
@@ -639,7 +647,7 @@ struct IntegrationProfileManager {
             return (
                 [],
                 [
-                    "OPENAI_API_KEY": "nativ",
+                    "OPENAI_API_KEY": apiKey,
                     "OPENAI_BASE_URL": openAIBaseURL,
                     "OPENAI_MODEL": selectedModelID
                 ]
@@ -647,7 +655,7 @@ struct IntegrationProfileManager {
         case .openClaw:
             return (["agent", "--model", "\(Self.providerID)/\(selectedModelID)"], [:])
         case .zed:
-            return (["."], ["NATIV_API_KEY": "nativ"])
+            return (["."], ["NATIV_API_KEY": apiKey])
         case .continueDev:
             return (["--config", configurationURL(for: tool).path], [:])
         case .vscode, .cursor, .jetbrains:

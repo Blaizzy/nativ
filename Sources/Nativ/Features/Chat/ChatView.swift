@@ -123,6 +123,7 @@ private struct ChatImageToolExecutor {
         call: MLXChatToolCall,
         modelID: String,
         baseURL: URL,
+        apiKey: String?,
         references: [ChatImageAttachment]
     ) async throws -> ChatImageToolExecution {
         guard let name = call.function?.name else {
@@ -156,6 +157,7 @@ private struct ChatImageToolExecutor {
         )
         let outputs = try await ImageGenerationExecutor().run(
             baseURL: baseURL,
+            apiKey: apiKey,
             modelID: modelID,
             prompt: prompt,
             references: name == "edit_image" ? references : [],
@@ -801,7 +803,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
-        let client = NativChatClient(baseURL: queuedRequest.settings.serverBaseURL)
+        let client = NativChatClient(
+            baseURL: queuedRequest.settings.serverBaseURL,
+            apiKey: queuedRequest.settings.serverAPIKey
+        )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         let maximumToolRounds = 4
@@ -867,6 +872,7 @@ final class ChatViewModel: ObservableObject {
                         call: toolCall,
                         modelID: imageModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
+                        apiKey: queuedRequest.settings.serverAPIKey,
                         references: references
                     )
                     updateToolMessage(

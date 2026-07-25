@@ -105,6 +105,63 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(token, ServerAPIAuthentication.normalizedToken(token))
     }
 
+    func testServerAuthorizationAddsBearerHeader() {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
+
+        NativServerAuthorization.authorize(&request, apiKey: "  nativ_test_token\n")
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_test_token"
+        )
+    }
+
+    func testServerAuthorizationOmitsBlankToken() {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
+
+        NativServerAuthorization.authorize(&request, apiKey: " \n ")
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testChatClientAddsServerAuthorization() throws {
+        let client = NativChatClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_chat_token"
+        )
+        let payload = MLXChatCompletionRequest(
+            model: "org/model",
+            messages: [MLXChatMessage(role: "user", content: "Hello")],
+            maxTokens: 1,
+            temperature: 0,
+            topK: 0,
+            topP: 1,
+            minP: 0
+        )
+
+        let request = try client.makeURLRequest(payload: payload, accepts: "application/json")
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_chat_token"
+        )
+    }
+
+    func testImageClientAddsServerAuthorization() throws {
+        let client = NativImageClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_image_token"
+        )
+        let payload = MLXImageGenerationRequest(model: "org/model", prompt: "A lighthouse")
+
+        let request = try client.makeURLRequest(payload, path: "v1/images/generations")
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_image_token"
+        )
+    }
+
     func testEveryPreloadSelectionRequiresServerRestart() {
         let original = NativSettings()
 

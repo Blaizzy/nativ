@@ -172,6 +172,7 @@ public struct MLXImageResponseData: Decodable, Equatable, Sendable {
 
 public final class NativImageClient {
     private let baseURL: URL
+    private let apiKey: String?
     private let session: URLSession
     private let timeout: TimeInterval
     private let decoder = JSONDecoder()
@@ -179,9 +180,11 @@ public final class NativImageClient {
 
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:8080")!,
+        apiKey: String? = nil,
         timeout: TimeInterval = 1_800
     ) {
         self.baseURL = baseURL
+        self.apiKey = apiKey
         self.timeout = timeout
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -231,13 +234,7 @@ public final class NativImageClient {
         _ payload: Payload,
         path: String
     ) async throws -> MLXImageResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try encoder.encode(payload)
+        let request = try makeURLRequest(payload, path: path)
 
         let (data, response) = try await session.data(for: request)
 
@@ -249,5 +246,20 @@ public final class NativImageClient {
         }
 
         return try decoder.decode(MLXImageResponse.self, from: data)
+    }
+
+    func makeURLRequest<Payload: Encodable>(
+        _ payload: Payload,
+        path: String
+    ) throws -> URLRequest {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
+        request.httpBody = try encoder.encode(payload)
+        return request
     }
 }

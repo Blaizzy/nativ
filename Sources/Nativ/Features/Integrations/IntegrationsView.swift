@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import NativServerKit
 import SwiftUI
 
 extension IntegrationModelDescriptor {
@@ -67,8 +68,15 @@ final class IntegrationsViewModel: ObservableObject {
         serverModel.activeServerBaseURL ?? serverModel.settings.serverBaseURL
     }
 
+    private var serverAPIKey: String? {
+        serverModel.settings.normalized().serverAPIKey
+    }
+
     private var profiles: IntegrationProfileManager {
-        IntegrationProfileManager(serverBaseURL: integrationServerBaseURL)
+        IntegrationProfileManager(
+            serverBaseURL: integrationServerBaseURL,
+            serverAPIKey: serverAPIKey
+        )
     }
 
     func appear() {
@@ -257,6 +265,7 @@ final class IntegrationsViewModel: ObservableObject {
             var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models"))
             request.timeoutInterval = 3
             request.cachePolicy = .reloadIgnoringLocalCacheData
+            NativServerAuthorization.authorize(&request, apiKey: serverAPIKey)
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
         } catch {
@@ -270,6 +279,7 @@ final class IntegrationsViewModel: ObservableObject {
         request.timeoutInterval = 300
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        NativServerAuthorization.authorize(&request, apiKey: serverAPIKey)
         request.httpBody = try JSONSerialization.data(withJSONObject: ["model": modelID])
 
         do {
