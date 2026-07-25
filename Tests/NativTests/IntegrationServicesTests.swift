@@ -24,7 +24,7 @@ final class IntegrationServicesTests: XCTestCase {
     private var homeDirectory: URL!
     private var applicationSupportDirectory: URL!
     private var manager: IntegrationProfileManager!
-    private let serverBaseURL = URL(string: "http://127.0.0.1:49152")!
+    private let serverBaseURL = URL(string: "http://nativ.test:49152")!
 
     private let selectedModel = IntegrationModelDescriptor(
         id: "org/local-model",
@@ -85,7 +85,7 @@ final class IntegrationServicesTests: XCTestCase {
         let providers = try XCTUnwrap(root["providers"] as? [String: Any])
         XCTAssertNotNil(providers["existing"])
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
-        XCTAssertEqual(provider["baseUrl"] as? String, "http://127.0.0.1:49152/v1")
+        XCTAssertEqual(provider["baseUrl"] as? String, "http://nativ.test:49152/v1")
         XCTAssertEqual(provider["api"] as? String, "openai-completions")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
@@ -121,7 +121,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: baseConfigurationURL, encoding: .utf8), baseConfiguration)
         XCTAssertEqual(
             profile,
-            CodexCLIProfile.contents(selectedModelID: basicModel.id, baseURL: "http://127.0.0.1:49152/v1")
+            CodexCLIProfile.contents(selectedModelID: basicModel.id, baseURL: "http://nativ.test:49152/v1")
         )
         XCTAssertFalse(profile.contains(selectedModel.id))
         XCTAssertEqual(profile.components(separatedBy: "# Managed by Nativ.").count - 1, 1)
@@ -139,7 +139,7 @@ final class IntegrationServicesTests: XCTestCase {
         let environment = try XCTUnwrap(root["env"] as? [String: Any])
         XCTAssertEqual(environment["ANTHROPIC_AUTH_TOKEN"] as? String, "nativ")
         XCTAssertEqual(environment["ANTHROPIC_API_KEY"] as? String, "")
-        XCTAssertEqual(environment["ANTHROPIC_BASE_URL"] as? String, "http://127.0.0.1:49152")
+        XCTAssertEqual(environment["ANTHROPIC_BASE_URL"] as? String, "http://nativ.test:49152")
         XCTAssertEqual(environment["ANTHROPIC_MODEL"] as? String, selectedModel.id)
         XCTAssertEqual(environment["ANTHROPIC_SMALL_FAST_MODEL"] as? String, selectedModel.id)
         XCTAssertEqual(
@@ -148,7 +148,7 @@ final class IntegrationServicesTests: XCTestCase {
             cd '/tmp/Nativ Project'
             export ANTHROPIC_API_KEY=''
             export ANTHROPIC_AUTH_TOKEN='nativ'
-            export ANTHROPIC_BASE_URL='http://127.0.0.1:49152'
+            export ANTHROPIC_BASE_URL='http://nativ.test:49152'
             '/tools/claude' '--settings' '\(configurationURL.path)' '--model' 'org/local-model'
             """
         )
@@ -160,7 +160,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .hermes)
         let configuration = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(configuration.contains("default: \"org/local-model\""))
-        XCTAssertTrue(configuration.contains("base_url: \"http://127.0.0.1:49152/v1\""))
+        XCTAssertTrue(configuration.contains("base_url: \"http://nativ.test:49152/v1\""))
         XCTAssertTrue(configuration.contains("\"org/local-model\":\n        context_length: 32768\n        supports_vision: true"))
         XCTAssertTrue(configuration.contains("\"org/basic-model\":\n        context_length: 131072"))
         XCTAssertEqual(
@@ -186,7 +186,7 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["npm"] as? String, "@ai-sdk/openai-compatible")
         let options = try XCTUnwrap(provider["options"] as? [String: Any])
-        XCTAssertEqual(options["baseURL"] as? String, "http://127.0.0.1:49152/v1")
+        XCTAssertEqual(options["baseURL"] as? String, "http://nativ.test:49152/v1")
         let models = try XCTUnwrap(provider["models"] as? [String: Any])
         let selected = try XCTUnwrap(models[selectedModel.id] as? [String: Any])
         XCTAssertEqual(selected["attachment"] as? Bool, true)
@@ -212,7 +212,7 @@ final class IntegrationServicesTests: XCTestCase {
 
         let configurationURL = manager.configurationURL(for: .aider)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
-        XCTAssertTrue(contents.contains("OPENAI_API_BASE=http://127.0.0.1:49152/v1"))
+        XCTAssertTrue(contents.contains("OPENAI_API_BASE=http://nativ.test:49152/v1"))
         XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
         XCTAssertEqual(
             launchCommand(for: .aider),
@@ -228,7 +228,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(root["name"] as? String, "nativ")
         XCTAssertEqual(root["engine"] as? String, "openai")
         XCTAssertEqual(root["api_key_env"] as? String, "NATIV_API_KEY")
-        XCTAssertEqual(root["base_url"] as? String, "http://127.0.0.1:49152/v1/chat/completions")
+        XCTAssertEqual(root["base_url"] as? String, "http://nativ.test:49152/v1/chat/completions")
         let models = try XCTUnwrap(root["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["name"] as? String, selectedModel.id)
@@ -253,7 +253,7 @@ final class IntegrationServicesTests: XCTestCase {
         let providers = try XCTUnwrap(root["providers"] as? [String: Any])
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["type"] as? String, "openai-compat")
-        XCTAssertEqual(provider["base_url"] as? String, "http://127.0.0.1:49152/v1")
+        XCTAssertEqual(provider["base_url"] as? String, "http://nativ.test:49152/v1")
         XCTAssertEqual(provider["api_key"] as? String, "nativ")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
@@ -281,14 +281,14 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .qwenCode)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
-        XCTAssertTrue(contents.contains("OPENAI_BASE_URL=http://127.0.0.1:49152/v1"))
+        XCTAssertTrue(contents.contains("OPENAI_BASE_URL=http://nativ.test:49152/v1"))
         XCTAssertTrue(contents.contains("OPENAI_MODEL=org/local-model"))
         XCTAssertEqual(
             launchCommand(for: .qwenCode),
             """
             cd '/tmp/Nativ Project'
             export OPENAI_API_KEY='nativ'
-            export OPENAI_BASE_URL='http://127.0.0.1:49152/v1'
+            export OPENAI_BASE_URL='http://nativ.test:49152/v1'
             export OPENAI_MODEL='org/local-model'
             '/tools/qwen'
             """
@@ -303,7 +303,7 @@ final class IntegrationServicesTests: XCTestCase {
         let modelsRoot = try XCTUnwrap(root["models"] as? [String: Any])
         let providers = try XCTUnwrap(modelsRoot["providers"] as? [String: Any])
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
-        XCTAssertEqual(provider["baseUrl"] as? String, "http://127.0.0.1:49152/v1")
+        XCTAssertEqual(provider["baseUrl"] as? String, "http://nativ.test:49152/v1")
         XCTAssertEqual(provider["api"] as? String, "openai-completions")
         XCTAssertEqual(provider["apiKey"] as? String, "nativ")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
@@ -325,7 +325,7 @@ final class IntegrationServicesTests: XCTestCase {
         let languageModels = try XCTUnwrap(root["language_models"] as? [String: Any])
         let openAICompatible = try XCTUnwrap(languageModels["openai_compatible"] as? [String: Any])
         let provider = try XCTUnwrap(openAICompatible["nativ"] as? [String: Any])
-        XCTAssertEqual(provider["api_url"] as? String, "http://127.0.0.1:49152/v1")
+        XCTAssertEqual(provider["api_url"] as? String, "http://nativ.test:49152/v1")
         let models = try XCTUnwrap(provider["available_models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["name"] as? String, selectedModel.id)
@@ -348,7 +348,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .continueDev)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(contents.contains("provider: openai"))
-        XCTAssertTrue(contents.contains("apiBase: \"http://127.0.0.1:49152/v1\""))
+        XCTAssertTrue(contents.contains("apiBase: \"http://nativ.test:49152/v1\""))
         XCTAssertTrue(contents.contains("model: \"org/local-model\""))
         XCTAssertTrue(contents.contains("apiKey: nativ"))
         XCTAssertEqual(

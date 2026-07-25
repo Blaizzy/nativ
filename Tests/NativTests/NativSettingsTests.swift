@@ -11,8 +11,9 @@ final class NativSettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            Array(settings.launchArguments.prefix(10)),
+            Array(settings.launchArguments.prefix(12)),
             [
+                "--host", "127.0.0.1",
                 "--port", "8080",
                 "--max-tokens", "2048",
                 "--model", "org/language",
@@ -40,6 +41,36 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--image-model"))
         XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
+    }
+
+    func testServerHostIsNormalizedAndPassedToServer() {
+        let settings = NativSettings(serverHost: "  0.0.0.0  ", serverPort: 9_001)
+
+        XCTAssertEqual(settings.normalized().serverHost, "0.0.0.0")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://0.0.0.0:9001")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "0.0.0.0"))
+    }
+
+    func testIPv6ServerHostProducesValidBaseURL() {
+        let settings = NativSettings(serverHost: "[::1]", serverPort: 9_002)
+
+        XCTAssertEqual(settings.normalized().serverHost, "::1")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://[::1]:9002")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::1"))
+    }
+
+    func testMissingServerHostUsesLoopbackDefault() throws {
+        let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+
+        XCTAssertEqual(settings.serverHost, "127.0.0.1")
+    }
+
+    func testServerHostRequiresServerRestart() {
+        let original = NativSettings()
+        var changed = original
+        changed.serverHost = "0.0.0.0"
+
+        XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
     }
 
     func testEveryPreloadSelectionRequiresServerRestart() {

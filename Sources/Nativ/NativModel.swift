@@ -200,6 +200,20 @@ final class NativModel: ObservableObject {
         return settingsAppliedAtServerStart.normalized().serverPort
     }
 
+    var activeServerHost: String? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.normalized().serverHost
+    }
+
+    var activeServerBaseURL: URL? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.serverBaseURL
+    }
+
     func startServer() {
         var shouldStartMetrics = false
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)

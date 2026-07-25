@@ -14,7 +14,7 @@ struct DeveloperView: View {
     @State private var logQuery = ""
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
-    @State private var isSelectedPortAvailable = true
+    @State private var isSelectedEndpointAvailable = true
 
     var body: some View {
         ModelConfigurationLayout(
@@ -163,9 +163,11 @@ struct DeveloperView: View {
                     endpointCategoryPicker
                         .frame(width: 300, alignment: .leading)
 
+                    serverHostField
+
                     serverPortField
                 }
-                .frame(width: 660, alignment: .leading)
+                .frame(width: 850, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 9) {
                     endpointPanelTitle
@@ -173,6 +175,8 @@ struct DeveloperView: View {
                     HStack(spacing: 10) {
                         endpointCategoryPicker
                             .frame(width: 320)
+
+                        serverHostField
 
                         serverPortField
 
@@ -184,9 +188,9 @@ struct DeveloperView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            if showsPortInUseWarning {
+            if showsEndpointInUseWarning {
                 Label(
-                    "Port \(String(model.settings.normalized().serverPort)) is already in use — that port can’t be used.",
+                    "\(model.settings.serverBaseURL.absoluteString) is unavailable — the server can’t use that address.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.footnote)
@@ -248,19 +252,45 @@ struct DeveloperView: View {
                     model.settings.serverPort = min(max(newValue, 1), 65_535)
                 }
         }
-        .help("The local server listens at 127.0.0.1 on this port. Changing it requires a server restart.")
-        .task(id: model.settings.normalized().serverPort) {
+        .help("The port the local server listens on. Changing it requires a server restart.")
+        .task(id: serverEndpointProbeID) {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            let port = model.settings.normalized().serverPort
-            let available = await Task.detached { ServerPortProbe.isAvailable(port) }.value
+            let settings = model.settings.normalized()
+            let available = await Task.detached {
+                ServerPortProbe.isAvailable(host: settings.serverHost, port: settings.serverPort)
+            }.value
             guard !Task.isCancelled else { return }
-            isSelectedPortAvailable = available
+            isSelectedEndpointAvailable = available
         }
     }
 
-    private var showsPortInUseWarning: Bool {
-        !isSelectedPortAvailable && model.settings.normalized().serverPort != model.activeServerPort
+    private var serverHostField: some View {
+        HStack(spacing: 6) {
+            Text("Host")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            TextField("", text: $model.settings.serverHost)
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.monospaced())
+                .frame(width: 120)
+                .onSubmit {
+                    model.settings.serverHost = model.settings.normalized().serverHost
+                }
+        }
+        .help("The host or IP address the local server binds to. Changing it requires a server restart.")
+    }
+
+    private var serverEndpointProbeID: String {
+        let settings = model.settings.normalized()
+        return "\(settings.serverHost):\(settings.serverPort)"
+    }
+
+    private var showsEndpointInUseWarning: Bool {
+        let settings = model.settings.normalized()
+        let isActiveEndpoint = settings.serverHost == model.activeServerHost
+            && settings.serverPort == model.activeServerPort
+        return !isSelectedEndpointAvailable && !isActiveEndpoint
     }
 
     private var endpointCategoryPicker: some View {

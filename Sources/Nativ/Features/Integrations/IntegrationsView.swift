@@ -64,10 +64,7 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private var integrationServerBaseURL: URL {
-        guard let activeServerPort = serverModel.activeServerPort else {
-            return serverModel.settings.serverBaseURL
-        }
-        return URL(string: "http://127.0.0.1:\(activeServerPort)")!
+        serverModel.activeServerBaseURL ?? serverModel.settings.serverBaseURL
     }
 
     private var profiles: IntegrationProfileManager {

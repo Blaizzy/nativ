@@ -145,6 +145,8 @@ struct NativSettings: Codable, Equatable {
         HuggingFaceCache.defaultHubPath()
     }
 
+    static let defaultServerHost = "127.0.0.1"
+
     var modelSearchPath: String
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
@@ -153,6 +155,7 @@ struct NativSettings: Codable, Equatable {
     var speechToTextModelID: String?
     var serverAPIKey: String?
     var huggingFaceToken: String?
+    var serverHost: String
     var serverPort: Int
     var maxTokens: Int
     var maxKVSize: Int
@@ -193,6 +196,7 @@ struct NativSettings: Codable, Equatable {
         speechToTextModelID: String? = nil,
         serverAPIKey: String? = nil,
         huggingFaceToken: String? = nil,
+        serverHost: String = Self.defaultServerHost,
         serverPort: Int = 8080,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
@@ -232,6 +236,7 @@ struct NativSettings: Codable, Equatable {
         self.speechToTextModelID = speechToTextModelID
         self.serverAPIKey = serverAPIKey
         self.huggingFaceToken = huggingFaceToken
+        self.serverHost = serverHost
         self.serverPort = serverPort
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
@@ -273,6 +278,7 @@ struct NativSettings: Codable, Equatable {
         case speechToTextModelID
         case serverAPIKey
         case huggingFaceToken
+        case serverHost
         case serverPort
         case selectedModelID
         case maxTokens
@@ -319,6 +325,7 @@ struct NativSettings: Codable, Equatable {
         speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
         serverAPIKey = try container.decodeIfPresent(String.self, forKey: .serverAPIKey) ?? defaults.serverAPIKey
         huggingFaceToken = try container.decodeIfPresent(String.self, forKey: .huggingFaceToken) ?? defaults.huggingFaceToken
+        serverHost = try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
         serverPort = try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize = try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
@@ -361,6 +368,7 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
         try container.encodeIfPresent(serverAPIKey, forKey: .serverAPIKey)
         try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
+        try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
@@ -428,6 +436,7 @@ struct NativSettings: Codable, Equatable {
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
         settings.serverAPIKey = Self.normalizedModelID(settings.serverAPIKey)
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
+        settings.serverHost = Self.normalizedServerHost(settings.serverHost)
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
@@ -466,6 +475,7 @@ struct NativSettings: Codable, Equatable {
             && lhs.speechToTextModelID == rhs.speechToTextModelID
             && lhs.serverAPIKey == rhs.serverAPIKey
             && lhs.huggingFaceToken == rhs.huggingFaceToken
+            && lhs.serverHost == rhs.serverHost
             && lhs.serverPort == rhs.serverPort
             && lhs.maxTokens == rhs.maxTokens
             && lhs.maxKVSize == rhs.maxKVSize
@@ -490,7 +500,9 @@ struct NativSettings: Codable, Equatable {
     }
 
     var serverBaseURL: URL {
-        URL(string: "http://127.0.0.1:\(min(max(serverPort, 1), 65_535))")!
+        let settings = normalized()
+        let host = Self.urlHost(settings.serverHost)
+        return URL(string: "http://\(host):\(settings.serverPort)")!
     }
 
     var launchEnvironment: [String: String] {
@@ -516,6 +528,7 @@ struct NativSettings: Codable, Equatable {
     var launchArguments: [String] {
         let settings = normalized()
         var arguments = [
+            "--host", settings.serverHost,
             "--port", "\(settings.serverPort)",
             "--max-tokens", "\(settings.maxTokens)"
         ]
@@ -626,6 +639,38 @@ struct NativSettings: Codable, Equatable {
     private static func normalizedModelID(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func normalizedServerHost(_ value: String) -> String {
+        var host = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if host.hasPrefix("["), host.hasSuffix("]") {
+            host.removeFirst()
+            host.removeLast()
+        }
+        guard !host.isEmpty else {
+            return defaultServerHost
+        }
+
+        let candidate = "http://\(urlHost(host)):8080"
+        guard let components = URLComponents(string: candidate),
+              components.host != nil,
+              components.port == 8080,
+              components.path.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            return defaultServerHost
+        }
+        return host
+    }
+
+    private static func urlHost(_ host: String) -> String {
+        guard host.contains(":") else {
+            return host
+        }
+        return "[\(host.replacingOccurrences(of: "%", with: "%25"))]"
     }
 
     private static func nonEmpty(_ value: String, fallback: String) -> String {
