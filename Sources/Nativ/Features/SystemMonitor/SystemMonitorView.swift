@@ -20,7 +20,7 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
         case .gpu:
             "GPU"
         case .memory:
-            "RAM"
+            "Memory"
         case .disk:
             "Disk"
         }
@@ -827,7 +827,7 @@ private struct SystemMemoryPage: View {
 
     var body: some View {
         SystemMonitorPage(
-            title: "RAM",
+            title: "Memory",
             subtitle: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.totalBytes)) unified memory"
         ) {
             SystemPanel {

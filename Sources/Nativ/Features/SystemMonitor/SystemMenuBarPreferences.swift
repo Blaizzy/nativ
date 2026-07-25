@@ -18,7 +18,16 @@ enum SystemMenuBarMetric: String, CaseIterable, Identifiable {
         case .gpu:
             "GPU"
         case .ram:
-            "RAM"
+            "Memory"
+        }
+    }
+
+    var menuBarLabel: String {
+        switch self {
+        case .ram:
+            "MEM"
+        default:
+            title
         }
     }
 

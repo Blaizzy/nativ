@@ -453,6 +453,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showMainWindow()
     }
 
+    @objc private func openSystemFromMenu(_ sender: Any?) {
+        controlPanelNavigation.open(.system)
+        showMainWindow()
+    }
+
     @objc private func openModelsFromMenu(_ sender: Any?) {
         controlPanelNavigation.open(.models)
         showMainWindow()
@@ -563,7 +568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .percentage:
                 description = "\(item.metric.title) \(percent)%"
                 image = menuBarPercentageImage(
-                    metricTitle: item.metric.title,
+                    metricTitle: item.metric.menuBarLabel,
                     percent: percent
                 )
             case .graph:
@@ -574,7 +579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 )
             case .gigabytes:
                 let value = menuBarMemoryUsedText()
-                description = "RAM \(value)"
+                description = "Memory \(value)"
                 image = menuBarGigabytesImage(value: value)
             }
             return (image: image, description: description)
@@ -718,7 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .paragraphStyle: paragraphStyle,
             ]
             let label = NSAttributedString(
-                string: "RAM",
+                string: "MEM",
                 attributes: labelAttributes
             )
             let valueLabel = NSAttributedString(
@@ -750,7 +755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "RAM \(value)"
+        image.accessibilityDescription = "Memory \(value)"
         return image
     }
 
@@ -910,6 +915,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dashboardMenuItem.target = self
         dashboardMenuItem.image = menuIcon("chart.xyaxis.line", description: "Dashboard")
         menu.addItem(dashboardMenuItem)
+
+        let systemMenuItem = NSMenuItem(
+            title: "System…",
+            action: #selector(openSystemFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        systemMenuItem.target = self
+        systemMenuItem.image = menuIcon(
+            "gauge.open.with.lines.needle.33percent",
+            description: "System"
+        )
+        menu.addItem(systemMenuItem)
 
         let modelsMenuItem = NSMenuItem(
             title: "Models…",
