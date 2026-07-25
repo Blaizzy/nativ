@@ -86,6 +86,24 @@ private enum ControlPanelLayout {
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
+/// A small pulsing download arrow shown next to the Models sidebar row while a model
+/// is downloading. When concurrent downloads are supported this can show the number of
+/// models still downloading beside the arrow.
+private struct ModelsDownloadArrow: View {
+    @State private var pulse = false
+
+    var body: some View {
+        Image(systemName: "arrow.down.circle.fill")
+            .font(.caption)
+            .foregroundStyle(.tint)
+            .opacity(pulse ? 0.4 : 1.0)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { pulse = true }
+            .help("A model is downloading")
+            .accessibilityLabel("A model is downloading")
+    }
+}
+
 private struct GlobalModelLoadFailureBanner: View {
     let failure: ModelLoadFailure
     let onOpenModels: () -> Void
@@ -140,6 +158,7 @@ struct ControlPanelView: View {
     @StateObject private var dashboard = DashboardViewModel()
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
+    @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
@@ -234,6 +253,9 @@ struct ControlPanelView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Label(tab.rawValue, systemImage: tab.systemImage)
+                            if tab == .models, downloads.downloadingModelID != nil {
+                                ModelsDownloadArrow()
+                            }
                             Spacer(minLength: 0)
                             if tab == .models,
                                model.isModelLoading,
