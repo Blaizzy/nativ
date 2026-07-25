@@ -1,9 +1,53 @@
 import AppKit
 import SwiftUI
 
+enum AppAppearance: String, CaseIterable, Identifiable {
+    static let storageKey = "appAppearance"
+
+    case system
+    case light
+    case dark
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .system:
+            "System"
+        case .light:
+            "Light"
+        case .dark:
+            "Dark"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .system:
+            "circle.lefthalf.filled"
+        case .light:
+            "sun.max.fill"
+        case .dark:
+            "moon.fill"
+        }
+    }
+
+    var preferredColorScheme: ColorScheme? {
+        switch self {
+        case .system:
+            nil
+        case .light:
+            .light
+        case .dark:
+            .dark
+        }
+    }
+}
+
 struct SettingsView: View {
     let softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
 
     var body: some View {
         ScrollView {
@@ -57,6 +101,25 @@ struct SettingsView: View {
                 ) {
                     CheckForUpdatesCommand(updater: softwareUpdater.updater)
                         .buttonStyle(.bordered)
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
+                    title: "Appearance",
+                    description: appearanceDescription,
+                    systemImage: appearance.systemImage
+                ) {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Text(option.displayName)
+                                .tag(option)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
                 }
 
                 Divider()
@@ -125,6 +188,17 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 15)
+    }
+
+    private var appearanceDescription: String {
+        switch appearance {
+        case .system:
+            "Match your Mac’s appearance."
+        case .light:
+            "Use Nativ’s light appearance."
+        case .dark:
+            "Use Nativ’s dark appearance."
+        }
     }
 
     private var appVersionLabel: String {
