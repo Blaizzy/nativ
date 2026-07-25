@@ -145,6 +145,77 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         XCTAssertNil(HuggingFaceAuthentication.tokenInfo(" \n "))
     }
 
+    func testTokenMetadataDecodesNameAndPermission() throws {
+        let data = Data(
+            """
+            {
+              "auth": {
+                "accessToken": {
+                  "displayName": "localai",
+                  "role": "write"
+                }
+              }
+            }
+            """.utf8
+        )
+
+        XCTAssertEqual(
+            try HuggingFaceAuthentication.decodeTokenMetadata(from: data),
+            HuggingFaceTokenMetadata(name: "localai", permission: "write")
+        )
+    }
+
+    func testTokenMetadataToleratesMissingDetails() throws {
+        XCTAssertEqual(
+            try HuggingFaceAuthentication.decodeTokenMetadata(
+                from: Data(#"{"auth":{"accessToken":{}}}"#.utf8)
+            ),
+            HuggingFaceTokenMetadata(name: nil, permission: nil)
+        )
+    }
+
+    func testTokenMetadataCachePersistsForMatchingToken() throws {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("HuggingFaceTokenMetadata.plist")
+        defer {
+            try? FileManager.default.removeItem(at: cacheURL.deletingLastPathComponent())
+        }
+        let metadata = HuggingFaceTokenMetadata(name: "localai", permission: "write")
+
+        try HuggingFaceTokenMetadataCache.save(
+            metadata,
+            for: "hf_example",
+            to: cacheURL
+        )
+
+        XCTAssertEqual(
+            HuggingFaceTokenMetadataCache.load(for: "hf_example", from: cacheURL),
+            metadata
+        )
+        XCTAssertNil(
+            HuggingFaceTokenMetadataCache.load(for: "hf_different", from: cacheURL)
+        )
+    }
+
+    func testTokenMetadataCacheDoesNotPersistRawToken() throws {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("HuggingFaceTokenMetadata.plist")
+        defer {
+            try? FileManager.default.removeItem(at: cacheURL.deletingLastPathComponent())
+        }
+
+        try HuggingFaceTokenMetadataCache.save(
+            HuggingFaceTokenMetadata(name: "token-name", permission: "read"),
+            for: "hf_private_value",
+            to: cacheURL
+        )
+
+        let storedData = try Data(contentsOf: cacheURL)
+        XCTAssertFalse(String(decoding: storedData, as: UTF8.self).contains("hf_private_value"))
+    }
+
     func testSystemCredentialPrefersEnvironmentToken() {
         var readCredentialFile = false
 

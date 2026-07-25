@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Locates the Hugging Face hub cache using the same environment variables
@@ -86,9 +87,77 @@ struct HuggingFaceTokenInfo: Equatable, Sendable {
     let characterCount: Int
 }
 
+struct HuggingFaceTokenMetadata: Codable, Equatable, Sendable {
+    let name: String?
+    let permission: String?
+}
+
+enum HuggingFaceTokenMetadataCache {
+    static func load(
+        for token: String,
+        from url: URL = storageURL
+    ) -> HuggingFaceTokenMetadata? {
+        guard let token = HuggingFaceAuthentication.normalizedToken(token),
+              let data = try? Data(contentsOf: url),
+              let record = try? PropertyListDecoder().decode(CacheRecord.self, from: data),
+              record.tokenFingerprint == fingerprint(for: token) else {
+            return nil
+        }
+        return record.metadata
+    }
+
+    static func save(
+        _ metadata: HuggingFaceTokenMetadata,
+        for token: String,
+        to url: URL = storageURL
+    ) throws {
+        guard let token = HuggingFaceAuthentication.normalizedToken(token) else {
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let record = CacheRecord(
+            tokenFingerprint: fingerprint(for: token),
+            metadata: metadata
+        )
+        let data = try PropertyListEncoder().encode(record)
+        try data.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
+    }
+
+    private struct CacheRecord: Codable {
+        let tokenFingerprint: String
+        let metadata: HuggingFaceTokenMetadata
+    }
+
+    private static func fingerprint(for token: String) -> String {
+        SHA256.hash(data: Data(token.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static var storageURL: URL {
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first
+        let baseURL = applicationSupport ?? FileManager.default.homeDirectoryForCurrentUser
+        return baseURL
+            .appendingPathComponent("Nativ", isDirectory: true)
+            .appendingPathComponent("HuggingFaceTokenMetadata.plist")
+    }
+}
+
 enum HuggingFaceAuthenticationError: LocalizedError, Equatable {
     case environmentTokenCannotBeRemoved
     case missingCredentialFile
+    case invalidResponse
+    case requestFailed(Int)
 
     var errorDescription: String? {
         switch self {
@@ -96,6 +165,10 @@ enum HuggingFaceAuthenticationError: LocalizedError, Equatable {
             "HF_TOKEN is managed by your environment. Remove it from your shell configuration, then restart Nativ."
         case .missingCredentialFile:
             "Nativ could not locate the Hugging Face login file."
+        case .invalidResponse:
+            "Hugging Face returned an invalid authentication response."
+        case .requestFailed(let statusCode):
+            "Hugging Face rejected the authentication request (HTTP \(statusCode))."
         }
     }
 }
@@ -108,6 +181,15 @@ enum HuggingFaceAuthentication {
         "HF_HOME",
         "XDG_CACHE_HOME"
     ]
+    private static let whoAmIURL = URL(string: "https://huggingface.co/api/whoami-v2")!
+    private static let metadataSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
 
     static func token(
         in environment: [String: String] = ProcessInfo.processInfo.environment
@@ -188,6 +270,38 @@ enum HuggingFaceAuthentication {
         )
     }
 
+    static func tokenMetadata(for token: String) async throws -> HuggingFaceTokenMetadata {
+        guard let token = normalizedToken(token) else {
+            throw HuggingFaceAuthenticationError.invalidResponse
+        }
+
+        var request = URLRequest(
+            url: whoAmIURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 10
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Nativ/1.0", forHTTPHeaderField: "User-Agent")
+        authorize(&request, token: token)
+
+        let (data, response) = try await metadataSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw HuggingFaceAuthenticationError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw HuggingFaceAuthenticationError.requestFailed(httpResponse.statusCode)
+        }
+        return try decodeTokenMetadata(from: data)
+    }
+
+    static func decodeTokenMetadata(from data: Data) throws -> HuggingFaceTokenMetadata {
+        let response = try JSONDecoder().decode(HuggingFaceWhoAmIResponse.self, from: data)
+        return HuggingFaceTokenMetadata(
+            name: normalizedToken(response.auth?.accessToken?.displayName),
+            permission: normalizedToken(response.auth?.accessToken?.role)
+        )
+    }
+
     static func logOut(
         credential: HuggingFaceCredential,
         removeCredentialFile: (String) throws -> Void = {
@@ -211,5 +325,18 @@ enum HuggingFaceAuthentication {
             return path
         }
         return (homeDirectory as NSString).appendingPathComponent(String(path.dropFirst(2)))
+    }
+}
+
+private struct HuggingFaceWhoAmIResponse: Decodable {
+    let auth: Authentication?
+
+    struct Authentication: Decodable {
+        let accessToken: AccessToken?
+    }
+
+    struct AccessToken: Decodable {
+        let displayName: String?
+        let role: String?
     }
 }

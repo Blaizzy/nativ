@@ -508,6 +508,13 @@ private struct PanelHeaderAccent: View {
     }
 }
 
+private enum HuggingFaceTokenMetadataState {
+    case idle
+    case loading
+    case loaded(HuggingFaceTokenMetadata)
+    case unavailable
+}
+
 private struct HuggingFaceAuthenticationPanel: View {
     let customToken: String?
     let systemCredential: HuggingFaceCredential?
@@ -517,6 +524,7 @@ private struct HuggingFaceAuthenticationPanel: View {
     @State private var isAddingToken = false
     @State private var showsLogoutConfirmation = false
     @State private var managementError: String?
+    @State private var tokenMetadataState = HuggingFaceTokenMetadataState.idle
     @FocusState private var tokenFieldIsFocused: Bool
 
     private var hasCustomToken: Bool {
@@ -527,14 +535,19 @@ private struct HuggingFaceAuthenticationPanel: View {
         systemCredential?.source
     }
 
-    private var activeTokenInfo: HuggingFaceTokenInfo? {
-        HuggingFaceAuthentication.tokenInfo(
-            hasCustomToken ? customToken : systemCredential?.token
+    private var activeToken: String? {
+        HuggingFaceAuthentication.effectiveToken(
+            customToken: customToken,
+            environmentToken: systemCredential?.token
         )
     }
 
+    private var activeTokenInfo: HuggingFaceTokenInfo? {
+        HuggingFaceAuthentication.tokenInfo(activeToken)
+    }
+
     private var hasActiveCredential: Bool {
-        hasCustomToken || systemCredential != nil
+        activeToken != nil
     }
 
     var body: some View {
@@ -641,6 +654,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         } message: {
             Text(managementError ?? "An unknown error occurred.")
         }
+        .task(id: activeToken) {
+            await loadTokenMetadata(for: activeToken)
+        }
     }
 
     private var authenticationStatus: String {
@@ -706,6 +722,26 @@ private struct HuggingFaceAuthenticationPanel: View {
                     .frame(height: 36)
 
                 credentialAttribute(
+                    title: "Token Name",
+                    value: activeTokenName,
+                    systemImage: "tag"
+                )
+                .frame(minWidth: 100, alignment: .leading)
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
+                    title: "Permission",
+                    value: activeTokenPermission,
+                    systemImage: "lock.shield"
+                )
+                .frame(minWidth: 90, alignment: .leading)
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
                     title: "Length",
                     value: activeTokenLength,
                     systemImage: "number"
@@ -730,6 +766,32 @@ private struct HuggingFaceAuthenticationPanel: View {
         }
         let unit = characterCount == 1 ? "character" : "characters"
         return "\(characterCount) \(unit)"
+    }
+
+    private var activeTokenName: String {
+        switch tokenMetadataState {
+        case .idle:
+            "—"
+        case .loading:
+            "Checking…"
+        case .loaded(let metadata):
+            metadata.name ?? "Not reported"
+        case .unavailable:
+            "Unavailable"
+        }
+    }
+
+    private var activeTokenPermission: String {
+        switch tokenMetadataState {
+        case .idle:
+            "—"
+        case .loading:
+            "Checking…"
+        case .loaded(let metadata):
+            metadata.permission ?? "Not reported"
+        case .unavailable:
+            "Unavailable"
+        }
     }
 
     private func credentialAttribute(
@@ -804,6 +866,33 @@ private struct HuggingFaceAuthenticationPanel: View {
         }
         onSetCustomToken(token)
         cancelAddingToken()
+    }
+
+    @MainActor
+    private func loadTokenMetadata(for token: String?) async {
+        tokenMetadataState = .idle
+        guard let token else {
+            return
+        }
+        if let cachedMetadata = HuggingFaceTokenMetadataCache.load(for: token) {
+            tokenMetadataState = .loaded(cachedMetadata)
+            return
+        }
+
+        tokenMetadataState = .loading
+        do {
+            let metadata = try await HuggingFaceAuthentication.tokenMetadata(for: token)
+            guard !Task.isCancelled else {
+                return
+            }
+            try? HuggingFaceTokenMetadataCache.save(metadata, for: token)
+            tokenMetadataState = .loaded(metadata)
+        } catch {
+            guard !Task.isCancelled else {
+                return
+            }
+            tokenMetadataState = .unavailable
+        }
     }
 
     private func requestLogout() {
