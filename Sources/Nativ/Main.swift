@@ -129,10 +129,12 @@ private struct NativApplication: App {
 
 private struct NativRootView: View {
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     let appDelegate: AppDelegate
 
     var body: some View {
         appDelegate.rootView
+            .preferredColorScheme(appearance.preferredColorScheme)
             .onAppear {
                 appDelegate.registerMainWindowOpener {
                     openWindow(id: "main")
