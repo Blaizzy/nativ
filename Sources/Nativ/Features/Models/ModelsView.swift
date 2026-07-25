@@ -103,9 +103,6 @@ struct ModelsView: View {
     private var activeDownloadBanner: some View {
         if let modelID = downloadManager.downloadingModelID {
             HStack(spacing: 12) {
-                ProgressView(value: downloadManager.downloadProgress)
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(NativFormatting.truncateModelName(
                         modelID.split(separator: "/").last.map(String.init) ?? modelID,
