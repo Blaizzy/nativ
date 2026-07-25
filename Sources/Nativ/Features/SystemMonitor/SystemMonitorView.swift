@@ -1117,12 +1117,12 @@ private struct SystemOverviewMetric: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SystemMonitorPalette.metricLabel)
                 Text(value)
                     .font(.title3.weight(.semibold).monospacedDigit())
                 Text(detail)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(SystemMonitorPalette.metricDetail)
                     .lineLimit(1)
             }
         }
@@ -1970,6 +1970,8 @@ private enum SystemMonitorPalette {
     static let orange = Color(red: 1.00, green: 0.55, blue: 0.17)
     static let red = Color(red: 1.00, green: 0.23, blue: 0.28)
     static let positive = Color(red: 0.18, green: 0.72, blue: 0.38)
+    static let metricLabel = Color.primary.opacity(0.72)
+    static let metricDetail = Color.primary.opacity(0.58)
 }
 
 private struct SystemMonitorPanelModifier: ViewModifier {

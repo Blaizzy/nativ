@@ -40,6 +40,7 @@ struct WelcomeGateView: View {
                 .transition(.opacity)
             }
         }
+        .textSelection(.enabled)
         .animation(.easeInOut(duration: 0.25), value: hasCompletedWelcome)
     }
 }
