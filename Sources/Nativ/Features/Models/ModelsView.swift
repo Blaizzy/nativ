@@ -69,6 +69,7 @@ struct ModelsView: View {
             VStack(spacing: 0) {
                 pageHeader
                 Divider()
+                activeDownloadBanner
 
                 switch section {
                 case .installed:
@@ -95,6 +96,46 @@ struct ModelsView: View {
         .onDisappear {
             localLibrary.cancel()
             hubLibrary.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private var activeDownloadBanner: some View {
+        if let modelID = downloadManager.downloadingModelID {
+            HStack(spacing: 12) {
+                ProgressView(value: downloadManager.downloadProgress)
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(NativFormatting.truncateModelName(
+                        modelID.split(separator: "/").last.map(String.init) ?? modelID,
+                        maxLength: 44
+                    ))
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    Text(downloadManager.isDownloadPaused
+                        ? "Download paused"
+                        : "Downloading… \(Int((downloadManager.downloadProgress * 100).rounded()))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Spacer(minLength: 12)
+                Button(downloadManager.isDownloadPaused ? "Resume" : "Pause") {
+                    if downloadManager.isDownloadPaused {
+                        downloadManager.resumeDownload()
+                    } else {
+                        downloadManager.pauseDownload()
+                    }
+                }
+                Button("Cancel", role: .destructive) {
+                    downloadManager.removeDownload()
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Color.accentColor.opacity(0.08))
+            Divider()
         }
     }
 

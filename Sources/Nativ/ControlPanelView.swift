@@ -75,6 +75,51 @@ private enum ControlPanelLayout {
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
+private struct GlobalDownloadChip: View {
+    @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    var onOpen: () -> Void
+
+    var body: some View {
+        if let modelID = downloads.downloadingModelID {
+            Button(action: onOpen) {
+                HStack(spacing: 9) {
+                    ProgressView(value: downloads.downloadProgress)
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(shortName(modelID))
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text(downloads.isDownloadPaused
+                            ? "Paused"
+                            : "Downloading \(Int((downloads.downloadProgress * 100).rounded()))%")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+            }
+            .buttonStyle(.plain)
+            .help("Go to the downloading model")
+            .accessibilityLabel("Downloading \(shortName(modelID)). Open the Models page.")
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private func shortName(_ modelID: String) -> String {
+        let last = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        return NativFormatting.truncateModelName(last, maxLength: 22)
+    }
+}
+
 struct ControlPanelView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
@@ -110,6 +155,13 @@ struct ControlPanelView: View {
         .navigationSplitViewStyle(.balanced)
         .coordinateSpace(name: ControlPanelLayout.coordinateSpaceName)
         .frame(minWidth: 1040, minHeight: 600)
+        .overlay(alignment: .top) {
+            if selectedTab != .models {
+                GlobalDownloadChip(onOpen: { navigation.open(.models) })
+                    .padding(.top, 10)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
