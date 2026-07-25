@@ -854,10 +854,7 @@ private struct SystemMemoryPage: View {
         ) {
             SystemPanel {
                 HStack(spacing: 24) {
-                    SystemUsageGauge(
-                        value: snapshot.memory.usage,
-                        tint: SystemMonitorPalette.blue
-                    )
+                    SystemMemoryPressureRing(memory: snapshot.memory)
 
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
@@ -915,18 +912,12 @@ private struct SystemMemoryPage: View {
                 color: SystemMonitorPalette.blue
             )
 
-            adaptivePair {
-                SystemInfoCard(title: "Memory pressure") {
-                    SystemMemoryPressureGauge(memory: snapshot.memory)
-                }
-            } trailing: {
-                SystemPercentHistoryChart(
-                    title: "Swap history",
-                    samples: swapHistory,
-                    color: SystemMonitorPalette.purple,
-                    footer: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.memoryBytes(snapshot.memory.swapTotalBytes))"
-                )
-            }
+            SystemPercentHistoryChart(
+                title: "Swap history",
+                samples: swapHistory,
+                color: SystemMonitorPalette.purple,
+                footer: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.memoryBytes(snapshot.memory.swapTotalBytes))"
+            )
         }
     }
 
@@ -965,133 +956,6 @@ private struct SystemMemoryPage: View {
         )
     }
 
-}
-
-private struct SystemMemoryPressureGauge: View {
-    let memory: SystemMemoryMetrics
-
-    var body: some View {
-        GeometryReader { geometry in
-            let inset = pressureLineWidth / 2
-            let center = CGPoint(
-                x: geometry.size.width / 2,
-                y: geometry.size.height - inset
-            )
-            let radius = min(
-                (geometry.size.width - pressureLineWidth) / 2,
-                geometry.size.height - inset
-            )
-            let markerAngle = (.pi * (1 + usage))
-
-            ZStack {
-                SystemPressureGaugeArc(start: 0, end: 1)
-                    .stroke(
-                        Color.secondary.opacity(0.12),
-                        style: pressureStroke
-                    )
-
-                pressureSegments
-
-                Circle()
-                    .fill(pressureColor)
-                    .frame(width: 14, height: 14)
-                    .overlay {
-                        Circle()
-                            .stroke(
-                                Color(nsColor: .windowBackgroundColor),
-                                lineWidth: 3
-                            )
-                    }
-                    .shadow(color: Color.black.opacity(0.18), radius: 2, y: 1)
-                    .position(
-                        x: center.x + (CGFloat(cos(markerAngle)) * radius),
-                        y: center.y + (CGFloat(sin(markerAngle)) * radius)
-                    )
-
-                VStack(spacing: 3) {
-                    Text(SystemMonitorFormat.percent(memory.usage))
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-
-                    Text(memory.pressureLabel)
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(pressureColor)
-                }
-                .position(x: center.x, y: center.y - 40)
-            }
-        }
-        .frame(width: 250, height: 128)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            "Memory pressure \(memory.pressureLabel), \(SystemMonitorFormat.percent(memory.usage)) used"
-        )
-    }
-
-    private var pressureSegments: some View {
-        ZStack {
-            SystemPressureGaugeArc(start: 0, end: 0.68)
-                .stroke(
-                    SystemMonitorPalette.positive.opacity(0.82),
-                    style: pressureStroke
-                )
-            SystemPressureGaugeArc(start: 0.70, end: 0.88)
-                .stroke(
-                    SystemMonitorPalette.orange.opacity(0.88),
-                    style: pressureStroke
-                )
-            SystemPressureGaugeArc(start: 0.90, end: 1)
-                .stroke(
-                    SystemMonitorPalette.red.opacity(0.90),
-                    style: pressureStroke
-                )
-        }
-    }
-
-    private var usage: Double {
-        min(max(memory.usage, 0), 1)
-    }
-
-    private var pressureLineWidth: CGFloat { 10 }
-
-    private var pressureStroke: StrokeStyle {
-        StrokeStyle(lineWidth: pressureLineWidth, lineCap: .round)
-    }
-
-    private var pressureColor: Color {
-        switch memory.pressureLabel {
-        case "Normal":
-            SystemMonitorPalette.positive
-        case "Elevated":
-            SystemMonitorPalette.orange
-        default:
-            SystemMonitorPalette.red
-        }
-    }
-}
-
-private struct SystemPressureGaugeArc: Shape {
-    let start: Double
-    let end: Double
-
-    func path(in rect: CGRect) -> Path {
-        let inset: CGFloat = 5
-        let radius = min(
-            (rect.width / 2) - inset,
-            rect.height - inset
-        )
-        let center = CGPoint(x: rect.midX, y: rect.maxY - inset)
-        var path = Path()
-        path.addArc(
-            center: center,
-            radius: radius,
-            startAngle: .degrees(180 + (180 * start)),
-            endAngle: .degrees(180 + (180 * end)),
-            clockwise: false
-        )
-        return path
-    }
 }
 
 private struct SystemDiskPage: View {
@@ -1393,6 +1257,38 @@ private struct SystemUsageGauge: View {
         .gaugeStyle(.accessoryCircularCapacity)
         .tint(tint)
         .frame(width: 86, height: 86)
+    }
+}
+
+private struct SystemMemoryPressureRing: View {
+    let memory: SystemMemoryMetrics
+
+    var body: some View {
+        Gauge(value: memory.usage) {
+            EmptyView()
+        } currentValueLabel: {
+            Text(SystemMonitorFormat.percent(memory.usage))
+                .font(.title3.weight(.semibold).monospacedDigit())
+        }
+        .gaugeStyle(.accessoryCircularCapacity)
+        .tint(pressureColor)
+        .frame(width: 78, height: 78)
+        .frame(width: 90)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "Memory pressure \(memory.pressureLabel), \(SystemMonitorFormat.percent(memory.usage)) used"
+        )
+    }
+
+    private var pressureColor: Color {
+        switch memory.pressureLabel {
+        case "Normal":
+            SystemMonitorPalette.blue
+        case "Elevated":
+            SystemMonitorPalette.orange
+        default:
+            SystemMonitorPalette.red
+        }
     }
 }
 
