@@ -1,30 +1,51 @@
 import Darwin
 import Foundation
 
+enum ServerEndpointAvailability: Equatable {
+    case available
+    case addressInUse
+    case invalidAddress
+}
+
 enum ServerPortProbe {
-    /// Whether a TCP listener can bind 127.0.0.1 on the given port right now.
-    static func isAvailable(_ port: Int) -> Bool {
+    /// Classifies whether a TCP listener can bind the given host and port right now.
+    static func availability(host: String, port: Int) -> ServerEndpointAvailability {
         guard (1...65_535).contains(port) else {
-            return false
+            return .invalidAddress
         }
 
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else {
-            return true
+        var hints = addrinfo()
+        hints.ai_flags = AI_NUMERICSERV
+        hints.ai_family = host.contains(":") ? AF_INET6 : AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_protocol = IPPROTO_TCP
+
+        var addresses: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &addresses) == 0,
+              let firstAddress = addresses
+        else {
+            return .invalidAddress
         }
-        defer { close(descriptor) }
+        defer { freeaddrinfo(firstAddress) }
 
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = in_port_t(UInt16(port)).bigEndian
-        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-
-        let bindResult = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        var foundAddressInUse = false
+        var address: UnsafeMutablePointer<addrinfo>? = firstAddress
+        while let candidate = address {
+            let info = candidate.pointee
+            let descriptor = socket(info.ai_family, info.ai_socktype, info.ai_protocol)
+            if descriptor >= 0 {
+                let bindResult = Darwin.bind(descriptor, info.ai_addr, info.ai_addrlen)
+                let bindError = errno
+                close(descriptor)
+                if bindResult == 0 {
+                    return .available
+                }
+                if bindError == EADDRINUSE {
+                    foundAddressInUse = true
+                }
             }
+            address = info.ai_next
         }
-        return bindResult == 0
+        return foundAddressInUse ? .addressInUse : .invalidAddress
     }
 }

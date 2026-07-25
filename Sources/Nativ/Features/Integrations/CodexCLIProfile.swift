@@ -3,6 +3,7 @@ import Foundation
 enum CodexCLIProfile {
     static let name = "nativ"
     static let providerID = "nativ"
+    static let apiKeyEnvironmentVariable = "NATIV_API_KEY"
 
     static func configurationURL(in homeDirectory: URL) -> URL {
         homeDirectory.appendingPathComponent(".codex/\(name).config.toml")
@@ -28,6 +29,7 @@ enum CodexCLIProfile {
         [model_providers.\(tomlString(providerID))]
         name = "Nativ"
         base_url = \(tomlString(baseURL))
+        env_key = \(tomlString(apiKeyEnvironmentVariable))
         wire_api = "responses"
 
         """
