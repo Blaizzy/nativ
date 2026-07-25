@@ -889,12 +889,20 @@ private struct ControlPanelSurfaceReader: NSViewRepresentable {
     }
 }
 
+private final class ControlPanelTitlebarFillView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
 @MainActor
 private final class ControlPanelSurfaceReaderView: NSView {
     private weak var glassSurface: NSView?
     private weak var sidebarBackdropView: NSView?
     private weak var titlebarFillView: NSView?
     private weak var titlebarSourceGlassView: NSView?
+    private weak var detailTitlebarFillView: NSView?
+    private weak var detailTitlebarContainerView: NSView?
     private weak var observedWindow: NSWindow?
     private var defaultCornerRadius: CGFloat?
     private var defaultBackdropCornerRadius: CGFloat?
@@ -996,6 +1004,9 @@ private final class ControlPanelSurfaceReaderView: NSView {
             titlebarFillView?.removeFromSuperview()
             titlebarFillView = nil
             titlebarSourceGlassView = nil
+            detailTitlebarFillView?.removeFromSuperview()
+            detailTitlebarFillView = nil
+            detailTitlebarContainerView = nil
             return
         }
         guard cornerCorrectionTimer == nil else { return }
@@ -1061,9 +1072,23 @@ private final class ControlPanelSurfaceReaderView: NSView {
                 isFullScreen
                 && constraint.firstAttribute == .bottom
                 && constraint.secondAttribute == .bottom
+            let extendsPastLeadingEdge =
+                isFullScreen
+                && (
+                    (
+                        constraint.firstAttribute == .leading
+                            && constraint.secondAttribute == .leading
+                    )
+                    || (
+                        constraint.firstAttribute == .left
+                            && constraint.secondAttribute == .left
+                    )
+                )
             let targetConstant: CGFloat
             if extendsPastBottomEdge {
-                targetConstant = firstView === glassSurface ? -1 : 1
+                targetConstant = firstView === glassSurface ? 2 : -2
+            } else if extendsPastLeadingEdge {
+                targetConstant = firstView === glassSurface ? -4 : 4
             } else {
                 targetConstant = 0
             }
@@ -1115,7 +1140,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
         )
 
         if let edgeInsets = isFullScreen
-            ? NSEdgeInsets(top: 0, left: 0, bottom: -1, right: 0)
+            ? NSEdgeInsets(top: 0, left: -4, bottom: 2, right: 0)
             : defaultBackdropEdgeInsets {
             backdropView.setValue(
                 NSValue(edgeInsets: edgeInsets),
@@ -1209,25 +1234,74 @@ private final class ControlPanelSurfaceReaderView: NSView {
             || titlebarFillView?.superview !== container {
             titlebarFillView?.removeFromSuperview()
 
-            let fill = NSVisualEffectView(frame: container.bounds)
+            let fill = ControlPanelTitlebarFillView(frame: container.bounds)
             fill.identifier = NSUserInterfaceItemIdentifier(
-                "NativFullScreenTitlebarFill"
+                "NativFullScreenSidebarTitlebarFill"
             )
             fill.autoresizingMask = [.width, .height]
-            fill.material = .contentBackground
-            fill.blendingMode = .withinWindow
-            fill.state = .followsWindowActiveState
+            fill.wantsLayer = true
             container.addSubview(fill, positioned: .above, relativeTo: titlebarGlass)
 
             titlebarFillView = fill
             titlebarSourceGlassView = titlebarGlass
         }
 
-        guard let fill = titlebarFillView as? NSVisualEffectView else { return }
-        fill.frame = container.bounds
-        fill.material = .contentBackground
-        fill.blendingMode = .withinWindow
-        fill.state = .followsWindowActiveState
+        if let fill = titlebarFillView {
+            fill.frame = container.bounds
+            updateTitlebarFill(
+                fill,
+                color: sidebarSectionColor(for: fill.effectiveAppearance)
+            )
+        }
+
+        let titlebarBackgroundClassName = "NSTitlebarBackgroundView"
+        let detailContainer = container.superview?.subviews
+            .filter {
+                $0 !== container
+                    && NSStringFromClass(type(of: $0))
+                        .contains(titlebarBackgroundClassName)
+            }
+            .max { $0.bounds.width < $1.bounds.width }
+
+        guard let detailContainer else { return }
+
+        if detailTitlebarContainerView !== detailContainer
+            || detailTitlebarFillView?.superview !== detailContainer {
+            detailTitlebarFillView?.removeFromSuperview()
+
+            let fill = ControlPanelTitlebarFillView(frame: detailContainer.bounds)
+            fill.identifier = NSUserInterfaceItemIdentifier(
+                "NativFullScreenDetailTitlebarFill"
+            )
+            fill.autoresizingMask = [.width, .height]
+            fill.wantsLayer = true
+            detailContainer.addSubview(fill, positioned: .above, relativeTo: nil)
+
+            detailTitlebarFillView = fill
+            detailTitlebarContainerView = detailContainer
+        }
+
+        if let detailFill = detailTitlebarFillView {
+            detailFill.frame = detailContainer.bounds
+            updateTitlebarFill(detailFill, color: .windowBackgroundColor)
+        }
+    }
+
+    private func updateTitlebarFill(_ fill: NSView, color: NSColor) {
+        fill.effectiveAppearance.performAsCurrentDrawingAppearance {
+            fill.layer?.backgroundColor = color.cgColor
+        }
+    }
+
+    private func sidebarSectionColor(for appearance: NSAppearance) -> NSColor {
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let component: CGFloat = isDark ? 27 / 255 : 248 / 255
+        return NSColor(
+            srgbRed: component,
+            green: component,
+            blue: component,
+            alpha: 1
+        )
     }
 
     private func hideFullScreenTitlebarSeparators(in contentView: NSView) {
