@@ -335,14 +335,14 @@ private struct SystemOverviewPage: View {
                     value: SystemMonitorFormat.percent(snapshot.memory.usage),
                     detail: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.usedBytes)) used",
                     icon: "memorychip",
-                    tint: SystemMonitorPalette.orange
+                    tint: SystemMonitorPalette.positive
                 )
                 SystemOverviewMetric(
                     title: "Disk",
                     value: SystemMonitorFormat.percent(snapshot.disk.usage),
                     detail: "\(SystemMonitorFormat.bytes(snapshot.disk.availableBytes)) free",
                     icon: "internaldrive",
-                    tint: SystemMonitorPalette.red
+                    tint: SystemMonitorPalette.orange
                 )
             }
             .frame(maxWidth: 1200)
