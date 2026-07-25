@@ -4,6 +4,11 @@ import IOKit
 import NativServerKit
 import SwiftUI
 
+private enum EndpointEditorField: Hashable {
+    case host
+    case port
+}
+
 struct DeveloperView: View {
     private static let configurationToggleClearance: CGFloat = 36
 
@@ -15,6 +20,7 @@ struct DeveloperView: View {
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
     @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
+    @FocusState private var focusedEndpointField: EndpointEditorField?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -266,13 +272,18 @@ struct DeveloperView: View {
     private var serverPortField: some View {
         HStack(spacing: 6) {
             Text("Port")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
             TextField("", value: $model.settings.serverPort, format: .number.grouping(.never))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
                 .font(.callout.monospaced())
                 .multilineTextAlignment(.trailing)
-                .frame(width: 64)
+                .focused($focusedEndpointField, equals: .port)
+                .editableFieldChrome(
+                    isFocused: focusedEndpointField == .port
+                )
+                .frame(width: 78)
+                .accessibilityLabel("Server port")
                 .onChange(of: model.settings.serverPort) { _, newValue in
                     model.settings.serverPort = min(max(newValue, 1), 65_535)
                 }
@@ -293,12 +304,17 @@ struct DeveloperView: View {
     private var serverHostField: some View {
         HStack(spacing: 6) {
             Text("Host")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
             TextField("", text: $model.settings.serverHost)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
                 .font(.callout.monospaced())
-                .frame(width: 120)
+                .focused($focusedEndpointField, equals: .host)
+                .editableFieldChrome(
+                    isFocused: focusedEndpointField == .host
+                )
+                .frame(width: 144)
+                .accessibilityLabel("Server host")
                 .onSubmit {
                     model.settings.serverHost = model.settings.normalized().serverHost
                 }
@@ -376,13 +392,13 @@ struct DeveloperView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(PanelHeaderAccent(tint: .teal))
+        .background(PanelHeaderAccent(tint: .blue))
     }
 
     private func logPanelTitle(_ output: LogOutput) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "terminal")
-                .foregroundStyle(.teal)
+                .foregroundStyle(.blue)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Server Output")
@@ -508,6 +524,42 @@ private struct PanelHeaderAccent: View {
     }
 }
 
+private struct EditableFieldChrome: ViewModifier {
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(
+                        isFocused
+                            ? Color.blue.opacity(0.08)
+                            : Color(nsColor: .textBackgroundColor)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(
+                        isFocused ? Color.blue : Color.primary.opacity(0.22),
+                        lineWidth: isFocused ? 1.5 : 1
+                    )
+            )
+            .shadow(
+                color: isFocused ? Color.blue.opacity(0.16) : .clear,
+                radius: 3
+            )
+            .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
+}
+
+private extension View {
+    func editableFieldChrome(isFocused: Bool) -> some View {
+        modifier(EditableFieldChrome(isFocused: isFocused))
+    }
+}
+
 private enum HuggingFaceTokenMetadataState {
     case idle
     case loading
@@ -554,7 +606,7 @@ private struct HuggingFaceAuthenticationPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "key.horizontal")
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(.blue)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Hugging Face Authentication")
@@ -578,7 +630,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(PanelHeaderAccent(tint: .purple))
+            .background(PanelHeaderAccent(tint: .blue))
 
             Divider()
 
@@ -1109,6 +1161,7 @@ private struct LogOutput {
 
 private struct LogSearchField: View {
     @Binding var text: String
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 7) {
@@ -1117,6 +1170,8 @@ private struct LogSearchField: View {
 
             TextField("Search logs", text: $text)
                 .textFieldStyle(.plain)
+                .focused($isFocused)
+                .accessibilityLabel("Search server logs")
 
             if !text.isEmpty {
                 Button {
@@ -1129,16 +1184,7 @@ private struct LogSearchField: View {
                 .help("Clear search")
             }
         }
-        .padding(.horizontal, 9)
-        .frame(height: 28)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color(nsColor: .textBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
+        .editableFieldChrome(isFocused: isFocused)
     }
 }
 
