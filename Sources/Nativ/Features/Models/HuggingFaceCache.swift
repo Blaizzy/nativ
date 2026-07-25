@@ -72,6 +72,32 @@ enum HuggingFaceTokenSource: Equatable, Sendable {
 struct HuggingFaceCredential: Equatable, Sendable {
     let token: String
     let source: HuggingFaceTokenSource
+    let filePath: String?
+
+    init(token: String, source: HuggingFaceTokenSource, filePath: String? = nil) {
+        self.token = token
+        self.source = source
+        self.filePath = filePath
+    }
+}
+
+struct HuggingFaceTokenInfo: Equatable, Sendable {
+    let maskedValue: String
+    let characterCount: Int
+}
+
+enum HuggingFaceAuthenticationError: LocalizedError, Equatable {
+    case environmentTokenCannotBeRemoved
+    case missingCredentialFile
+
+    var errorDescription: String? {
+        switch self {
+        case .environmentTokenCannotBeRemoved:
+            "HF_TOKEN is managed by your environment. Remove it from your shell configuration, then restart Nativ."
+        case .missingCredentialFile:
+            "Nativ could not locate the Hugging Face login file."
+        }
+    }
 }
 
 enum HuggingFaceAuthentication {
@@ -107,7 +133,11 @@ enum HuggingFaceAuthentication {
         guard let token = normalizedToken(readTokenFile(path)) else {
             return nil
         }
-        return HuggingFaceCredential(token: token, source: .credentialFile)
+        return HuggingFaceCredential(
+            token: token,
+            source: .credentialFile,
+            filePath: path
+        )
     }
 
     static func credentialFilePath(
@@ -145,15 +175,32 @@ enum HuggingFaceAuthentication {
         return trimmed
     }
 
-    static func tokenSummary(_ token: String?) -> String? {
+    static func tokenInfo(_ token: String?) -> HuggingFaceTokenInfo? {
         guard let token = normalizedToken(token) else {
             return nil
         }
 
         let prefix = token.hasPrefix("hf_") ? "hf_" : ""
         let suffix = token.count > 8 ? String(token.suffix(4)) : ""
-        let characterLabel = token.count == 1 ? "character" : "characters"
-        return "\(prefix)••••••••\(suffix) · \(token.count) \(characterLabel)"
+        return HuggingFaceTokenInfo(
+            maskedValue: "\(prefix)••••••••\(suffix)",
+            characterCount: token.count
+        )
+    }
+
+    static func logOut(
+        credential: HuggingFaceCredential,
+        removeCredentialFile: (String) throws -> Void = {
+            try FileManager.default.removeItem(atPath: $0)
+        }
+    ) throws {
+        guard credential.source == .credentialFile else {
+            throw HuggingFaceAuthenticationError.environmentTokenCannotBeRemoved
+        }
+        guard let filePath = credential.filePath else {
+            throw HuggingFaceAuthenticationError.missingCredentialFile
+        }
+        try removeCredentialFile(filePath)
     }
 
     private static func expandHome(in path: String, homeDirectory: String) -> String {

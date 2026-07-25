@@ -133,16 +133,16 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         XCTAssertNil(HuggingFaceAuthentication.token(in: ["HF_TOKEN": " \n "]))
     }
 
-    func testTokenSummaryMasksCredentialAndShowsLength() {
+    func testTokenInfoMasksCredentialAndShowsLength() {
         XCTAssertEqual(
-            HuggingFaceAuthentication.tokenSummary(" hf_1234567890abcdef\n"),
-            "hf_••••••••cdef · 19 characters"
+            HuggingFaceAuthentication.tokenInfo(" hf_1234567890abcdef\n"),
+            HuggingFaceTokenInfo(maskedValue: "hf_••••••••cdef", characterCount: 19)
         )
         XCTAssertEqual(
-            HuggingFaceAuthentication.tokenSummary("short"),
-            "•••••••• · 5 characters"
+            HuggingFaceAuthentication.tokenInfo("short"),
+            HuggingFaceTokenInfo(maskedValue: "••••••••", characterCount: 5)
         )
-        XCTAssertNil(HuggingFaceAuthentication.tokenSummary(" \n "))
+        XCTAssertNil(HuggingFaceAuthentication.tokenInfo(" \n "))
     }
 
     func testSystemCredentialPrefersEnvironmentToken() {
@@ -177,7 +177,11 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         XCTAssertEqual(requestedPath, "/Users/example/.cache/huggingface/token")
         XCTAssertEqual(
             credential,
-            HuggingFaceCredential(token: "hf_login", source: .credentialFile)
+            HuggingFaceCredential(
+                token: "hf_login",
+                source: .credentialFile,
+                filePath: "/Users/example/.cache/huggingface/token"
+            )
         )
     }
 
@@ -229,6 +233,53 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
             ),
             "/Volumes/cache/huggingface/token"
         )
+    }
+
+    func testLogoutRemovesCredentialFile() throws {
+        var removedPath: String?
+        let credential = HuggingFaceCredential(
+            token: "hf_login",
+            source: .credentialFile,
+            filePath: "/Users/example/.cache/huggingface/token"
+        )
+
+        try HuggingFaceAuthentication.logOut(credential: credential) { path in
+            removedPath = path
+        }
+
+        XCTAssertEqual(removedPath, "/Users/example/.cache/huggingface/token")
+    }
+
+    func testLogoutRejectsEnvironmentToken() {
+        let credential = HuggingFaceCredential(
+            token: "hf_environment",
+            source: .environment
+        )
+
+        XCTAssertThrowsError(
+            try HuggingFaceAuthentication.logOut(credential: credential)
+        ) { error in
+            XCTAssertEqual(
+                error as? HuggingFaceAuthenticationError,
+                .environmentTokenCannotBeRemoved
+            )
+        }
+    }
+
+    func testLogoutRejectsCredentialWithoutFilePath() {
+        let credential = HuggingFaceCredential(
+            token: "hf_login",
+            source: .credentialFile
+        )
+
+        XCTAssertThrowsError(
+            try HuggingFaceAuthentication.logOut(credential: credential)
+        ) { error in
+            XCTAssertEqual(
+                error as? HuggingFaceAuthenticationError,
+                .missingCredentialFile
+            )
+        }
     }
 
     func testCustomTokenOverridesEnvironmentToken() {

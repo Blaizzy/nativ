@@ -126,6 +126,28 @@ final class NativModel: ObservableObject {
         )
     }
 
+    func setCustomHuggingFaceToken(_ token: String?) {
+        settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(token)
+        restartServerForHuggingFaceCredentialChangeIfNeeded()
+    }
+
+    func logOutSystemHuggingFaceCredential() throws {
+        guard let credential = systemHuggingFaceCredential else {
+            return
+        }
+        try HuggingFaceAuthentication.logOut(credential: credential)
+        systemHuggingFaceCredential = nil
+        restartServerForHuggingFaceCredentialChangeIfNeeded()
+    }
+
+    private func restartServerForHuggingFaceCredentialChangeIfNeeded() {
+        guard isRunning,
+              effectiveHuggingFaceToken != huggingFaceTokenAppliedAtServerStart else {
+            return
+        }
+        restartServer()
+    }
+
     var metricsAreStale: Bool {
         guard let lastMetricsFetchAt else {
             return true
