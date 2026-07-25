@@ -513,11 +513,11 @@ private struct HuggingFaceAuthenticationPanel: View {
     let systemCredential: HuggingFaceCredential?
     let onSetCustomToken: (String?) -> Void
     let onLogOutSystemCredential: () throws -> Void
-    @State private var replacementToken = ""
-    @State private var isReplacingToken = false
+    @State private var tokenEntry = ""
+    @State private var isAddingToken = false
     @State private var showsLogoutConfirmation = false
     @State private var managementError: String?
-    @FocusState private var replacementFieldIsFocused: Bool
+    @FocusState private var tokenFieldIsFocused: Bool
 
     private var hasCustomToken: Bool {
         HuggingFaceAuthentication.normalizedToken(customToken) != nil
@@ -572,67 +572,31 @@ private struct HuggingFaceAuthenticationPanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 credentialOverview
 
-                Divider()
-
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Custom Token Override")
-                            .font(.callout.weight(.medium))
-                        Text(customTokenOverrideDescription)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer(minLength: 12)
-
-                    Button {
-                        beginReplacingToken()
-                    } label: {
-                        Label(
-                            customTokenActionTitle,
-                            systemImage: "arrow.triangle.2.circlepath"
-                        )
-                    }
-                    .buttonStyle(.bordered)
-
-                    if hasCustomToken || systemCredential != nil {
-                        Button(role: .destructive) {
-                            requestLogout()
-                        } label: {
-                            Label(
-                                hasCustomToken ? "Remove Custom Token" : "Log Out",
-                                systemImage: "rectangle.portrait.and.arrow.right"
-                            )
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-
-                if isReplacingToken {
+                if isAddingToken {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(hasCustomToken ? "Replace custom token" : "Use a custom token")
+                        Text("Add Hugging Face token")
                             .font(.caption.weight(.semibold))
 
                         HStack(spacing: 8) {
-                            SecureField("Paste Hugging Face token", text: $replacementToken)
+                            SecureField("Paste Hugging Face token", text: $tokenEntry)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.callout.monospaced())
-                                .focused($replacementFieldIsFocused)
+                                .focused($tokenFieldIsFocused)
                                 .privacySensitive()
-                                .accessibilityLabel("Replacement Hugging Face token")
-                                .onSubmit(saveReplacementToken)
+                                .accessibilityLabel("Hugging Face token")
+                                .onSubmit(saveToken)
 
                             Button("Cancel") {
-                                cancelReplacingToken()
+                                cancelAddingToken()
                             }
                             .buttonStyle(.bordered)
 
                             Button("Use Token") {
-                                saveReplacementToken()
+                                saveToken()
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(
-                                HuggingFaceAuthentication.normalizedToken(replacementToken) == nil
+                                HuggingFaceAuthentication.normalizedToken(tokenEntry) == nil
                             )
                         }
 
@@ -691,43 +655,6 @@ private struct HuggingFaceAuthenticationPanel: View {
         hasActiveCredential ? .green : .secondary
     }
 
-    private var activeCredentialSource: String {
-        if hasCustomToken {
-            return "Custom Token"
-        }
-        switch systemTokenSource {
-        case .environment:
-            return "Environment · HF_TOKEN"
-        case .credentialFile:
-            return "Hugging Face Login"
-        case nil:
-            return "None"
-        }
-    }
-
-    private var customTokenActionTitle: String {
-        if hasCustomToken {
-            return "Replace Custom Token"
-        }
-        if systemCredential != nil {
-            return "Add Custom Override"
-        }
-        return "Add Token"
-    }
-
-    private var customTokenOverrideDescription: String {
-        if hasCustomToken, let systemTokenDescription {
-            return "Active. This token takes priority over \(systemTokenDescription)."
-        }
-        if hasCustomToken {
-            return "Active. Nativ uses this token for Hugging Face Hub requests."
-        }
-        if let systemTokenDescription {
-            return "Optional. A custom token takes priority over \(systemTokenDescription)."
-        }
-        return "Add a token for gated models without changing your shell environment."
-    }
-
     private var credentialOverview: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -740,6 +667,25 @@ private struct HuggingFaceAuthenticationPanel: View {
 
                 Spacer()
 
+                if hasCustomToken || systemCredential != nil {
+                    Button(role: .destructive) {
+                        requestLogout()
+                    } label: {
+                        Label(
+                            "Log Out",
+                            systemImage: "rectangle.portrait.and.arrow.right"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        beginAddingToken()
+                    } label: {
+                        Label("Add Token", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
                 Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
                     Label("Manage on Hugging Face", systemImage: "arrow.up.right")
                 }
@@ -747,16 +693,6 @@ private struct HuggingFaceAuthenticationPanel: View {
             }
 
             HStack(spacing: 14) {
-                credentialAttribute(
-                    title: "Source",
-                    value: activeCredentialSource,
-                    systemImage: "tray.full"
-                )
-                .frame(minWidth: 160, alignment: .leading)
-
-                Divider()
-                    .frame(height: 36)
-
                 credentialAttribute(
                     title: "Token",
                     value: activeTokenInfo?.maskedValue ?? "Not available",
@@ -829,11 +765,11 @@ private struct HuggingFaceAuthenticationPanel: View {
     }
 
     private var logoutConfirmationTitle: String {
-        hasCustomToken ? "Remove custom token?" : "Log out of Hugging Face?"
+        "Log out of Hugging Face?"
     }
 
     private var logoutConfirmationAction: String {
-        hasCustomToken ? "Remove Token" : "Log Out"
+        "Log Out"
     }
 
     private var logoutConfirmationMessage: String {
@@ -846,28 +782,28 @@ private struct HuggingFaceAuthenticationPanel: View {
         return "This removes the active Hugging Face CLI login file from this Mac and restarts the running server without it."
     }
 
-    private func beginReplacingToken() {
-        replacementToken = ""
+    private func beginAddingToken() {
+        tokenEntry = ""
         withAnimation(.easeInOut(duration: 0.15)) {
-            isReplacingToken = true
+            isAddingToken = true
         }
-        replacementFieldIsFocused = true
+        tokenFieldIsFocused = true
     }
 
-    private func cancelReplacingToken() {
-        replacementFieldIsFocused = false
-        replacementToken = ""
+    private func cancelAddingToken() {
+        tokenFieldIsFocused = false
+        tokenEntry = ""
         withAnimation(.easeInOut(duration: 0.15)) {
-            isReplacingToken = false
+            isAddingToken = false
         }
     }
 
-    private func saveReplacementToken() {
-        guard let token = HuggingFaceAuthentication.normalizedToken(replacementToken) else {
+    private func saveToken() {
+        guard let token = HuggingFaceAuthentication.normalizedToken(tokenEntry) else {
             return
         }
         onSetCustomToken(token)
-        cancelReplacingToken()
+        cancelAddingToken()
     }
 
     private func requestLogout() {
@@ -881,7 +817,6 @@ private struct HuggingFaceAuthenticationPanel: View {
     }
 
     private func performLogout() {
-        cancelReplacingToken()
         if hasCustomToken {
             onSetCustomToken(nil)
             return
