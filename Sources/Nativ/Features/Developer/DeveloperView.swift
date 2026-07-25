@@ -737,12 +737,12 @@ private struct ServerEndpointRow: View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
                 Text(endpoint.method.rawValue)
-                    .font(.caption2.monospaced().weight(.bold))
+                    .font(.caption.monospaced().weight(.bold))
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .font(.caption.monospaced())
+                    .font(.callout.monospaced())
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
