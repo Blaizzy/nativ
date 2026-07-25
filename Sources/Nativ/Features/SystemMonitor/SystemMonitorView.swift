@@ -683,8 +683,8 @@ private struct SystemCPUPage: View {
                             title: coreTitle(index),
                             value: usage,
                             tint: isEfficiencyCore(index)
-                                ? SystemMonitorPalette.teal
-                                : SystemMonitorPalette.purple
+                                ? SystemMonitorPalette.blue
+                                : SystemMonitorPalette.orange
                         )
                     }
                 }
