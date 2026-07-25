@@ -32,7 +32,9 @@ final class NativModel: ObservableObject {
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
     @Published private(set) var metricsLoading = false
-    @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
+    @Published private(set) var systemHuggingFaceCredential =
+        HuggingFaceAuthentication.systemCredential()
+    @Published private(set) var serverRestartCountdown: Int?
     @Published var settings = NativSettings.load() {
         didSet {
             settings.save()
@@ -55,6 +57,8 @@ final class NativModel: ObservableObject {
     private var preservedSessionTokenActivity: [SessionTokenActivitySample] = []
     private var isStoppingForModelSwitch = false
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
+    private var pendingServerRestartID: UUID?
+    private var serverRestartTask: Task<Void, Never>?
 
     private let maxLogCharacters = 250_000
     private let maxSessionActivitySamples = 120
@@ -82,7 +86,10 @@ final class NativModel: ObservableObject {
             names.append(contentsOf: HuggingFaceCache.environmentVariableNames)
         }
         if needsTokenEnvironment {
-            names.append(HuggingFaceAuthentication.environmentVariableName)
+            for name in HuggingFaceAuthentication.discoveryEnvironmentVariableNames
+            where !names.contains(name) {
+                names.append(name)
+            }
         }
 
         let environmentVariableNames = names
@@ -102,8 +109,11 @@ final class NativModel: ObservableObject {
                 }
             }
             if needsTokenEnvironment {
-                self.environmentHuggingFaceToken = HuggingFaceAuthentication.token(
-                    in: shellEnvironment
+                let effectiveEnvironment = processEnvironment.merging(shellEnvironment) {
+                    _, shellValue in shellValue
+                }
+                self.systemHuggingFaceCredential = HuggingFaceAuthentication.systemCredential(
+                    in: effectiveEnvironment
                 )
             }
         }
@@ -112,8 +122,44 @@ final class NativModel: ObservableObject {
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(
             customToken: settings.huggingFaceToken,
-            environmentToken: environmentHuggingFaceToken
+            environmentToken: systemHuggingFaceCredential?.token
         )
+    }
+
+    func setCustomHuggingFaceToken(_ token: String?) {
+        settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(token)
+        restartServerForHuggingFaceCredentialChangeIfNeeded()
+    }
+
+    func setServerAPIKey(_ token: String?) {
+        let normalizedToken = ServerAPIAuthentication.normalizedToken(token)
+        guard normalizedToken != settings.normalized().serverAPIKey else {
+            return
+        }
+
+        settings.serverAPIKey = normalizedToken
+        guard isRunning,
+              normalizedToken != settingsAppliedAtServerStart?.serverAPIKey else {
+            return
+        }
+        restartServer()
+    }
+
+    func logOutSystemHuggingFaceCredential() throws {
+        guard let credential = systemHuggingFaceCredential else {
+            return
+        }
+        try HuggingFaceAuthentication.logOut(credential: credential)
+        systemHuggingFaceCredential = nil
+        restartServerForHuggingFaceCredentialChangeIfNeeded()
+    }
+
+    private func restartServerForHuggingFaceCredentialChangeIfNeeded() {
+        guard isRunning,
+              effectiveHuggingFaceToken != huggingFaceTokenAppliedAtServerStart else {
+            return
+        }
+        restartServer()
     }
 
     var metricsAreStale: Bool {
@@ -200,6 +246,20 @@ final class NativModel: ObservableObject {
         return settingsAppliedAtServerStart.normalized().serverPort
     }
 
+    var activeServerHost: String? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.normalized().serverHost
+    }
+
+    var activeServerBaseURL: URL? {
+        guard isRunning, let settingsAppliedAtServerStart else {
+            return nil
+        }
+        return settingsAppliedAtServerStart.serverBaseURL
+    }
+
     func startServer() {
         var shouldStartMetrics = false
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
@@ -237,6 +297,7 @@ final class NativModel: ObservableObject {
     }
 
     func stopServer(preserveSessionStats: Bool = false) {
+        cancelPendingServerRestart()
         modelLoadingProgress = nil
         if preserveSessionStats {
             preserveCurrentSessionStats()
@@ -270,6 +331,89 @@ final class NativModel: ObservableObject {
         } else {
             startServer()
         }
+    }
+
+    func restartServer() {
+        guard server.isRunning else {
+            return
+        }
+
+        stopServer()
+        guard !server.isRunning else {
+            appendLog("\nCould not stop the current server to apply the configuration change.\n")
+            return
+        }
+        startServer()
+    }
+
+    func scheduleServerRestartForEndpointChange() {
+        cancelPendingServerRestart()
+        guard isRunning else {
+            return
+        }
+
+        let scheduledSettings = settings.normalized()
+        let endpointHasChanged = scheduledSettings.serverHost != activeServerHost
+            || scheduledSettings.serverPort != activeServerPort
+        guard endpointHasChanged else {
+            return
+        }
+
+        let restartID = UUID()
+        pendingServerRestartID = restartID
+        serverRestartCountdown = 3
+        serverRestartTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.clearPendingServerRestart(id: restartID)
+            }
+
+            for secondsRemaining in stride(from: 3, through: 1, by: -1) {
+                guard !Task.isCancelled, self.isRunning else {
+                    return
+                }
+                self.serverRestartCountdown = secondsRemaining
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+            }
+
+            let currentSettings = self.settings.normalized()
+            guard currentSettings.serverHost == scheduledSettings.serverHost,
+                  currentSettings.serverPort == scheduledSettings.serverPort
+            else {
+                return
+            }
+
+            let endpointStillNeedsRestart = currentSettings.serverHost != self.activeServerHost
+                || currentSettings.serverPort != self.activeServerPort
+            guard endpointStillNeedsRestart else {
+                return
+            }
+
+            self.clearPendingServerRestart(id: restartID)
+            self.restartServer()
+        }
+    }
+
+    private func cancelPendingServerRestart() {
+        serverRestartTask?.cancel()
+        serverRestartTask = nil
+        pendingServerRestartID = nil
+        serverRestartCountdown = nil
+    }
+
+    private func clearPendingServerRestart(id: UUID) {
+        guard pendingServerRestartID == id else {
+            return
+        }
+        serverRestartTask = nil
+        pendingServerRestartID = nil
+        serverRestartCountdown = nil
     }
 
     func switchLanguageModel(to modelID: String?) {
@@ -482,19 +626,22 @@ final class NativModel: ObservableObject {
         }
         server.onTermination = { [weak self] status in
             Task { @MainActor [weak self] in
-                self?.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
-                self?.isRunning = false
-                self?.settingsAppliedAtServerStart = nil
-                self?.huggingFaceTokenAppliedAtServerStart = nil
-                self?.stopMetricsPolling(clearSession: true)
-                self?.metricsLoading = false
-                self?.modelLoadingProgress = nil
-                if self?.isStoppingForModelSwitch != true {
-                    self?.modelSwitchInProgress = false
-                    self?.modelSwitchTargetID = nil
-                    self?.clearPreservedSessionStats()
+                guard let self, !self.server.isRunning else {
+                    return
                 }
-                self?.notifyMenuStateChanged()
+                self.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
+                self.isRunning = false
+                self.settingsAppliedAtServerStart = nil
+                self.huggingFaceTokenAppliedAtServerStart = nil
+                self.stopMetricsPolling(clearSession: true)
+                self.metricsLoading = false
+                self.modelLoadingProgress = nil
+                if !self.isStoppingForModelSwitch {
+                    self.modelSwitchInProgress = false
+                    self.modelSwitchTargetID = nil
+                    self.clearPreservedSessionStats()
+                }
+                self.notifyMenuStateChanged()
             }
         }
     }

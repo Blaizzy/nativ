@@ -1,7 +1,13 @@
 import AppKit
 import Darwin
+import IOKit
 import NativServerKit
 import SwiftUI
+
+private enum EndpointEditorField: Hashable {
+    case host
+    case port
+}
 
 struct DeveloperView: View {
     private static let configurationToggleClearance: CGFloat = 36
@@ -13,7 +19,8 @@ struct DeveloperView: View {
     @State private var logQuery = ""
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
-    @State private var isSelectedPortAvailable = true
+    @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
+    @FocusState private var focusedEndpointField: EndpointEditorField?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -26,7 +33,7 @@ struct DeveloperView: View {
                         pageHeader
                         runtimeGrid
                         serverEndpointsPanel
-                        huggingFaceAuthenticationPanel
+                        authenticationPanels
                         logPanel
                             .frame(height: max(320, geometry.size.height - 550))
                     }
@@ -45,7 +52,7 @@ struct DeveloperView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Developer")
                     .font(.title2.weight(.semibold))
-                Text("Runtime diagnostics, Hub authentication, API endpoints, and live server output.")
+                Text("Runtime diagnostics, server authentication, API endpoints, and live server output.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -145,12 +152,35 @@ struct DeveloperView: View {
 
     private var huggingFaceAuthenticationPanel: some View {
         HuggingFaceAuthenticationPanel(
-            customToken: Binding(
-                get: { model.settings.huggingFaceToken ?? "" },
-                set: { model.settings.huggingFaceToken = $0.isEmpty ? nil : $0 }
-            ),
-            hasEnvironmentToken: model.environmentHuggingFaceToken != nil
+            customToken: model.settings.huggingFaceToken,
+            systemCredential: model.systemHuggingFaceCredential,
+            onSetCustomToken: model.setCustomHuggingFaceToken,
+            onLogOutSystemCredential: model.logOutSystemHuggingFaceCredential
         )
+    }
+
+    private var serverAPIAuthenticationPanel: some View {
+        ServerAPIAuthenticationPanel(
+            token: model.settings.serverAPIKey,
+            onSetToken: model.setServerAPIKey
+        )
+    }
+
+    private var authenticationPanels: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(
+                    .adaptive(minimum: 500),
+                    spacing: 12,
+                    alignment: .top
+                )
+            ],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            huggingFaceAuthenticationPanel
+            serverAPIAuthenticationPanel
+        }
     }
 
     private var serverEndpointsPanel: some View {
@@ -162,9 +192,11 @@ struct DeveloperView: View {
                     endpointCategoryPicker
                         .frame(width: 300, alignment: .leading)
 
+                    serverHostField
+
                     serverPortField
                 }
-                .frame(width: 660, alignment: .leading)
+                .frame(width: 850, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 9) {
                     endpointPanelTitle
@@ -172,6 +204,8 @@ struct DeveloperView: View {
                     HStack(spacing: 10) {
                         endpointCategoryPicker
                             .frame(width: 320)
+
+                        serverHostField
 
                         serverPortField
 
@@ -182,10 +216,13 @@ struct DeveloperView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .background(PanelHeaderAccent(tint: .blue))
 
-            if showsPortInUseWarning {
+            serverRestartIndicator
+
+            if let endpointAvailabilityWarning {
                 Label(
-                    "Port \(String(model.settings.normalized().serverPort)) is already in use — that port can’t be used.",
+                    endpointAvailabilityWarning,
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.footnote)
@@ -216,6 +253,29 @@ struct DeveloperView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
+        .onChange(of: serverEndpointProbeID) {
+            model.scheduleServerRestartForEndpointChange()
+        }
+    }
+
+    @ViewBuilder
+    private var serverRestartIndicator: some View {
+        if let countdown = model.serverRestartCountdown {
+            let timeUnit = countdown == 1 ? "second" : "seconds"
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+
+                Text("Applying endpoint change — restarting server in \(countdown) \(timeUnit)…")
+                    .font(.footnote.weight(.medium))
+            }
+            .foregroundStyle(.blue)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+            .accessibilityElement(children: .combine)
+        }
     }
 
     private var endpointPanelTitle: some View {
@@ -236,30 +296,82 @@ struct DeveloperView: View {
     private var serverPortField: some View {
         HStack(spacing: 6) {
             Text("Port")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
             TextField("", value: $model.settings.serverPort, format: .number.grouping(.never))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
                 .font(.callout.monospaced())
                 .multilineTextAlignment(.trailing)
-                .frame(width: 64)
+                .focused($focusedEndpointField, equals: .port)
+                .editableFieldChrome(
+                    isFocused: focusedEndpointField == .port
+                )
+                .frame(width: 78)
+                .accessibilityLabel("Server port")
                 .onChange(of: model.settings.serverPort) { _, newValue in
                     model.settings.serverPort = min(max(newValue, 1), 65_535)
                 }
         }
-        .help("The local server listens at 127.0.0.1 on this port. Changing it requires a server restart.")
-        .task(id: model.settings.normalized().serverPort) {
+        .help("The port the local server listens on. Changes restart a running server after 3 seconds.")
+        .task(id: serverEndpointAvailabilityProbeID) {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            let port = model.settings.normalized().serverPort
-            let available = await Task.detached { ServerPortProbe.isAvailable(port) }.value
+            let settings = model.settings.normalized()
+            let availability = await Task.detached {
+                ServerPortProbe.availability(host: settings.serverHost, port: settings.serverPort)
+            }.value
             guard !Task.isCancelled else { return }
-            isSelectedPortAvailable = available
+            selectedEndpointAvailability = availability
         }
     }
 
-    private var showsPortInUseWarning: Bool {
-        !isSelectedPortAvailable && model.settings.normalized().serverPort != model.activeServerPort
+    private var serverHostField: some View {
+        HStack(spacing: 6) {
+            Text("Host")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+            TextField("", text: $model.settings.serverHost)
+                .textFieldStyle(.plain)
+                .font(.callout.monospaced())
+                .focused($focusedEndpointField, equals: .host)
+                .editableFieldChrome(
+                    isFocused: focusedEndpointField == .host
+                )
+                .frame(width: 144)
+                .accessibilityLabel("Server host")
+                .onSubmit {
+                    model.settings.serverHost = model.settings.normalized().serverHost
+                }
+        }
+        .help("The host or IP address the local server binds to. Changes restart a running server after 3 seconds.")
+    }
+
+    private var serverEndpointProbeID: String {
+        let settings = model.settings.normalized()
+        return "\(settings.serverHost):\(settings.serverPort)"
+    }
+
+    private var serverEndpointAvailabilityProbeID: String {
+        let activeEndpoint = model.activeServerBaseURL?.absoluteString ?? "offline"
+        return "\(serverEndpointProbeID):\(activeEndpoint)"
+    }
+
+    private var endpointAvailabilityWarning: String? {
+        let settings = model.settings.normalized()
+        let isActiveEndpoint = settings.serverHost == model.activeServerHost
+            && settings.serverPort == model.activeServerPort
+        guard !isActiveEndpoint, model.serverRestartCountdown == nil else {
+            return nil
+        }
+
+        switch selectedEndpointAvailability {
+        case .available:
+            return nil
+        case .addressInUse:
+            return "\(settings.serverBaseURL.absoluteString) is already in use — Nativ can’t bind to that address."
+        case .invalidAddress:
+            return "\(settings.serverBaseURL.absoluteString) can’t be used — check the host and port."
+        }
     }
 
     private var endpointCategoryPicker: some View {
@@ -304,12 +416,13 @@ struct DeveloperView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .background(PanelHeaderAccent(tint: .blue))
     }
 
     private func logPanelTitle(_ output: LogOutput) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "terminal")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.blue)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Server Output")
@@ -402,27 +515,411 @@ struct DeveloperView: View {
     }
 }
 
-private struct HuggingFaceAuthenticationPanel: View {
-    @Binding var customToken: String
-    let hasEnvironmentToken: Bool
-    @State private var isCustomTokenExpanded: Bool
-    @State private var hasSelectedDisclosureState = false
+private struct PanelHeaderAccent: View {
+    let tint: Color
 
-    init(customToken: Binding<String>, hasEnvironmentToken: Bool) {
-        _customToken = customToken
-        self.hasEnvironmentToken = hasEnvironmentToken
-        _isCustomTokenExpanded = State(initialValue: !hasEnvironmentToken)
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                LinearGradient(
+                    colors: [tint.opacity(0.12), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(maxWidth: 420)
+
+                Spacer(minLength: 0)
+            }
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [tint.opacity(0.85), tint.opacity(0.25)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 120, height: 3)
+                .padding(.top, 2)
+                .padding(.leading, 16)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
+}
+
+private struct EditableFieldChrome: ViewModifier {
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(
+                        isFocused
+                            ? Color.blue.opacity(0.08)
+                            : Color(nsColor: .textBackgroundColor)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(
+                        isFocused ? Color.blue : Color.primary.opacity(0.22),
+                        lineWidth: isFocused ? 1.5 : 1
+                    )
+            )
+            .shadow(
+                color: isFocused ? Color.blue.opacity(0.16) : .clear,
+                radius: 3
+            )
+            .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
+}
+
+private extension View {
+    func editableFieldChrome(isFocused: Bool) -> some View {
+        modifier(EditableFieldChrome(isFocused: isFocused))
+    }
+}
+
+private struct ServerAPIAuthenticationPanel: View {
+    let token: String?
+    let onSetToken: (String?) -> Void
+    @State private var tokenEntry = ""
+    @State private var isEditingToken = false
+    @State private var showsRemovalConfirmation = false
+    @FocusState private var tokenFieldIsFocused: Bool
+
+    private var activeToken: String? {
+        ServerAPIAuthentication.normalizedToken(token)
+    }
+
+    private var tokenInfo: ServerAPITokenInfo? {
+        ServerAPIAuthentication.tokenInfo(activeToken)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(.blue)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Server API Authentication")
+                        .font(.callout.weight(.semibold))
+                    Text("Protect API requests with a custom Bearer token.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Label(authenticationStatus, systemImage: authenticationStatusImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(authenticationStatusColor)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(
+                        authenticationStatusColor.opacity(0.12),
+                        in: Capsule()
+                    )
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(PanelHeaderAccent(tint: .blue))
+
+            Divider()
+
+            Group {
+                if isEditingToken {
+                    tokenEditor
+                } else {
+                    credentialOverview
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .confirmationDialog(
+            "Remove the server API token?",
+            isPresented: $showsRemovalConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Token", role: .destructive) {
+                onSetToken(nil)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "API requests will no longer require this token. "
+                    + "The running server restarts automatically."
+            )
+        }
+    }
+
+    private var authenticationStatus: String {
+        activeToken == nil ? "Not Configured" : "Configured"
+    }
+
+    private var authenticationStatusImage: String {
+        activeToken == nil ? "circle.dashed" : "checkmark.circle.fill"
+    }
+
+    private var authenticationStatusColor: Color {
+        activeToken == nil ? .secondary : .green
+    }
+
+    private var credentialOverview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label(
+                    activeToken == nil ? "No Active Credential" : "Active Credential",
+                    systemImage: activeToken == nil ? "key" : "key.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(activeToken == nil ? .secondary : .primary)
+
+                Spacer()
+
+                if activeToken != nil {
+                    Button {
+                        copyToken()
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Copy the active server API token")
+
+                    Button {
+                        beginEditingToken()
+                    } label: {
+                        Label("Change", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(role: .destructive) {
+                        showsRemovalConfirmation = true
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        beginEditingToken()
+                    } label: {
+                        Label("Add Token", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            HStack(spacing: 14) {
+                credentialAttribute(
+                    title: "Token",
+                    value: tokenInfo?.maskedValue ?? "Not available",
+                    systemImage: "ellipsis.rectangle",
+                    monospaced: true
+                )
+                .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
+                .privacySensitive()
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
+                    title: "Length",
+                    value: activeTokenLength,
+                    systemImage: "number"
+                )
+                .frame(minWidth: 110, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+    }
+
+    private var tokenEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(
+                    activeToken == nil ? "Add Server API Token" : "Replace Server API Token",
+                    systemImage: "key.fill"
+                )
+                .font(.caption.weight(.semibold))
+
+                Spacer()
+
+                Button {
+                    tokenEntry = ServerAPIAuthentication.generateToken()
+                    tokenFieldIsFocused = true
+                } label: {
+                    Label("Generate Secure Token", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            HStack(spacing: 8) {
+                SecureField("Paste or generate a server API token", text: $tokenEntry)
+                    .textFieldStyle(.plain)
+                    .font(.callout.monospaced())
+                    .focused($tokenFieldIsFocused)
+                    .editableFieldChrome(isFocused: tokenFieldIsFocused)
+                    .privacySensitive()
+                    .accessibilityLabel("Server API token")
+                    .onSubmit(saveToken)
+
+                Button("Cancel") {
+                    cancelEditingToken()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Save Token") {
+                    saveToken()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(ServerAPIAuthentication.normalizedToken(tokenEntry) == nil)
+            }
+
+            Text("Clients send this value as an Authorization Bearer token.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .task {
+            tokenFieldIsFocused = true
+        }
+    }
+
+    private var activeTokenLength: String {
+        guard let characterCount = tokenInfo?.characterCount else {
+            return "—"
+        }
+        let unit = characterCount == 1 ? "character" : "characters"
+        return "\(characterCount) \(unit)"
+    }
+
+    private func credentialAttribute(
+        title: String,
+        value: String,
+        systemImage: String,
+        monospaced: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(title, systemImage: systemImage)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(
+                    monospaced
+                        ? .caption.monospaced().weight(.medium)
+                        : .callout.weight(.medium)
+                )
+                .lineLimit(1)
+        }
+    }
+
+    private func beginEditingToken() {
+        tokenEntry = ""
+        isEditingToken = true
+    }
+
+    private func cancelEditingToken() {
+        isEditingToken = false
+        tokenFieldIsFocused = false
+        tokenEntry = ""
+    }
+
+    private func saveToken() {
+        guard let token = ServerAPIAuthentication.normalizedToken(tokenEntry) else {
+            return
+        }
+        onSetToken(token)
+        isEditingToken = false
+        tokenFieldIsFocused = false
+        tokenEntry = ""
+    }
+
+    private func copyToken() {
+        guard let activeToken else {
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(activeToken, forType: .string)
+    }
+}
+
+private enum HuggingFaceTokenMetadataState {
+    case idle
+    case loading
+    case loaded(HuggingFaceTokenMetadata)
+    case unavailable
+}
+
+private struct HuggingFaceAuthenticationPanel: View {
+    let customToken: String?
+    let systemCredential: HuggingFaceCredential?
+    let onSetCustomToken: (String?) -> Void
+    let onLogOutSystemCredential: () throws -> Void
+    @State private var tokenEntry = ""
+    @State private var isAddingToken = false
+    @State private var showsLogoutConfirmation = false
+    @State private var managementError: String?
+    @State private var tokenMetadataState = HuggingFaceTokenMetadataState.idle
+    @FocusState private var tokenFieldIsFocused: Bool
 
     private var hasCustomToken: Bool {
         HuggingFaceAuthentication.normalizedToken(customToken) != nil
+    }
+
+    private var systemTokenSource: HuggingFaceTokenSource? {
+        systemCredential?.source
+    }
+
+    private var activeToken: String? {
+        HuggingFaceAuthentication.effectiveToken(
+            customToken: customToken,
+            environmentToken: systemCredential?.token
+        )
+    }
+
+    private var activeTokenInfo: HuggingFaceTokenInfo? {
+        HuggingFaceAuthentication.tokenInfo(activeToken)
+    }
+
+    private var hasActiveCredential: Bool {
+        activeToken != nil
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "key.horizontal")
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(.blue)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Hugging Face Authentication")
@@ -435,71 +932,57 @@ private struct HuggingFaceAuthenticationPanel: View {
                 Spacer()
 
                 Label(authenticationStatus, systemImage: authenticationStatusImage)
-                    .font(.caption.weight(.medium))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(authenticationStatusColor)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(
+                        authenticationStatusColor.opacity(0.12),
+                        in: Capsule()
+                    )
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .background(PanelHeaderAccent(tint: .blue))
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isCustomTokenExpanded.toggle()
-                        hasSelectedDisclosureState = true
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "chevron.right")
+            VStack(alignment: .leading, spacing: 12) {
+                credentialOverview
+
+                if isAddingToken {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Add Hugging Face token")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(isCustomTokenExpanded ? 90 : 0))
-                            .frame(width: 10)
 
-                        Text("Use Custom Token")
-                            .font(.callout.weight(.medium))
-
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Use Custom Token")
-                .accessibilityValue(isCustomTokenExpanded ? "Expanded" : "Collapsed")
-
-                if isCustomTokenExpanded {
-                    VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 8) {
-                            SecureField("Enter token", text: $customToken)
+                            SecureField("Paste Hugging Face token", text: $tokenEntry)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.callout.monospaced())
+                                .focused($tokenFieldIsFocused)
                                 .privacySensitive()
-                                .accessibilityLabel("Custom Hugging Face token")
+                                .accessibilityLabel("Hugging Face token")
+                                .onSubmit(saveToken)
 
-                            if hasCustomToken {
-                                Button {
-                                    customToken = ""
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                }
-                                .buttonStyle(.borderless)
-                                .foregroundStyle(.secondary)
-                                .help("Clear custom token")
-                            }
-
-                            Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
-                                Label("Manage Tokens", systemImage: "arrow.up.right")
+                            Button("Cancel") {
+                                cancelAddingToken()
                             }
                             .buttonStyle(.bordered)
+
+                            Button("Use Token") {
+                                saveToken()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                HuggingFaceAuthentication.normalizedToken(tokenEntry) == nil
+                            )
                         }
 
-                        Text(authenticationDetail)
+                        Text("The running server restarts automatically after the credential changes.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.top, 10)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             .padding(.horizontal, 12)
@@ -511,43 +994,292 @@ private struct HuggingFaceAuthenticationPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .onChange(of: hasEnvironmentToken) { wasAvailable, isAvailable in
-            if !wasAvailable && isAvailable && !hasSelectedDisclosureState {
-                isCustomTokenExpanded = false
+        .confirmationDialog(
+            logoutConfirmationTitle,
+            isPresented: $showsLogoutConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(logoutConfirmationAction, role: .destructive) {
+                performLogout()
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(logoutConfirmationMessage)
         }
-        .onChange(of: customToken) { oldValue, newValue in
-            if oldValue != newValue {
-                hasSelectedDisclosureState = true
+        .alert(
+            "Unable to Log Out",
+            isPresented: Binding(
+                get: { managementError != nil },
+                set: { if !$0 { managementError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                managementError = nil
             }
+        } message: {
+            Text(managementError ?? "An unknown error occurred.")
+        }
+        .task(id: activeToken) {
+            await loadTokenMetadata(for: activeToken)
         }
     }
 
     private var authenticationStatus: String {
-        if hasCustomToken { return "Custom Token" }
-        if hasEnvironmentToken { return "HF_TOKEN" }
-        return "Not Configured"
+        hasActiveCredential ? "Configured" : "Not Configured"
     }
 
     private var authenticationStatusImage: String {
-        hasCustomToken || hasEnvironmentToken ? "checkmark.circle.fill" : "circle.dashed"
+        hasActiveCredential ? "checkmark.circle.fill" : "circle.dashed"
     }
 
     private var authenticationStatusColor: Color {
-        hasCustomToken || hasEnvironmentToken ? .green : .secondary
+        hasActiveCredential ? .green : .secondary
     }
 
-    private var authenticationDetail: String {
-        if hasCustomToken && hasEnvironmentToken {
-            return "The custom token overrides HF_TOKEN from your environment. Access to a gated model must also be approved on Hugging Face."
+    private var credentialOverview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label(
+                    hasActiveCredential ? "Active Credential" : "No Active Credential",
+                    systemImage: hasActiveCredential ? "key.fill" : "key"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(hasActiveCredential ? .primary : .secondary)
+
+                Spacer()
+
+                if hasCustomToken || systemCredential != nil {
+                    Button(role: .destructive) {
+                        requestLogout()
+                    } label: {
+                        Label(
+                            "Log Out",
+                            systemImage: "rectangle.portrait.and.arrow.right"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        beginAddingToken()
+                    } label: {
+                        Label("Add Token", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
+                    Label("Manage on Hugging Face", systemImage: "arrow.up.right")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 14) {
+                credentialAttribute(
+                    title: "Token",
+                    value: activeTokenInfo?.maskedValue ?? "Not available",
+                    systemImage: "ellipsis.rectangle",
+                    monospaced: true
+                )
+                .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
+                .privacySensitive()
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
+                    title: "Token Name",
+                    value: activeTokenName,
+                    systemImage: "tag"
+                )
+                .frame(minWidth: 72, alignment: .leading)
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
+                    title: "Permission",
+                    value: activeTokenPermission,
+                    systemImage: "lock.shield"
+                )
+                .frame(minWidth: 72, alignment: .leading)
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
+                    title: "Length",
+                    value: activeTokenLength,
+                    systemImage: "number"
+                )
+                .frame(minWidth: 88, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+    }
+
+    private var activeTokenLength: String {
+        guard let characterCount = activeTokenInfo?.characterCount else {
+            return "—"
+        }
+        let unit = characterCount == 1 ? "character" : "characters"
+        return "\(characterCount) \(unit)"
+    }
+
+    private var activeTokenName: String {
+        switch tokenMetadataState {
+        case .idle:
+            "—"
+        case .loading:
+            "Checking…"
+        case .loaded(let metadata):
+            metadata.name ?? "Not reported"
+        case .unavailable:
+            "Unavailable"
+        }
+    }
+
+    private var activeTokenPermission: String {
+        switch tokenMetadataState {
+        case .idle:
+            "—"
+        case .loading:
+            "Checking…"
+        case .loaded(let metadata):
+            metadata.permission ?? "Not reported"
+        case .unavailable:
+            "Unavailable"
+        }
+    }
+
+    private func credentialAttribute(
+        title: String,
+        value: String,
+        systemImage: String,
+        monospaced: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(title, systemImage: systemImage)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(
+                    monospaced
+                        ? .caption.monospaced().weight(.medium)
+                        : .callout.weight(.medium)
+                )
+                .lineLimit(1)
+        }
+    }
+
+    private var systemTokenDescription: String? {
+        switch systemTokenSource {
+        case .environment:
+            "HF_TOKEN from your environment"
+        case .credentialFile:
+            "your Hugging Face login"
+        case nil:
+            nil
+        }
+    }
+
+    private var logoutConfirmationTitle: String {
+        "Log out of Hugging Face?"
+    }
+
+    private var logoutConfirmationAction: String {
+        "Log Out"
+    }
+
+    private var logoutConfirmationMessage: String {
+        if hasCustomToken, let systemTokenDescription {
+            return "Nativ will remove its custom token, fall back to \(systemTokenDescription), and restart the running server."
         }
         if hasCustomToken {
-            return "Using the custom token. Access to a gated model must also be approved on Hugging Face."
+            return "Nativ will remove its custom token and restart the running server without Hugging Face authentication."
         }
-        if hasEnvironmentToken {
-            return "Using HF_TOKEN from your process or login-shell environment. Enter a custom token above to override it."
+        return "This removes the active Hugging Face CLI login file from this Mac and restarts the running server without it."
+    }
+
+    private func beginAddingToken() {
+        tokenEntry = ""
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isAddingToken = true
         }
-        return "Set HF_TOKEN in your environment or enter a custom token. Access to a gated model must also be approved on Hugging Face."
+        tokenFieldIsFocused = true
+    }
+
+    private func cancelAddingToken() {
+        tokenFieldIsFocused = false
+        tokenEntry = ""
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isAddingToken = false
+        }
+    }
+
+    private func saveToken() {
+        guard let token = HuggingFaceAuthentication.normalizedToken(tokenEntry) else {
+            return
+        }
+        onSetCustomToken(token)
+        cancelAddingToken()
+    }
+
+    @MainActor
+    private func loadTokenMetadata(for token: String?) async {
+        tokenMetadataState = .idle
+        guard let token else {
+            return
+        }
+        if let cachedMetadata = HuggingFaceTokenMetadataCache.load(for: token) {
+            tokenMetadataState = .loaded(cachedMetadata)
+            return
+        }
+
+        tokenMetadataState = .loading
+        do {
+            let metadata = try await HuggingFaceAuthentication.tokenMetadata(for: token)
+            guard !Task.isCancelled else {
+                return
+            }
+            try? HuggingFaceTokenMetadataCache.save(metadata, for: token)
+            tokenMetadataState = .loaded(metadata)
+        } catch {
+            guard !Task.isCancelled else {
+                return
+            }
+            tokenMetadataState = .unavailable
+        }
+    }
+
+    private func requestLogout() {
+        if !hasCustomToken, systemTokenSource == .environment {
+            managementError =
+                HuggingFaceAuthenticationError.environmentTokenCannotBeRemoved
+                .localizedDescription
+            return
+        }
+        showsLogoutConfirmation = true
+    }
+
+    private func performLogout() {
+        if hasCustomToken {
+            onSetCustomToken(nil)
+            return
+        }
+        do {
+            try onLogOutSystemCredential()
+        } catch {
+            managementError = error.localizedDescription
+        }
     }
 }
 
@@ -610,6 +1342,10 @@ private enum ServerEndpointMethod: String {
     case post = "POST"
     case delete = "DELETE"
 
+    var displayTitle: String {
+        self == .delete ? "DEL" : rawValue
+    }
+
     var tint: Color {
         switch self {
         case .get: .blue
@@ -628,13 +1364,13 @@ private struct ServerEndpointRow: View {
     var body: some View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
-                Text(endpoint.method.rawValue)
-                    .font(.caption2.monospaced().weight(.bold))
+                Text(endpoint.method.displayTitle)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .font(.caption.monospaced())
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -738,6 +1474,7 @@ private struct LogOutput {
 
 private struct LogSearchField: View {
     @Binding var text: String
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 7) {
@@ -746,6 +1483,8 @@ private struct LogSearchField: View {
 
             TextField("Search logs", text: $text)
                 .textFieldStyle(.plain)
+                .focused($isFocused)
+                .accessibilityLabel("Search server logs")
 
             if !text.isEmpty {
                 Button {
@@ -758,16 +1497,7 @@ private struct LogSearchField: View {
                 .help("Clear search")
             }
         }
-        .padding(.horizontal, 9)
-        .frame(height: 28)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color(nsColor: .textBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
+        .editableFieldChrome(isFocused: isFocused)
     }
 }
 
@@ -886,6 +1616,8 @@ private struct RuntimeInfoCard: View {
 @MainActor
 final class SystemRuntimeMonitor: ObservableObject {
     @Published private(set) var usedMemoryBytes: UInt64 = 0
+    @Published private(set) var cpuUsage: Double = 0
+    @Published private(set) var gpuUsage: Double?
 
     let chipName = SystemRuntimeInfo.chipName
     let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
@@ -894,6 +1626,11 @@ final class SystemRuntimeMonitor: ObservableObject {
     let mlxVLMVersion = SystemRuntimeInfo.mlxVLMVersion
 
     private var timer: Timer?
+    private var previousCPUTicks: SystemRuntimeInfo.CPUTicks?
+    private(set) var cpuHistory: [Double] = []
+    private(set) var gpuHistory: [Double] = []
+    private(set) var memoryHistory: [Double] = []
+    var onUpdate: (() -> Void)?
 
     var memoryUsageFraction: Double {
         guard totalMemoryBytes > 0 else { return 0 }
@@ -918,11 +1655,40 @@ final class SystemRuntimeMonitor: ObservableObject {
     }
 
     private func refresh() {
+        let currentCPUTicks = SystemRuntimeInfo.cpuTicks
+        cpuUsage = SystemRuntimeInfo.cpuUsage(
+            current: currentCPUTicks,
+            previous: previousCPUTicks
+        )
+        previousCPUTicks = currentCPUTicks
+        gpuUsage = SystemRuntimeInfo.gpuUsage
         usedMemoryBytes = SystemRuntimeInfo.usedMemoryBytes
+
+        append(cpuUsage, to: &cpuHistory)
+        append(gpuUsage ?? 0, to: &gpuHistory)
+        append(memoryUsageFraction, to: &memoryHistory)
+        onUpdate?()
+    }
+
+    private func append(_ value: Double, to history: inout [Double]) {
+        history.append(value)
+        if history.count > 30 {
+            history.removeFirst(history.count - 30)
+        }
     }
 }
 
 private enum SystemRuntimeInfo {
+    struct CPUTicks {
+        let user: UInt64
+        let system: UInt64
+        let idle: UInt64
+
+        var total: UInt64 {
+            user + system + idle
+        }
+    }
+
     static let chipName: String = {
         sysctlString("machdep.cpu.brand_string")
             ?? sysctlString("hw.model")
@@ -998,6 +1764,66 @@ private enum SystemRuntimeInfo {
             + UInt64(statistics.compressor_page_count)
         let usedBytes = usedPages * UInt64(vm_kernel_page_size)
         return min(usedBytes, ProcessInfo.processInfo.physicalMemory)
+    }
+
+    static var cpuTicks: CPUTicks {
+        var statistics = host_cpu_load_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<host_cpu_load_info_data_t>.stride
+                / MemoryLayout<integer_t>.stride
+        )
+        let result = withUnsafeMutablePointer(to: &statistics) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            return CPUTicks(user: 0, system: 0, idle: 1)
+        }
+
+        return CPUTicks(
+            user: UInt64(
+                statistics.cpu_ticks.0 + statistics.cpu_ticks.3
+            ),
+            system: UInt64(statistics.cpu_ticks.1),
+            idle: UInt64(statistics.cpu_ticks.2)
+        )
+    }
+
+    static func cpuUsage(current: CPUTicks, previous: CPUTicks?) -> Double {
+        let delta: CPUTicks
+        if let previous {
+            delta = CPUTicks(
+                user: current.user >= previous.user ? current.user - previous.user : 0,
+                system: current.system >= previous.system
+                    ? current.system - previous.system
+                    : 0,
+                idle: current.idle >= previous.idle ? current.idle - previous.idle : 0
+            )
+        } else {
+            delta = current
+        }
+        guard delta.total > 0 else { return 0 }
+        return min(max(1 - (Double(delta.idle) / Double(delta.total)), 0), 1)
+    }
+
+    static var gpuUsage: Double? {
+        guard let matching = IOServiceMatching("AGXAccelerator") else { return nil }
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+        guard service != IO_OBJECT_NULL else { return nil }
+        defer { IOObjectRelease(service) }
+
+        guard let statistics = IORegistryEntryCreateCFProperty(
+            service,
+            "PerformanceStatistics" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue() as? NSDictionary,
+              let percentage = statistics["Device Utilization %"] as? NSNumber
+        else {
+            return nil
+        }
+        return min(max(percentage.doubleValue / 100, 0), 1)
     }
 
     private static func sysctlString(_ name: String) -> String? {

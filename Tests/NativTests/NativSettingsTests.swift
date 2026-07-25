@@ -11,8 +11,9 @@ final class NativSettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            Array(settings.launchArguments.prefix(10)),
+            Array(settings.launchArguments.prefix(12)),
             [
+                "--host", "127.0.0.1",
                 "--port", "8080",
                 "--max-tokens", "2048",
                 "--model", "org/language",
@@ -40,6 +41,125 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--image-model"))
         XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
+    }
+
+    func testServerHostIsNormalizedAndPassedToServer() {
+        let settings = NativSettings(serverHost: "  0.0.0.0  ", serverPort: 9_001)
+
+        XCTAssertEqual(settings.normalized().serverHost, "0.0.0.0")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://0.0.0.0:9001")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "0.0.0.0"))
+    }
+
+    func testIPv6ServerHostProducesValidBaseURL() {
+        let settings = NativSettings(serverHost: "[::1]", serverPort: 9_002)
+
+        XCTAssertEqual(settings.normalized().serverHost, "::1")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://[::1]:9002")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::1"))
+    }
+
+    func testMissingServerHostUsesLoopbackDefault() throws {
+        let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+
+        XCTAssertEqual(settings.serverHost, "127.0.0.1")
+    }
+
+    func testServerHostRequiresServerRestart() {
+        let original = NativSettings()
+        var changed = original
+        changed.serverHost = "0.0.0.0"
+
+        XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
+    }
+
+    func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {
+        let settings = NativSettings(serverAPIKey: "  nativ_1234567890abcdef\n")
+        let normalized = settings.normalized()
+
+        XCTAssertEqual(normalized.serverAPIKey, "nativ_1234567890abcdef")
+        XCTAssertEqual(
+            ServerAPIAuthentication.tokenInfo(normalized.serverAPIKey),
+            ServerAPITokenInfo(
+                maskedValue: "nativ_••••••••cdef",
+                characterCount: 22
+            )
+        )
+        XCTAssertEqual(
+            normalized.launchEnvironment["MLX_VLM_SERVER_API_KEY"],
+            "nativ_1234567890abcdef"
+        )
+    }
+
+    func testBlankServerAPITokenIsOmitted() {
+        let settings = NativSettings(serverAPIKey: " \n ").normalized()
+
+        XCTAssertNil(settings.serverAPIKey)
+        XCTAssertNil(settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
+    }
+
+    func testGeneratedServerAPITokenHasNativPrefix() {
+        let token = ServerAPIAuthentication.generateToken()
+
+        XCTAssertTrue(token.hasPrefix("nativ_"))
+        XCTAssertEqual(token, ServerAPIAuthentication.normalizedToken(token))
+    }
+
+    func testServerAuthorizationAddsBearerHeader() {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
+
+        NativServerAuthorization.authorize(&request, apiKey: "  nativ_test_token\n")
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_test_token"
+        )
+    }
+
+    func testServerAuthorizationOmitsBlankToken() {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
+
+        NativServerAuthorization.authorize(&request, apiKey: " \n ")
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testChatClientAddsServerAuthorization() throws {
+        let client = NativChatClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_chat_token"
+        )
+        let payload = MLXChatCompletionRequest(
+            model: "org/model",
+            messages: [MLXChatMessage(role: "user", content: "Hello")],
+            maxTokens: 1,
+            temperature: 0,
+            topK: 0,
+            topP: 1,
+            minP: 0
+        )
+
+        let request = try client.makeURLRequest(payload: payload, accepts: "application/json")
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_chat_token"
+        )
+    }
+
+    func testImageClientAddsServerAuthorization() throws {
+        let client = NativImageClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_image_token"
+        )
+        let payload = MLXImageGenerationRequest(model: "org/model", prompt: "A lighthouse")
+
+        let request = try client.makeURLRequest(payload, path: "v1/images/generations")
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_image_token"
+        )
     }
 
     func testEveryPreloadSelectionRequiresServerRestart() {

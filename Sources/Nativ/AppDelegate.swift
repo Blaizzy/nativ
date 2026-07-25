@@ -338,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let softwareUpdater = SoftwareUpdater()
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
+    private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
     private var mainWindowOpener: (() -> Void)?
     private var statusItem: NSStatusItem?
     private var serverActionMenuItem: NSMenuItem?
@@ -350,6 +351,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private weak var highlightedMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        runtime.onUpdate = { [weak self] in
+            self?.updateStatusItemButton()
+        }
+        systemMenuBarPreferences.onChange = { [weak self] in
+            self?.updateStatusItemButton()
+        }
         runtime.start()
         model.onMenuStateChanged = { [weak self] in
             guard let self else {
@@ -389,6 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
+        runtime.onUpdate = nil
+        systemMenuBarPreferences.onChange = nil
         runtime.stop()
         model.applicationWillTerminate()
     }
@@ -441,6 +450,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openDashboardFromMenu(_ sender: Any?) {
         controlPanelNavigation.open(.dashboard)
+        showMainWindow()
+    }
+
+    @objc private func openSystemFromMenu(_ sender: Any?) {
+        controlPanelNavigation.open(.system)
         showMainWindow()
     }
 
@@ -524,7 +538,304 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         self.statusItem = statusItem
+        updateStatusItemButton()
         rebuildMenu()
+    }
+
+    private func updateStatusItemButton() {
+        guard let statusItem, let button = statusItem.button else { return }
+        let items = systemMenuBarPreferences.orderedItems
+
+        if items.isEmpty {
+            statusItem.length = NSStatusItem.squareLength
+            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
+            button.image = NSImage(named: "MenuBarLogo")
+            button.image?.isTemplate = true
+            button.image?.size = NSSize(width: 18, height: 18)
+            button.imagePosition = .imageOnly
+            button.toolTip = "Nativ Server"
+            return
+        }
+
+        let renderedItems = items.map { item in
+            let usage = menuBarUsage(for: item.metric)
+            let percent = Int((usage * 100).rounded())
+            let description: String
+            let image: NSImage
+
+            switch item.style {
+            case .percentage:
+                description = "\(item.metric.title) \(percent)%"
+                image = menuBarPercentageImage(
+                    metricTitle: item.metric.menuBarLabel,
+                    percent: percent
+                )
+            case .graph:
+                description = "\(item.metric.title) \(percent)% usage graph"
+                image = menuBarGraphImage(
+                    values: menuBarHistory(for: item.metric),
+                    accessibilityDescription: "\(item.metric.title) usage graph"
+                )
+            case .gigabytes:
+                let value = menuBarMemoryUsedText()
+                description = "Memory \(value)"
+                image = menuBarGigabytesImage(value: value)
+            }
+            return (image: image, description: description)
+        }
+
+        let accessibilityDescription = renderedItems
+            .map { $0.description }
+            .joined(separator: ", ")
+        let compositeImage = menuBarCompositeImage(
+            renderedItems.map { $0.image },
+            accessibilityDescription: accessibilityDescription
+        )
+
+        statusItem.length = compositeImage.size.width + 6
+        button.title = ""
+        button.attributedTitle = NSAttributedString(string: "")
+        button.image = compositeImage
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.toolTip = accessibilityDescription
+    }
+
+    private func menuBarCompositeImage(
+        _ images: [NSImage],
+        accessibilityDescription: String
+    ) -> NSImage {
+        let spacing: CGFloat = 4
+        let height = images.map(\.size.height).max() ?? 20
+        let contentWidth = images.reduce(CGFloat.zero) {
+            $0 + $1.size.width
+        }
+        let width = contentWidth + (spacing * CGFloat(max(images.count - 1, 0)))
+        let size = NSSize(width: width, height: height)
+        let compositeImage = NSImage(size: size, flipped: false) { rect in
+            var originX = rect.minX
+            for image in images {
+                let imageRect = NSRect(
+                    x: originX,
+                    y: rect.midY - (image.size.height / 2),
+                    width: image.size.width,
+                    height: image.size.height
+                )
+                image.draw(in: imageRect)
+                originX += image.size.width + spacing
+            }
+            return true
+        }
+        compositeImage.isTemplate = true
+        compositeImage.accessibilityDescription = accessibilityDescription
+        return compositeImage
+    }
+
+    private func menuBarPercentageImage(
+        metricTitle: String,
+        percent: Int
+    ) -> NSImage {
+        let size = NSSize(width: 34, height: 20)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+
+            let labelAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let valueAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(
+                    ofSize: 10,
+                    weight: .semibold
+                ),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let labelHeight = NSAttributedString(
+                string: metricTitle,
+                attributes: labelAttributes
+            ).size().height
+            let valueHeight = NSAttributedString(
+                string: "\(percent)%",
+                attributes: valueAttributes
+            ).size().height
+            let spacing: CGFloat = -2
+            let contentHeight = labelHeight + spacing + valueHeight
+            let originY = floor((rect.height - contentHeight) / 2)
+
+            NSAttributedString(
+                string: "\(percent)%",
+                attributes: valueAttributes
+            ).draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY,
+                    width: rect.width,
+                    height: valueHeight
+                )
+            )
+            NSAttributedString(
+                string: metricTitle,
+                attributes: labelAttributes
+            ).draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY + valueHeight + spacing,
+                    width: rect.width,
+                    height: labelHeight
+                )
+            )
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "\(metricTitle) \(percent) percent"
+        return image
+    }
+
+    private func menuBarMemoryUsedText() -> String {
+        guard runtime.usedMemoryBytes > 0 else {
+            return "--\u{2009}GB"
+        }
+        let usedGigabytes = Double(runtime.usedMemoryBytes) / 1_073_741_824
+        return String(format: "%.0f\u{2009}GB", usedGigabytes)
+    }
+
+    private func menuBarGigabytesImage(value: String) -> NSImage {
+        let size = NSSize(width: 48, height: 20)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+
+            let labelAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 7, weight: .semibold),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let valueAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(
+                    ofSize: 9,
+                    weight: .semibold
+                ),
+                .foregroundColor: NSColor.black,
+                .paragraphStyle: paragraphStyle,
+            ]
+            let label = NSAttributedString(
+                string: "MEM",
+                attributes: labelAttributes
+            )
+            let valueLabel = NSAttributedString(
+                string: value,
+                attributes: valueAttributes
+            )
+            let spacing: CGFloat = -2
+            let contentHeight = label.size().height
+                + spacing
+                + valueLabel.size().height
+            let originY = floor((rect.height - contentHeight) / 2)
+
+            valueLabel.draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY,
+                    width: rect.width,
+                    height: valueLabel.size().height
+                )
+            )
+            label.draw(
+                in: NSRect(
+                    x: rect.minX,
+                    y: originY + valueLabel.size().height + spacing,
+                    width: rect.width,
+                    height: label.size().height
+                )
+            )
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Memory \(value)"
+        return image
+    }
+
+    private func menuBarUsage(for metric: SystemMenuBarMetric) -> Double {
+        switch metric {
+        case .nativ:
+            0
+        case .cpu:
+            runtime.cpuUsage
+        case .gpu:
+            runtime.gpuUsage ?? 0
+        case .ram:
+            runtime.memoryUsageFraction
+        }
+    }
+
+    private func menuBarHistory(for metric: SystemMenuBarMetric) -> [Double] {
+        switch metric {
+        case .nativ:
+            []
+        case .cpu:
+            runtime.cpuHistory
+        case .gpu:
+            runtime.gpuHistory
+        case .ram:
+            runtime.memoryHistory
+        }
+    }
+
+    private func menuBarGraphImage(
+        values: [Double],
+        accessibilityDescription: String
+    ) -> NSImage {
+        let size = NSSize(width: 42, height: 18)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.labelColor.setStroke()
+
+            let frame = NSBezierPath(
+                roundedRect: rect.insetBy(dx: 0.75, dy: 0.75),
+                xRadius: 3.5,
+                yRadius: 3.5
+            )
+            frame.lineWidth = 1
+            frame.stroke()
+
+            guard values.count > 1 else { return true }
+            let plotRect = rect.insetBy(dx: 3, dy: 3)
+            let path = NSBezierPath()
+            for (index, rawValue) in values.enumerated() {
+                let fraction = CGFloat(index) / CGFloat(max(values.count - 1, 1))
+                let value = min(max(rawValue, 0), 1)
+                let point = NSPoint(
+                    x: plotRect.minX + (plotRect.width * fraction),
+                    y: plotRect.minY + (plotRect.height * CGFloat(value))
+                )
+                if index == 0 {
+                    path.move(to: point)
+                } else {
+                    path.line(to: point)
+                }
+            }
+
+            if let fillPath = path.copy() as? NSBezierPath {
+                fillPath.line(to: NSPoint(x: plotRect.maxX, y: plotRect.minY))
+                fillPath.line(to: NSPoint(x: plotRect.minX, y: plotRect.minY))
+                fillPath.close()
+                NSColor.labelColor.withAlphaComponent(0.22).setFill()
+                fillPath.fill()
+            }
+
+            NSColor.labelColor.setStroke()
+            path.lineWidth = 1.25
+            path.lineJoinStyle = .round
+            path.lineCapStyle = .round
+            path.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = accessibilityDescription
+        return image
     }
 
     private func rebuildMenu() {
@@ -605,6 +916,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dashboardMenuItem.image = menuIcon("chart.xyaxis.line", description: "Dashboard")
         menu.addItem(dashboardMenuItem)
 
+        let systemMenuItem = NSMenuItem(
+            title: "System…",
+            action: #selector(openSystemFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        systemMenuItem.target = self
+        systemMenuItem.image = menuIcon(
+            "gauge.open.with.lines.needle.33percent",
+            description: "System"
+        )
+        menu.addItem(systemMenuItem)
+
         let modelsMenuItem = NSMenuItem(
             title: "Models…",
             action: #selector(openModelsFromMenu(_:)),
@@ -633,7 +956,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let headerItem = NSMenuItem(title: "Session Status", action: nil, keyEquivalent: "")
         let headerView = NSHostingView(rootView: SessionStatsContainerView(
             model: model,
-            runtime: runtime,
             highlightState: SessionStatsHighlightState(),
             section: .header
         ))
@@ -646,7 +968,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let bodyView = SessionStatsHostingView(
             rootView: SessionStatsContainerView(
                 model: model,
-                runtime: runtime,
                 highlightState: highlightState,
                 section: .body
             ),
@@ -1138,7 +1459,6 @@ private enum SessionStatsSection {
 
 private struct SessionStatsContainerView: View {
     @ObservedObject var model: NativModel
-    @ObservedObject var runtime: SystemRuntimeMonitor
     @ObservedObject var highlightState: SessionStatsHighlightState
     let section: SessionStatsSection
 
@@ -1151,7 +1471,6 @@ private struct SessionStatsContainerView: View {
             if let metrics = model.sessionStatsDisplayMetrics {
                 SessionStatsMenuView(
                     metrics: metrics,
-                    runtime: runtime,
                     tokenActivity: model.sessionStatsDisplayTokenActivity,
                     isLoading: isLoading,
                     loadingStatusText: model.modelLoadingStatusText,
@@ -1164,7 +1483,6 @@ private struct SessionStatsContainerView: View {
             } else {
                 SessionStatsLoadingMenuView(
                     modelName: model.selectedModelDisplay,
-                    runtime: runtime,
                     isHighlighted: highlightState.isHighlighted,
                     section: section,
                     statusText: model.settings.normalized().languageModelID == nil
@@ -1188,7 +1506,6 @@ private struct SessionStatsContainerView: View {
 
 private struct SessionStatsMenuView: View {
     let metrics: NativMetrics
-    @ObservedObject var runtime: SystemRuntimeMonitor
     let tokenActivity: [SessionTokenActivitySample]
     let isLoading: Bool
     let loadingStatusText: String?
@@ -1218,6 +1535,20 @@ private struct SessionStatsMenuView: View {
 
     private var totalTokens: Int {
         metrics.summary.totalProcessedTokens
+    }
+
+    private var displayModelSubtitle: String? {
+        let subtitle = displayModel == "None" ? "On demand" : displayModel
+        return NativFormatting.truncateModelName(subtitle, maxLength: 24)
+    }
+
+    private var displayModelIndicatorColor: Color {
+        switch displayModel {
+        case "None", "On demand":
+            .orange
+        default:
+            .green
+        }
     }
 
     var body: some View {
@@ -1280,33 +1611,30 @@ private struct SessionStatsMenuView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Nativ Server")
                     .font(.headline)
-                SessionMemoryUsageLabel(
-                    runtime: runtime,
-                    textColor: secondaryTextColor
-                )
+                if let displayModelSubtitle {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(displayModelIndicatorColor)
+                            .frame(width: 6, height: 6)
+                        Text(displayModelSubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(1)
+                    }
+                }
             }
 
             Spacer(minLength: 16)
 
-            VStack(alignment: .trailing, spacing: 1) {
+            if isLoading {
                 HStack(spacing: 5) {
-                    if isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(primaryTextColor)
-                    }
-                    Text(isLoading ? loadingStatusText ?? "Loading model…" : "Running")
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(primaryTextColor)
+                    Text(loadingStatusText ?? "Loading model…")
                         .font(.headline)
                 }
-                Text(NativFormatting.truncateModelName(
-                    displayModel,
-                    maxLength: 20
-                ))
-                .font(.subheadline)
-                .foregroundStyle(secondaryTextColor)
-                .lineLimit(1)
             }
-
         }
     }
 
@@ -1415,7 +1743,6 @@ private struct SessionStatsMenuView: View {
 
 private struct SessionStatsLoadingMenuView: View {
     let modelName: String
-    @ObservedObject var runtime: SystemRuntimeMonitor
     let isHighlighted: Bool
     let section: SessionStatsSection
     let statusText: String
@@ -1430,6 +1757,21 @@ private struct SessionStatsLoadingMenuView: View {
 
     private var dividerColor: Color {
         SessionStatsMenuPalette.divider(isHighlighted)
+    }
+
+    private var modelSubtitle: String? {
+        return NativFormatting.truncateModelName(modelName, maxLength: 20)
+    }
+
+    private var modelIndicatorColor: Color {
+        switch modelName {
+        case "On demand":
+            .orange
+        case "None":
+            .red
+        default:
+            .green
+        }
     }
 
     var body: some View {
@@ -1478,96 +1820,29 @@ private struct SessionStatsLoadingMenuView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Nativ Server")
                     .font(.headline)
-                SessionMemoryUsageLabel(
-                    runtime: runtime,
-                    textColor: secondaryTextColor
-                )
+                if let modelSubtitle {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(modelIndicatorColor)
+                            .frame(width: 6, height: 6)
+                        Text(modelSubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(secondaryTextColor)
+                            .lineLimit(1)
+                    }
+                }
             }
 
             Spacer(minLength: 16)
 
-            VStack(alignment: .trailing, spacing: 1) {
-                HStack(spacing: 5) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(primaryTextColor)
-                    Text(statusText)
-                        .font(.headline)
-                }
-                Text(NativFormatting.truncateModelName(modelName, maxLength: 20))
-                    .font(.subheadline)
-                    .foregroundStyle(secondaryTextColor)
-                    .lineLimit(1)
+            HStack(spacing: 5) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(primaryTextColor)
+                Text(statusText)
+                    .font(.headline)
             }
         }
-    }
-}
-
-private struct SessionMemoryUsageLabel: View {
-    @ObservedObject var runtime: SystemRuntimeMonitor
-    let textColor: Color
-
-    private var usageFraction: Double {
-        runtime.memoryUsageFraction
-    }
-
-    private var compactValue: String {
-        guard runtime.usedMemoryBytes > 0, runtime.totalMemoryBytes > 0 else {
-            return "--"
-        }
-        return String(
-            format: "%.1f / %.0f GB",
-            gibibytes(runtime.usedMemoryBytes),
-            gibibytes(runtime.totalMemoryBytes)
-        )
-    }
-
-    private var detailedValue: String {
-        guard runtime.usedMemoryBytes > 0, runtime.totalMemoryBytes > 0 else {
-            return "Memory usage unavailable"
-        }
-        return String(
-            format: "Memory usage: %.1f GB of %.0f GB (%d%%)",
-            gibibytes(runtime.usedMemoryBytes),
-            gibibytes(runtime.totalMemoryBytes),
-            Int((usageFraction * 100).rounded())
-        )
-    }
-
-    private var iconColor: Color {
-        switch usageFraction {
-        case 0.85...:
-            return .red
-        case 0.70...:
-            return .orange
-        default:
-            return .green
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "memorychip")
-                .foregroundStyle(iconColor)
-            ProgressView(value: usageFraction)
-                .progressViewStyle(.linear)
-                .tint(iconColor)
-                .frame(width: 54)
-            Text(compactValue)
-                .monospacedDigit()
-                .foregroundStyle(textColor)
-        }
-        .font(.caption)
-        .lineLimit(1)
-        .fixedSize()
-        .help(detailedValue)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Memory usage")
-        .accessibilityValue(detailedValue)
-    }
-
-    private func gibibytes(_ bytes: UInt64) -> Double {
-        Double(bytes) / Double(1024 * 1024 * 1024)
     }
 }
 

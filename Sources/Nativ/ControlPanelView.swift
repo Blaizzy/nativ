@@ -6,13 +6,22 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
     case imageGeneration = "Images"
     case dashboard = "Dashboard"
+    case system = "System"
     case models = "Models"
     case integrations = "Integrations"
     case developer = "Developer"
     case settings = "Settings"
 
     static var allCases: [ControlPanelTab] {
-        [.chat, .imageGeneration, .dashboard, .models, .integrations, .developer]
+        [
+            .chat,
+            .imageGeneration,
+            .dashboard,
+            .system,
+            .models,
+            .integrations,
+            .developer,
+        ]
     }
 
     var id: String { rawValue }
@@ -25,6 +34,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "photo.on.rectangle"
         case .dashboard:
             "chart.bar.xaxis"
+        case .system:
+            "gauge.open.with.lines.needle.33percent"
         case .models:
             "cube.transparent"
         case .integrations:
@@ -128,6 +139,7 @@ struct ControlPanelView: View {
     @StateObject private var chat = ChatViewModel()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var dashboard = DashboardViewModel()
+    @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
@@ -470,6 +482,11 @@ struct ControlPanelView: View {
                         model: model,
                         dashboard: dashboard,
                         titleLeadingInset: detailTitleLeadingInset
+                    )
+                case .system:
+                    SystemMonitorView(
+                        store: systemMonitor,
+                        menuBarPreferences: .shared
                     )
                 case .models:
                     ModelsView(

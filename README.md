@@ -30,10 +30,11 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Model library** | Discover installed MLX models , browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
+| **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, and SMART health. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
 | **Coding-tool integrations** | Configure and launch Codex, Claude Code, Pi, Hermes, and OpenCode against models served by Nativ. |
-| **Developer workspace** | Set the server port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
-| **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, and open the main app without breaking focus. |
+| **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
+| **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
 Inference runs on your Mac after a model has been downloaded. Model downloads and first-time build dependencies still require network access.
@@ -97,7 +98,7 @@ The first build can take a while because `NativServerKit` creates a relocatable 
 
 ## Use Nativ as a local API server
 
-By default, the app exposes its server at `http://127.0.0.1:8080`. You can change the port in the Developer page, which also lists every available endpoint and lets you copy URLs directly.
+By default, the app exposes its server at `http://127.0.0.1:8080`. You can change the host and port in the Developer page, which also lists every available endpoint and lets you copy URLs directly.
 
 For example, with a model selected:
 
@@ -134,7 +135,8 @@ Sources/
 │   │   ├── Developer/
 │   │   ├── ImageGeneration/
 │   │   ├── Integrations/
-│   │   └── Models/
+│   │   ├── Models/
+│   │   └── SystemMonitor/
 │   ├── Assets.xcassets/
 │   ├── ModelProviderIcons/
 │   └── Utilities/

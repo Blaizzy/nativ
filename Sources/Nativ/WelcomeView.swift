@@ -1,5 +1,4 @@
 import AppKit
-import Security
 import SwiftUI
 
 enum WelcomePreferences {
@@ -40,6 +39,7 @@ struct WelcomeGateView: View {
                 .transition(.opacity)
             }
         }
+        .textSelection(.enabled)
         .animation(.easeInOut(duration: 0.25), value: hasCompletedWelcome)
     }
 }
@@ -72,7 +72,9 @@ private struct WelcomeView: View {
         self.onComplete = onComplete
         let settings = model.settings.normalized()
         _selectedModelID = State(initialValue: settings.languageModelID)
-        _serverAPIKey = State(initialValue: settings.serverAPIKey ?? WelcomeAPIKeyGenerator.makeKey())
+        _serverAPIKey = State(
+            initialValue: settings.serverAPIKey ?? ServerAPIAuthentication.generateToken()
+        )
     }
 
     var body: some View {
@@ -382,7 +384,7 @@ private struct WelcomeView: View {
                     .font(.subheadline.weight(.medium))
                 Spacer()
                 Button("Generate New") {
-                    serverAPIKey = WelcomeAPIKeyGenerator.makeKey()
+                    serverAPIKey = ServerAPIAuthentication.generateToken()
                     isAPIKeyFieldFocused = true
                 }
                 .buttonStyle(.borderless)
@@ -875,22 +877,6 @@ private struct WelcomeBackground: View {
                 .offset(x: -360, y: -250)
         }
         .ignoresSafeArea()
-    }
-}
-
-private enum WelcomeAPIKeyGenerator {
-    static func makeKey() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            return "nativ_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
-        }
-
-        let token = Data(bytes)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        return "nativ_\(token)"
     }
 }
 

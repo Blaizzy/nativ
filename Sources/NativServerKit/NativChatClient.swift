@@ -522,6 +522,7 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
 
 public final class NativChatClient {
     private let baseURL: URL
+    private let apiKey: String?
     private let session: URLSession
     private let timeout: TimeInterval
     private let decoder = JSONDecoder()
@@ -529,9 +530,11 @@ public final class NativChatClient {
 
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:8080")!,
+        apiKey: String? = nil,
         timeout: TimeInterval = 600
     ) {
         self.baseURL = baseURL
+        self.apiKey = apiKey
         self.timeout = timeout
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -719,13 +722,14 @@ public final class NativChatClient {
         throw NativChatError.missingAssistantContent
     }
 
-    private func makeURLRequest(payload: MLXChatCompletionRequest, accepts: String) throws -> URLRequest {
+    func makeURLRequest(payload: MLXChatCompletionRequest, accepts: String) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accepts, forHTTPHeaderField: "Accept")
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
         request.httpBody = try encoder.encode(payload)
         return request
     }

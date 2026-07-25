@@ -34,13 +34,14 @@ struct ImageRequestSettings: Equatable, Codable, Sendable {
 struct ImageGenerationExecutor {
     func run(
         baseURL: URL,
+        apiKey: String?,
         modelID: String,
         prompt: String,
         references: [ChatImageAttachment],
         settings: ImageRequestSettings,
         seed: Int?
     ) async throws -> [GeneratedImage] {
-        let client = NativImageClient(baseURL: baseURL)
+        let client = NativImageClient(baseURL: baseURL, apiKey: apiKey)
         let response: MLXImageResponse
         if references.isEmpty {
             response = try await client.generate(MLXImageGenerationRequest(
@@ -398,7 +399,9 @@ final class ImageGenerationViewModel: ObservableObject {
         bumpScroll()
 
         activeTask?.cancel()
-        let serverBaseURL = appModel.settings.serverBaseURL
+        let serverSettings = appModel.settings.normalized()
+        let serverBaseURL = serverSettings.serverBaseURL
+        let serverAPIKey = serverSettings.serverAPIKey
         activeTask = Task { @MainActor [weak self, weak appModel] in
             guard let self else {
                 return
@@ -407,6 +410,7 @@ final class ImageGenerationViewModel: ObservableObject {
             do {
                 let outputs = try await ImageGenerationExecutor().run(
                     baseURL: serverBaseURL,
+                    apiKey: serverAPIKey,
                     modelID: requestModelID,
                     prompt: requestPrompt,
                     references: references,

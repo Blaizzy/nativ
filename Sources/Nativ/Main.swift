@@ -26,14 +26,15 @@ enum Main {
             }
 
             do {
+                let smokeHost = ProcessInfo.processInfo.environment["NATIV_SMOKE_HOST"] ?? "127.0.0.1"
                 let smokePort = ProcessInfo.processInfo.environment["NATIV_SMOKE_PORT"] ?? "18080"
-                try server.start(arguments: ["--host", "127.0.0.1", "--port", smokePort])
+                try server.start(arguments: ["--host", smokeHost, "--port", smokePort])
                 guard server.isRunning else {
                     fputs("mlx-vlm-server exited before stop was requested\n", stderr)
                     exit(EXIT_FAILURE)
                 }
-                guard waitForMetricsEndpoint(port: smokePort) else {
-                    fputs("mlx-vlm-server did not expose /metrics on port \(smokePort)\n", stderr)
+                guard waitForMetricsEndpoint(host: smokeHost, port: smokePort) else {
+                    fputs("mlx-vlm-server did not expose /metrics at \(smokeHost):\(smokePort)\n", stderr)
                     try? server.stop()
                     exit(EXIT_FAILURE)
                 }
@@ -53,10 +54,14 @@ enum Main {
         NativApplication.main()
     }
 
-    private static func waitForMetricsEndpoint(port: String, timeout: TimeInterval = 5) -> Bool {
+    private static func waitForMetricsEndpoint(
+        host: String,
+        port: String,
+        timeout: TimeInterval = 5
+    ) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if checkMetricsEndpoint(port: port) {
+            if checkMetricsEndpoint(host: host, port: port) {
                 return true
             }
             Thread.sleep(forTimeInterval: 0.2)
@@ -64,8 +69,9 @@ enum Main {
         return false
     }
 
-    private static func checkMetricsEndpoint(port: String) -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/metrics") else {
+    private static func checkMetricsEndpoint(host: String, port: String) -> Bool {
+        let urlHost = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        guard let url = URL(string: "http://\(urlHost):\(port)/metrics") else {
             return false
         }
 
