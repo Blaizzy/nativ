@@ -583,19 +583,22 @@ final class NativModel: ObservableObject {
         }
         server.onTermination = { [weak self] status in
             Task { @MainActor [weak self] in
-                self?.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
-                self?.isRunning = false
-                self?.settingsAppliedAtServerStart = nil
-                self?.huggingFaceTokenAppliedAtServerStart = nil
-                self?.stopMetricsPolling(clearSession: true)
-                self?.metricsLoading = false
-                self?.modelLoadingProgress = nil
-                if self?.isStoppingForModelSwitch != true {
-                    self?.modelSwitchInProgress = false
-                    self?.modelSwitchTargetID = nil
-                    self?.clearPreservedSessionStats()
+                guard let self, !self.server.isRunning else {
+                    return
                 }
-                self?.notifyMenuStateChanged()
+                self.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
+                self.isRunning = false
+                self.settingsAppliedAtServerStart = nil
+                self.huggingFaceTokenAppliedAtServerStart = nil
+                self.stopMetricsPolling(clearSession: true)
+                self.metricsLoading = false
+                self.modelLoadingProgress = nil
+                if !self.isStoppingForModelSwitch {
+                    self.modelSwitchInProgress = false
+                    self.modelSwitchTargetID = nil
+                    self.clearPreservedSessionStats()
+                }
+                self.notifyMenuStateChanged()
             }
         }
     }

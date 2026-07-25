@@ -591,8 +591,12 @@ public final class NativProcessController {
             observe(pipe: outputPipe)
             observe(pipe: errorPipe)
 
-            process.terminationHandler = { [weak self] process in
-                self?.handleTermination(status: process.terminationStatus)
+            process.terminationHandler = { [weak self, outputPipe, errorPipe] process in
+                self?.handleTermination(
+                    process: process,
+                    outputPipe: outputPipe,
+                    errorPipe: errorPipe
+                )
             }
 
             do {
@@ -638,18 +642,23 @@ public final class NativProcessController {
         }
     }
 
-    private func handleTermination(status: Int32) {
-        let pipes = lock.withLock {
-            let pipes = (self.outputPipe, self.errorPipe)
+    private func handleTermination(
+        process: Process,
+        outputPipe: Pipe,
+        errorPipe: Pipe
+    ) {
+        lock.withLock {
+            guard self.process === process else {
+                return
+            }
             self.process = nil
             self.outputPipe = nil
             self.errorPipe = nil
-            return pipes
         }
 
-        pipes.0?.fileHandleForReading.readabilityHandler = nil
-        pipes.1?.fileHandleForReading.readabilityHandler = nil
-        onTermination?(status)
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        errorPipe.fileHandleForReading.readabilityHandler = nil
+        onTermination?(process.terminationStatus)
     }
 }
 
