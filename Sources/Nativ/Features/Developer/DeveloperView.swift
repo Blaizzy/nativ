@@ -480,29 +480,29 @@ private struct PanelHeaderAccent: View {
     let tint: Color
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
-                Spacer(minLength: 0)
-
                 LinearGradient(
-                    colors: [.clear, tint.opacity(0.12)],
+                    colors: [tint.opacity(0.12), .clear],
                     startPoint: .leading,
                     endPoint: .trailing
                 )
                 .frame(maxWidth: 420)
+
+                Spacer(minLength: 0)
             }
 
             Capsule()
                 .fill(
                     LinearGradient(
-                        colors: [tint.opacity(0.25), tint.opacity(0.85)],
+                        colors: [tint.opacity(0.85), tint.opacity(0.25)],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
                 )
                 .frame(width: 120, height: 3)
                 .padding(.top, 2)
-                .padding(.trailing, 16)
+                .padding(.leading, 16)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
