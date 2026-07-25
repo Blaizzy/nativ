@@ -286,6 +286,19 @@ final class NativModel: ObservableObject {
         }
     }
 
+    func restartServer() {
+        guard server.isRunning else {
+            return
+        }
+
+        stopServer()
+        guard !server.isRunning else {
+            appendLog("\nCould not stop the current server to apply the endpoint change.\n")
+            return
+        }
+        startServer()
+    }
+
     func switchLanguageModel(to modelID: String?) {
         switchPreloadedModel(to: modelID, for: .language)
     }

@@ -221,6 +221,9 @@ struct DeveloperView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
+        .task(id: serverEndpointProbeID) {
+            await restartServerAfterEndpointChange()
+        }
     }
 
     private var endpointPanelTitle: some View {
@@ -252,7 +255,7 @@ struct DeveloperView: View {
                     model.settings.serverPort = min(max(newValue, 1), 65_535)
                 }
         }
-        .help("The port the local server listens on. Changing it requires a server restart.")
+        .help("The port the local server listens on. Changes restart a running server after 3 seconds.")
         .task(id: serverEndpointProbeID) {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
@@ -278,7 +281,7 @@ struct DeveloperView: View {
                     model.settings.serverHost = model.settings.normalized().serverHost
                 }
         }
-        .help("The host or IP address the local server binds to. Changing it requires a server restart.")
+        .help("The host or IP address the local server binds to. Changes restart a running server after 3 seconds.")
     }
 
     private var serverEndpointProbeID: String {
@@ -291,6 +294,42 @@ struct DeveloperView: View {
         let isActiveEndpoint = settings.serverHost == model.activeServerHost
             && settings.serverPort == model.activeServerPort
         return !isSelectedEndpointAvailable && !isActiveEndpoint
+    }
+
+    private func restartServerAfterEndpointChange() async {
+        guard model.isRunning else {
+            return
+        }
+
+        let scheduledSettings = model.settings.normalized()
+        let endpointHasChanged = scheduledSettings.serverHost != model.activeServerHost
+            || scheduledSettings.serverPort != model.activeServerPort
+        guard endpointHasChanged else {
+            return
+        }
+
+        do {
+            try await Task.sleep(for: .seconds(3))
+        } catch {
+            return
+        }
+        guard !Task.isCancelled, model.isRunning else {
+            return
+        }
+
+        let currentSettings = model.settings.normalized()
+        guard currentSettings.serverHost == scheduledSettings.serverHost,
+              currentSettings.serverPort == scheduledSettings.serverPort
+        else {
+            return
+        }
+
+        let endpointStillNeedsRestart = currentSettings.serverHost != model.activeServerHost
+            || currentSettings.serverPort != model.activeServerPort
+        guard endpointStillNeedsRestart else {
+            return
+        }
+        model.restartServer()
     }
 
     private var endpointCategoryPicker: some View {
