@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import IOKit
 import NativServerKit
 import SwiftUI
 
@@ -886,6 +887,8 @@ private struct RuntimeInfoCard: View {
 @MainActor
 final class SystemRuntimeMonitor: ObservableObject {
     @Published private(set) var usedMemoryBytes: UInt64 = 0
+    @Published private(set) var cpuUsage: Double = 0
+    @Published private(set) var gpuUsage: Double?
 
     let chipName = SystemRuntimeInfo.chipName
     let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
@@ -894,6 +897,11 @@ final class SystemRuntimeMonitor: ObservableObject {
     let mlxVLMVersion = SystemRuntimeInfo.mlxVLMVersion
 
     private var timer: Timer?
+    private var previousCPUTicks: SystemRuntimeInfo.CPUTicks?
+    private(set) var cpuHistory: [Double] = []
+    private(set) var gpuHistory: [Double] = []
+    private(set) var memoryHistory: [Double] = []
+    var onUpdate: (() -> Void)?
 
     var memoryUsageFraction: Double {
         guard totalMemoryBytes > 0 else { return 0 }
@@ -918,11 +926,40 @@ final class SystemRuntimeMonitor: ObservableObject {
     }
 
     private func refresh() {
+        let currentCPUTicks = SystemRuntimeInfo.cpuTicks
+        cpuUsage = SystemRuntimeInfo.cpuUsage(
+            current: currentCPUTicks,
+            previous: previousCPUTicks
+        )
+        previousCPUTicks = currentCPUTicks
+        gpuUsage = SystemRuntimeInfo.gpuUsage
         usedMemoryBytes = SystemRuntimeInfo.usedMemoryBytes
+
+        append(cpuUsage, to: &cpuHistory)
+        append(gpuUsage ?? 0, to: &gpuHistory)
+        append(memoryUsageFraction, to: &memoryHistory)
+        onUpdate?()
+    }
+
+    private func append(_ value: Double, to history: inout [Double]) {
+        history.append(value)
+        if history.count > 30 {
+            history.removeFirst(history.count - 30)
+        }
     }
 }
 
 private enum SystemRuntimeInfo {
+    struct CPUTicks {
+        let user: UInt64
+        let system: UInt64
+        let idle: UInt64
+
+        var total: UInt64 {
+            user + system + idle
+        }
+    }
+
     static let chipName: String = {
         sysctlString("machdep.cpu.brand_string")
             ?? sysctlString("hw.model")
@@ -998,6 +1035,66 @@ private enum SystemRuntimeInfo {
             + UInt64(statistics.compressor_page_count)
         let usedBytes = usedPages * UInt64(vm_kernel_page_size)
         return min(usedBytes, ProcessInfo.processInfo.physicalMemory)
+    }
+
+    static var cpuTicks: CPUTicks {
+        var statistics = host_cpu_load_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<host_cpu_load_info_data_t>.stride
+                / MemoryLayout<integer_t>.stride
+        )
+        let result = withUnsafeMutablePointer(to: &statistics) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            return CPUTicks(user: 0, system: 0, idle: 1)
+        }
+
+        return CPUTicks(
+            user: UInt64(
+                statistics.cpu_ticks.0 + statistics.cpu_ticks.3
+            ),
+            system: UInt64(statistics.cpu_ticks.1),
+            idle: UInt64(statistics.cpu_ticks.2)
+        )
+    }
+
+    static func cpuUsage(current: CPUTicks, previous: CPUTicks?) -> Double {
+        let delta: CPUTicks
+        if let previous {
+            delta = CPUTicks(
+                user: current.user >= previous.user ? current.user - previous.user : 0,
+                system: current.system >= previous.system
+                    ? current.system - previous.system
+                    : 0,
+                idle: current.idle >= previous.idle ? current.idle - previous.idle : 0
+            )
+        } else {
+            delta = current
+        }
+        guard delta.total > 0 else { return 0 }
+        return min(max(1 - (Double(delta.idle) / Double(delta.total)), 0), 1)
+    }
+
+    static var gpuUsage: Double? {
+        guard let matching = IOServiceMatching("AGXAccelerator") else { return nil }
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+        guard service != IO_OBJECT_NULL else { return nil }
+        defer { IOObjectRelease(service) }
+
+        guard let statistics = IORegistryEntryCreateCFProperty(
+            service,
+            "PerformanceStatistics" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue() as? NSDictionary,
+              let percentage = statistics["Device Utilization %"] as? NSNumber
+        else {
+            return nil
+        }
+        return min(max(percentage.doubleValue / 100, 0), 1)
     }
 
     private static func sysctlString(_ name: String) -> String? {
