@@ -353,7 +353,9 @@ struct ControlPanelView: View {
             }
         }
         .navigationTitle("Nativ")
-        .background(ControlPanelSidebarSurfaceReader())
+        .background(
+            ControlPanelSurfaceReader(isFullScreen: isFullScreen)
+        )
     }
 
     private var issueReportMenu: some View {
@@ -873,52 +875,345 @@ private final class FooterControlTrackingNSView: NSView {
     }
 }
 
-private struct ControlPanelSidebarSurfaceReader: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        expandSidebarSurface(from: view)
+private struct ControlPanelSurfaceReader: NSViewRepresentable {
+    let isFullScreen: Bool
+
+    func makeNSView(context: Context) -> ControlPanelSurfaceReaderView {
+        let view = ControlPanelSurfaceReaderView()
+        view.update(isFullScreen: isFullScreen)
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        expandSidebarSurface(from: view)
+    func updateNSView(_ view: ControlPanelSurfaceReaderView, context: Context) {
+        view.update(isFullScreen: isFullScreen)
+    }
+}
+
+@MainActor
+private final class ControlPanelSurfaceReaderView: NSView {
+    private weak var glassSurface: NSView?
+    private weak var sidebarBackdropView: NSView?
+    private weak var titlebarFillView: NSView?
+    private weak var titlebarSourceGlassView: NSView?
+    private weak var observedWindow: NSWindow?
+    private var defaultCornerRadius: CGFloat?
+    private var defaultBackdropCornerRadius: CGFloat?
+    private var defaultBackdropEdgeInsets: NSEdgeInsets?
+    private var defaultLayerCornerRadii: [
+        ObjectIdentifier: (layer: CALayer, radius: CGFloat)
+    ] = [:]
+    private var cornerCorrectionTimer: Timer?
+    private var isFullScreen = false
+
+    deinit {
+        cornerCorrectionTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
 
-    private func expandSidebarSurface(from view: NSView) {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeFullScreenTransitions()
+
+        if window?.styleMask.contains(.fullScreen) == true {
+            isFullScreen = true
+        }
+
+        updateCornerCorrectionTimer()
+        configureGlassSurface()
+        DispatchQueue.main.async { [weak self] in
+            self?.configureGlassSurface()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        configureGlassSurface()
+    }
+
+    func update(isFullScreen: Bool) {
+        self.isFullScreen = isFullScreen
+        updateCornerCorrectionTimer()
+        configureGlassSurface()
+    }
+
+    private func observeFullScreenTransitions() {
+        guard observedWindow !== window else { return }
+        NotificationCenter.default.removeObserver(self)
+        observedWindow = window
+        guard let window else { return }
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillEnterFullScreen(_:)),
+            name: NSWindow.willEnterFullScreenNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidEnterFullScreen(_:)),
+            name: NSWindow.didEnterFullScreenNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidExitFullScreen(_:)),
+            name: NSWindow.didExitFullScreenNotification,
+            object: window
+        )
+    }
+
+    @objc
+    private func windowWillEnterFullScreen(_ notification: Notification) {
+        isFullScreen = true
+        updateCornerCorrectionTimer()
+        configureGlassSurface()
+    }
+
+    @objc
+    private func windowDidEnterFullScreen(_ notification: Notification) {
+        isFullScreen = true
+
+        // AppKit reapplies its concentric radius while completing this event.
+        // Correct the live surface after its final full-screen layout pass.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.configureGlassSurface()
+        }
+    }
+
+    @objc
+    private func windowDidExitFullScreen(_ notification: Notification) {
+        isFullScreen = false
+        updateCornerCorrectionTimer()
+        DispatchQueue.main.async { [weak self] in
+            self?.configureGlassSurface()
+        }
+    }
+
+    private func updateCornerCorrectionTimer() {
+        guard isFullScreen, window != nil else {
+            cornerCorrectionTimer?.invalidate()
+            cornerCorrectionTimer = nil
+            titlebarFillView?.removeFromSuperview()
+            titlebarFillView = nil
+            titlebarSourceGlassView = nil
+            return
+        }
+        guard cornerCorrectionTimer == nil else { return }
+
+        let timer = Timer(
+            timeInterval: 0.25,
+            target: self,
+            selector: #selector(correctFullScreenCorners(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(timer, forMode: .common)
+        cornerCorrectionTimer = timer
+    }
+
+    @objc
+    private func correctFullScreenCorners(_ timer: Timer) {
+        guard isFullScreen else {
+            updateCornerCorrectionTimer()
+            return
+        }
+        configureGlassSurface()
+    }
+
+    private func configureGlassSurface() {
         guard #available(macOS 26.0, *) else { return }
-        expandGlassSidebarSurface(from: view)
-    }
+        var ancestor = superview
+        var glassSurface: NSGlassEffectView?
 
-    @available(macOS 26.0, *)
-    private func expandGlassSidebarSurface(from view: NSView) {
-        DispatchQueue.main.async {
-            var ancestor = view.superview
-            var glassSurface: NSGlassEffectView?
-
-            while let current = ancestor {
-                if let glass = current as? NSGlassEffectView {
-                    glassSurface = glass
-                    break
-                }
-                ancestor = current.superview
+        while let current = ancestor {
+            if let glass = current as? NSGlassEffectView {
+                glassSurface = glass
+                break
             }
+            ancestor = current.superview
+        }
 
-            guard let glassSurface, let container = glassSurface.superview else { return }
+        guard let glassSurface, let container = glassSurface.superview else { return }
 
-            for constraint in container.constraints {
-                let firstView = constraint.firstItem as? NSView
-                let secondView = constraint.secondItem as? NSView
-                let directlyPositionsSurface =
-                    (firstView === glassSurface && secondView === container)
-                    || (firstView === container && secondView === glassSurface)
+        if self.glassSurface !== glassSurface {
+            self.glassSurface = glassSurface
+            defaultCornerRadius = glassSurface.cornerRadius
+            defaultLayerCornerRadii.removeAll()
+        }
+        glassSurface.cornerRadius = isFullScreen
+            ? 0
+            : defaultCornerRadius ?? glassSurface.cornerRadius
 
-                guard directlyPositionsSurface else { continue }
+        configureSidebarBackdrop(in: container, excluding: glassSurface)
+        configureFullSizeGlassLayers(in: glassSurface)
+        configureFullScreenTitlebarFill()
+
+        var changedConstraint = false
+        for constraint in container.constraints {
+            let firstView = constraint.firstItem as? NSView
+            let secondView = constraint.secondItem as? NSView
+            let directlyPositionsSurface =
+                (firstView === glassSurface && secondView === container)
+                || (firstView === container && secondView === glassSurface)
+
+            guard directlyPositionsSurface else { continue }
+            if constraint.constant != 0 {
                 constraint.constant = 0
+                changedConstraint = true
             }
+        }
 
+        if changedConstraint {
             container.needsUpdateConstraints = true
             container.needsLayout = true
         }
+    }
+
+    private func configureSidebarBackdrop(
+        in container: NSView,
+        excluding glassSurface: NSView
+    ) {
+        let cornerRadiusKey = "punchOutCornerRadius"
+        let edgeInsetsKey = "punchOutEdgeInsets"
+        let cornerRadiusSelector = NSSelectorFromString(cornerRadiusKey)
+        let edgeInsetsSelector = NSSelectorFromString(edgeInsetsKey)
+
+        guard let backdropView = container.subviews.first(where: {
+            $0 !== glassSurface
+                && $0.responds(to: cornerRadiusSelector)
+                && $0.responds(to: edgeInsetsSelector)
+        }) else {
+            return
+        }
+
+        if sidebarBackdropView !== backdropView {
+            sidebarBackdropView = backdropView
+            defaultBackdropCornerRadius =
+                (backdropView.value(forKey: cornerRadiusKey) as? NSNumber)
+                .map { CGFloat($0.doubleValue) }
+            defaultBackdropEdgeInsets =
+                (backdropView.value(forKey: edgeInsetsKey) as? NSValue)?.edgeInsetsValue
+        }
+
+        let cornerRadius = isFullScreen
+            ? 0
+            : defaultBackdropCornerRadius ?? 0
+        backdropView.setValue(
+            NSNumber(value: cornerRadius),
+            forKey: cornerRadiusKey
+        )
+
+        if let edgeInsets = isFullScreen
+            ? NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+            : defaultBackdropEdgeInsets {
+            backdropView.setValue(
+                NSValue(edgeInsets: edgeInsets),
+                forKey: edgeInsetsKey
+            )
+        }
+    }
+
+    private func configureFullSizeGlassLayers(in glassSurface: NSGlassEffectView) {
+        guard let rootLayer = glassSurface.layer else { return }
+        let targetSize = glassSurface.bounds.size
+        guard targetSize.width > 0, targetSize.height > 0 else { return }
+
+        var layers = [rootLayer]
+        var activeLayerIdentifiers = Set<ObjectIdentifier>()
+        var index = 0
+
+        while index < layers.count {
+            let layer = layers[index]
+            index += 1
+            layers.append(contentsOf: layer.sublayers ?? [])
+
+            let fillsSurface =
+                abs(layer.bounds.width - targetSize.width) < 1
+                && abs(layer.bounds.height - targetSize.height) < 1
+            guard fillsSurface else { continue }
+
+            let identifier = ObjectIdentifier(layer)
+            activeLayerIdentifiers.insert(identifier)
+            if defaultLayerCornerRadii[identifier] == nil, layer.cornerRadius > 0 {
+                defaultLayerCornerRadii[identifier] = (layer, layer.cornerRadius)
+            }
+
+            guard let defaultRadius = defaultLayerCornerRadii[identifier]?.radius else {
+                continue
+            }
+
+            let cornerRadius = isFullScreen ? 0 : defaultRadius
+            if layer.cornerRadius != cornerRadius {
+                layer.cornerRadius = cornerRadius
+                layer.setNeedsDisplay()
+            }
+        }
+
+        defaultLayerCornerRadii = defaultLayerCornerRadii.filter {
+            activeLayerIdentifiers.contains($0.key)
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private func configureFullScreenTitlebarFill() {
+        guard isFullScreen, let window else { return }
+
+        let toolbarWindow = NSApp.windows.first {
+            $0 !== window
+                && $0.isVisible
+                && $0.frame.height > 0
+                && $0.frame.height <= 100
+                && abs($0.frame.width - window.frame.width) < 1
+        }
+        guard let contentView = toolbarWindow?.contentView else { return }
+
+        var titlebarGlass: NSGlassEffectView?
+        var largestArea: CGFloat = 0
+        var views = [contentView]
+        var index = 0
+
+        while index < views.count {
+            let view = views[index]
+            index += 1
+            views.append(contentsOf: view.subviews)
+
+            guard let glass = view as? NSGlassEffectView else { continue }
+            let area = glass.bounds.width * glass.bounds.height
+            guard glass.bounds.width >= ControlPanelLayout.sidebarMinimumWidth,
+                  area > largestArea else {
+                continue
+            }
+            largestArea = area
+            titlebarGlass = glass
+        }
+
+        guard let titlebarGlass, let container = titlebarGlass.superview else {
+            return
+        }
+
+        if titlebarSourceGlassView !== titlebarGlass
+            || titlebarFillView?.superview !== container {
+            titlebarFillView?.removeFromSuperview()
+
+            let fill = NSVisualEffectView(frame: container.bounds)
+            fill.identifier = NSUserInterfaceItemIdentifier(
+                "NativFullScreenTitlebarFill"
+            )
+            fill.autoresizingMask = [.width, .height]
+            fill.material = .sidebar
+            fill.blendingMode = .behindWindow
+            fill.state = .active
+            container.addSubview(fill, positioned: .above, relativeTo: titlebarGlass)
+
+            titlebarFillView = fill
+            titlebarSourceGlassView = titlebarGlass
+        }
+
+        guard let fill = titlebarFillView as? NSVisualEffectView else { return }
+        fill.frame = container.bounds
+        fill.material = .sidebar
+        fill.blendingMode = .behindWindow
+        fill.state = .active
     }
 }
 
