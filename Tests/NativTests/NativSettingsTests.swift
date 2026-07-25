@@ -73,6 +73,38 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
     }
 
+    func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {
+        let settings = NativSettings(serverAPIKey: "  nativ_1234567890abcdef\n")
+        let normalized = settings.normalized()
+
+        XCTAssertEqual(normalized.serverAPIKey, "nativ_1234567890abcdef")
+        XCTAssertEqual(
+            ServerAPIAuthentication.tokenInfo(normalized.serverAPIKey),
+            ServerAPITokenInfo(
+                maskedValue: "nativ_••••••••cdef",
+                characterCount: 22
+            )
+        )
+        XCTAssertEqual(
+            normalized.launchEnvironment["MLX_VLM_SERVER_API_KEY"],
+            "nativ_1234567890abcdef"
+        )
+    }
+
+    func testBlankServerAPITokenIsOmitted() {
+        let settings = NativSettings(serverAPIKey: " \n ").normalized()
+
+        XCTAssertNil(settings.serverAPIKey)
+        XCTAssertNil(settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
+    }
+
+    func testGeneratedServerAPITokenHasNativPrefix() {
+        let token = ServerAPIAuthentication.generateToken()
+
+        XCTAssertTrue(token.hasPrefix("nativ_"))
+        XCTAssertEqual(token, ServerAPIAuthentication.normalizedToken(token))
+    }
+
     func testEveryPreloadSelectionRequiresServerRestart() {
         let original = NativSettings()
 

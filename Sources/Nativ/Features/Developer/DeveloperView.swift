@@ -33,7 +33,7 @@ struct DeveloperView: View {
                         pageHeader
                         runtimeGrid
                         serverEndpointsPanel
-                        huggingFaceAuthenticationPanel
+                        authenticationPanels
                         logPanel
                             .frame(height: max(320, geometry.size.height - 550))
                     }
@@ -52,7 +52,7 @@ struct DeveloperView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Developer")
                     .font(.title2.weight(.semibold))
-                Text("Runtime diagnostics, Hub authentication, API endpoints, and live server output.")
+                Text("Runtime diagnostics, server authentication, API endpoints, and live server output.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -157,6 +157,30 @@ struct DeveloperView: View {
             onSetCustomToken: model.setCustomHuggingFaceToken,
             onLogOutSystemCredential: model.logOutSystemHuggingFaceCredential
         )
+    }
+
+    private var serverAPIAuthenticationPanel: some View {
+        ServerAPIAuthenticationPanel(
+            token: model.settings.serverAPIKey,
+            onSetToken: model.setServerAPIKey
+        )
+    }
+
+    private var authenticationPanels: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(
+                    .adaptive(minimum: 500),
+                    spacing: 12,
+                    alignment: .top
+                )
+            ],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            huggingFaceAuthenticationPanel
+            serverAPIAuthenticationPanel
+        }
     }
 
     private var serverEndpointsPanel: some View {
@@ -560,6 +584,295 @@ private extension View {
     }
 }
 
+private struct ServerAPIAuthenticationPanel: View {
+    let token: String?
+    let onSetToken: (String?) -> Void
+    @State private var tokenEntry = ""
+    @State private var isEditingToken = false
+    @State private var showsRemovalConfirmation = false
+    @FocusState private var tokenFieldIsFocused: Bool
+
+    private var activeToken: String? {
+        ServerAPIAuthentication.normalizedToken(token)
+    }
+
+    private var tokenInfo: ServerAPITokenInfo? {
+        ServerAPIAuthentication.tokenInfo(activeToken)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(.blue)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Server API Authentication")
+                        .font(.callout.weight(.semibold))
+                    Text("Protect API requests with a custom Bearer token.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Label(authenticationStatus, systemImage: authenticationStatusImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(authenticationStatusColor)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(
+                        authenticationStatusColor.opacity(0.12),
+                        in: Capsule()
+                    )
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(PanelHeaderAccent(tint: .blue))
+
+            Divider()
+
+            Group {
+                if isEditingToken {
+                    tokenEditor
+                } else {
+                    credentialOverview
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .confirmationDialog(
+            "Remove the server API token?",
+            isPresented: $showsRemovalConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Token", role: .destructive) {
+                onSetToken(nil)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "API requests will no longer require this token. "
+                    + "The running server restarts automatically."
+            )
+        }
+    }
+
+    private var authenticationStatus: String {
+        activeToken == nil ? "Not Configured" : "Configured"
+    }
+
+    private var authenticationStatusImage: String {
+        activeToken == nil ? "circle.dashed" : "checkmark.circle.fill"
+    }
+
+    private var authenticationStatusColor: Color {
+        activeToken == nil ? .secondary : .green
+    }
+
+    private var credentialOverview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label(
+                    activeToken == nil ? "No Active Credential" : "Active Credential",
+                    systemImage: activeToken == nil ? "key" : "key.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(activeToken == nil ? .secondary : .primary)
+
+                Spacer()
+
+                if activeToken != nil {
+                    Button {
+                        copyToken()
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Copy the active server API token")
+
+                    Button {
+                        beginEditingToken()
+                    } label: {
+                        Label("Change", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(role: .destructive) {
+                        showsRemovalConfirmation = true
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button {
+                        beginEditingToken()
+                    } label: {
+                        Label("Add Token", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            HStack(spacing: 14) {
+                credentialAttribute(
+                    title: "Token",
+                    value: tokenInfo?.maskedValue ?? "Not available",
+                    systemImage: "ellipsis.rectangle",
+                    monospaced: true
+                )
+                .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
+                .privacySensitive()
+
+                Divider()
+                    .frame(height: 36)
+
+                credentialAttribute(
+                    title: "Length",
+                    value: activeTokenLength,
+                    systemImage: "number"
+                )
+                .frame(minWidth: 110, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+    }
+
+    private var tokenEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(
+                    activeToken == nil ? "Add Server API Token" : "Replace Server API Token",
+                    systemImage: "key.fill"
+                )
+                .font(.caption.weight(.semibold))
+
+                Spacer()
+
+                Button {
+                    tokenEntry = ServerAPIAuthentication.generateToken()
+                    tokenFieldIsFocused = true
+                } label: {
+                    Label("Generate Secure Token", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            HStack(spacing: 8) {
+                SecureField("Paste or generate a server API token", text: $tokenEntry)
+                    .textFieldStyle(.plain)
+                    .font(.callout.monospaced())
+                    .focused($tokenFieldIsFocused)
+                    .editableFieldChrome(isFocused: tokenFieldIsFocused)
+                    .privacySensitive()
+                    .accessibilityLabel("Server API token")
+                    .onSubmit(saveToken)
+
+                Button("Cancel") {
+                    cancelEditingToken()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Save Token") {
+                    saveToken()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(ServerAPIAuthentication.normalizedToken(tokenEntry) == nil)
+            }
+
+            Text("Clients send this value as an Authorization Bearer token.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .task {
+            tokenFieldIsFocused = true
+        }
+    }
+
+    private var activeTokenLength: String {
+        guard let characterCount = tokenInfo?.characterCount else {
+            return "—"
+        }
+        let unit = characterCount == 1 ? "character" : "characters"
+        return "\(characterCount) \(unit)"
+    }
+
+    private func credentialAttribute(
+        title: String,
+        value: String,
+        systemImage: String,
+        monospaced: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(title, systemImage: systemImage)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(
+                    monospaced
+                        ? .caption.monospaced().weight(.medium)
+                        : .callout.weight(.medium)
+                )
+                .lineLimit(1)
+        }
+    }
+
+    private func beginEditingToken() {
+        tokenEntry = ""
+        isEditingToken = true
+    }
+
+    private func cancelEditingToken() {
+        isEditingToken = false
+        tokenFieldIsFocused = false
+        tokenEntry = ""
+    }
+
+    private func saveToken() {
+        guard let token = ServerAPIAuthentication.normalizedToken(tokenEntry) else {
+            return
+        }
+        onSetToken(token)
+        isEditingToken = false
+        tokenFieldIsFocused = false
+        tokenEntry = ""
+    }
+
+    private func copyToken() {
+        guard let activeToken else {
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(activeToken, forType: .string)
+    }
+}
+
 private enum HuggingFaceTokenMetadataState {
     case idle
     case loading
@@ -767,7 +1080,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
-                .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
                 .privacySensitive()
 
                 Divider()
@@ -778,7 +1091,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                     value: activeTokenName,
                     systemImage: "tag"
                 )
-                .frame(minWidth: 100, alignment: .leading)
+                .frame(minWidth: 72, alignment: .leading)
 
                 Divider()
                     .frame(height: 36)
@@ -788,7 +1101,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                     value: activeTokenPermission,
                     systemImage: "lock.shield"
                 )
-                .frame(minWidth: 90, alignment: .leading)
+                .frame(minWidth: 72, alignment: .leading)
 
                 Divider()
                     .frame(height: 36)
@@ -798,7 +1111,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                     value: activeTokenLength,
                     systemImage: "number"
                 )
-                .frame(minWidth: 110, alignment: .leading)
+                .frame(minWidth: 88, alignment: .leading)
             }
         }
         .padding(12)

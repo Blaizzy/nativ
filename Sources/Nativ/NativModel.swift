@@ -131,6 +131,20 @@ final class NativModel: ObservableObject {
         restartServerForHuggingFaceCredentialChangeIfNeeded()
     }
 
+    func setServerAPIKey(_ token: String?) {
+        let normalizedToken = ServerAPIAuthentication.normalizedToken(token)
+        guard normalizedToken != settings.normalized().serverAPIKey else {
+            return
+        }
+
+        settings.serverAPIKey = normalizedToken
+        guard isRunning,
+              normalizedToken != settingsAppliedAtServerStart?.serverAPIKey else {
+            return
+        }
+        restartServer()
+    }
+
     func logOutSystemHuggingFaceCredential() throws {
         guard let credential = systemHuggingFaceCredential else {
             return
@@ -326,7 +340,7 @@ final class NativModel: ObservableObject {
 
         stopServer()
         guard !server.isRunning else {
-            appendLog("\nCould not stop the current server to apply the endpoint change.\n")
+            appendLog("\nCould not stop the current server to apply the configuration change.\n")
             return
         }
         startServer()

@@ -1,5 +1,48 @@
 import Foundation
 import NativServerKit
+import Security
+
+struct ServerAPITokenInfo: Equatable, Sendable {
+    let maskedValue: String
+    let characterCount: Int
+}
+
+enum ServerAPIAuthentication {
+    static func normalizedToken(_ token: String?) -> String? {
+        guard let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    static func tokenInfo(_ token: String?) -> ServerAPITokenInfo? {
+        guard let token = normalizedToken(token) else {
+            return nil
+        }
+
+        let prefix = token.hasPrefix("nativ_") ? "nativ_" : ""
+        let suffix = token.count > 8 ? String(token.suffix(4)) : ""
+        return ServerAPITokenInfo(
+            maskedValue: "\(prefix)••••••••\(suffix)",
+            characterCount: token.count
+        )
+    }
+
+    static func generateToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            return "nativ_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        }
+
+        let token = Data(bytes)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "nativ_\(token)"
+    }
+}
 
 enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
     case language
@@ -434,7 +477,7 @@ struct NativSettings: Codable, Equatable {
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
-        settings.serverAPIKey = Self.normalizedModelID(settings.serverAPIKey)
+        settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
         settings.serverHost = Self.normalizedServerHost(settings.serverHost)
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
