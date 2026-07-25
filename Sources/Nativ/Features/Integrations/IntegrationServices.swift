@@ -1,130 +1,41 @@
 import AppKit
 import Foundation
 
-enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
-    case pi
-    case codex
-    case claudeCode
-    case hermes
-    case openCode
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .pi: "Pi"
-        case .codex: "Codex"
-        case .claudeCode: "Claude Code"
-        case .hermes: "Hermes"
-        case .openCode: "OpenCode"
-        }
-    }
-
-    var commandName: String {
-        switch self {
-        case .pi: "pi"
-        case .codex: "codex"
-        case .claudeCode: "claude"
-        case .hermes: "hermes"
-        case .openCode: "opencode"
-        }
-    }
-
-    var logoAssetName: String { "IntegrationLogo-\(rawValue)" }
-
-    var summary: String {
-        switch self {
-        case .pi: "Minimal, extensible coding agent"
-        case .codex: "OpenAI coding agent for terminal and desktop"
-        case .claudeCode: "Anthropic's agentic coding tool"
-        case .hermes: "Open agent with tools, skills, and memory"
-        case .openCode: "Open-source coding agent"
-        }
-    }
-
-    var installURL: URL {
-        switch self {
-        case .pi: URL(string: "https://pi.dev/docs/latest")!
-        case .codex: URL(string: "https://developers.openai.com/codex/cli")!
-        case .claudeCode: URL(string: "https://code.claude.com/docs/en/setup")!
-        case .hermes: URL(string: "https://github.com/NousResearch/hermes-agent")!
-        case .openCode: URL(string: "https://opencode.ai/docs")!
-        }
-    }
-}
-
-struct IntegrationModelDescriptor: Identifiable, Equatable, Sendable {
-    let id: String
-    let displayName: String
-    let contextWindow: Int?
-    let supportsVision: Bool
-    let supportsReasoning: Bool
-    let supportsTools: Bool
-
-    init(localModel: LocalModel) {
-        id = localModel.repoID
-        displayName = localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID
-        contextWindow = localModel.contextSize
-        supportsVision = localModel.capabilities.contains(.vision)
-        supportsReasoning = localModel.capabilities.contains(.reasoning)
-        supportsTools = localModel.capabilities.contains(.tools)
-    }
-}
-
-struct IntegrationToolStatus: Equatable, Sendable {
-    var executableURL: URL?
-    var version: String?
-    var isConfigured: Bool
-
-    static let unavailable = IntegrationToolStatus(executableURL: nil, version: nil, isConfigured: false)
-}
-
-enum IntegrationServiceError: LocalizedError {
-    case missingExecutable(IntegrationTool)
-    case invalidConfiguration(URL)
-    case noModel
-    case serverUnavailable
-    case modelLoadFailed(String, String)
-    case modelLoadTimedOut(String)
-    case terminalLaunchFailed(String)
-    case desktopLaunchFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .missingExecutable(let tool):
-            return "\(tool.displayName) is not installed or could not be found in the application bundle or shell PATH."
-        case .invalidConfiguration(let url):
-            return "The existing configuration at \(url.path) is not valid JSON. It was left unchanged."
-        case .noModel:
-            return "Choose an installed chat model first."
-        case .serverUnavailable:
-            return "The local model server did not become ready in time."
-        case .modelLoadFailed(let model, let message):
-            return "Couldn’t load \(model): \(message)"
-        case .modelLoadTimedOut(let model):
-            return "Loading \(model) took longer than five minutes. The coding tool was not opened."
-        case .terminalLaunchFailed(let message):
-            return "Couldn’t open Terminal: \(message)"
-        case .desktopLaunchFailed(let message):
-            return "Couldn’t open Codex Desktop: \(message)"
-        }
-    }
-}
-
 struct IntegrationProfileManager {
-    static let providerID = "nativ"
+    static let providerID = CodexCLIProfile.providerID
 
-    static var openAIBaseURL: String {
-        NativSettings.load().serverBaseURL.absoluteString + "/v1"
+    private let fileManager: FileManager
+    private let homeDirectory: URL
+    private let applicationSupportDirectory: URL
+    let serverBaseURL: URL
+
+    var openAIBaseURL: String {
+        serverBaseURL.appendingPathComponent("v1").absoluteString
     }
 
-    static var anthropicBaseURL: String {
-        NativSettings.load().serverBaseURL.absoluteString
+    var anthropicBaseURL: String {
+        serverBaseURL.absoluteString
     }
 
-    private let fileManager = FileManager.default
+    init(
+        serverBaseURL: URL,
+        fileManager: FileManager = .default,
+        homeDirectory: URL? = nil,
+        applicationSupportDirectory: URL? = nil
+    ) {
+        let resolvedHomeDirectory = homeDirectory ?? fileManager.homeDirectoryForCurrentUser
+        self.fileManager = fileManager
+        self.homeDirectory = resolvedHomeDirectory
+        self.serverBaseURL = serverBaseURL
+        self.applicationSupportDirectory = applicationSupportDirectory
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? resolvedHomeDirectory
+    }
 
     func status(for tool: IntegrationTool) async -> IntegrationToolStatus {
+        if tool.isGuidedSetup {
+            return IntegrationToolStatus(executableURL: nil, version: nil, isConfigured: false)
+        }
         let resolvedExecutableURL: URL?
         if let bundledURL = bundledExecutableURL(for: tool) {
             resolvedExecutableURL = bundledURL
@@ -155,16 +66,43 @@ struct IntegrationProfileManager {
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let environment = root["env"] as? [String: Any]
             else { return false }
-            return environment["ANTHROPIC_BASE_URL"] as? String == Self.anthropicBaseURL
+            return environment["ANTHROPIC_BASE_URL"] as? String == anthropicBaseURL
         case .openCode:
             guard
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let providers = root["provider"] as? [String: Any]
             else { return false }
             return providers[Self.providerID] != nil
-        case .codex, .hermes:
+        case .goose:
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+            return root["name"] as? String == Self.providerID
+        case .crush:
+            guard
+                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let providers = root["providers"] as? [String: Any]
+            else { return false }
+            return providers[Self.providerID] != nil
+        case .openClaw:
+            guard
+                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let modelsRoot = root["models"] as? [String: Any],
+                let providers = modelsRoot["providers"] as? [String: Any]
+            else { return false }
+            return providers[Self.providerID] != nil
+        case .zed:
+            guard
+                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let languageModels = root["language_models"] as? [String: Any],
+                let openAICompatible = languageModels["openai_compatible"] as? [String: Any]
+            else { return false }
+            return openAICompatible[Self.providerID] != nil
+        case .codex, .hermes, .aider, .qwenCode, .continueDev:
             guard let text = String(data: data, encoding: .utf8) else { return false }
-            return text.contains(Self.providerID) && text.contains(Self.openAIBaseURL)
+            return text.contains(Self.providerID) && text.contains(openAIBaseURL)
+        case .vscode, .cursor, .jetbrains:
+            return false
+        case .cline:
+            return false
         }
     }
 
@@ -178,7 +116,12 @@ struct IntegrationProfileManager {
         case .pi:
             try configurePi(selectedModelID: selectedModelID, models: models)
         case .codex:
-            try writeText(codexProfile(selectedModelID: selectedModelID), to: configurationURL(for: tool))
+            try CodexCLIProfile.write(
+                selectedModelID: selectedModelID,
+                baseURL: openAIBaseURL,
+                homeDirectory: homeDirectory,
+                fileManager: fileManager
+            )
         case .claudeCode:
             try writeJSON(claudeSettings(selectedModelID: selectedModelID), to: configurationURL(for: tool))
         case .hermes:
@@ -192,6 +135,24 @@ struct IntegrationProfileManager {
                 ),
                 to: configurationURL(for: tool)
             )
+        case .aider:
+            try configureAider()
+        case .goose:
+            try configureGoose(models: models)
+        case .crush:
+            try configureCrush(selectedModelID: selectedModelID, models: models, maxOutputTokens: maxOutputTokens)
+        case .qwenCode:
+            try configureQwenCode(selectedModelID: selectedModelID)
+        case .openClaw:
+            try configureOpenClaw(models: models)
+        case .zed:
+            try configureZed(models: models)
+        case .continueDev:
+            try configureContinue(selectedModelID: selectedModelID, models: models)
+        case .vscode, .cursor, .jetbrains:
+            break
+        case .cline:
+            break
         }
     }
 
@@ -244,72 +205,53 @@ struct IntegrationProfileManager {
             .joined(separator: "\n")
     }
 
-    func codexDesktopLaunchCommand(
-        executableURL: URL,
-        selectedModelID _: String,
-        workingDirectory: URL
-    ) -> String {
-        ([shellQuote(executableURL.path)] + codexDesktopArguments(
-            workingDirectory: workingDirectory
-        ).map(shellQuote))
-        .joined(separator: " ")
-    }
-
-    func configureCodexDesktop(selectedModelID: String) throws {
-        let url = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml")
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let updated = updatingCodexUserConfiguration(existing, selectedModelID: selectedModelID)
-        try writeText(updated, to: url)
-    }
-
-    func launchCodexDesktop(
-        executableURL: URL,
-        selectedModelID _: String,
-        workingDirectory: URL
-    ) throws {
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = codexDesktopArguments(workingDirectory: workingDirectory)
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            throw IntegrationServiceError.desktopLaunchFailed(error.localizedDescription)
-        }
-        guard process.terminationStatus == 0 else {
-            throw IntegrationServiceError.desktopLaunchFailed(
-                "codex app exited with status \(process.terminationStatus)"
-            )
-        }
-    }
-
     func configurationURL(for tool: IntegrationTool) -> URL {
-        let home = fileManager.homeDirectoryForCurrentUser
+        let home = homeDirectory
         switch tool {
         case .pi:
             return home.appendingPathComponent(".pi/agent/models.json")
         case .codex:
-            return home.appendingPathComponent(".codex/nativ.config.toml")
+            return CodexCLIProfile.configurationURL(in: home)
         case .claudeCode:
             return integrationsSupportURL.appendingPathComponent("claude-settings.json")
         case .hermes:
             return home.appendingPathComponent(".hermes/profiles/nativ/config.yaml")
         case .openCode:
             return integrationsSupportURL.appendingPathComponent("opencode.json")
+        case .aider:
+            return integrationsSupportURL.appendingPathComponent("aider.env")
+        case .goose:
+            return home.appendingPathComponent(".config/goose/custom_providers/nativ.json")
+        case .crush:
+            return integrationsSupportURL.appendingPathComponent("crush.json")
+        case .qwenCode:
+            return integrationsSupportURL.appendingPathComponent("qwen.env")
+        case .openClaw:
+            return home.appendingPathComponent(".openclaw/openclaw.json")
+        case .zed:
+            return home.appendingPathComponent(".config/zed/settings.json")
+        case .continueDev:
+            return integrationsSupportURL.appendingPathComponent("continue-config.yaml")
+        case .vscode:
+            return integrationsSupportURL.appendingPathComponent("vscode-guided.json")
+        case .cline:
+            return integrationsSupportURL.appendingPathComponent("cline-guided.json")
+        case .cursor:
+            return integrationsSupportURL.appendingPathComponent("cursor-guided.json")
+        case .jetbrains:
+            return integrationsSupportURL.appendingPathComponent("jetbrains-guided.json")
         }
     }
 
     private var integrationsSupportURL: URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser
-        return base
+        applicationSupportDirectory
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("Integrations", isDirectory: true)
     }
 
     private func bundledExecutableURL(for tool: IntegrationTool) -> URL? {
         guard tool == .codex else { return nil }
-        let home = fileManager.homeDirectoryForCurrentUser
+        let home = homeDirectory
         let candidates = [
             URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
             URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
@@ -393,7 +335,7 @@ struct IntegrationProfileManager {
         }
         var providers = root["providers"] as? [String: Any] ?? [:]
         providers[Self.providerID] = [
-            "baseUrl": Self.openAIBaseURL,
+            "baseUrl": openAIBaseURL,
             "api": "openai-completions",
             "apiKey": "nativ",
             "compat": [
@@ -421,25 +363,12 @@ struct IntegrationProfileManager {
         return value
     }
 
-    private func codexProfile(selectedModelID: String) -> String {
-        """
-        # Managed by Nativ. Other Codex profiles are not modified.
-        model = \(tomlString(selectedModelID))
-        model_provider = \(tomlString(Self.providerID))
-
-        [model_providers.\(tomlString(Self.providerID))]
-        name = "Nativ"
-        base_url = \(tomlString(Self.openAIBaseURL))
-        wire_api = "responses"
-        """
-    }
-
     private func claudeSettings(selectedModelID: String) -> [String: Any] {
         [
             "env": [
                 "ANTHROPIC_AUTH_TOKEN": "nativ",
                 "ANTHROPIC_API_KEY": "",
-                "ANTHROPIC_BASE_URL": Self.anthropicBaseURL,
+                "ANTHROPIC_BASE_URL": anthropicBaseURL,
                 "ANTHROPIC_MODEL": selectedModelID,
                 "ANTHROPIC_SMALL_FAST_MODEL": selectedModelID
             ]
@@ -466,13 +395,13 @@ struct IntegrationProfileManager {
         model:
           default: \(yamlString(selectedModelID))
           provider: custom
-          base_url: \(yamlString(Self.openAIBaseURL))
+          base_url: \(yamlString(openAIBaseURL))
           api_key: nativ
         display:
           streaming: true
         custom_providers:
           - name: nativ
-            base_url: \(yamlString(Self.openAIBaseURL))
+            base_url: \(yamlString(openAIBaseURL))
             api_key: nativ
             api_mode: chat_completions
             models:
@@ -522,13 +451,151 @@ struct IntegrationProfileManager {
                     "npm": "@ai-sdk/openai-compatible",
                     "name": "Nativ",
                     "options": [
-                        "baseURL": Self.openAIBaseURL,
+                        "baseURL": openAIBaseURL,
                         "apiKey": "nativ"
                     ],
                     "models": modelCatalog
                 ]
             ]
         ]
+    }
+
+    private func configureAider() throws {
+        let contents = "OPENAI_API_BASE=\(openAIBaseURL)\nOPENAI_API_KEY=nativ\n"
+        try writeText(contents, to: configurationURL(for: .aider))
+    }
+
+    private func configureGoose(models: [IntegrationModelDescriptor]) throws {
+        let modelEntries = models.map { model -> [String: Any] in
+            ["name": model.id, "context_limit": model.contextWindow ?? 131_072]
+        }
+        let provider: [String: Any] = [
+            "name": Self.providerID,
+            "engine": "openai",
+            "display_name": "Nativ",
+            "description": "Local models from Nativ",
+            "api_key_env": "NATIV_API_KEY",
+            "base_url": openAIBaseURL + "/chat/completions",
+            "models": modelEntries,
+            "supports_streaming": true,
+            "requires_auth": true
+        ]
+        try writeJSON(provider, to: configurationURL(for: .goose))
+    }
+
+    private func configureCrush(
+        selectedModelID: String,
+        models: [IntegrationModelDescriptor],
+        maxOutputTokens: Int
+    ) throws {
+        let providerModels = models.map { model -> [String: Any] in
+            var entry: [String: Any] = ["id": model.id, "name": model.displayName]
+            if let contextWindow = model.contextWindow {
+                entry["context_window"] = contextWindow
+            }
+            return entry
+        }
+        let large: [String: Any] = [
+            "model": selectedModelID,
+            "provider": Self.providerID,
+            "max_tokens": maxOutputTokens
+        ]
+        let small: [String: Any] = ["model": selectedModelID, "provider": Self.providerID]
+        let configuration: [String: Any] = [
+            "$schema": "https://charm.land/crush.json",
+            "models": ["large": large, "small": small],
+            "providers": [
+                Self.providerID: [
+                    "type": "openai-compat",
+                    "base_url": openAIBaseURL,
+                    "api_key": "nativ",
+                    "models": providerModels
+                ]
+            ]
+        ]
+        try writeJSON(configuration, to: configurationURL(for: .crush))
+    }
+
+    private func configureQwenCode(selectedModelID: String) throws {
+        let contents = "OPENAI_API_KEY=nativ\nOPENAI_BASE_URL=\(openAIBaseURL)\nOPENAI_MODEL=\(selectedModelID)\n"
+        try writeText(contents, to: configurationURL(for: .qwenCode))
+    }
+
+    private func configureOpenClaw(models: [IntegrationModelDescriptor]) throws {
+        let url = configurationURL(for: .openClaw)
+        var root: [String: Any] = [:]
+        if fileManager.fileExists(atPath: url.path) {
+            let data = try Data(contentsOf: url)
+            guard let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw IntegrationServiceError.invalidConfiguration(url)
+            }
+            root = existing
+        }
+        var modelsRoot = root["models"] as? [String: Any] ?? [:]
+        var providers = modelsRoot["providers"] as? [String: Any] ?? [:]
+        providers[Self.providerID] = [
+            "baseUrl": openAIBaseURL,
+            "apiKey": "nativ",
+            "api": "openai-completions",
+            "models": models.map(openClawModel)
+        ]
+        modelsRoot["providers"] = providers
+        root["models"] = modelsRoot
+        try writeJSON(root, to: url)
+    }
+
+    private func openClawModel(_ model: IntegrationModelDescriptor) -> [String: Any] {
+        var value: [String: Any] = ["id": model.id, "name": model.displayName]
+        if let contextWindow = model.contextWindow {
+            value["contextWindow"] = contextWindow
+        }
+        return value
+    }
+
+    private func configureZed(models: [IntegrationModelDescriptor]) throws {
+        let url = configurationURL(for: .zed)
+        var root: [String: Any] = [:]
+        if fileManager.fileExists(atPath: url.path) {
+            let data = try Data(contentsOf: url)
+            guard let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw IntegrationServiceError.invalidConfiguration(url)
+            }
+            root = existing
+        }
+        var languageModels = root["language_models"] as? [String: Any] ?? [:]
+        var openAICompatible = languageModels["openai_compatible"] as? [String: Any] ?? [:]
+        openAICompatible[Self.providerID] = [
+            "api_url": openAIBaseURL,
+            "available_models": models.map(zedModel)
+        ]
+        languageModels["openai_compatible"] = openAICompatible
+        root["language_models"] = languageModels
+        try writeJSON(root, to: url)
+    }
+
+    private func zedModel(_ model: IntegrationModelDescriptor) -> [String: Any] {
+        [
+            "name": model.id,
+            "display_name": model.displayName,
+            "max_tokens": model.contextWindow ?? 131_072
+        ]
+    }
+
+    private func configureContinue(selectedModelID: String, models: [IntegrationModelDescriptor]) throws {
+        let ordered = models.filter { $0.id == selectedModelID } + models.filter { $0.id != selectedModelID }
+        var lines = ["name: nativ", "version: 0.0.1", "models:"]
+        for model in ordered {
+            lines.append("  - name: \(yamlString(model.displayName))")
+            lines.append("    provider: openai")
+            lines.append("    apiBase: \(yamlString(openAIBaseURL))")
+            lines.append("    model: \(yamlString(model.id))")
+            lines.append("    apiKey: nativ")
+            lines.append("    roles:")
+            lines.append("      - chat")
+            lines.append("      - edit")
+            lines.append("      - apply")
+        }
+        try writeText(lines.joined(separator: "\n") + "\n", to: configurationURL(for: .continueDev))
     }
 
     private func launchConfiguration(
@@ -546,7 +613,7 @@ struct IntegrationProfileManager {
                 [
                     "ANTHROPIC_AUTH_TOKEN": "nativ",
                     "ANTHROPIC_API_KEY": "",
-                    "ANTHROPIC_BASE_URL": Self.anthropicBaseURL
+                    "ANTHROPIC_BASE_URL": anthropicBaseURL
                 ]
             )
         case .hermes:
@@ -556,97 +623,38 @@ struct IntegrationProfileManager {
                 ["--model", "\(Self.providerID)/\(selectedModelID)"],
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
             )
+        case .aider:
+            return (
+                ["--env-file", configurationURL(for: tool).path, "--model", "openai/\(selectedModelID)"],
+                [:]
+            )
+        case .goose:
+            return (
+                ["session", "start", "--provider", Self.providerID],
+                ["NATIV_API_KEY": "nativ", "GOOSE_MODEL": selectedModelID]
+            )
+        case .crush:
+            return ([], ["CRUSH_GLOBAL_CONFIG": configurationURL(for: tool).path])
+        case .qwenCode:
+            return (
+                [],
+                [
+                    "OPENAI_API_KEY": "nativ",
+                    "OPENAI_BASE_URL": openAIBaseURL,
+                    "OPENAI_MODEL": selectedModelID
+                ]
+            )
+        case .openClaw:
+            return (["agent", "--model", "\(Self.providerID)/\(selectedModelID)"], [:])
+        case .zed:
+            return (["."], ["NATIV_API_KEY": "nativ"])
+        case .continueDev:
+            return (["--config", configurationURL(for: tool).path], [:])
+        case .vscode, .cursor, .jetbrains:
+            return ([], [:])
+        case .cline:
+            return ([], [:])
         }
-    }
-
-    private func codexDesktopArguments(workingDirectory: URL) -> [String] {
-        ["app", workingDirectory.path]
-    }
-
-    private func updatingCodexUserConfiguration(
-        _ configuration: String,
-        selectedModelID: String
-    ) -> String {
-        let lines = configuration.components(separatedBy: .newlines)
-        var output: [String] = []
-        var reachedTable = false
-        var skippingManagedProvider = false
-        var wroteModel = false
-        var wroteProvider = false
-
-        func appendMissingRootValues() {
-            guard !wroteModel || !wroteProvider else { return }
-            output.append("# Model selection managed by Nativ.")
-            if !wroteModel {
-                output.append("model = \(tomlString(selectedModelID))")
-                wroteModel = true
-            }
-            if !wroteProvider {
-                output.append("model_provider = \(tomlString(Self.providerID))")
-                wroteProvider = true
-            }
-            output.append("")
-        }
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let isTable = trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
-
-            if isTable {
-                if !reachedTable {
-                    appendMissingRootValues()
-                    reachedTable = true
-                }
-                if isCodexManagedProviderTable(trimmed) {
-                    skippingManagedProvider = true
-                    continue
-                }
-                skippingManagedProvider = false
-            }
-
-            if skippingManagedProvider { continue }
-
-            if !reachedTable, let key = tomlAssignmentKey(line) {
-                if key == "model" {
-                    output.append("model = \(tomlString(selectedModelID)) # Managed by Nativ")
-                    wroteModel = true
-                    continue
-                }
-                if key == "model_provider" {
-                    output.append("model_provider = \(tomlString(Self.providerID)) # Managed by Nativ")
-                    wroteProvider = true
-                    continue
-                }
-            }
-            output.append(line)
-        }
-
-        if !reachedTable {
-            appendMissingRootValues()
-        }
-        while output.last?.isEmpty == true { output.removeLast() }
-        output.append("")
-        output.append("# Provider managed by Nativ.")
-        output.append("[model_providers.\(tomlString(Self.providerID))]")
-        output.append("name = \(tomlString("Nativ"))")
-        output.append("base_url = \(tomlString(Self.openAIBaseURL))")
-        output.append("wire_api = \(tomlString("responses"))")
-        output.append("")
-        return output.joined(separator: "\n")
-    }
-
-    private func tomlAssignmentKey(_ line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("#"), let equals = trimmed.firstIndex(of: "=") else {
-            return nil
-        }
-        return String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
-    }
-
-    private func isCodexManagedProviderTable(_ line: String) -> Bool {
-        line == "[model_providers.\(Self.providerID)]"
-            || line == "[model_providers.\(tomlString(Self.providerID))]"
-            || line == "[model_providers.'\(Self.providerID)']"
     }
 
     private func terminalScriptURL(for tool: IntegrationTool) throws -> URL {

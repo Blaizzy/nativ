@@ -27,17 +27,17 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
         case .video:
             "Video"
         case .imageGeneration:
-            "Image generation"
+            "Image Generation"
         case .speechToText:
-            "Speech to text"
+            "Speech to Text"
         case .textToSpeech:
-            "Text to speech"
+            "Text to Speech"
         case .embeddings:
             "Embeddings"
         case .reasoning:
             "Reasoning"
         case .tools:
-            "Tool calling"
+            "Tool Calling"
         }
     }
 }
@@ -333,7 +333,11 @@ enum LocalModelDiscovery {
                     snapshotURL: snapshotURL,
                     fileManager: fileManager
                 ),
-                capabilities: modelCapabilities(at: snapshotURL, fileManager: fileManager)
+                capabilities: modelCapabilities(
+                    model: repoID,
+                    at: snapshotURL,
+                    fileManager: fileManager
+                )
             )
         }
 
@@ -432,7 +436,11 @@ enum LocalModelDiscovery {
                 snapshotURL: modelURL,
                 fileManager: fileManager
             ),
-            capabilities: modelCapabilities(at: modelURL, fileManager: fileManager),
+            capabilities: modelCapabilities(
+                model: standardizedPath,
+                at: modelURL,
+                fileManager: fileManager
+            ),
             source: .external
         )
     }
@@ -889,6 +897,7 @@ enum LocalModelDiscovery {
     }
 
     private static func modelCapabilities(
+        model: String,
         at snapshotURL: URL,
         fileManager: FileManager
     ) -> Set<LocalModelCapability> {
@@ -915,14 +924,29 @@ enum LocalModelDiscovery {
         let keys = recursiveKeys(in: config).union(recursiveKeys(in: modelIndex))
         let descriptors = [modelDescriptors(in: config), modelDescriptors(in: modelIndex)]
             .joined(separator: " ")
+        let primaryTask = ModelPrimaryTaskResolver.resolve(
+            model: model,
+            config: config
+        )
         var capabilities = Set<LocalModelCapability>()
 
         let textDescriptors = [
             "causallm", "conditionalgeneration", "language", "llm", "gpt",
             "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
         ]
-        if textDescriptors.contains(where: descriptors.contains) {
+        if primaryTask.includesLanguageCapability(
+            fallbackMatch: textDescriptors.contains(where: descriptors.contains)
+        ) {
             capabilities.insert(.text)
+        }
+
+        switch primaryTask {
+        case .textToSpeech:
+            capabilities.formUnion([.audio, .textToSpeech])
+        case .speechToText:
+            capabilities.formUnion([.audio, .speechToText])
+        case .language, .audioLanguage, .unknown:
+            break
         }
 
         let visionKeys: Set<String> = [
@@ -947,15 +971,19 @@ enum LocalModelDiscovery {
             capabilities.insert(.vision)
         }
 
-        let imageGenerationDescriptors = [
-            "diffusion", "stable_diffusion", "fluxpipeline", "imagegeneration"
-        ]
-        if imageGenerationDescriptors.contains(where: descriptors.contains) {
+        if MLXImageModelResolver.shared.isImageGenerationModel(
+            model: model,
+            at: snapshotURL,
+            fileManager: fileManager
+        ) {
             capabilities.insert(.imageGeneration)
         }
 
         let audioKeys: Set<String> = [
             "audio_config",
+            "audio_decoder_config",
+            "audio_encoder_config",
+            "audio_tokenizer_config",
             "audio_tower",
             "audio_token_id",
             "speech_config",
@@ -988,14 +1016,22 @@ enum LocalModelDiscovery {
             capabilities.insert(.embeddings)
         }
 
-        if descriptors.contains("reasoning")
-            || descriptors.contains("thinking")
-            || keys.contains("thinking_config")
-            || supportsThinkingMode(at: snapshotURL, fileManager: fileManager) {
+        if capabilities.contains(.text)
+            && (descriptors.contains("reasoning")
+                || descriptors.contains("thinking")
+                || keys.contains("thinking_config")
+                || supportsThinkingMode(
+                    at: snapshotURL,
+                    fileManager: fileManager
+                )) {
             capabilities.insert(.reasoning)
         }
 
-        if supportsToolCalling(at: snapshotURL, fileManager: fileManager) {
+        if capabilities.contains(.text)
+            && supportsToolCalling(
+                at: snapshotURL,
+                fileManager: fileManager
+            ) {
             capabilities.insert(.tools)
         }
 

@@ -16,6 +16,29 @@ private enum HubAccessFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case language = "Language"
+    case image = "Image"
+    case speech = "Speech"
+
+    var id: String { rawValue }
+
+    func matches(_ capabilities: Set<LocalModelCapability>) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .language:
+            capabilities.contains(.text)
+        case .image:
+            capabilities.contains(.imageGeneration)
+        case .speech:
+            !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
+        }
+    }
+
+}
+
 private struct HubSearchTaskID: Hashable {
     let section: ModelsPageSection
     let query: String
@@ -26,10 +49,12 @@ private struct HubSearchTaskID: Hashable {
 struct ModelsView: View {
     @ObservedObject var model: NativModel
     @Binding var showsConfiguration: Bool
+    var titleLeadingInset: CGFloat = 0
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
     @State private var section: ModelsPageSection = .installed
+    @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
     @State private var hubQuery = ""
     @State private var hubSort: HuggingFaceModelSort = .downloads
@@ -90,6 +115,7 @@ struct ModelsView: View {
             }
         }
         .padding(.horizontal, 22)
+        .padding(.leading, titleLeadingInset)
         .padding(.top, 20)
         .padding(.bottom, 16)
     }
@@ -97,7 +123,9 @@ struct ModelsView: View {
     private var installedPage: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                ModelsSearchField(prompt: "Filter installed models", text: $localQuery)
+                ModelsSearchField(prompt: "Search installed models", text: $localQuery)
+
+                typeFilterPicker
 
                 sourcesMenu
 
@@ -128,17 +156,21 @@ struct ModelsView: View {
                         ModelsLoadingState(title: "Scanning your Hugging Face cache…")
                     } else if filteredLocalModels.isEmpty {
                         ModelsEmptyState(
-                            systemImage: localQuery.isEmpty ? "shippingbox" : "magnifyingglass",
-                            title: localQuery.isEmpty ? "No MLX models installed" : "No models match your filter",
-                            message: localQuery.isEmpty
-                                ? "Discover an MLX model on Hugging Face and download it to this cache."
-                                : "Try a different model name or provider.",
-                            actionTitle: localQuery.isEmpty ? "Discover models" : nil,
+                            systemImage: installedFilterIsActive
+                                ? "line.3.horizontal.decrease.circle" : "shippingbox",
+                            title: installedFilterIsActive
+                                ? "No models match your filter" : "No MLX models installed",
+                            message: installedFilterIsActive
+                                ? "Try a different search or model type."
+                                : "Discover an MLX model on Hugging Face and download it to this cache.",
+                            actionTitle: installedFilterIsActive ? nil : "Discover models",
                             action: { section = .discover }
                         )
                     } else {
                         HStack {
-                            Text("\(filteredLocalModels.count) \(filteredLocalModels.count == 1 ? "model" : "models")")
+                            Text(
+                                "\(filteredLocalModels.count) \(filteredLocalModels.count == 1 ? "model" : "models")"
+                            )
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -148,13 +180,35 @@ struct ModelsView: View {
                         }
 
                         ForEach(filteredLocalModels) { localModel in
+                            let preloadSlots = preloadSlots(for: localModel)
                             InstalledModelRow(
                                 localModel: localModel,
-                                selectedLanguageModelID: model.settings.normalized().languageModelID,
-                                isModelSwitchInProgress: model.modelSwitchInProgress,
-                                isDeleting: localLibrary.deletingModelIDs.contains(localModel.repoID),
-                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress && !isModelInUse(localModel.repoID),
-                                onLoadModel: { model.switchLanguageModel(to: localModel.repoID) },
+                                preloadSlots: preloadSlots,
+                                selectedPreloadSlots: selectedPreloadSlots(
+                                    for: localModel.repoID
+                                ),
+                                preferredPreloadSlot: preferredPreloadSlot(
+                                    among: preloadSlots
+                                ),
+                                isSelectionDisabled: model.modelSwitchInProgress,
+                                isModelLoading: model.modelLoadingID
+                                    == localModel.repoID,
+                                modelLoadingPercentage: model.modelLoadingPercentage,
+                                isDeleting: localLibrary.deletingModelIDs.contains(
+                                    localModel.repoID),
+                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress
+                                    && !isModelInUse(localModel.repoID),
+                                onSetPreload: { slot, isEnabled in
+                                    if isEnabled {
+                                        model.requestPreloadedModelSwitch(
+                                            to: localModel,
+                                            for: slot,
+                                            availableModels: localLibrary.models
+                                        )
+                                    } else {
+                                        model.switchPreloadedModel(to: nil, for: slot)
+                                    }
+                                },
                                 onDelete: { deleteInstalledModel(localModel) }
                             )
                         }
@@ -194,7 +248,9 @@ struct ModelsView: View {
                             color: .orange
                         )
                     } else if hubLibrary.isSearching && hubLibrary.models.isEmpty {
-                        ModelsLoadingState(title: hubQuery.isEmpty ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
+                        ModelsLoadingState(
+                            title: hubQuery.isEmpty
+                                ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
                     } else if hubLibrary.models.isEmpty {
                         ModelsEmptyState(
                             systemImage: "magnifyingglass",
@@ -210,7 +266,8 @@ struct ModelsView: View {
                             ModelsEmptyState(
                                 systemImage: "line.3.horizontal.decrease.circle",
                                 title: "No models match these filters",
-                                message: "Try another capability or access filter, or continue to the next page.",
+                                message:
+                                    "Try another model type, capability, or access filter, or continue to the next page.",
                                 actionTitle: nil,
                                 action: {}
                             )
@@ -219,13 +276,17 @@ struct ModelsView: View {
                                 HubModelRow(
                                     model: hubModel,
                                     isInstalled: installedModelIDs.contains(hubModel.id),
-                                    isDownloading: downloadManager.downloadingModelID == hubModel.id,
-                                    downloadProgress: downloadManager.downloadingModelID == hubModel.id
+                                    isDownloading: downloadManager.downloadingModelID
+                                        == hubModel.id,
+                                    downloadProgress: downloadManager.downloadingModelID
+                                        == hubModel.id
                                         ? downloadManager.downloadProgress
                                         : 0,
-                                    isDownloadPaused: downloadManager.downloadingModelID == hubModel.id
+                                    isDownloadPaused: downloadManager.downloadingModelID
+                                        == hubModel.id
                                         && downloadManager.isDownloadPaused,
-                                    anotherDownloadIsActive: downloadManager.downloadingModelID != nil,
+                                    anotherDownloadIsActive: downloadManager.downloadingModelID
+                                        != nil,
                                     downloadError: downloadManager.errorByModelID[hubModel.id],
                                     onDownload: {
                                         downloadManager.download(
@@ -297,9 +358,56 @@ struct ModelsView: View {
             settings.imageGenerationModelID,
             settings.textToSpeechModelID,
             settings.speechToTextModelID,
-            model.metrics?.server.loadedModel
+            model.metrics?.server.loadedModel,
         ]
         return configuredModelIDs.contains(repoID)
+    }
+
+    private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
+        var slots: [ModelPreloadSlot] = []
+        if localModel.capabilities.contains(.text) {
+            slots.append(.language)
+        }
+        if localModel.capabilities.contains(.imageGeneration) {
+            slots.append(.imageGeneration)
+        }
+        if localModel.capabilities.contains(.textToSpeech) {
+            slots.append(.textToSpeech)
+        }
+        if localModel.capabilities.contains(.speechToText) {
+            slots.append(.speechToText)
+        }
+        return slots
+    }
+
+    private func selectedPreloadSlots(
+        for repoID: String
+    ) -> Set<ModelPreloadSlot> {
+        let settings = model.settings.normalized()
+        return Set(
+            ModelPreloadSlot.allCases.filter {
+                settings.modelID(for: $0) == repoID
+            })
+    }
+
+    private func preferredPreloadSlot(
+        among slots: [ModelPreloadSlot]
+    ) -> ModelPreloadSlot? {
+        let preferredSlot: ModelPreloadSlot? =
+            switch typeFilter {
+            case .all:
+                nil
+            case .language:
+                .language
+            case .image:
+                .imageGeneration
+            case .speech:
+                nil
+            }
+        if let preferredSlot, slots.contains(preferredSlot) {
+            return preferredSlot
+        }
+        return slots.first
     }
 
     private func deleteInstalledModel(_ localModel: LocalModel) {
@@ -328,7 +436,8 @@ struct ModelsView: View {
 
     private var filteredLocalModels: [LocalModel] {
         let query = localQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        var models = query.isEmpty
+        var models =
+            query.isEmpty
             ? localLibrary.models
             : localLibrary.models.filter {
                 $0.repoID.localizedCaseInsensitiveContains(query)
@@ -336,12 +445,21 @@ struct ModelsView: View {
                     || $0.provider?.displayName.localizedCaseInsensitiveContains(query) == true
             }
 
-        let selectedModelID = model.settings.normalized().languageModelID
-        if let selectedIndex = models.firstIndex(where: { $0.repoID == selectedModelID }) {
-            let selectedModel = models.remove(at: selectedIndex)
-            models.insert(selectedModel, at: 0)
+        models = models.filter { typeFilter.matches($0.capabilities) }
+
+        let settings = model.settings.normalized()
+        let selectedModelIDs = Set(
+            ModelPreloadSlot.allCases.compactMap {
+                settings.modelID(for: $0)
+            })
+        return models.enumerated().sorted { lhs, rhs in
+            let lhsIsSelected = selectedModelIDs.contains(lhs.element.repoID)
+            let rhsIsSelected = selectedModelIDs.contains(rhs.element.repoID)
+            if lhsIsSelected != rhsIsSelected {
+                return lhsIsSelected
         }
-        return models
+            return lhs.offset < rhs.offset
+        }.map(\.element)
     }
 
     private var installedModelIDs: Set<String> {
@@ -368,6 +486,16 @@ struct ModelsView: View {
         .labelsHidden()
         .pickerStyle(.segmented)
         .frame(width: 230)
+    }
+
+    private var typeFilterPicker: some View {
+        Picker("Filter", selection: $typeFilter) {
+            ForEach(ModelsTypeFilter.allCases) { filter in
+                Text(filter.rawValue).tag(filter)
+            }
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
     }
 
     private var discoverFilterBar: some View {
@@ -552,6 +680,11 @@ struct ModelsView: View {
         }
     }
 
+    private var installedFilterIsActive: Bool {
+        typeFilter != .all
+            || !localQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var modelScanPath: String {
         let settings = model.settings.normalized()
         return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
@@ -564,7 +697,8 @@ struct ModelsView: View {
                 Text(abbreviatedPath(model.settings.normalized().modelSearchPath))
             }
             Section("Model folders") {
-                ForEach(model.settings.normalized().additionalModelSearchPaths, id: \.self) { path in
+                ForEach(model.settings.normalized().additionalModelSearchPaths, id: \.self) {
+                    path in
                     Menu(abbreviatedPath(path)) {
                         Button("Remove", role: .destructive) {
                             removeModelSourceFolder(path)
@@ -628,14 +762,16 @@ struct ModelsView: View {
         var queryItems = [
             URLQueryItem(name: "library", value: "safetensors"),
             URLQueryItem(name: "sort", value: hubSort.hubWebValue),
-            URLQueryItem(name: "p", value: String(hubLibrary.pageNumber - 1))
+            URLQueryItem(name: "p", value: String(hubLibrary.pageNumber - 1)),
         ]
 
         let query = hubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             queryItems.append(URLQueryItem(name: "search", value: query))
         }
-        queryItems.append(contentsOf: hubCapabilityFilters
+        queryItems.append(
+            contentsOf:
+                hubCapabilityFilters
             .sorted { $0.rawValue < $1.rawValue }
             .map(\.hubQueryItem))
 
@@ -690,29 +826,40 @@ private struct ModelsSearchField: View {
 
 private struct InstalledModelRow: View {
     let localModel: LocalModel
-    let selectedLanguageModelID: String?
-    let isModelSwitchInProgress: Bool
+    let preloadSlots: [ModelPreloadSlot]
+    let selectedPreloadSlots: Set<ModelPreloadSlot>
+    let preferredPreloadSlot: ModelPreloadSlot?
+    let isSelectionDisabled: Bool
+    let isModelLoading: Bool
+    let modelLoadingPercentage: Int?
     let isDeleting: Bool
     let canDelete: Bool
-    let onLoadModel: () -> Void
+    let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onDelete: () -> Void
 
     @State private var isHovered = false
     @State private var showsDeleteConfirmation = false
 
     private var isSelected: Bool {
-        selectedLanguageModelID == localModel.repoID
+        !selectedPreloadSlots.isEmpty
     }
 
     private var isLoading: Bool {
-        isSelected && isModelSwitchInProgress
+        isModelLoading
     }
 
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                guard !isSelected, !isModelSwitchInProgress else { return }
-                onLoadModel()
+                guard let preferredPreloadSlot,
+                    !isSelectionDisabled
+                else {
+                    return
+                }
+                onSetPreload(
+                    preferredPreloadSlot,
+                    !selectedPreloadSlots.contains(preferredPreloadSlot)
+                )
             } label: {
                 HStack(spacing: 14) {
                     ModelProviderBadge(provider: localModel.provider, isHighlighted: isSelected)
@@ -731,9 +878,19 @@ private struct InstalledModelRow: View {
                             }
                             if isLoading {
                                 ModelPill(
-                                    title: "Loading model",
+                                    title: modelLoadingPercentage.map { "Loading model · \($0)%" }
+                                        ?? "Loading model",
                                     systemImage: "arrow.triangle.2.circlepath",
                                     color: .orange
+                                )
+                            }
+                            ForEach(
+                                preloadSlots.filter(selectedPreloadSlots.contains)
+                            ) { slot in
+                                ModelPill(
+                                    title: slot.displayName,
+                                    systemImage: slot.systemImage,
+                                    color: .accentColor
                                 )
                             }
                         }
@@ -753,14 +910,16 @@ private struct InstalledModelRow: View {
                             }
                             if let sizeBytes = localModel.sizeBytes {
                                 ModelPill(
-                                    title: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file),
+                                    title: ByteCountFormatter.string(
+                                        fromByteCount: sizeBytes, countStyle: .file),
                                     systemImage: "internaldrive"
                                 )
                             }
                         }
 
                         HStack(spacing: 6) {
-                            ForEach(LocalModelCapability.visibleModelTags, id: \.self) { capability in
+                            ForEach(LocalModelCapability.visibleModelTags, id: \.self) {
+                                capability in
                                 if localModel.capabilities.contains(capability) {
                                     CapabilityPill(capability: capability)
                                 }
@@ -775,8 +934,8 @@ private struct InstalledModelRow: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .help(isSelected ? "Selected model" : "Load \(localModel.repoID)")
-            .accessibilityLabel(isSelected ? "Selected model, \(localModel.repoID)" : "Load \(localModel.repoID)")
+            .help(rowHelp)
+            .accessibilityLabel(rowHelp)
 
             if isDeleting {
                 ProgressView()
@@ -817,6 +976,18 @@ private struct InstalledModelRow: View {
         } message: {
             Text("This permanently removes \(localModel.repoID) from the local Hugging Face cache.")
         }
+    }
+
+    private var rowHelp: String {
+        if let preferredPreloadSlot,
+            selectedPreloadSlots.contains(preferredPreloadSlot)
+        {
+            return "Unload \(localModel.repoID) from \(preferredPreloadSlot.displayName)"
+        }
+        if let preferredPreloadSlot {
+            return "Preload \(localModel.repoID) for \(preferredPreloadSlot.displayName)"
+        }
+        return "\(localModel.repoID) has no supported preload role"
     }
 }
 
@@ -862,11 +1033,13 @@ private struct HubModelRow: View {
                         .truncationMode(.middle)
 
                     HStack(spacing: 6) {
-                        ModelPill(title: compactCount(model.downloads), systemImage: "arrow.down.circle")
+                        ModelPill(
+                            title: compactCount(model.downloads), systemImage: "arrow.down.circle")
                         ModelPill(title: compactCount(model.likes), systemImage: "heart")
                         if let sizeBytes = model.sizeBytes {
                             ModelPill(
-                                title: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file),
+                                title: ByteCountFormatter.string(
+                                    fromByteCount: sizeBytes, countStyle: .file),
                                 systemImage: "internaldrive"
                             )
                         }
@@ -874,7 +1047,8 @@ private struct HubModelRow: View {
 
                     if !model.capabilities.isEmpty {
                         HStack(spacing: 6) {
-                            ForEach(LocalModelCapability.visibleModelTags, id: \.self) { capability in
+                            ForEach(LocalModelCapability.visibleModelTags, id: \.self) {
+                                capability in
                                 if model.capabilities.contains(capability) {
                                     CapabilityPill(capability: capability)
                                 }
@@ -904,7 +1078,11 @@ private struct HubModelRow: View {
                     }
                         .buttonStyle(.borderedProminent)
                         .disabled(anotherDownloadIsActive || model.isPrivate)
-                        .help(model.isGated ? "Gated models require Hugging Face authentication." : "Download to the configured cache")
+                    .help(
+                        model.isGated
+                            ? "Gated models require Hugging Face authentication."
+                            : "Download to the configured cache"
+                    )
                         .fixedSize()
                 }
             }
@@ -979,7 +1157,9 @@ private struct ModelDownloadProgressControl: View {
         .onHover { isHovering = $0 }
         .animation(.snappy(duration: 0.16), value: isHovering)
         .animation(.easeOut(duration: 0.18), value: displayedProgress)
-        .help(isPaused ? "Download paused" : "Downloading \(Int((progress * 100).rounded())) percent")
+        .help(
+            isPaused ? "Download paused" : "Downloading \(Int((progress * 100).rounded())) percent"
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isPaused ? "Download paused" : "Download progress")
         .accessibilityValue("\(Int((progress * 100).rounded())) percent")
@@ -1003,11 +1183,16 @@ private struct ModelDownloadActionButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(isDisabled ? Color.secondary.opacity(0.45) : (isHovering ? tint : Color.secondary))
+                .foregroundStyle(
+                    isDisabled
+                        ? Color.secondary.opacity(0.45) : (isHovering ? tint : Color.secondary)
+                )
                 .frame(width: 30, height: 30)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(isHovering && !isDisabled ? tint.opacity(0.13) : Color.secondary.opacity(0.10))
+                        .fill(
+                            isHovering && !isDisabled
+                                ? tint.opacity(0.13) : Color.secondary.opacity(0.10))
                 )
         }
         .buttonStyle(.plain)
@@ -1196,16 +1381,16 @@ private struct ModelRowBackground: ViewModifier {
     }
 }
 
-private extension View {
-    func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
+extension View {
+    fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
         modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
     }
 }
 
-private extension LocalModelCapability {
-    static let visibleModelTags = allCases.filter { $0 != .text }
+extension LocalModelCapability {
+    fileprivate static let visibleModelTags = allCases.filter { $0 != .text }
 
-    var hubQueryItem: URLQueryItem {
+    fileprivate var hubQueryItem: URLQueryItem {
         switch self {
         case .text:
             URLQueryItem(name: "pipeline_tag", value: "text-generation")
@@ -1230,7 +1415,7 @@ private extension LocalModelCapability {
         }
     }
 
-    var systemImage: String {
+    fileprivate var systemImage: String {
         switch self {
         case .text: "text.alignleft"
         case .vision: "eye"
@@ -1246,8 +1431,8 @@ private extension LocalModelCapability {
     }
 }
 
-private extension LocalModelProvider {
-    var modelBadgeColor: Color {
+extension LocalModelProvider {
+    fileprivate var modelBadgeColor: Color {
         switch self {
         case .google:
             .primary
@@ -1302,10 +1487,12 @@ private func compactContextSize(_ value: Int) -> String {
 
 private func compactCount(_ value: Int) -> String {
     if value >= 1_000_000 {
-        return String(format: "%.1fM", Double(value) / 1_000_000).replacingOccurrences(of: ".0M", with: "M")
+        return String(format: "%.1fM", Double(value) / 1_000_000).replacingOccurrences(
+            of: ".0M", with: "M")
     }
     if value >= 1_000 {
-        return String(format: "%.1fK", Double(value) / 1_000).replacingOccurrences(of: ".0K", with: "K")
+        return String(format: "%.1fK", Double(value) / 1_000).replacingOccurrences(
+            of: ".0K", with: "K")
     }
     return "\(value)"
 }

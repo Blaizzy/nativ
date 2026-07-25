@@ -20,6 +20,7 @@ struct WelcomeGateView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
+    let softwareUpdater: SoftwareUpdater
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
 
     var body: some View {
@@ -28,7 +29,8 @@ struct WelcomeGateView: View {
                 ControlPanelView(
                     model: model,
                     navigation: navigation,
-                    runtime: runtime
+                    runtime: runtime,
+                    softwareUpdater: softwareUpdater
                 )
             } else {
                 WelcomeView(model: model) { modelID, serverAPIKey in

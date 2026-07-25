@@ -5,5 +5,12 @@ Codex/OpenAI mark: https://developers.openai.com/favicon.svg
 Claude mark: https://claude.ai/favicon.svg
 Hermes mark: https://github.com/NousResearch/hermes-agent/blob/main/acp_registry/icon.svg
 OpenCode mark: https://github.com/anomalyco/opencode/blob/dev/packages/ui/src/assets/favicon/favicon-v3.svg
+Aider mark: https://aider.chat/assets/logo.svg
+Goose mark: https://github.com/block/goose/blob/main/ui/desktop/src/images/icon.svg
+Crush mark: https://github.com/charmbracelet/crush/blob/main/internal/ui/notification/crush-icon-solo.png
+Qwen Code mark: https://github.com/QwenLM/qwen-code/blob/main/packages/chrome-extension/public/icons/icon-128.png
+OpenClaw mark: https://github.com/openclaw/openclaw/blob/main/apps/ios/Sources/Assets.xcassets/AppIcon.appiconset/258.png
+Zed mark: https://github.com/zed-industries/zed/blob/main/assets/images/zed_logo.svg
+Continue mark: https://github.com/continuedev/continue/blob/main/extensions/intellij/src/main/resources/META-INF/pluginIcon.svg
 
 All product names, logos, and trademarks remain the property of their respective owners.

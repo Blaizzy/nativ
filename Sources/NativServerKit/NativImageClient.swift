@@ -191,6 +191,10 @@ public final class NativImageClient {
         self.session = URLSession(configuration: configuration)
     }
 
+    deinit {
+        session.finishTasksAndInvalidate()
+    }
+
     public func generate(_ request: MLXImageGenerationRequest) async throws -> MLXImageResponse {
         try await post(
             request,

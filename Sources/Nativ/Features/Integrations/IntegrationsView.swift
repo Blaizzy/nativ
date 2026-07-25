@@ -2,6 +2,19 @@ import AppKit
 import Combine
 import SwiftUI
 
+extension IntegrationModelDescriptor {
+    init(localModel: LocalModel) {
+        self.init(
+            id: localModel.repoID,
+            displayName: localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID,
+            contextWindow: localModel.contextSize,
+            supportsVision: localModel.capabilities.contains(.vision),
+            supportsReasoning: localModel.capabilities.contains(.reasoning),
+            supportsTools: localModel.capabilities.contains(.tools)
+        )
+    }
+}
+
 @MainActor
 final class IntegrationsViewModel: ObservableObject {
     @Published var selectedTool: IntegrationTool?
@@ -15,7 +28,6 @@ final class IntegrationsViewModel: ObservableObject {
 
     let library = LocalModelLibrary()
     private let serverModel: NativModel
-    private let profiles = IntegrationProfileManager()
     private let defaults = UserDefaults.standard
     private var libraryObservation: AnyCancellable?
 
@@ -46,6 +58,21 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     var isBusy: Bool { activeOperation != nil }
+
+    var integrationEndpoint: String {
+        profiles.openAIBaseURL
+    }
+
+    private var integrationServerBaseURL: URL {
+        guard let activeServerPort = serverModel.activeServerPort else {
+            return serverModel.settings.serverBaseURL
+        }
+        return URL(string: "http://127.0.0.1:\(activeServerPort)")!
+    }
+
+    private var profiles: IntegrationProfileManager {
+        IntegrationProfileManager(serverBaseURL: integrationServerBaseURL)
+    }
 
     func appear() {
         library.scan(path: serverModel.settings.modelSearchPath)
@@ -97,9 +124,6 @@ final class IntegrationsViewModel: ObservableObject {
         activeOperation = tool
         do {
             try configureProfile(tool: tool, selectedModelID: selectedModelID)
-            if tool == .codex {
-                try profiles.configureCodexDesktop(selectedModelID: selectedModelID)
-            }
             var status = statuses[tool] ?? .unavailable
             status.isConfigured = true
             statuses[tool] = status
@@ -131,40 +155,6 @@ final class IntegrationsViewModel: ObservableObject {
                 try await prepareServer(modelID: selectedModelID)
                 try profiles.launch(
                     tool: tool,
-                    executableURL: executableURL,
-                    selectedModelID: selectedModelID,
-                    workingDirectory: workingDirectory
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            activeOperation = nil
-        }
-    }
-
-    func configureAndOpenCodexDesktop(workingDirectory: URL) {
-        let tool = IntegrationTool.codex
-        guard let selectedModelID else {
-            errorMessage = IntegrationServiceError.noModel.localizedDescription
-            return
-        }
-        guard let executableURL = statuses[tool]?.executableURL else {
-            errorMessage = IntegrationServiceError.missingExecutable(tool).localizedDescription
-            return
-        }
-
-        rememberWorkingDirectory(workingDirectory, for: tool)
-        activeOperation = tool
-        Task {
-            do {
-                try configureProfile(tool: tool, selectedModelID: selectedModelID)
-                try profiles.configureCodexDesktop(selectedModelID: selectedModelID)
-                var status = statuses[tool] ?? .unavailable
-                status.isConfigured = true
-                statuses[tool] = status
-
-                try await prepareServer(modelID: selectedModelID)
-                try profiles.launchCodexDesktop(
                     executableURL: executableURL,
                     selectedModelID: selectedModelID,
                     workingDirectory: workingDirectory
@@ -226,24 +216,6 @@ final class IntegrationsViewModel: ObservableObject {
         )
     }
 
-    func codexDesktopLaunchCommand(workingDirectory: URL) -> String? {
-        guard
-            let selectedModelID,
-            let executableURL = statuses[.codex]?.executableURL
-        else { return nil }
-        return profiles.codexDesktopLaunchCommand(
-            executableURL: executableURL,
-            selectedModelID: selectedModelID,
-            workingDirectory: workingDirectory
-        )
-    }
-
-    func copyCodexDesktopLaunchCommand(workingDirectory: URL) {
-        guard let command = codexDesktopLaunchCommand(workingDirectory: workingDirectory) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-    }
-
     private func prepareServer(modelID: String) async throws {
         // Keep the process alive and hot-swap its text-generation cache through
         // the management endpoint. The harness also sends this model on every
@@ -285,7 +257,7 @@ final class IntegrationsViewModel: ObservableObject {
             // /v1/models is part of the public inference API and does not
             // require a management API key. It also proves the listener that
             // the harness will use is ready.
-            var request = URLRequest(url: serverModel.settings.serverBaseURL.appendingPathComponent("v1/models"))
+            var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models"))
             request.timeoutInterval = 3
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -296,7 +268,7 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func loadModelThroughEndpoint(_ modelID: String) async throws {
-        var request = URLRequest(url: serverModel.settings.serverBaseURL.appendingPathComponent("v1/models/load"))
+        var request = URLRequest(url: integrationServerBaseURL.appendingPathComponent("v1/models/load"))
         request.httpMethod = "POST"
         request.timeoutInterval = 300
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -395,10 +367,11 @@ private struct IntegrationCatalogView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Integrations")
-                        .font(.largeTitle.bold())
+                        .font(.title2.weight(.semibold))
                     Text("Run your coding tools with models served from this Mac.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -414,9 +387,9 @@ private struct IntegrationCatalogView: View {
                 .buttonStyle(.bordered)
                 .disabled(viewModel.isRefreshingStatuses)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 22)
-            .padding(.bottom, 18)
+            .padding(.horizontal, 22)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
 
             Divider()
 
@@ -469,6 +442,9 @@ private struct IntegrationCard: View {
                     if isLoading {
                         ProgressView().controlSize(.small)
                         Text("Checking…")
+                    } else if tool.isGuidedSetup {
+                        Image(systemName: "sparkles")
+                        Text("Guided setup")
                     } else if status.executableURL == nil {
                         Image(systemName: "arrow.down.circle")
                         Text("Not installed")
@@ -528,7 +504,7 @@ private struct IntegrationDetailView: View {
                     Text(tool.summary).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                IntegrationAvailabilityBadge(status: status)
+                IntegrationAvailabilityBadge(status: status, isGuidedSetup: tool.isGuidedSetup)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 18)
@@ -537,7 +513,10 @@ private struct IntegrationDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if status.executableURL == nil, !viewModel.isRefreshingStatuses {
+                    if tool.isGuidedSetup {
+                        guidedSetupPanel
+                        modelPanel
+                    } else if status.executableURL == nil, !viewModel.isRefreshingStatuses {
                         missingToolPanel
                     } else {
                         modelPanel
@@ -555,6 +534,54 @@ private struct IntegrationDetailView: View {
         .onAppear {
             workingDirectory = viewModel.workingDirectory(for: tool)
                 ?? FileManager.default.homeDirectoryForCurrentUser
+        }
+    }
+
+    private var guidedSetupPanel: some View {
+        IntegrationPanel(title: "Guided setup", systemImage: "sparkles") {
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
+                IntegrationConfigurationRow(label: "API key", value: "nativ")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(tool.guidedSetupSteps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(index + 1).")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(step)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            if let caveat = tool.guidedSetupCaveat {
+                Label(caveat, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button("Open \(tool.displayName)") {
+                    openGuidedApp()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Setup guide") {
+                    NSWorkspace.shared.open(tool.installURL)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func openGuidedApp() {
+        if let bundleID = tool.appBundleIdentifier,
+           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            NSWorkspace.shared.open(appURL)
+        } else {
+            NSWorkspace.shared.open(tool.installURL)
         }
     }
 
@@ -593,6 +620,12 @@ private struct IntegrationDetailView: View {
                 }
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
+
+                if let hint = tool.preferredModelHint {
+                    Label(hint, systemImage: "sparkles")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 if let selected = viewModel.selectedModel {
                     HStack(spacing: 8) {
@@ -642,7 +675,7 @@ private struct IntegrationDetailView: View {
     private var configurationPanel: some View {
         IntegrationPanel(title: "Managed configuration", systemImage: "gearshape.2") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
-                IntegrationConfigurationRow(label: "Endpoint", value: IntegrationProfileManager.openAIBaseURL)
+                IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "Profile", value: IntegrationProfileManager.providerID)
                 IntegrationConfigurationRow(label: "Model loading", value: "On demand · no restart")
                 IntegrationConfigurationRow(label: "Responses", value: "Streaming")
@@ -651,7 +684,7 @@ private struct IntegrationDetailView: View {
                 }
             }
             if tool == .codex {
-                Text("Codex Desktop reads ~/.codex/config.toml. Configuring this integration makes the selected local model its default while preserving unrelated Codex settings.")
+                Text("Nativ writes only ~/.codex/nativ.config.toml. Your default Codex app and ~/.codex/config.toml are left unchanged; the local model is selected only for CLI launches using --profile nativ.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -680,36 +713,11 @@ private struct IntegrationDetailView: View {
                 }
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 
-                if tool == .codex,
-                   let desktopCommand = viewModel.codexDesktopLaunchCommand(workingDirectory: workingDirectory) {
-                    Text("Desktop app")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    ScrollView(.horizontal) {
-                        Text(desktopCommand)
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                }
-
                 HStack {
-                    Text(tool == .codex
-                         ? "Choose Terminal or the Codex desktop app after the server is ready."
-                         : "This is the command opened in Terminal after the server is ready.")
+                    Text("This is the command opened in Terminal after the server is ready.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    if tool == .codex {
-                        Button {
-                            viewModel.copyCodexDesktopLaunchCommand(workingDirectory: workingDirectory)
-                        } label: {
-                            Label("Copy Desktop", systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(.bordered)
-                    }
                     Button {
                         viewModel.copyLaunchCommand(for: tool, workingDirectory: workingDirectory)
                     } label: {
@@ -804,13 +812,14 @@ private struct IntegrationLogo: View {
 
 private struct IntegrationAvailabilityBadge: View {
     let status: IntegrationToolStatus
+    var isGuidedSetup: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(status.executableURL == nil ? Color.secondary : (status.isConfigured ? .green : .orange))
+                .fill(isGuidedSetup ? Color.accentColor : (status.executableURL == nil ? Color.secondary : (status.isConfigured ? .green : .orange)))
                 .frame(width: 7, height: 7)
-            Text(status.executableURL == nil ? "Not installed" : (status.isConfigured ? "Configured" : "Not configured"))
+            Text(isGuidedSetup ? "Guided setup" : (status.executableURL == nil ? "Not installed" : (status.isConfigured ? "Configured" : "Not configured")))
         }
         .font(.caption.weight(.semibold))
         .padding(.horizontal, 10)

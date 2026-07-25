@@ -15,42 +15,176 @@ enum SessionModelKind: String, Codable, Equatable, Sendable {
     var badgeTitle: String {
         switch self {
         case .language:
-            return "Text"
+            "Text"
         case .imageGeneration:
-            return "Image"
+            "Image"
         }
+    }
+}
+
+struct ImageRequestSettings: Equatable, Codable, Sendable {
+    var count = 1
+    var width = 512
+    var height = 512
+    var steps = 4
+    var guidance = 1.0
+    var seedText = ""
+}
+
+struct ImageGenerationExecutor {
+    func run(
+        baseURL: URL,
+        modelID: String,
+        prompt: String,
+        references: [ChatImageAttachment],
+        settings: ImageRequestSettings,
+        seed: Int?
+    ) async throws -> [GeneratedImage] {
+        let client = NativImageClient(baseURL: baseURL)
+        let response: MLXImageResponse
+        if references.isEmpty {
+            response = try await client.generate(MLXImageGenerationRequest(
+                model: modelID,
+                prompt: prompt,
+                n: settings.count,
+                width: settings.width,
+                height: settings.height,
+                steps: settings.steps,
+                seed: seed,
+                guidance: settings.guidance
+            ))
+        } else {
+            let paths = try references.map(Self.materializeReference).map(\.path)
+            response = try await client.edit(MLXImageEditRequest(
+                model: modelID,
+                prompt: prompt,
+                image: paths,
+                n: settings.count,
+                width: settings.width,
+                height: settings.height,
+                steps: settings.steps,
+                seed: seed,
+                guidance: settings.guidance
+            ))
+        }
+
+        try Task.checkCancellation()
+        return try Self.makeGeneratedImages(from: response)
+    }
+
+    private static func materializeReference(_ attachment: ChatImageAttachment) throws -> URL {
+        guard let data = attachment.imageData else {
+            throw NativImageError.missingImageData
+        }
+        let fileManager = FileManager.default
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let directory = caches
+            .appendingPathComponent("Nativ", isDirectory: true)
+            .appendingPathComponent("ImageGeneration", isDirectory: true)
+            .appendingPathComponent("References", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let fileExtension = UTType(mimeType: attachment.mimeType)?.preferredFilenameExtension
+            ?? URL(fileURLWithPath: attachment.filename).pathExtension.nonEmpty
+            ?? "png"
+        let url = directory.appendingPathComponent("\(attachment.id.uuidString).\(fileExtension)")
+        if !fileManager.fileExists(atPath: url.path) {
+            try data.write(to: url, options: .atomic)
+        }
+        return url
+    }
+
+    private static func makeGeneratedImages(from response: MLXImageResponse) throws -> [GeneratedImage] {
+        let images = response.data.compactMap { item -> GeneratedImage? in
+            let data: Data?
+            if let base64 = item.b64JSON {
+                data = Data(base64Encoded: base64)
+            } else if let path = item.path {
+                data = try? Data(contentsOf: URL(fileURLWithPath: path))
+            } else {
+                data = nil
+            }
+            guard let data, NSImage(data: data) != nil else {
+                return nil
+            }
+            return GeneratedImage(
+                imageData: data,
+                mimeType: item.mimeType,
+                width: item.width,
+                height: item.height,
+                seed: item.seed,
+                path: item.path,
+                revisedPrompt: item.revisedPrompt
+            )
+        }
+        guard !images.isEmpty else {
+            throw NativImageError.missingImageData
+        }
+        return images
+    }
+}
+
+enum ImageGenerationTurnStatus: String, Equatable, Codable, Sendable {
+    case inProgress
+    case completed
+    case failed
+    case cancelled
+}
+
+struct ImageGenerationTurn: Identifiable, Equatable, Codable, Sendable {
+    let id: UUID
+    let prompt: String
+    let referenceImages: [ChatImageAttachment]
+    let modelID: String
+    let settings: ImageRequestSettings
+    let createdAt: Date
+    var outputs: [GeneratedImage]
+    var status: ImageGenerationTurnStatus
+    var errorMessage: String?
+
+    var isEdit: Bool {
+        !referenceImages.isEmpty
     }
 }
 
 @MainActor
 final class ImageGenerationViewModel: ObservableObject {
+    static let fallbackModelID = "black-forest-labs/FLUX.2-klein-9B-kv"
+
     @Published var prompt = ""
-    @Published var modelID = ""
-    @Published var count = 1
-    @Published var width = 512
-    @Published var height = 512
-    @Published var steps = 4
-    @Published var guidance = 1.0
-    @Published var seedText = ""
+    @Published var modelID = fallbackModelID
+    @Published var requestSettings = ImageRequestSettings()
     @Published private(set) var sessions: [ImageGenerationSessionSummary] = []
     @Published private(set) var currentSessionID: UUID?
-    @Published private(set) var referenceImage: ImageGenerationReferenceImage?
-    @Published private(set) var results: [GeneratedImage] = []
+    @Published private(set) var turns: [ImageGenerationTurn] = []
+    @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
+    @Published private(set) var activeReference: ChatImageAttachment?
     @Published private(set) var isGenerating = false
     @Published private(set) var statusText: String?
-    @Published private(set) var errorText: String?
+    @Published private(set) var scrollToken = 0
 
     private let sessionStore = ImageGenerationSessionStore()
     private var activeTask: Task<Void, Never>?
+    private var activeTurnID: UUID?
     private var storedSessions: [ImageGenerationSession] = []
     private var currentSession: ImageGenerationSession?
+
     private let imageSizeMultiple = 16
     private let minImageDimension = 64
-    private let maxRequestDimension = 4096
+    private let maxRequestDimension = 4_096
     private let maxAutoEditLongestSide = 2_048
 
     init() {
-        storedSessions = sessionStore.loadSessions()
+        storedSessions = sessionStore.loadSessions().map { session in
+            var repaired = session
+            for index in repaired.turns.indices where repaired.turns[index].status == .inProgress {
+                repaired.turns[index].status = .failed
+                repaired.turns[index].errorMessage = "Image generation was interrupted."
+            }
+            return repaired
+        }
+
         if let latestSession = storedSessions.sorted(by: ImageGenerationSession.recencySort).first {
             applyCurrentSession(latestSession)
         } else {
@@ -62,51 +196,68 @@ final class ImageGenerationViewModel: ObservableObject {
         activeTask?.cancel()
     }
 
+    var canPasteImage: Bool {
+        ChatImageAttachment.canReadImages(from: .general)
+    }
+
+    var currentLongestSide: Int {
+        max(requestSettings.width, requestSettings.height)
+    }
+
+    var effectiveReferenceImages: [ChatImageAttachment] {
+        if !pendingImageAttachments.isEmpty {
+            return pendingImageAttachments
+        }
+        return activeReference.map { [$0] } ?? []
+    }
+
+    var nextRequestIsEdit: Bool {
+        !effectiveReferenceImages.isEmpty
+    }
+
     func applyDefaultModel(_ selectedModelID: String?) {
-        guard modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let selectedModelID,
-              !selectedModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
+        guard let selectedModelID = normalized(selectedModelID) else {
             return
         }
-
         modelID = selectedModelID
         persistCurrentSession(updateTimestamp: false)
+    }
+
+    func canSubmit(isRunning: Bool) -> Bool {
+        isRunning
+            && !isGenerating
+            && normalized(modelID) != nil
+            && normalized(prompt) != nil
+            && parsedSeed != nil
     }
 
     func unavailableReason(isRunning: Bool) -> String? {
         if !isRunning {
             return "Server is stopped."
         }
-        if normalizedModelID == nil {
-            return "Enter an image model."
-        }
-        if normalizedPrompt == nil {
-            return "Enter a prompt."
+        if normalized(modelID) == nil {
+            return "No image model is configured."
         }
         if parsedSeed == nil {
             return "Seed must be a whole number."
         }
-        if isGenerating {
-            return referenceImage == nil ? "Generation in progress." : "Edit in progress."
+        if normalized(prompt) == nil {
+            return nextRequestIsEdit ? "Describe how to edit the image." : "Describe an image to generate."
         }
         return nil
     }
 
-    var currentLongestSide: Int {
-        max(width, height)
-    }
-
     func applyLongestSide(_ longestSide: Int) {
-        let editSize = aspectFitSize(
-            for: ImageGenerationPixelSize(width: width, height: height),
+        let size = aspectFitSize(
+            for: ImageGenerationPixelSize(
+                width: requestSettings.width,
+                height: requestSettings.height
+            ),
             longestSide: longestSide,
             upperLimit: maxRequestDimension
         )
-        width = editSize.width
-        height = editSize.height
-        statusText = "Size set to \(width)x\(height)."
-        errorText = nil
+        requestSettings.width = size.width
+        requestSettings.height = size.height
         persistCurrentSession(updateTimestamp: false)
     }
 
@@ -115,6 +266,16 @@ final class ImageGenerationViewModel: ObservableObject {
             return
         }
 
+        if let currentSession,
+           currentSession.turns.isEmpty,
+           normalized(prompt) == nil,
+           pendingImageAttachments.isEmpty,
+           activeReference == nil {
+            applyCurrentSession(currentSession)
+            return
+        }
+
+        persistCurrentSession(updateTimestamp: false)
         let createdAt = Date()
         let session = ImageGenerationSession(
             id: UUID(),
@@ -122,20 +283,16 @@ final class ImageGenerationViewModel: ObservableObject {
             createdAt: createdAt,
             updatedAt: createdAt,
             modelKind: .imageGeneration,
-            prompt: "",
-            modelID: modelID,
-            count: 1,
-            width: 512,
-            height: 512,
-            steps: 4,
-            guidance: 1.0,
-            seedText: "",
-            referenceImage: nil,
-            results: []
+            modelID: normalized(modelID) ?? Self.fallbackModelID,
+            draftSettings: requestSettings,
+            activeReference: nil,
+            turns: []
         )
 
         storedSessions.append(session)
         sessionStore.saveSession(session)
+        prompt = ""
+        pendingImageAttachments.removeAll()
         applyCurrentSession(session)
     }
 
@@ -144,12 +301,13 @@ final class ImageGenerationViewModel: ObservableObject {
             return
         }
 
+        persistCurrentSession(updateTimestamp: false)
+        prompt = ""
+        pendingImageAttachments.removeAll()
+
         if let session = storedSessions.first(where: { $0.id == sessionID }) {
             applyCurrentSession(session)
-            return
-        }
-
-        if let session = sessionStore.loadSession(id: sessionID) {
+        } else if let session = sessionStore.loadSession(id: sessionID) {
             storedSessions.append(session)
             applyCurrentSession(session)
         }
@@ -168,89 +326,127 @@ final class ImageGenerationViewModel: ObservableObject {
             return
         }
 
+        prompt = ""
+        pendingImageAttachments.removeAll()
         if let nextSession = storedSessions.sorted(by: ImageGenerationSession.recencySort).first {
             applyCurrentSession(nextSession)
         } else {
             currentSession = nil
             currentSessionID = nil
-            createSession()
+            turns = []
+            activeReference = nil
+            refreshSessionList()
         }
+    }
+
+    func sessionDataFileURL(for sessionID: UUID) -> URL? {
+        guard storedSessions.contains(where: { $0.id == sessionID }) else {
+            return nil
+        }
+        if sessionID == currentSessionID {
+            persistCurrentSession(updateTimestamp: false)
+        }
+        let url = sessionStore.sessionURL(for: sessionID)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     func run(using appModel: NativModel) {
         guard !isGenerating,
               appModel.isRunning,
-              let requestModelID = normalizedModelID,
-              let requestPrompt = normalizedPrompt,
-              let requestSeed = parsedSeed
+              let requestModelID = normalized(modelID),
+              let requestPrompt = normalized(prompt),
+              let requestSeed = parsedSeed,
+              currentSession != nil
         else {
             return
         }
 
-        let requestCount = min(max(count, 1), 10)
-        let requestWidth = min(max(width, minImageDimension), maxRequestDimension)
-        let requestHeight = min(max(height, minImageDimension), maxRequestDimension)
-        let requestSteps = min(max(steps, 1), 1_000)
-        let requestGuidance = min(max(guidance, 0), 100)
-        let requestReference = referenceImage
+        var settings = requestSettings
+        settings.count = min(max(settings.count, 1), 10)
+        settings.width = boundedRoundedDimension(settings.width, upperLimit: maxRequestDimension)
+        settings.height = boundedRoundedDimension(settings.height, upperLimit: maxRequestDimension)
+        settings.steps = min(max(settings.steps, 1), 1_000)
+        settings.guidance = min(max(settings.guidance, 0), 100)
+        requestSettings = settings
 
-        count = requestCount
-        width = requestWidth
-        height = requestHeight
-        steps = requestSteps
-        guidance = requestGuidance
-        errorText = nil
-        statusText = requestReference == nil ? "Generating image..." : "Editing image..."
+        let references = effectiveReferenceImages
+        if references.count == 1 {
+            activeReference = references[0]
+        } else if references.count > 1 {
+            activeReference = nil
+        }
+
+        let turn = ImageGenerationTurn(
+            id: UUID(),
+            prompt: requestPrompt,
+            referenceImages: references,
+            modelID: requestModelID,
+            settings: settings,
+            createdAt: Date(),
+            outputs: [],
+            status: .inProgress,
+            errorMessage: nil
+        )
+
+        turns.append(turn)
+        activeTurnID = turn.id
+        prompt = ""
+        pendingImageAttachments.removeAll()
         isGenerating = true
+        statusText = references.isEmpty ? "Generating image…" : "Editing image…"
         persistCurrentSession(updateTimestamp: true)
+        bumpScroll()
 
         activeTask?.cancel()
-        let client = NativImageClient(baseURL: appModel.settings.serverBaseURL)
+        let serverBaseURL = appModel.settings.serverBaseURL
         activeTask = Task { @MainActor [weak self, weak appModel] in
             guard let self else {
                 return
             }
 
             do {
-                let response: MLXImageResponse
-                if let requestReference {
-                    response = try await client.edit(MLXImageEditRequest(
-                        model: requestModelID,
-                        prompt: requestPrompt,
-                        image: [requestReference.url.path],
-                        n: requestCount,
-                        width: requestWidth,
-                        height: requestHeight,
-                        steps: requestSteps,
-                        seed: requestSeed,
-                        guidance: requestGuidance
-                    ))
-                } else {
-                    response = try await client.generate(MLXImageGenerationRequest(
-                        model: requestModelID,
-                        prompt: requestPrompt,
-                        n: requestCount,
-                        width: requestWidth,
-                        height: requestHeight,
-                        steps: requestSteps,
-                        seed: requestSeed,
-                        guidance: requestGuidance
-                    ))
+                let outputs = try await ImageGenerationExecutor().run(
+                    baseURL: serverBaseURL,
+                    modelID: requestModelID,
+                    prompt: requestPrompt,
+                    references: references,
+                    settings: settings,
+                    seed: requestSeed
+                )
+                updateTurn(turn.id) { current in
+                    current.outputs = outputs
+                    current.status = .completed
                 }
 
-                let decodedResults = try makeGeneratedImages(from: response)
-                results = decodedResults
-                statusText = "\(decodedResults.count) \(decodedResults.count == 1 ? "image" : "images") ready."
+                if outputs.count == 1 {
+                    activeReference = outputs[0].attachment
+                    statusText = "Image ready. Your next prompt will edit it."
+                } else {
+                    activeReference = nil
+                    statusText = "\(outputs.count) images ready. Choose one to continue editing."
+                }
                 persistCurrentSession(updateTimestamp: true)
+                bumpScroll()
                 appModel?.refreshMetricsIfRunning(force: true)
             } catch is CancellationError {
-                statusText = "Cancelled."
+                finishCancelledTurn(turn.id)
+            } catch let error as URLError where error.code == .cancelled {
+                finishCancelledTurn(turn.id)
             } catch {
-                errorText = error.localizedDescription
+                updateTurn(turn.id) { current in
+                    current.status = .failed
+                    current.errorMessage = error.localizedDescription
+                }
                 statusText = nil
+                persistCurrentSession(updateTimestamp: true)
+                bumpScroll()
                 appModel?.refreshMetricsIfRunning(force: true)
             }
 
+            guard activeTurnID == turn.id else {
+                return
+            }
+            activeTurnID = nil
             isGenerating = false
             activeTask = nil
         }
@@ -260,7 +456,7 @@ final class ImageGenerationViewModel: ObservableObject {
         activeTask?.cancel()
     }
 
-    func chooseReferenceImage() {
+    func chooseImageAttachments() {
         guard !isGenerating else {
             return
         }
@@ -268,192 +464,221 @@ final class ImageGenerationViewModel: ObservableObject {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [.image]
-
-        guard panel.runModal() == .OK,
-              let url = panel.url
-        else {
+        guard panel.runModal() == .OK else {
             return
         }
 
-        do {
-            try setReferenceImage(contentsOf: url)
-        } catch {
-            errorText = error.localizedDescription
+        appendPending(panel.urls.compactMap { try? ChatImageAttachment(contentsOf: $0) })
+    }
+
+    @discardableResult
+    func attachImages(from pasteboard: NSPasteboard) -> Bool {
+        guard !isGenerating else {
+            return false
+        }
+        let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
+        guard !attachments.isEmpty else {
+            return false
+        }
+        appendPending(attachments)
+        return true
+    }
+
+    func pasteImageFromClipboard() {
+        attachImages(from: .general)
+    }
+
+    func captureScreenshot() {
+        guard !isGenerating else {
+            return
+        }
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Nativ-Image-Reference-\(UUID().uuidString).png")
+
+        Task { [weak self] in
+            let captured = await ChatScreenCapture.captureInteractive(to: fileURL)
+            guard captured, let attachment = try? ChatImageAttachment(contentsOf: fileURL) else {
+                return
+            }
+            self?.appendPending([attachment])
+            try? FileManager.default.removeItem(at: fileURL)
         }
     }
 
     @discardableResult
-    func loadReferenceImage(from providers: [NSItemProvider]) -> Bool {
+    func loadImageAttachments(from providers: [NSItemProvider]) -> Bool {
         guard !isGenerating else {
             return false
         }
 
-        if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, error in
-                Task { @MainActor in
-                    guard let self else {
+        var accepted = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                accepted = true
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, _ in
+                    guard let url = Self.fileURL(from: item),
+                          let attachment = try? ChatImageAttachment(contentsOf: url)
+                    else {
                         return
                     }
-
-                    if let error {
-                        self.errorText = error.localizedDescription
-                        return
-                    }
-
-                    guard let url = Self.fileURL(from: item) else {
-                        self.errorText = ImageGenerationReferenceImageError.unsupportedDrop.localizedDescription
-                        return
-                    }
-
-                    do {
-                        try self.setReferenceImage(contentsOf: url)
-                    } catch {
-                        self.errorText = error.localizedDescription
+                    Task { @MainActor in
+                        self?.appendPending([attachment])
                     }
                 }
+                continue
             }
-            return true
-        }
 
-        guard let imageDrop = providers.compactMap({ provider -> (NSItemProvider, String)? in
             guard let typeIdentifier = Self.preferredImageTypeIdentifier(for: provider) else {
-                return nil
+                continue
             }
-            return (provider, typeIdentifier)
-        }).first else {
-            return false
-        }
-
-        let provider = imageDrop.0
-        let typeIdentifier = imageDrop.1
-        provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [weak self] data, error in
-            Task { @MainActor in
-                guard let self else {
-                    return
-                }
-
-                if let error {
-                    self.errorText = error.localizedDescription
-                    return
-                }
-
-                guard let data else {
-                    self.errorText = ImageGenerationReferenceImageError.unsupportedDrop.localizedDescription
-                    return
-                }
-
-                do {
-                    try self.setReferenceImage(
-                        imageData: data,
+            accepted = true
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [weak self] data, _ in
+                guard let data,
+                      let image = NSImage(data: data),
+                      let attachment = ChatImageAttachment.attachment(
+                        from: image,
                         filename: Self.dropFilename(for: typeIdentifier)
-                    )
-                } catch {
-                    self.errorText = error.localizedDescription
+                      )
+                else {
+                    return
+                }
+                Task { @MainActor in
+                    self?.appendPending([attachment])
                 }
             }
         }
-        return true
+        return accepted
     }
 
-    func removeReferenceImage() {
+    func removePendingImageAttachment(_ id: UUID) {
+        pendingImageAttachments.removeAll { $0.id == id }
+    }
+
+    func clearActiveReference() {
         guard !isGenerating else {
             return
         }
-
-        referenceImage = nil
+        activeReference = nil
+        statusText = "Your next prompt will create a new image."
         persistCurrentSession(updateTimestamp: true)
     }
 
-    func clearResults() {
+    func useAsReference(_ result: GeneratedImage) {
         guard !isGenerating else {
             return
         }
+        setActiveReference(result.attachment)
+    }
 
-        results.removeAll()
-        statusText = nil
-        errorText = nil
-        persistCurrentSession(updateTimestamp: true)
+    func useAsReference(_ attachment: ChatImageAttachment) {
+        guard !isGenerating else {
+            return
+        }
+        setActiveReference(attachment)
     }
 
     func save(_ result: GeneratedImage) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "image-\(result.seed).png"
-
-        guard panel.runModal() == .OK,
-              let url = panel.url
-        else {
+        panel.allowedContentTypes = [result.imageType]
+        panel.nameFieldStringValue = result.filename
+        guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
 
         do {
             try result.imageData.write(to: url, options: .atomic)
             statusText = "Saved \(url.lastPathComponent)."
-            errorText = nil
         } catch {
-            errorText = error.localizedDescription
+            statusText = "Could not save image: \(error.localizedDescription)"
         }
     }
 
-    private func setReferenceImage(contentsOf url: URL) throws {
-        let referenceImage = try ImageGenerationReferenceImage(contentsOf: url)
-        self.referenceImage = referenceImage
-        applyEditSize(for: referenceImage.pixelSize)
-        statusText = "Reference image set. Size \(width)x\(height)."
-        errorText = nil
+    func persistDraftState() {
+        persistCurrentSession(updateTimestamp: false)
+    }
+
+    private func appendPending(_ attachments: [ChatImageAttachment]) {
+        guard !attachments.isEmpty else {
+            return
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+        if let first = attachments.first, let size = pixelSize(for: first) {
+            applyEditSize(for: size)
+        }
+        statusText = attachments.count == 1
+            ? "Reference image attached."
+            : "\(attachments.count) reference images attached."
+    }
+
+    private func setActiveReference(_ attachment: ChatImageAttachment) {
+        activeReference = attachment
+        pendingImageAttachments.removeAll()
+        if let size = pixelSize(for: attachment) {
+            applyEditSize(for: size)
+        }
+        statusText = "Selected \(attachment.filename) for the next edit."
         persistCurrentSession(updateTimestamp: true)
     }
 
-    private func setReferenceImage(imageData: Data, filename: String) throws {
-        let referenceImage = try ImageGenerationReferenceImage(
-            imageData: imageData,
-            filename: filename
-        )
-        self.referenceImage = referenceImage
-        applyEditSize(for: referenceImage.pixelSize)
-        statusText = "Reference image set. Size \(width)x\(height)."
-        errorText = nil
+    private func pixelSize(for attachment: ChatImageAttachment) -> ImageGenerationPixelSize? {
+        guard let data = attachment.imageData,
+              let image = NSImage(data: data)
+        else {
+            return nil
+        }
+        if let representation = image.representations
+            .filter({ $0.pixelsWide > 0 && $0.pixelsHigh > 0 })
+            .max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }) {
+            return ImageGenerationPixelSize(width: representation.pixelsWide, height: representation.pixelsHigh)
+        }
+        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return ImageGenerationPixelSize(width: cgImage.width, height: cgImage.height)
+        }
+        return nil
+    }
+
+    private func finishCancelledTurn(_ turnID: UUID) {
+        updateTurn(turnID) { turn in
+            turn.status = .cancelled
+            turn.errorMessage = "Image generation cancelled."
+        }
+        statusText = "Cancelled."
         persistCurrentSession(updateTimestamp: true)
+        bumpScroll()
+    }
+
+    private func updateTurn(_ id: UUID, mutate: (inout ImageGenerationTurn) -> Void) {
+        guard let index = turns.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        mutate(&turns[index])
     }
 
     private func applyCurrentSession(_ session: ImageGenerationSession) {
         currentSession = session
         currentSessionID = session.id
-        prompt = session.prompt
-        modelID = session.modelID
-        count = session.count
-        width = session.width
-        height = session.height
-        steps = session.steps
-        guidance = session.guidance
-        seedText = session.seedText
-        referenceImage = session.referenceImage
-        results = session.results
+        modelID = normalized(session.modelID) ?? Self.fallbackModelID
+        requestSettings = session.draftSettings
+        turns = session.turns
+        activeReference = session.activeReference
         statusText = nil
-        errorText = nil
         refreshSessionList()
+        bumpScroll()
     }
 
     private func persistCurrentSession(updateTimestamp: Bool) {
         guard var session = currentSession else {
             return
         }
-
         session.modelKind = .imageGeneration
-        session.prompt = prompt
-        session.modelID = modelID
-        session.count = count
-        session.width = width
-        session.height = height
-        session.steps = steps
-        session.guidance = guidance
-        session.seedText = seedText
-        session.referenceImage = referenceImage
-        session.results = results
+        session.modelID = normalized(modelID) ?? Self.fallbackModelID
+        session.draftSettings = requestSettings
+        session.activeReference = activeReference
+        session.turns = turns
         session.title = ImageGenerationSession.defaultTitle(
-            prompt: prompt,
+            turns: turns,
             createdAt: session.createdAt,
             fallback: session.title
         )
@@ -476,27 +701,23 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     private func refreshSessionList() {
-        let summaries = storedSessions.map(\.summary)
-        let sortedSessions = summaries.sorted(by: ImageGenerationSessionSummary.recencySort)
+        sessions = storedSessions
+            .map(\.summary)
+            .sorted(by: ImageGenerationSessionSummary.recencySort)
+    }
 
-        guard let currentSessionID,
-              let current = sortedSessions.first(where: { $0.id == currentSessionID })
-        else {
-            sessions = sortedSessions
-            return
-        }
-
-        sessions = [current] + sortedSessions.filter { $0.id != currentSessionID }
+    private func bumpScroll() {
+        scrollToken += 1
     }
 
     private func applyEditSize(for sourceSize: ImageGenerationPixelSize) {
-        let editSize = aspectFitSize(
+        let size = aspectFitSize(
             for: sourceSize,
             longestSide: min(sourceSize.longestSide, maxAutoEditLongestSide),
             upperLimit: maxAutoEditLongestSide
         )
-        width = editSize.width
-        height = editSize.height
+        requestSettings.width = size.width
+        requestSettings.height = size.height
     }
 
     private func aspectFitSize(
@@ -504,125 +725,54 @@ final class ImageGenerationViewModel: ObservableObject {
         longestSide: Int,
         upperLimit: Int
     ) -> ImageGenerationPixelSize {
-        guard sourceSize.width > 0,
-              sourceSize.height > 0
-        else {
-            return ImageGenerationPixelSize(width: width, height: height)
+        guard sourceSize.width > 0, sourceSize.height > 0 else {
+            return ImageGenerationPixelSize(
+                width: requestSettings.width,
+                height: requestSettings.height
+            )
         }
 
         let sourceAspect = Double(sourceSize.width) / Double(sourceSize.height)
         let targetLongestSide = boundedRoundedDimension(longestSide, upperLimit: upperLimit)
-
         if sourceSize.width >= sourceSize.height {
-            return editSize(width: targetLongestSide, aspect: sourceAspect)
+            let height = boundedRoundedDimension(
+                Int((Double(targetLongestSide) / sourceAspect).rounded(.down)),
+                upperLimit: upperLimit
+            )
+            return ImageGenerationPixelSize(width: targetLongestSide, height: height)
         }
-        return editSize(height: targetLongestSide, aspect: sourceAspect)
-    }
-
-    private func editSize(
-        width candidateWidth: Int,
-        aspect: Double
-    ) -> ImageGenerationPixelSize {
-        let candidateHeight = boundedRoundedDimension(
-            Int((Double(candidateWidth) / aspect).rounded(.down)),
-            upperLimit: maxRequestDimension
+        let width = boundedRoundedDimension(
+            Int((Double(targetLongestSide) * sourceAspect).rounded(.down)),
+            upperLimit: upperLimit
         )
-        return ImageGenerationPixelSize(width: candidateWidth, height: candidateHeight)
-    }
-
-    private func editSize(
-        height candidateHeight: Int,
-        aspect: Double
-    ) -> ImageGenerationPixelSize {
-        let candidateWidth = boundedRoundedDimension(
-            Int((Double(candidateHeight) * aspect).rounded(.down)),
-            upperLimit: maxRequestDimension
-        )
-        return ImageGenerationPixelSize(width: candidateWidth, height: candidateHeight)
+        return ImageGenerationPixelSize(width: width, height: targetLongestSide)
     }
 
     private func boundedRoundedDimension(_ value: Int, upperLimit: Int) -> Int {
-        max(minImageDimension, roundedDownToMultiple(min(value, upperLimit)))
-    }
-
-    private func roundedDownToMultiple(_ value: Int) -> Int {
-        (value / imageSizeMultiple) * imageSizeMultiple
-    }
-
-    private var normalizedModelID: String? {
-        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private var normalizedPrompt: String? {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        max(minImageDimension, (min(value, upperLimit) / imageSizeMultiple) * imageSizeMultiple)
     }
 
     private var parsedSeed: Int?? {
-        let trimmed = seedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = requestSettings.seedText.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return .some(nil)
         }
-        guard let seed = Int(trimmed) else {
-            return nil
-        }
-        return .some(seed)
+        return Int(trimmed).map(Optional.some)
     }
 
-    private func makeGeneratedImages(from response: MLXImageResponse) throws -> [GeneratedImage] {
-        let generatedImages = response.data.compactMap { item -> GeneratedImage? in
-            let imageData: Data?
-            if let b64JSON = item.b64JSON {
-                imageData = Data(base64Encoded: b64JSON)
-            } else if let path = item.path {
-                imageData = try? Data(contentsOf: URL(fileURLWithPath: path))
-            } else {
-                imageData = nil
-            }
-
-            guard let imageData,
-                  NSImage(data: imageData) != nil
-            else {
-                return nil
-            }
-
-            return GeneratedImage(
-                imageData: imageData,
-                mimeType: item.mimeType,
-                width: item.width,
-                height: item.height,
-                seed: item.seed,
-                path: item.path,
-                revisedPrompt: item.revisedPrompt
-            )
-        }
-
-        guard !generatedImages.isEmpty else {
-            throw NativImageError.missingImageData
-        }
-        return generatedImages
+    private func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func preferredImageTypeIdentifier(for provider: NSItemProvider) -> String? {
-        if let registeredImageType = provider.registeredTypeIdentifiers.first(where: { identifier in
-            guard identifier != UTType.fileURL.identifier,
-                  let type = UTType(identifier)
-            else {
-                return false
-            }
-            return type.conforms(to: .image)
-        }) {
-            return registeredImageType
-        }
-
         let fallbackTypes: [UTType] = [.png, .jpeg, .tiff, .gif, .image]
-        return fallbackTypes
-            .map(\.identifier)
-            .first(where: provider.hasItemConformingToTypeIdentifier)
+        return provider.registeredTypeIdentifiers.first(where: { identifier in
+            UTType(identifier)?.conforms(to: .image) == true
+        }) ?? fallbackTypes.map(\.identifier).first(where: provider.hasItemConformingToTypeIdentifier)
     }
 
-    private static func fileURL(from item: NSSecureCoding?) -> URL? {
+    private nonisolated static func fileURL(from item: NSSecureCoding?) -> URL? {
         if let url = item as? URL {
             return url
         }
@@ -638,23 +788,9 @@ final class ImageGenerationViewModel: ObservableObject {
         return nil
     }
 
-    private static func dropFilename(for typeIdentifier: String) -> String {
+    private nonisolated static func dropFilename(for typeIdentifier: String) -> String {
         let fileExtension = UTType(typeIdentifier)?.preferredFilenameExtension ?? "png"
         return "dropped-reference.\(fileExtension)"
-    }
-}
-
-private enum ImageGenerationReferenceImageError: LocalizedError {
-    case invalidImageData
-    case unsupportedDrop
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidImageData:
-            return "The dropped item is not a valid image."
-        case .unsupportedDrop:
-            return "Drop an image file or image data."
-        }
     }
 }
 
@@ -664,16 +800,10 @@ private struct ImageGenerationSession: Identifiable, Equatable, Codable {
     var createdAt: Date
     var updatedAt: Date
     var modelKind: SessionModelKind
-    var prompt: String
     var modelID: String
-    var count: Int
-    var width: Int
-    var height: Int
-    var steps: Int
-    var guidance: Double
-    var seedText: String
-    var referenceImage: ImageGenerationReferenceImage?
-    var results: [GeneratedImage]
+    var draftSettings: ImageRequestSettings
+    var activeReference: ChatImageAttachment?
+    var turns: [ImageGenerationTurn]
 
     var summary: ImageGenerationSessionSummary {
         ImageGenerationSessionSummary(
@@ -682,19 +812,16 @@ private struct ImageGenerationSession: Identifiable, Equatable, Codable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             modelKind: modelKind,
-            resultCount: results.count
+            resultCount: turns.reduce(0) { $0 + $1.outputs.count }
         )
     }
 
     var displayTitle: String {
-        Self.defaultTitle(prompt: prompt, createdAt: createdAt, fallback: title)
+        Self.defaultTitle(turns: turns, createdAt: createdAt, fallback: title)
     }
 
-    static func recencySort(_ lhs: ImageGenerationSession, _ rhs: ImageGenerationSession) -> Bool {
-        if lhs.updatedAt == rhs.updatedAt {
-            return lhs.createdAt > rhs.createdAt
-        }
-        return lhs.updatedAt > rhs.updatedAt
+    static func recencySort(_ lhs: Self, _ rhs: Self) -> Bool {
+        lhs.updatedAt == rhs.updatedAt ? lhs.createdAt > rhs.createdAt : lhs.updatedAt > rhs.updatedAt
     }
 
     static func timestampTitle(for date: Date) -> String {
@@ -705,42 +832,16 @@ private struct ImageGenerationSession: Identifiable, Equatable, Codable {
     }
 
     static func defaultTitle(
-        prompt: String,
+        turns: [ImageGenerationTurn],
         createdAt: Date,
         fallback: String? = nil
     ) -> String {
-        if let promptTitle = title(fromPrompt: prompt) {
-            return promptTitle
+        if let firstPrompt = turns.first?.prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+           !firstPrompt.isEmpty {
+            return firstPrompt.count > 56 ? "\(firstPrompt.prefix(53))…" : firstPrompt
         }
-
         let trimmedFallback = fallback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedFallback.isEmpty {
-            return trimmedFallback
-        }
-
-        return timestampTitle(for: createdAt)
-    }
-
-    private static func title(fromPrompt prompt: String) -> String? {
-        let firstLine = prompt
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
-
-        guard let firstLine else {
-            return nil
-        }
-
-        return truncateTitle(firstLine)
-    }
-
-    private static func truncateTitle(_ value: String, maxLength: Int = 56) -> String {
-        guard value.count > maxLength else {
-            return value
-        }
-
-        let keep = max(1, maxLength - 3)
-        return "\(value.prefix(keep))..."
+        return trimmedFallback.isEmpty ? timestampTitle(for: createdAt) : trimmedFallback
     }
 }
 
@@ -752,11 +853,8 @@ struct ImageGenerationSessionSummary: Identifiable, Equatable {
     let modelKind: SessionModelKind
     let resultCount: Int
 
-    static func recencySort(_ lhs: ImageGenerationSessionSummary, _ rhs: ImageGenerationSessionSummary) -> Bool {
-        if lhs.updatedAt == rhs.updatedAt {
-            return lhs.createdAt > rhs.createdAt
-        }
-        return lhs.updatedAt > rhs.updatedAt
+    static func recencySort(_ lhs: Self, _ rhs: Self) -> Bool {
+        lhs.updatedAt == rhs.updatedAt ? lhs.createdAt > rhs.createdAt : lhs.updatedAt > rhs.updatedAt
     }
 }
 
@@ -770,7 +868,6 @@ private struct ImageGenerationSessionStore {
         ) else {
             return []
         }
-
         return urls
             .filter { $0.pathExtension == "json" }
             .compactMap(loadSession)
@@ -783,18 +880,13 @@ private struct ImageGenerationSessionStore {
 
     func saveSession(_ session: ImageGenerationSession) {
         do {
-            try fileManager.createDirectory(
-                at: sessionsDirectory,
-                withIntermediateDirectories: true
-            )
-
+            try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(session)
-            try data.write(to: sessionURL(for: session.id), options: .atomic)
+            try encoder.encode(session).write(to: sessionURL(for: session.id), options: .atomic)
         } catch {
-            // Image persistence should not block the local server UI.
+            // Persistence should never prevent local image generation.
         }
     }
 
@@ -806,24 +898,18 @@ private struct ImageGenerationSessionStore {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
-
-        do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode(ImageGenerationSession.self, from: data)
-        } catch {
-            return nil
-        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(ImageGenerationSession.self, from: data)
     }
 
-    private func sessionURL(for id: UUID) -> URL {
+    func sessionURL(for id: UUID) -> URL {
         sessionsDirectory.appendingPathComponent("\(id.uuidString).json")
     }
 
     private var sessionsDirectory: URL {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-
         return caches
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("ImageGeneration", isDirectory: true)
@@ -831,151 +917,9 @@ private struct ImageGenerationSessionStore {
     }
 }
 
-struct ImageGenerationReferenceImage: Identifiable, Equatable, Codable, Sendable {
-    let id: UUID
-    let url: URL
-    let filename: String
-    let imageData: Data
-    let pixelSize: ImageGenerationPixelSize
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case url
-        case filename
-        case imageData
-        case pixelSize
-    }
-
-    init(id: UUID = UUID(), contentsOf url: URL) throws {
-        let didAccess = url.startAccessingSecurityScopedResource()
-        defer {
-            if didAccess {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        let data = try Data(contentsOf: url)
-        let image = try Self.makeImage(from: data)
-
-        self.id = id
-        self.filename = url.lastPathComponent
-        self.imageData = data
-        self.pixelSize = try Self.pixelSize(for: image)
-        self.url = try Self.writeReferenceCopy(
-            originalFilename: url.lastPathComponent,
-            id: id,
-            imageData: data
-        )
-    }
-
-    init(id: UUID = UUID(), imageData data: Data, filename: String) throws {
-        let image = try Self.makeImage(from: data)
-
-        self.id = id
-        self.filename = filename.isEmpty ? "dropped-reference.png" : filename
-        self.imageData = data
-        self.pixelSize = try Self.pixelSize(for: image)
-        self.url = try Self.writeReferenceCopy(
-            originalFilename: self.filename,
-            id: id,
-            imageData: data
-        )
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        let filename = try container.decodeIfPresent(String.self, forKey: .filename) ?? "reference.png"
-        let imageData = try container.decode(Data.self, forKey: .imageData)
-        let image = try Self.makeImage(from: imageData)
-        let decodedPixelSize = try container.decodeIfPresent(ImageGenerationPixelSize.self, forKey: .pixelSize)
-        let decodedURL = try container.decodeIfPresent(URL.self, forKey: .url)
-
-        self.id = id
-        self.filename = filename
-        self.imageData = imageData
-        if let decodedPixelSize {
-            self.pixelSize = decodedPixelSize
-        } else {
-            self.pixelSize = try Self.pixelSize(for: image)
-        }
-
-        if let decodedURL,
-           FileManager.default.fileExists(atPath: decodedURL.path) {
-            self.url = decodedURL
-        } else {
-            self.url = try Self.writeReferenceCopy(
-                originalFilename: filename,
-                id: id,
-                imageData: imageData
-            )
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(url, forKey: .url)
-        try container.encode(filename, forKey: .filename)
-        try container.encode(imageData, forKey: .imageData)
-        try container.encode(pixelSize, forKey: .pixelSize)
-    }
-
-    var nsImage: NSImage? {
-        NSImage(data: imageData)
-    }
-
-    private static func makeImage(from data: Data) throws -> NSImage {
-        guard let image = NSImage(data: data) else {
-            throw ImageGenerationReferenceImageError.invalidImageData
-        }
-        return image
-    }
-
-    private static func pixelSize(for image: NSImage) throws -> ImageGenerationPixelSize {
-        if let representation = image.representations
-            .filter({ $0.pixelsWide > 0 && $0.pixelsHigh > 0 })
-            .max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }) {
-            return ImageGenerationPixelSize(width: representation.pixelsWide, height: representation.pixelsHigh)
-        }
-
-        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            return ImageGenerationPixelSize(width: cgImage.width, height: cgImage.height)
-        }
-
-        throw ImageGenerationReferenceImageError.invalidImageData
-    }
-
-    private static func writeReferenceCopy(
-        originalFilename: String,
-        id: UUID,
-        imageData: Data
-    ) throws -> URL {
-        let fileManager = FileManager.default
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let directory = caches
-            .appendingPathComponent("Nativ", isDirectory: true)
-            .appendingPathComponent("ImageGeneration", isDirectory: true)
-            .appendingPathComponent("References", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let fileExtension = URL(fileURLWithPath: originalFilename).pathExtension.isEmpty
-            ? "png"
-            : URL(fileURLWithPath: originalFilename).pathExtension
-        let destination = directory.appendingPathComponent("\(id.uuidString).\(fileExtension)")
-        try imageData.write(to: destination, options: .atomic)
-        return destination
-    }
-}
-
 struct ImageGenerationPixelSize: Equatable, Codable, Sendable {
     let width: Int
     let height: Int
-
-    var area: Int {
-        width * height
-    }
 
     var longestSide: Int {
         max(width, height)
@@ -1022,5 +966,20 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
 
     var filename: String {
         "image-\(seed).\(imageType.preferredFilenameExtension ?? "png")"
+    }
+
+    var attachment: ChatImageAttachment {
+        ChatImageAttachment(
+            id: id,
+            filename: filename,
+            mimeType: mimeType,
+            base64Data: imageData.base64EncodedString()
+        )
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        isEmpty ? nil : self
     }
 }

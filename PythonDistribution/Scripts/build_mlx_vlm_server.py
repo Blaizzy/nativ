@@ -19,11 +19,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from generate_image_model_manifest import (
+    MANIFEST_FILENAME as IMAGE_MODEL_MANIFEST_FILENAME,
+)
+from generate_image_model_manifest import generate_image_model_manifest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_DISTRIBUTION_ROOT = REPO_ROOT / "PythonDistribution"
 LAUNCHER_SOURCE = PYTHON_DISTRIBUTION_ROOT / "Launcher" / "mlx_vlm_server_launcher.c"
 OVERLAY_SERVER = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py"
+IMAGE_MODEL_MANIFEST_GENERATOR = Path(__file__).with_name(
+    "generate_image_model_manifest.py"
+)
 DEFAULT_PYTHON_VERSION = "3.12.13"
 DEFAULT_PBS_RELEASE = "20260508"
 DEFAULT_PBS_ASSET = (
@@ -249,7 +257,7 @@ def build_signature(
     skip_install: bool,
 ) -> dict[str, object]:
     return {
-        "version": 3,
+        "version": 4,
         "asset": asset.name,
         "python_version": python_version,
         "pbs_release": pbs_release,
@@ -274,6 +282,9 @@ def build_signature(
         ),
         "launcher_sha256": file_sha256(LAUNCHER_SOURCE),
         "overlay_server_sha256": file_sha256(OVERLAY_SERVER),
+        "image_model_manifest_generator_sha256": file_sha256(
+            IMAGE_MODEL_MANIFEST_GENERATOR
+        ),
         "builder_sha256": file_sha256(Path(__file__)),
         "skip_install": skip_install,
     }
@@ -540,6 +551,12 @@ def install_overlay(output: Path) -> None:
     shutil.copy2(OVERLAY_SERVER, destination)
 
 
+def install_image_model_manifest(output: Path) -> None:
+    destination = output / IMAGE_MODEL_MANIFEST_FILENAME
+    log(f"Generating image model capability manifest {destination.name}")
+    generate_image_model_manifest(site_packages_dir(output), destination)
+
+
 def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
     python = python_executable(output / "python")
     launcher = output / "bin" / "mlx-vlm-server"
@@ -562,6 +579,23 @@ def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
                 "raise SystemExit(0 if importlib.util.find_spec('nativ_server') else 1)",
             ]
         )
+        manifest_path = output / IMAGE_MODEL_MANIFEST_FILENAME
+        if not manifest_path.exists():
+            raise SystemExit(f"Missing image model capability manifest: {manifest_path}")
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise SystemExit(
+                f"Invalid image model capability manifest: {manifest_path}: {error}"
+            ) from error
+        if (
+            manifest.get("schema_version") != 1
+            or not isinstance(manifest.get("model_types"), list)
+            or not manifest["model_types"]
+        ):
+            raise SystemExit(
+                f"Invalid image model capability manifest contents: {manifest_path}"
+            )
     if not launcher.exists():
         raise SystemExit(f"Missing launcher: {launcher}")
 
@@ -716,6 +750,7 @@ def main() -> None:
                 extra_pip_args=args.pip_arg,
             )
         install_overlay(output)
+        install_image_model_manifest(output)
 
     launcher = write_or_build_launcher(output)
     verify_distribution(output, expect_mlx_vlm=not args.skip_install)
