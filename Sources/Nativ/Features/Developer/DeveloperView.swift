@@ -150,7 +150,7 @@ struct DeveloperView: View {
                 get: { model.settings.huggingFaceToken ?? "" },
                 set: { model.settings.huggingFaceToken = $0.isEmpty ? nil : $0 }
             ),
-            hasEnvironmentToken: model.environmentHuggingFaceToken != nil
+            systemTokenSource: model.systemHuggingFaceCredential?.source
         )
     }
 
@@ -511,14 +511,14 @@ private struct PanelHeaderAccent: View {
 
 private struct HuggingFaceAuthenticationPanel: View {
     @Binding var customToken: String
-    let hasEnvironmentToken: Bool
+    let systemTokenSource: HuggingFaceTokenSource?
     @State private var isCustomTokenExpanded: Bool
     @State private var hasSelectedDisclosureState = false
 
-    init(customToken: Binding<String>, hasEnvironmentToken: Bool) {
+    init(customToken: Binding<String>, systemTokenSource: HuggingFaceTokenSource?) {
         _customToken = customToken
-        self.hasEnvironmentToken = hasEnvironmentToken
-        _isCustomTokenExpanded = State(initialValue: !hasEnvironmentToken)
+        self.systemTokenSource = systemTokenSource
+        _isCustomTokenExpanded = State(initialValue: systemTokenSource == nil)
     }
 
     private var hasCustomToken: Bool {
@@ -619,8 +619,8 @@ private struct HuggingFaceAuthenticationPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .onChange(of: hasEnvironmentToken) { wasAvailable, isAvailable in
-            if !wasAvailable && isAvailable && !hasSelectedDisclosureState {
+        .onChange(of: systemTokenSource) { previousSource, currentSource in
+            if previousSource == nil && currentSource != nil && !hasSelectedDisclosureState {
                 isCustomTokenExpanded = false
             }
         }
@@ -633,29 +633,44 @@ private struct HuggingFaceAuthenticationPanel: View {
 
     private var authenticationStatus: String {
         if hasCustomToken { return "Custom Token" }
-        if hasEnvironmentToken { return "HF_TOKEN" }
+        if systemTokenSource == .environment { return "HF_TOKEN" }
+        if systemTokenSource == .credentialFile { return "HF Login" }
         return "Not Configured"
     }
 
     private var authenticationStatusImage: String {
-        hasCustomToken || hasEnvironmentToken ? "checkmark.circle.fill" : "circle.dashed"
+        hasCustomToken || systemTokenSource != nil ? "checkmark.circle.fill" : "circle.dashed"
     }
 
     private var authenticationStatusColor: Color {
-        hasCustomToken || hasEnvironmentToken ? .green : .secondary
+        hasCustomToken || systemTokenSource != nil ? .green : .secondary
     }
 
     private var authenticationDetail: String {
-        if hasCustomToken && hasEnvironmentToken {
-            return "The custom token overrides HF_TOKEN from your environment. Access to a gated model must also be approved on Hugging Face."
+        if hasCustomToken, let systemTokenDescription {
+            return "The custom token overrides \(systemTokenDescription). Access to a gated model must also be approved on Hugging Face."
         }
         if hasCustomToken {
             return "Using the custom token. Access to a gated model must also be approved on Hugging Face."
         }
-        if hasEnvironmentToken {
+        if systemTokenSource == .environment {
             return "Using HF_TOKEN from your process or login-shell environment. Enter a custom token above to override it."
         }
-        return "Set HF_TOKEN in your environment or enter a custom token. Access to a gated model must also be approved on Hugging Face."
+        if systemTokenSource == .credentialFile {
+            return "Using the token from your Hugging Face login. Enter a custom token above to override it."
+        }
+        return "Log in with the Hugging Face CLI, set HF_TOKEN, or enter a custom token. Access to a gated model must also be approved on Hugging Face."
+    }
+
+    private var systemTokenDescription: String? {
+        switch systemTokenSource {
+        case .environment:
+            "HF_TOKEN from your environment"
+        case .credentialFile:
+            "your Hugging Face login"
+        case nil:
+            nil
+        }
     }
 }
 

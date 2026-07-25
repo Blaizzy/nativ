@@ -32,7 +32,8 @@ final class NativModel: ObservableObject {
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
     @Published private(set) var metricsLoading = false
-    @Published private(set) var environmentHuggingFaceToken = HuggingFaceAuthentication.token()
+    @Published private(set) var systemHuggingFaceCredential =
+        HuggingFaceAuthentication.systemCredential()
     @Published private(set) var serverRestartCountdown: Int?
     @Published var settings = NativSettings.load() {
         didSet {
@@ -85,7 +86,10 @@ final class NativModel: ObservableObject {
             names.append(contentsOf: HuggingFaceCache.environmentVariableNames)
         }
         if needsTokenEnvironment {
-            names.append(HuggingFaceAuthentication.environmentVariableName)
+            for name in HuggingFaceAuthentication.discoveryEnvironmentVariableNames
+            where !names.contains(name) {
+                names.append(name)
+            }
         }
 
         let environmentVariableNames = names
@@ -105,8 +109,11 @@ final class NativModel: ObservableObject {
                 }
             }
             if needsTokenEnvironment {
-                self.environmentHuggingFaceToken = HuggingFaceAuthentication.token(
-                    in: shellEnvironment
+                let effectiveEnvironment = processEnvironment.merging(shellEnvironment) {
+                    _, shellValue in shellValue
+                }
+                self.systemHuggingFaceCredential = HuggingFaceAuthentication.systemCredential(
+                    in: effectiveEnvironment
                 )
             }
         }
@@ -115,7 +122,7 @@ final class NativModel: ObservableObject {
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(
             customToken: settings.huggingFaceToken,
-            environmentToken: environmentHuggingFaceToken
+            environmentToken: systemHuggingFaceCredential?.token
         )
     }
 

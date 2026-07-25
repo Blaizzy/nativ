@@ -133,6 +133,92 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         XCTAssertNil(HuggingFaceAuthentication.token(in: ["HF_TOKEN": " \n "]))
     }
 
+    func testSystemCredentialPrefersEnvironmentToken() {
+        var readCredentialFile = false
+
+        let credential = HuggingFaceAuthentication.systemCredential(
+            in: ["HF_TOKEN": " hf_environment "],
+            homeDirectory: "/Users/example"
+        ) { _ in
+            readCredentialFile = true
+            return "hf_file"
+        }
+
+        XCTAssertEqual(
+            credential,
+            HuggingFaceCredential(token: "hf_environment", source: .environment)
+        )
+        XCTAssertFalse(readCredentialFile)
+    }
+
+    func testSystemCredentialReadsLocalLoginToken() {
+        var requestedPath: String?
+
+        let credential = HuggingFaceAuthentication.systemCredential(
+            in: [:],
+            homeDirectory: "/Users/example"
+        ) { path in
+            requestedPath = path
+            return "  hf_login\n"
+        }
+
+        XCTAssertEqual(requestedPath, "/Users/example/.cache/huggingface/token")
+        XCTAssertEqual(
+            credential,
+            HuggingFaceCredential(token: "hf_login", source: .credentialFile)
+        )
+    }
+
+    func testSystemCredentialIgnoresMissingAndBlankLoginToken() {
+        XCTAssertNil(
+            HuggingFaceAuthentication.systemCredential(
+                in: [:],
+                homeDirectory: "/Users/example",
+                readTokenFile: { _ in nil }
+            )
+        )
+        XCTAssertNil(
+            HuggingFaceAuthentication.systemCredential(
+                in: [:],
+                homeDirectory: "/Users/example",
+                readTokenFile: { _ in " \n " }
+            )
+        )
+    }
+
+    func testCredentialFilePathUsesHuggingFacePrecedence() {
+        let homeDirectory = "/Users/example"
+
+        XCTAssertEqual(
+            HuggingFaceAuthentication.credentialFilePath(
+                environment: [
+                    "HF_TOKEN_PATH": "~/credentials/hf-token",
+                    "HF_HOME": "/Volumes/hugging-face",
+                    "XDG_CACHE_HOME": "/Volumes/cache"
+                ],
+                homeDirectory: homeDirectory
+            ),
+            "/Users/example/credentials/hf-token"
+        )
+        XCTAssertEqual(
+            HuggingFaceAuthentication.credentialFilePath(
+                environment: [
+                    "HF_HOME": "/Volumes/hugging-face",
+                    "XDG_CACHE_HOME": "/Volumes/cache"
+                ],
+                homeDirectory: homeDirectory
+            ),
+            "/Volumes/hugging-face/token"
+        )
+        XCTAssertEqual(
+            HuggingFaceAuthentication.credentialFilePath(
+                environment: ["XDG_CACHE_HOME": "/Volumes/cache"],
+                homeDirectory: homeDirectory
+            ),
+            "/Volumes/cache/huggingface/token"
+        )
+    }
+
     func testCustomTokenOverridesEnvironmentToken() {
         XCTAssertEqual(
             HuggingFaceAuthentication.effectiveToken(

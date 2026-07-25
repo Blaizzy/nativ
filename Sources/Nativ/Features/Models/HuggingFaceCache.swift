@@ -63,14 +63,69 @@ enum HuggingFaceCache {
 }
 
 /// Resolves and applies Hugging Face authentication without persisting tokens
-/// discovered in the process or login-shell environment.
+/// discovered in the process, login-shell environment, or local Hub login.
+enum HuggingFaceTokenSource: Equatable, Sendable {
+    case environment
+    case credentialFile
+}
+
+struct HuggingFaceCredential: Equatable, Sendable {
+    let token: String
+    let source: HuggingFaceTokenSource
+}
+
 enum HuggingFaceAuthentication {
     static let environmentVariableName = "HF_TOKEN"
+    static let discoveryEnvironmentVariableNames = [
+        environmentVariableName,
+        "HF_TOKEN_PATH",
+        "HF_HOME",
+        "XDG_CACHE_HOME"
+    ]
 
     static func token(
         in environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String? {
         normalizedToken(environment[environmentVariableName])
+    }
+
+    static func systemCredential(
+        in environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        readTokenFile: (String) -> String? = {
+            try? String(contentsOfFile: $0, encoding: .utf8)
+        }
+    ) -> HuggingFaceCredential? {
+        if let token = token(in: environment) {
+            return HuggingFaceCredential(token: token, source: .environment)
+        }
+
+        let path = credentialFilePath(
+            environment: environment,
+            homeDirectory: homeDirectory
+        )
+        guard let token = normalizedToken(readTokenFile(path)) else {
+            return nil
+        }
+        return HuggingFaceCredential(token: token, source: .credentialFile)
+    }
+
+    static func credentialFilePath(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> String {
+        if let tokenPath = normalizedToken(environment["HF_TOKEN_PATH"]) {
+            return expandHome(in: tokenPath, homeDirectory: homeDirectory)
+        }
+        if let huggingFaceHome = normalizedToken(environment["HF_HOME"]) {
+            return (expandHome(in: huggingFaceHome, homeDirectory: homeDirectory) as NSString)
+                .appendingPathComponent("token")
+        }
+        if let cacheHome = normalizedToken(environment["XDG_CACHE_HOME"]) {
+            return (expandHome(in: cacheHome, homeDirectory: homeDirectory) as NSString)
+                .appendingPathComponent("huggingface/token")
+        }
+        return (homeDirectory as NSString).appendingPathComponent(".cache/huggingface/token")
     }
 
     static func effectiveToken(customToken: String?, environmentToken: String?) -> String? {
@@ -88,5 +143,15 @@ enum HuggingFaceAuthentication {
             return nil
         }
         return trimmed
+    }
+
+    private static func expandHome(in path: String, homeDirectory: String) -> String {
+        if path == "~" {
+            return homeDirectory
+        }
+        guard path.hasPrefix("~/") else {
+            return path
+        }
+        return (homeDirectory as NSString).appendingPathComponent(String(path.dropFirst(2)))
     }
 }
