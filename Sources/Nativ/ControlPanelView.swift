@@ -270,111 +270,114 @@ struct ControlPanelView: View {
     }
 
     private var sidebar: some View {
-        List {
-            Section {
-                ForEach(ControlPanelTab.allCases) { tab in
-                    let selection = ControlPanelSidebarSelection.tab(tab)
-                    Button {
-                        applySidebarSelection(selection)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label(tab.rawValue, systemImage: tab.systemImage)
-                            if tab == .models, downloads.downloadingModelID != nil {
-                                ModelsDownloadArrow()
+        VStack(spacing: 0) {
+            List {
+                Section {
+                    ForEach(ControlPanelTab.allCases) { tab in
+                        let selection = ControlPanelSidebarSelection.tab(tab)
+                        Button {
+                            applySidebarSelection(selection)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Label(tab.rawValue, systemImage: tab.systemImage)
+                                if tab == .models, downloads.downloadingModelID != nil {
+                                    ModelsDownloadArrow()
+                                }
+                                Spacer(minLength: 0)
+                                if tab == .models,
+                                   model.isModelLoading,
+                                   let percentage = model.modelLoadingPercentageText {
+                                    Text(percentage)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 34, alignment: .trailing)
+                                }
                             }
-                            Spacer(minLength: 0)
-                            if tab == .models,
-                               model.isModelLoading,
-                               let percentage = model.modelLoadingPercentageText {
-                                Text(percentage)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 34, alignment: .trailing)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
+                        }
+                        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+                        .buttonStyle(.plain)
+                        .listRowInsets(sidebarItemInsets)
+                    }
+                }
+
+                Section {
+                    ForEach(recentSessions) { recent in
+                        ControlPanelRecentSessionRow(
+                            recent: recent,
+                            isSelected: sidebarSelection == recent.selection,
+                            isCurrent: isCurrentRecent(recent),
+                            isSelectionDisabled: isRecentSelectionDisabled(recent),
+                            isDeleteDisabled: isRecentDeleteDisabled(recent),
+                            canExport: canExportRecent(recent),
+                            onSelect: {
+                                applySidebarSelection(recent.selection)
+                            },
+                            onDelete: {
+                                deleteRecentSession(recent)
+                            },
+                            onCopyConversation: {
+                                copyRecentConversation(recent)
+                            },
+                            onExportFile: {
+                                exportRecentConversation(recent)
+                            },
+                            onRevealInFinder: {
+                                revealRecentSession(recent)
                             }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(.rect)
+                        )
+                        .listRowInsets(sidebarItemInsets)
                     }
-                    .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
-                    .buttonStyle(.plain)
-                    .listRowInsets(sidebarItemInsets)
-                }
-            }
+                } header: {
+                    HStack(spacing: 8) {
+                        Text("Recents")
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(.secondary.opacity(0.7))
 
-            Section {
-                ForEach(recentSessions) { recent in
-                    ControlPanelRecentSessionRow(
-                        recent: recent,
-                        isSelected: sidebarSelection == recent.selection,
-                        isCurrent: isCurrentRecent(recent),
-                        isSelectionDisabled: isRecentSelectionDisabled(recent),
-                        isDeleteDisabled: isRecentDeleteDisabled(recent),
-                        canExport: canExportRecent(recent),
-                        onSelect: {
-                            applySidebarSelection(recent.selection)
-                        },
-                        onDelete: {
-                            deleteRecentSession(recent)
-                        },
-                        onCopyConversation: {
-                            copyRecentConversation(recent)
-                        },
-                        onExportFile: {
-                            exportRecentConversation(recent)
-                        },
-                        onRevealInFinder: {
-                            revealRecentSession(recent)
+                        Spacer(minLength: 0)
+
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) {
+                                createRecentSession()
+                            }
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 15, weight: .medium))
+                                .frame(width: 28, height: 28)
+                                .foregroundStyle(
+                                    isNewChatHovering
+                                        ? Color.primary
+                                        : Color.secondary.opacity(0.7)
+                                )
                         }
-                    )
-                    .listRowInsets(sidebarItemInsets)
-                }
-            } header: {
-                HStack(spacing: 8) {
-                    Text("Recents")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(.secondary.opacity(0.7))
-
-                    Spacer(minLength: 0)
-
-                    Button {
-                        withAnimation(.snappy(duration: 0.2)) {
-                            createRecentSession()
-                        }
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(width: 28, height: 28)
-                            .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
+                        .buttonStyle(.plain)
+                        .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
+                        .help(newRecentHelp)
+                        .padding(.trailing, 4)
+                        .onHover { isNewChatHovering = $0 }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
-                    .help(newRecentHelp)
-                    .padding(.trailing, 4)
-                    .onHover { isNewChatHovering = $0 }
+                    .textCase(nil)
+                    .padding(.horizontal, 7)
                 }
-                .textCase(nil)
-                .padding(.horizontal, 7)
             }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            Color.clear.frame(height: 18)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
-                    .overlay(Color.secondary.opacity(0.25))
+            .listStyle(.sidebar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                Color.clear.frame(height: 18)
+            }
 
-                HStack(spacing: 4) {
-                    settingsButton
-                    supportButton
-                    serverToggleButton
-                    issueReportMenu
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
+            Divider()
+                .overlay(Color.secondary.opacity(0.25))
+
+            HStack(spacing: 4) {
+                settingsButton
+                supportButton
+                serverToggleButton
+                issueReportMenu
             }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
         }
         .navigationTitle("Nativ")
         .background(
