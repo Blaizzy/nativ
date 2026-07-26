@@ -84,7 +84,7 @@ private enum ControlPanelLayout {
     static let sidebarMaximumWidth: CGFloat = 320
     static let collapsedSidebarTitleClearance: CGFloat = 56
     static let sidebarButtonTopOffset: CGFloat = -60
-    static let collapsedSidebarButtonLeadingPadding: CGFloat = 124
+    static let sidebarButtonLeadingPadding: CGFloat = 88
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
@@ -191,12 +191,10 @@ struct ControlPanelView: View {
         .coordinateSpace(name: ControlPanelLayout.coordinateSpaceName)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .topLeading) {
-            if splitColumnVisibility == .detailOnly {
-                sidebarVisibilityButton
-                    .padding(.top, 12)
-                    .padding(.leading, ControlPanelLayout.collapsedSidebarButtonLeadingPadding)
-                    .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
-            }
+            sidebarVisibilityButton
+                .padding(.top, 12)
+                .padding(.leading, ControlPanelLayout.sidebarButtonLeadingPadding)
+                .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
         }
         .overlay(alignment: .topTrailing) {
             if showsModelConfigurationToggle {
@@ -378,11 +376,6 @@ struct ControlPanelView: View {
             }
         }
         .navigationTitle("Nativ")
-        .overlay(alignment: .topTrailing) {
-            sidebarVisibilityButton
-                .padding(12)
-                .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
-        }
         .background(
             ControlPanelSurfaceReader(isFullScreen: isFullScreen)
         )
@@ -403,8 +396,7 @@ struct ControlPanelView: View {
                 .font(.system(size: 15, weight: .medium))
                 .frame(width: 30, height: 30)
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
+        .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(help)
     }
@@ -423,8 +415,7 @@ struct ControlPanelView: View {
                 .font(.system(size: 15, weight: .medium))
                 .frame(width: 30, height: 30)
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
+        .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(help)
     }
