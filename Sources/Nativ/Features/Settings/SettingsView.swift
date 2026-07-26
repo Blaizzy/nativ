@@ -119,7 +119,7 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
-                    .frame(width: 220)
+                    .frame(width: 220, alignment: .trailing)
                 }
 
                 Divider()
