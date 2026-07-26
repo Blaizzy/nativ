@@ -657,7 +657,10 @@ struct ControlPanelView: View {
                     ChatView(
                         model: model,
                         chat: chat,
-                        showsConfiguration: $isModelConfigurationVisible
+                        showsConfiguration: $isModelConfigurationVisible,
+                        conversationWidthReduction: isFullScreen
+                            ? 0
+                            : ControlPanelLayout.titlebarHeight
                     )
                 case .imageGeneration:
                     ImageGenerationView(model: model, viewModel: imageGeneration)
