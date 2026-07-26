@@ -55,7 +55,7 @@ struct DeveloperView: View {
                     height: geometry.size.height,
                     alignment: .topLeading
                 )
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(Color.nativMainContentBackground)
             }
         }
     }

@@ -80,7 +80,7 @@ struct ModelsView: View {
                 }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
         .task(id: modelScanPath) {
             rescanLocalModels()
         }

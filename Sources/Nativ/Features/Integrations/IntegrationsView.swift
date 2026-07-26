@@ -358,7 +358,7 @@ struct IntegrationsView: View {
                 )
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
         .onAppear(perform: viewModel.appear)
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             viewModel.modelsDidChange()

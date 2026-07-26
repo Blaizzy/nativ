@@ -58,7 +58,7 @@ struct SystemMonitorView: View {
             page
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
         .onAppear {
             store.start()
         }

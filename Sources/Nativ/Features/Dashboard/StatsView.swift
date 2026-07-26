@@ -152,7 +152,7 @@ private struct DashboardContentView: View, Equatable {
                 alignment: .topLeading
             )
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
         .contentShape(Rectangle())
         .onTapGesture {
             isModelSearchFocused = false

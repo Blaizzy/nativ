@@ -60,7 +60,7 @@ struct SettingsView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 26)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
     }
 
     private var pageHeader: some View {

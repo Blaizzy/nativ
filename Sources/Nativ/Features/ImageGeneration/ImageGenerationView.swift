@@ -34,7 +34,7 @@ struct ImageGenerationView: View {
                         }
                     }
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(Color.nativMainContentBackground)
             .onAppear {
                 viewModel.applyDefaultModel(model.settings.normalized().imageGenerationModelID)
                 followsLatestTurn = true

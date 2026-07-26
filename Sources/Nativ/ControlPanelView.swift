@@ -91,6 +91,23 @@ private enum ControlPanelLayout {
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
+extension Color {
+    static let nativMainContentBackground = Color(
+        nsColor: NSColor(name: NSColor.Name("NativMainContentBackground")) { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(
+                    srgbRed: 24 / 255,
+                    green: 24 / 255,
+                    blue: 24 / 255,
+                    alpha: 1
+                )
+            }
+
+            return .windowBackgroundColor
+        }
+    )
+}
+
 /// A small pulsing download arrow shown next to the Models sidebar row while a model
 /// is downloading. When concurrent downloads are supported this can show the number of
 /// models still downloading beside the arrow.
@@ -722,6 +739,7 @@ struct ControlPanelView: View {
                 extendsIntoTitlebar: detailExtendsIntoTitlebar
             )
         )
+        .background(Color.nativMainContentBackground)
         .alert(
             "Models May Not Fit in Memory",
             isPresented: Binding(

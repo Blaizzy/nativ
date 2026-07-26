@@ -277,7 +277,7 @@ struct ChatView: View {
                     }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
     }
 
     private var selectedModelID: String? {
