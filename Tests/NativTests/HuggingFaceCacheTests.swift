@@ -306,6 +306,99 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         )
     }
 
+    func testLoginWritesActiveAndNamedHuggingFaceCredentials() throws {
+        let homeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+
+        let credential = try HuggingFaceAuthentication.logIn(
+            token: "  hf_login_value\n",
+            tokenName: "localai",
+            environment: [:],
+            homeDirectory: homeURL.path
+        )
+        let credentialURL = homeURL
+            .appendingPathComponent(".cache/huggingface/token")
+        let storedTokensURL = homeURL
+            .appendingPathComponent(".cache/huggingface/stored_tokens")
+
+        XCTAssertEqual(
+            credential,
+            HuggingFaceCredential(
+                token: "hf_login_value",
+                source: .credentialFile,
+                filePath: credentialURL.path
+            )
+        )
+        XCTAssertEqual(
+            try String(contentsOf: credentialURL, encoding: .utf8),
+            "hf_login_value"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: storedTokensURL, encoding: .utf8),
+            """
+            [localai]
+            hf_token = hf_login_value
+
+            """
+        )
+        XCTAssertEqual(
+            try posixPermissions(at: credentialURL),
+            0o600
+        )
+        XCTAssertEqual(
+            try posixPermissions(at: storedTokensURL),
+            0o600
+        )
+    }
+
+    func testLoginPreservesOtherNamedHuggingFaceCredentials() throws {
+        let homeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+
+        _ = try HuggingFaceAuthentication.logIn(
+            token: "hf_first",
+            tokenName: "alpha",
+            environment: [:],
+            homeDirectory: homeURL.path
+        )
+        _ = try HuggingFaceAuthentication.logIn(
+            token: "hf_second",
+            tokenName: "beta",
+            environment: [:],
+            homeDirectory: homeURL.path
+        )
+
+        let credentialsURL = homeURL
+            .appendingPathComponent(".cache/huggingface")
+        XCTAssertEqual(
+            try String(
+                contentsOf: credentialsURL.appendingPathComponent("token"),
+                encoding: .utf8
+            ),
+            "hf_second"
+        )
+        XCTAssertEqual(
+            try String(
+                contentsOf: credentialsURL.appendingPathComponent("stored_tokens"),
+                encoding: .utf8
+            ),
+            """
+            [alpha]
+            hf_token = hf_first
+
+            [beta]
+            hf_token = hf_second
+
+            """
+        )
+    }
+
     func testLogoutRemovesCredentialFile() throws {
         var removedPath: String?
         let credential = HuggingFaceCredential(
@@ -383,5 +476,10 @@ final class HuggingFaceAuthenticationTests: XCTestCase {
         var request = URLRequest(url: URL(string: "https://huggingface.co/api/models")!)
         HuggingFaceAuthentication.authorize(&request, token: " ")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    private func posixPermissions(at url: URL) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
     }
 }

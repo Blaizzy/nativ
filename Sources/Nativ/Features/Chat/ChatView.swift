@@ -229,6 +229,7 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @Binding var showsConfiguration: Bool
+    let conversationWidthReduction: CGFloat
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var followsLatestMessage = true
@@ -255,7 +256,10 @@ struct ChatView: View {
                                 )
                             }
                         )
-                        .frame(maxWidth: Layout.conversationMaxWidth)
+                        .frame(
+                            maxWidth: Layout.conversationMaxWidth
+                                - conversationWidthReduction
+                        )
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, Layout.horizontalPadding)
                         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -273,7 +277,7 @@ struct ChatView: View {
                     }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
     }
 
     private var selectedModelID: String? {
@@ -319,7 +323,10 @@ struct ChatView: View {
                     }
                 }
             }
-            .frame(maxWidth: Layout.conversationMaxWidth)
+            .frame(
+                maxWidth: Layout.conversationMaxWidth
+                    - conversationWidthReduction
+            )
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Layout.horizontalPadding)
             .padding(.top, 18)
@@ -2347,5 +2354,10 @@ private struct ChatEmptyTranscriptView: View {
 }
 
 #Preview {
-    ChatView(model: .init(), chat: ChatViewModel(), showsConfiguration: .constant(true))
+    ChatView(
+        model: .init(),
+        chat: ChatViewModel(),
+        showsConfiguration: .constant(true),
+        conversationWidthReduction: 0
+    )
 }

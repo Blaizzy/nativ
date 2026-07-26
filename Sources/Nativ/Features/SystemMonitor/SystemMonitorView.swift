@@ -45,6 +45,7 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
 struct SystemMonitorView: View {
     @ObservedObject var store: SystemMonitorStore
     @ObservedObject var menuBarPreferences: SystemMenuBarPreferences
+    var titleLeadingInset: CGFloat = 0
     @State private var destination: SystemMonitorDestination = .overview
     @State private var isMenuBarControlHovered = false
 
@@ -57,7 +58,7 @@ struct SystemMonitorView: View {
             page
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
         .onAppear {
             store.start()
         }
@@ -112,6 +113,7 @@ struct SystemMonitorView: View {
             .help("Refresh now")
         }
         .padding(.horizontal, 28)
+        .padding(.leading, titleLeadingInset)
         .padding(.top, 24)
         .padding(.bottom, 18)
     }

@@ -134,11 +134,18 @@ private struct NativRootView: View {
 
     var body: some View {
         appDelegate.rootView
-            .preferredColorScheme(appearance.preferredColorScheme)
             .onAppear {
+                applyAppearance(appearance)
                 appDelegate.registerMainWindowOpener {
                     openWindow(id: "main")
                 }
             }
+            .onChange(of: appearance) { _, newAppearance in
+                applyAppearance(newAppearance)
+            }
+    }
+
+    private func applyAppearance(_ appearance: AppAppearance) {
+        NSApplication.shared.appearance = appearance.appKitAppearance
     }
 }

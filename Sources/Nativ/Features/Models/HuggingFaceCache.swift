@@ -294,6 +294,53 @@ enum HuggingFaceAuthentication {
         return try decodeTokenMetadata(from: data)
     }
 
+    static func logIn(
+        token: String,
+        tokenName: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        fileManager: FileManager = .default
+    ) throws -> HuggingFaceCredential {
+        guard let token = normalizedToken(token),
+              let tokenName = normalizedToken(tokenName),
+              !tokenName.contains("\n"),
+              !tokenName.contains("\r"),
+              !tokenName.contains("["),
+              !tokenName.contains("]") else {
+            throw HuggingFaceAuthenticationError.invalidResponse
+        }
+
+        let activeTokenPath = credentialFilePath(
+            environment: environment,
+            homeDirectory: homeDirectory
+        )
+        let storedTokensPath = (activeTokenPath as NSString)
+            .deletingLastPathComponent
+            .appending("/stored_tokens")
+
+        var storedTokens = try readStoredTokens(
+            at: storedTokensPath,
+            fileManager: fileManager
+        )
+        storedTokens[tokenName] = token
+        try writeSecret(
+            serializeStoredTokens(storedTokens),
+            to: storedTokensPath,
+            fileManager: fileManager
+        )
+        try writeSecret(
+            token,
+            to: activeTokenPath,
+            fileManager: fileManager
+        )
+
+        return HuggingFaceCredential(
+            token: token,
+            source: .credentialFile,
+            filePath: activeTokenPath
+        )
+    }
+
     static func decodeTokenMetadata(from data: Data) throws -> HuggingFaceTokenMetadata {
         let response = try JSONDecoder().decode(HuggingFaceWhoAmIResponse.self, from: data)
         return HuggingFaceTokenMetadata(
@@ -315,6 +362,78 @@ enum HuggingFaceAuthentication {
             throw HuggingFaceAuthenticationError.missingCredentialFile
         }
         try removeCredentialFile(filePath)
+    }
+
+    private static func readStoredTokens(
+        at path: String,
+        fileManager: FileManager
+    ) throws -> [String: String] {
+        guard fileManager.fileExists(atPath: path) else {
+            return [:]
+        }
+
+        let contents = try String(contentsOfFile: path, encoding: .utf8)
+        var storedTokens: [String: String] = [:]
+        var currentSection: String?
+
+        for rawLine in contents.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("["), line.hasSuffix("]"), line.count > 2 {
+                currentSection = String(line.dropFirst().dropLast())
+                continue
+            }
+            guard let currentSection,
+                  let separator = line.firstIndex(of: "=") else {
+                continue
+            }
+
+            let key = line[..<separator]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard key == "hf_token" else {
+                continue
+            }
+
+            let value = String(line[line.index(after: separator)...])
+            if let token = normalizedToken(value) {
+                storedTokens[currentSection] = token
+            }
+        }
+        return storedTokens
+    }
+
+    private static func serializeStoredTokens(_ storedTokens: [String: String]) -> String {
+        storedTokens.keys.sorted().map { tokenName in
+            """
+            [\(tokenName)]
+            hf_token = \(storedTokens[tokenName] ?? "")
+            """
+        }
+        .joined(separator: "\n\n")
+        + "\n"
+    }
+
+    private static func writeSecret(
+        _ contents: String,
+        to path: String,
+        fileManager: FileManager
+    ) throws {
+        let url = URL(fileURLWithPath: path)
+        let directoryURL = url.deletingLastPathComponent()
+        try fileManager.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try Data(contents.utf8).write(to: url, options: .atomic)
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: path
+        )
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directoryURL.path
+        )
     }
 
     private static func expandHome(in path: String, homeDirectory: String) -> String {

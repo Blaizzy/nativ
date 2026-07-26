@@ -82,13 +82,40 @@ private enum ControlPanelLayout {
     static let sidebarMinimumWidth: CGFloat = 220
     static let sidebarIdealWidth: CGFloat = 260
     static let sidebarMaximumWidth: CGFloat = 320
-    static let collapsedSidebarTitleClearance: CGFloat = 128
+    static let detailMinimumWidth: CGFloat = 720
+    static let titlebarHeight: CGFloat = 52
+    static let collapsedSidebarTitleClearance: CGFloat = 108
+    static let sidebarButtonLeadingPadding: CGFloat = 88
+    static let modelConfigurationButtonTrailingPadding: CGFloat = 12
+    static let collapseButtonSize: CGFloat = 30
+    static let windowControlsLeadingPadding: CGFloat = 19
+    static let windowControlsTopPadding: CGFloat = 9
+    static let windowControlsWidth: CGFloat = 64
+    static let windowControlsHeight: CGFloat = 28
+    static let windowControlsCenterY =
+        windowControlsTopPadding + (windowControlsHeight / 2)
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
-/// A small pulsing download arrow shown next to the Models sidebar row while a model
-/// is downloading. When concurrent downloads are supported this can show the number of
-/// models still downloading beside the arrow.
+extension Color {
+    static let nativMainContentBackground = Color(
+        nsColor: NSColor(name: NSColor.Name("NativMainContentBackground")) { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(
+                    srgbRed: 24 / 255,
+                    green: 24 / 255,
+                    blue: 24 / 255,
+                    alpha: 1
+                )
+            }
+
+            return .windowBackgroundColor
+        }
+    )
+}
+
+/// A small pulsing download arrow shown at the trailing edge of the Models sidebar row
+/// while a model is downloading.
 private struct ModelsDownloadArrow: View {
     @State private var pulse = false
 
@@ -149,6 +176,7 @@ private struct GlobalModelLoadFailureBanner: View {
 }
 
 struct ControlPanelView: View {
+    @Environment(\.displayScale) private var displayScale
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
@@ -163,26 +191,33 @@ struct ControlPanelView: View {
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
+    @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
+    @State private var sidebarDragStartWidth: CGFloat?
     @State private var detailLeadingEdge = ControlPanelLayout.sidebarIdealWidth
     @State private var expandedDetailLeadingEdge = ControlPanelLayout.sidebarIdealWidth
     @State private var isSidebarTransitioning = false
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
+    @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
-    private let sidebarItemInsets = EdgeInsets(top: -1, leading: 0, bottom: -1, trailing: 0)
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $splitColumnVisibility) {
-            sidebar
-                .navigationSplitViewColumnWidth(
-                    min: ControlPanelLayout.sidebarMinimumWidth,
-                    ideal: ControlPanelLayout.sidebarIdealWidth,
-                    max: ControlPanelLayout.sidebarMaximumWidth
-                )
-        } detail: {
+        HStack(spacing: 0) {
+            if splitColumnVisibility != .detailOnly {
+                resizableSidebar
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
             detail
+                .frame(
+                    minWidth: ControlPanelLayout.detailMinimumWidth,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
+                .clipped()
         }
-        .navigationSplitViewStyle(.balanced)
+        .toolbarVisibility(.hidden, for: .windowToolbar)
+        .ignoresSafeArea(.container, edges: .top)
         .coordinateSpace(name: ControlPanelLayout.coordinateSpaceName)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .top) {
@@ -198,8 +233,22 @@ struct ControlPanelView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
-            ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
-                .frame(width: 0, height: 0)
+            ZStack {
+                ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
+                ControlPanelWindowControls(refreshTrigger: windowControlsRefreshTrigger)
+                ControlPanelCollapseButtons(
+                    showsModelConfigurationButton: showsModelConfigurationToggle,
+                    sidebarHelp: splitColumnVisibility == .detailOnly
+                        ? "Show Sidebar"
+                        : "Hide Sidebar",
+                    modelConfigurationHelp: isModelConfigurationVisible
+                        ? "Hide model configuration"
+                        : "Show model configuration",
+                    onToggleSidebar: toggleSidebarVisibility,
+                    onToggleModelConfiguration: toggleModelConfigurationVisibility
+                )
+            }
+            .frame(width: 0, height: 0)
         }
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
@@ -218,8 +267,12 @@ struct ControlPanelView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            windowControlsRefreshTrigger += 1
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             isFullScreen = false
+            windowControlsRefreshTrigger += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()
@@ -244,116 +297,223 @@ struct ControlPanelView: View {
     }
 
     private var sidebar: some View {
-        List {
-            Section {
-                ForEach(ControlPanelTab.allCases) { tab in
-                    let selection = ControlPanelSidebarSelection.tab(tab)
-                    Button {
-                        applySidebarSelection(selection)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label(tab.rawValue, systemImage: tab.systemImage)
-                            if tab == .models, downloads.downloadingModelID != nil {
-                                ModelsDownloadArrow()
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: ControlPanelLayout.titlebarHeight)
+
+            sidebarNavigation
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+
+            sidebarRecentsHeader
+                .padding(.leading, 17)
+                .padding(.trailing, 10)
+                .padding(.bottom, 4)
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(recentSessions) { recent in
+                        ControlPanelRecentSessionRow(
+                            recent: recent,
+                            isSelected: sidebarSelection == recent.selection,
+                            isCurrent: isCurrentRecent(recent),
+                            isSelectionDisabled: isRecentSelectionDisabled(recent),
+                            isDeleteDisabled: isRecentDeleteDisabled(recent),
+                            canExport: canExportRecent(recent),
+                            onSelect: {
+                                applySidebarSelection(recent.selection)
+                            },
+                            onDelete: {
+                                deleteRecentSession(recent)
+                            },
+                            onCopyConversation: {
+                                copyRecentConversation(recent)
+                            },
+                            onExportFile: {
+                                exportRecentConversation(recent)
+                            },
+                            onRevealInFinder: {
+                                revealRecentSession(recent)
                             }
-                            Spacer(minLength: 0)
-                            if tab == .models,
-                               model.isModelLoading,
-                               let percentage = model.modelLoadingPercentageText {
-                                Text(percentage)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 34, alignment: .trailing)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(.rect)
+                        )
                     }
-                    .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
-                    .buttonStyle(.plain)
-                    .listRowInsets(sidebarItemInsets)
                 }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
             }
+            .frame(maxHeight: .infinity)
 
-            Section {
-                ForEach(recentSessions) { recent in
-                    ControlPanelRecentSessionRow(
-                        recent: recent,
-                        isSelected: sidebarSelection == recent.selection,
-                        isCurrent: isCurrentRecent(recent),
-                        isSelectionDisabled: isRecentSelectionDisabled(recent),
-                        isDeleteDisabled: isRecentDeleteDisabled(recent),
-                        canExport: canExportRecent(recent),
-                        onSelect: {
-                            applySidebarSelection(recent.selection)
-                        },
-                        onDelete: {
-                            deleteRecentSession(recent)
-                        },
-                        onCopyConversation: {
-                            copyRecentConversation(recent)
-                        },
-                        onExportFile: {
-                            exportRecentConversation(recent)
-                        },
-                        onRevealInFinder: {
-                            revealRecentSession(recent)
-                        }
-                    )
-                    .listRowInsets(sidebarItemInsets)
-                }
-            } header: {
-                HStack(spacing: 8) {
-                    Text("Recents")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(.secondary.opacity(0.7))
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: sidebarSeparatorThickness)
 
-                    Spacer(minLength: 0)
-
-                    Button {
-                        withAnimation(.snappy(duration: 0.2)) {
-                            createRecentSession()
-                        }
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(width: 28, height: 28)
-                            .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
-                    .help(newRecentHelp)
-                    .padding(.trailing, 4)
-                    .onHover { isNewChatHovering = $0 }
-                }
-                .textCase(nil)
-                .padding(.horizontal, 7)
+            HStack(spacing: 4) {
+                settingsButton
+                supportButton
+                serverToggleButton
+                issueReportMenu
             }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if isFullScreen {
-                Color.clear.frame(height: 28)
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
-                    .overlay(Color.secondary.opacity(0.25))
-
-                HStack(spacing: 4) {
-                    settingsButton
-                    supportButton
-                    serverToggleButton
-                    issueReportMenu
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
         }
         .navigationTitle("Nativ")
-        .background(ControlPanelSidebarSurfaceReader())
+        .background(
+            ControlPanelSurfaceReader(
+                isFullScreen: isFullScreen,
+                isSidebarTransitioning: isSidebarTransitioning
+            )
+        )
+    }
+
+    private var resizableSidebar: some View {
+        sidebar
+            .frame(width: sidebarWidth)
+            .background {
+                Group {
+                    if isFullScreen {
+                        Rectangle()
+                            .fill(.regularMaterial)
+                    } else {
+                        Color.clear
+                            .glassEffect(.regular, in: Rectangle())
+                    }
+                }
+                    .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
+            }
+            .overlay(alignment: .trailing) {
+                sidebarResizeHandle
+            }
+            .zIndex(1)
+    }
+
+    private var sidebarResizeHandle: some View {
+        ZStack {
+            Color.clear
+
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: sidebarSeparatorThickness)
+        }
+        .frame(width: 9)
+        .contentShape(Rectangle())
+        .offset(x: 4)
+        .onHover { isHovering in
+            (isHovering ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if sidebarDragStartWidth == nil {
+                        sidebarDragStartWidth = sidebarWidth
+                    }
+
+                    let startWidth = sidebarDragStartWidth ?? sidebarWidth
+                    let proposedWidth = startWidth + value.translation.width
+                    sidebarWidth = min(
+                        max(proposedWidth, ControlPanelLayout.sidebarMinimumWidth),
+                        ControlPanelLayout.sidebarMaximumWidth
+                    )
+                    expandedDetailLeadingEdge = sidebarWidth
+                }
+                .onEnded { _ in
+                    sidebarDragStartWidth = nil
+                    expandedDetailLeadingEdge = sidebarWidth
+                    NSCursor.arrow.set()
+                }
+        )
+    }
+
+    private var sidebarSeparatorThickness: CGFloat {
+        1 / max(displayScale, 1)
+    }
+
+    private var sidebarNavigation: some View {
+        VStack(spacing: 0) {
+            ForEach(ControlPanelTab.allCases) { tab in
+                let selection = ControlPanelSidebarSelection.tab(tab)
+                Button {
+                    applySidebarSelection(selection)
+                } label: {
+                    HStack(spacing: 8) {
+                        Label(tab.rawValue, systemImage: tab.systemImage)
+                        Spacer(minLength: 0)
+                        if tab == .models {
+                            HStack(spacing: 6) {
+                                if model.isModelLoading,
+                                   let percentage = model.modelLoadingPercentageText {
+                                    Text(percentage)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 34, alignment: .trailing)
+                                }
+                                if downloads.downloadingModelID != nil {
+                                    ModelsDownloadArrow()
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+                }
+                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var sidebarRecentsHeader: some View {
+        HStack(spacing: 8) {
+            Text("Recents")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(.secondary.opacity(0.7))
+
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    createRecentSession()
+                }
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(
+                        isNewChatHovering
+                            ? Color.primary
+                            : Color.secondary.opacity(0.7)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
+            .help(newRecentHelp)
+            .padding(.trailing, 4)
+            .onHover { isNewChatHovering = $0 }
+        }
+    }
+
+    private func toggleSidebarVisibility() {
+        let newVisibility: NavigationSplitViewVisibility =
+            splitColumnVisibility == .detailOnly ? .all : .detailOnly
+        beginSidebarTransition(to: newVisibility)
+        withAnimation(.snappy(duration: 0.2)) {
+            splitColumnVisibility = newVisibility
+        }
+    }
+
+    private func toggleModelConfigurationVisibility() {
+        withAnimation(.snappy(duration: 0.2)) {
+            isModelConfigurationVisible.toggle()
+        }
+    }
+
+    private var showsModelConfigurationToggle: Bool {
+        switch selectedTab {
+        case .chat, .models, .developer:
+            true
+        case .imageGeneration, .dashboard, .system, .integrations, .settings:
+            false
+        }
     }
 
     private var issueReportMenu: some View {
@@ -499,7 +659,10 @@ struct ControlPanelView: View {
                     ChatView(
                         model: model,
                         chat: chat,
-                        showsConfiguration: $isModelConfigurationVisible
+                        showsConfiguration: $isModelConfigurationVisible,
+                        conversationWidthReduction: isFullScreen
+                            ? 0
+                            : ControlPanelLayout.titlebarHeight
                     )
                 case .imageGeneration:
                     ImageGenerationView(model: model, viewModel: imageGeneration)
@@ -512,7 +675,8 @@ struct ControlPanelView: View {
                 case .system:
                     SystemMonitorView(
                         store: systemMonitor,
-                        menuBarPreferences: .shared
+                        menuBarPreferences: .shared,
+                        titleLeadingInset: detailTitleLeadingInset
                     )
                 case .models:
                     ModelsView(
@@ -521,7 +685,10 @@ struct ControlPanelView: View {
                         titleLeadingInset: detailTitleLeadingInset
                     )
                 case .integrations:
-                    IntegrationsView(model: model)
+                    IntegrationsView(
+                        model: model,
+                        titleLeadingInset: detailTitleLeadingInset
+                    )
                 case .developer:
                     DeveloperView(
                         model: model,
@@ -538,7 +705,13 @@ struct ControlPanelView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .modifier(ControlPanelDetailSafeArea(isFullScreen: isFullScreen))
+        .modifier(
+            ControlPanelDetailSafeArea(
+                isFullScreen: isFullScreen,
+                extendsIntoTitlebar: detailExtendsIntoTitlebar
+            )
+        )
+        .background(Color.nativMainContentBackground)
         .alert(
             "Models May Not Fit in Memory",
             isPresented: Binding(
@@ -608,9 +781,18 @@ struct ControlPanelView: View {
         return ControlPanelLayout.collapsedSidebarTitleClearance * (1 - visibleFraction)
     }
 
+    private var detailExtendsIntoTitlebar: Bool {
+        switch selectedTab {
+        case .dashboard, .system, .models, .integrations, .developer:
+            true
+        case .chat, .imageGeneration, .settings:
+            false
+        }
+    }
+
     private func beginSidebarTransition(to visibility: NavigationSplitViewVisibility) {
         if visibility == .detailOnly {
-            expandedDetailLeadingEdge = max(detailLeadingEdge, 1)
+            expandedDetailLeadingEdge = sidebarWidth
         }
         isSidebarTransitioning = true
     }
@@ -873,51 +1055,575 @@ private final class FooterControlTrackingNSView: NSView {
     }
 }
 
-private struct ControlPanelSidebarSurfaceReader: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        expandSidebarSurface(from: view)
+private struct ControlPanelSurfaceReader: NSViewRepresentable {
+    let isFullScreen: Bool
+    let isSidebarTransitioning: Bool
+
+    func makeNSView(context: Context) -> ControlPanelSurfaceReaderView {
+        let view = ControlPanelSurfaceReaderView()
+        view.update(
+            isFullScreen: isFullScreen,
+            isSidebarTransitioning: isSidebarTransitioning
+        )
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        expandSidebarSurface(from: view)
+    func updateNSView(_ view: ControlPanelSurfaceReaderView, context: Context) {
+        view.update(
+            isFullScreen: isFullScreen,
+            isSidebarTransitioning: isSidebarTransitioning
+        )
+    }
+}
+
+private var controlPanelBackdropCornerRadiusObservationContext = 0
+
+@MainActor
+private final class ControlPanelSurfaceReaderView: NSView {
+    private weak var glassSurface: NSView?
+    private weak var sidebarBackdropView: NSView?
+    private weak var observedSplitView: NSSplitView?
+    private weak var observedBackdropCornerRadiusView: NSView?
+    private weak var observedWindow: NSWindow?
+    private var defaultBackdropEdgeInsets: NSEdgeInsets?
+    private var glassCornerRadiusObservation: NSKeyValueObservation?
+    private var glassFrameObservation: NSKeyValueObservation?
+    private var layerCornerRadiusObservations: [
+        ObjectIdentifier: NSKeyValueObservation
+    ] = [:]
+    private var cornerCorrectionTimer: Timer?
+    private var liveResizeCornerCorrectionTimer: Timer?
+    private var liveResizeStopWorkItem: DispatchWorkItem?
+    private var localMouseEventMonitor: Any?
+    private var isFullScreen = false
+
+    deinit {
+        cornerCorrectionTimer?.invalidate()
+        liveResizeCornerCorrectionTimer?.invalidate()
+        liveResizeStopWorkItem?.cancel()
+        glassCornerRadiusObservation?.invalidate()
+        glassFrameObservation?.invalidate()
+        layerCornerRadiusObservations.values.forEach { $0.invalidate() }
+        observedBackdropCornerRadiusView?.removeObserver(
+            self,
+            forKeyPath: "punchOutCornerRadius",
+            context: &controlPanelBackdropCornerRadiusObservationContext
+        )
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+        }
+        NotificationCenter.default.removeObserver(self)
     }
 
-    private func expandSidebarSurface(from view: NSView) {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeFullScreenTransitions()
+
+        if window?.styleMask.contains(.fullScreen) == true {
+            isFullScreen = true
+        }
+
+        updateCornerCorrectionTimer()
+        configureGlassSurface()
+        DispatchQueue.main.async { [weak self] in
+            self?.configureGlassSurface()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        configureGlassSurface()
+    }
+
+    func update(
+        isFullScreen: Bool,
+        isSidebarTransitioning: Bool
+    ) {
+        self.isFullScreen = isFullScreen
+        updateCornerCorrectionTimer()
+
+        if isSidebarTransitioning {
+            beginLiveSidebarResizeCornerCorrection()
+        } else {
+            configureGlassSurface()
+        }
+    }
+
+    private func observeFullScreenTransitions() {
+        guard observedWindow !== window else { return }
+        NotificationCenter.default.removeObserver(self)
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+            self.localMouseEventMonitor = nil
+        }
+        observedSplitView = nil
+        observedWindow = window
+        guard let window else { return }
+        observeSidebarDragEvents(in: window)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillEnterFullScreen(_:)),
+            name: NSWindow.willEnterFullScreenNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidEnterFullScreen(_:)),
+            name: NSWindow.didEnterFullScreenNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidExitFullScreen(_:)),
+            name: NSWindow.didExitFullScreenNotification,
+            object: window
+        )
+        for notificationName in [
+            NSWindow.didMoveNotification,
+            NSWindow.didResizeNotification,
+            NSWindow.willStartLiveResizeNotification,
+            NSWindow.didEndLiveResizeNotification,
+        ] {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowGeometryDidChange(_:)),
+                name: notificationName,
+                object: window
+            )
+        }
+    }
+
+    private func observeSidebarDragEvents(in window: NSWindow) {
+        localMouseEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDragged, .leftMouseUp]
+        ) { [weak self, weak window] event in
+            MainActor.assumeIsolated {
+                guard event.window === window else { return }
+                if event.type == .leftMouseDragged {
+                    self?.beginLiveSidebarResizeCornerCorrection()
+                } else {
+                    self?.scheduleEndLiveSidebarResizeCornerCorrection()
+                }
+            }
+            return event
+        }
+    }
+
+    @objc
+    private func windowWillEnterFullScreen(_ notification: Notification) {
+        isFullScreen = true
+        updateCornerCorrectionTimer()
+        configureGlassSurface()
+    }
+
+    @objc
+    private func windowDidEnterFullScreen(_ notification: Notification) {
+        isFullScreen = true
+
+        // AppKit reapplies its concentric radius while completing this event.
+        // Correct the live surface after its final full-screen layout pass.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.configureGlassSurface()
+        }
+    }
+
+    @objc
+    private func windowDidExitFullScreen(_ notification: Notification) {
+        isFullScreen = false
+        updateCornerCorrectionTimer()
+        DispatchQueue.main.async { [weak self] in
+            self?.configureGlassSurface()
+        }
+    }
+
+    @objc
+    private func windowGeometryDidChange(_ notification: Notification) {
+        configureGlassSurface(adjustsConstraints: false)
+        DispatchQueue.main.async { [weak self] in
+            self?.configureGlassSurface(adjustsConstraints: false)
+        }
+    }
+
+    @objc
+    private func splitViewDidResize(_ notification: Notification) {
+        beginLiveSidebarResizeCornerCorrection()
+    }
+
+    private func updateCornerCorrectionTimer() {
+        guard isFullScreen, window != nil else {
+            cornerCorrectionTimer?.invalidate()
+            cornerCorrectionTimer = nil
+            return
+        }
+        guard cornerCorrectionTimer == nil else { return }
+
+        let timer = Timer(
+            timeInterval: 0.25,
+            target: self,
+            selector: #selector(correctSidebarCorners(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(timer, forMode: .common)
+        cornerCorrectionTimer = timer
+    }
+
+    @objc
+    private func correctSidebarCorners(_ timer: Timer) {
+        guard isFullScreen else {
+            updateCornerCorrectionTimer()
+            return
+        }
+        configureGlassSurface()
+    }
+
+    private func configureGlassSurface(adjustsConstraints: Bool = true) {
         guard #available(macOS 26.0, *) else { return }
-        expandGlassSidebarSurface(from: view)
+        var ancestor = superview
+        var glassSurface: NSGlassEffectView?
+
+        while let current = ancestor {
+            if let glass = current as? NSGlassEffectView {
+                glassSurface = glass
+                break
+            }
+            ancestor = current.superview
+        }
+
+        guard let glassSurface, let container = glassSurface.superview else { return }
+        observeSidebarResizing(above: container)
+
+        if self.glassSurface !== glassSurface {
+            glassCornerRadiusObservation?.invalidate()
+            glassFrameObservation?.invalidate()
+            layerCornerRadiusObservations.values.forEach { $0.invalidate() }
+            layerCornerRadiusObservations.removeAll()
+            self.glassSurface = glassSurface
+            glassCornerRadiusObservation = glassSurface.observe(
+                \.cornerRadius,
+                options: [.new]
+            ) { surface, _ in
+                guard surface.cornerRadius != 0 else { return }
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    context.allowsImplicitAnimation = false
+                    surface.cornerRadius = 0
+                }
+            }
+            glassFrameObservation = glassSurface.observe(
+                \.frame,
+                options: [.new]
+            ) { [weak self] _, _ in
+                MainActor.assumeIsolated {
+                    self?.beginLiveSidebarResizeCornerCorrection()
+                }
+            }
+        }
+        setCornerRadiusToZero(on: glassSurface)
+
+        configureSidebarBackdrop(in: container, excluding: glassSurface)
+        configureFullSizeGlassLayers(in: glassSurface)
+
+        guard adjustsConstraints else { return }
+
+        var changedConstraint = false
+        for constraint in container.constraints {
+            let firstView = constraint.firstItem as? NSView
+            let secondView = constraint.secondItem as? NSView
+            let directlyPositionsSurface =
+                (firstView === glassSurface && secondView === container)
+                || (firstView === container && secondView === glassSurface)
+
+            guard directlyPositionsSurface else { continue }
+            let extendsPastBottomEdge =
+                isFullScreen
+                && constraint.firstAttribute == .bottom
+                && constraint.secondAttribute == .bottom
+            let extendsPastLeadingEdge =
+                isFullScreen
+                && (
+                    (
+                        constraint.firstAttribute == .leading
+                            && constraint.secondAttribute == .leading
+                    )
+                    || (
+                        constraint.firstAttribute == .left
+                            && constraint.secondAttribute == .left
+                    )
+                )
+            let targetConstant: CGFloat
+            if extendsPastBottomEdge {
+                targetConstant = firstView === glassSurface ? 2 : -2
+            } else if extendsPastLeadingEdge {
+                targetConstant = firstView === glassSurface ? -4 : 4
+            } else {
+                targetConstant = 0
+            }
+
+            if constraint.constant != targetConstant {
+                constraint.constant = targetConstant
+                changedConstraint = true
+            }
+        }
+
+        if changedConstraint {
+            container.needsUpdateConstraints = true
+            container.needsLayout = true
+        }
+    }
+
+    private func beginLiveSidebarResizeCornerCorrection() {
+        configureGlassSurface(adjustsConstraints: false)
+
+        if liveResizeCornerCorrectionTimer == nil {
+            let timer = Timer(
+                timeInterval: 1 / 120,
+                target: self,
+                selector: #selector(correctLiveSidebarResizeCorners(_:)),
+                userInfo: nil,
+                repeats: true
+            )
+            RunLoop.main.add(timer, forMode: .common)
+            liveResizeCornerCorrectionTimer = timer
+        }
+
+        scheduleEndLiveSidebarResizeCornerCorrection()
+    }
+
+    private func scheduleEndLiveSidebarResizeCornerCorrection() {
+        guard liveResizeCornerCorrectionTimer != nil else { return }
+        liveResizeStopWorkItem?.cancel()
+        let stopWorkItem = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.endLiveSidebarResizeCornerCorrection()
+            }
+        }
+        liveResizeStopWorkItem = stopWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + 0.35,
+            execute: stopWorkItem
+        )
+    }
+
+    @objc
+    private func correctLiveSidebarResizeCorners(_ timer: Timer) {
+        configureGlassSurface(adjustsConstraints: false)
+    }
+
+    private func endLiveSidebarResizeCornerCorrection() {
+        liveResizeCornerCorrectionTimer?.invalidate()
+        liveResizeCornerCorrectionTimer = nil
+        liveResizeStopWorkItem = nil
+        configureGlassSurface(adjustsConstraints: false)
+    }
+
+    private func observeSidebarResizing(above view: NSView) {
+        var ancestor: NSView? = view
+        while let current = ancestor, !(current is NSSplitView) {
+            ancestor = current.superview
+        }
+        guard let splitView = ancestor as? NSSplitView,
+              observedSplitView !== splitView else {
+            return
+        }
+
+        if let observedSplitView {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSSplitView.didResizeSubviewsNotification,
+                object: observedSplitView
+            )
+        }
+        observedSplitView = splitView
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(splitViewDidResize(_:)),
+            name: NSSplitView.didResizeSubviewsNotification,
+            object: splitView
+        )
+    }
+
+    private func startObservingBackdropCornerRadius(_ backdropView: NSView) {
+        let setter = NSSelectorFromString("setPunchOutCornerRadius:")
+        guard backdropView.responds(to: setter) else { return }
+
+        backdropView.addObserver(
+            self,
+            forKeyPath: "punchOutCornerRadius",
+            options: [.new],
+            context: &controlPanelBackdropCornerRadiusObservationContext
+        )
+        observedBackdropCornerRadiusView = backdropView
+    }
+
+    private func stopObservingBackdropCornerRadius() {
+        guard let observedBackdropCornerRadiusView else { return }
+        observedBackdropCornerRadiusView.removeObserver(
+            self,
+            forKeyPath: "punchOutCornerRadius",
+            context: &controlPanelBackdropCornerRadiusObservationContext
+        )
+        self.observedBackdropCornerRadiusView = nil
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        guard context == &controlPanelBackdropCornerRadiusObservationContext,
+              let backdropView = object as? NSView else {
+            super.observeValue(
+                forKeyPath: keyPath,
+                of: object,
+                change: change,
+                context: context
+            )
+            return
+        }
+
+        let cornerRadius =
+            (backdropView.value(forKey: "punchOutCornerRadius") as? NSNumber)?
+            .doubleValue ?? 0
+        if cornerRadius != 0 {
+            setBackdropCornerRadiusToZero(
+                on: backdropView,
+                key: "punchOutCornerRadius"
+            )
+        }
+    }
+
+    private func configureSidebarBackdrop(
+        in container: NSView,
+        excluding glassSurface: NSView
+    ) {
+        let cornerRadiusKey = "punchOutCornerRadius"
+        let edgeInsetsKey = "punchOutEdgeInsets"
+        let cornerRadiusSelector = NSSelectorFromString(cornerRadiusKey)
+        let edgeInsetsSelector = NSSelectorFromString(edgeInsetsKey)
+
+        var candidateViews = container.subviews
+        var backdropViews = [NSView]()
+        var index = 0
+
+        while index < candidateViews.count {
+            let candidate = candidateViews[index]
+            index += 1
+            candidateViews.append(contentsOf: candidate.subviews)
+
+            guard candidate !== glassSurface,
+                  !candidate.isDescendant(of: glassSurface),
+                  candidate.responds(to: cornerRadiusSelector),
+                  candidate.responds(to: edgeInsetsSelector) else {
+                continue
+            }
+            backdropViews.append(candidate)
+        }
+
+        guard let primaryBackdropView = backdropViews.first else { return }
+
+        if sidebarBackdropView !== primaryBackdropView {
+            stopObservingBackdropCornerRadius()
+            sidebarBackdropView = primaryBackdropView
+            defaultBackdropEdgeInsets =
+                (primaryBackdropView.value(forKey: edgeInsetsKey) as? NSValue)?
+                .edgeInsetsValue
+            startObservingBackdropCornerRadius(primaryBackdropView)
+        }
+
+        for backdropView in backdropViews {
+            setBackdropCornerRadiusToZero(
+                on: backdropView,
+                key: cornerRadiusKey
+            )
+
+            if let edgeInsets = isFullScreen
+                ? NSEdgeInsets(top: 0, left: -4, bottom: 2, right: 0)
+                : backdropView === primaryBackdropView
+                    ? defaultBackdropEdgeInsets
+                    : nil {
+                backdropView.setValue(
+                    NSValue(edgeInsets: edgeInsets),
+                    forKey: edgeInsetsKey
+                )
+            }
+        }
+    }
+
+    private func configureFullSizeGlassLayers(in glassSurface: NSGlassEffectView) {
+        guard let rootLayer = glassSurface.layer else { return }
+        let targetSize = glassSurface.bounds.size
+        guard targetSize.width > 0, targetSize.height > 0 else { return }
+
+        var layers = [rootLayer]
+        var activeLayerIdentifiers = Set<ObjectIdentifier>()
+        var index = 0
+
+        while index < layers.count {
+            let layer = layers[index]
+            index += 1
+            layers.append(contentsOf: layer.sublayers ?? [])
+
+            let fillsSurface =
+                abs(layer.bounds.width - targetSize.width) < 1
+                && abs(layer.bounds.height - targetSize.height) < 1
+            guard fillsSurface else { continue }
+
+            let identifier = ObjectIdentifier(layer)
+            activeLayerIdentifiers.insert(identifier)
+            if layerCornerRadiusObservations[identifier] == nil {
+                layerCornerRadiusObservations[identifier] = layer.observe(
+                    \.cornerRadius,
+                    options: [.new]
+                ) { observedLayer, _ in
+                    guard observedLayer.cornerRadius != 0 else { return }
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    observedLayer.cornerRadius = 0
+                    CATransaction.commit()
+                }
+            }
+
+            if layer.cornerRadius != 0 {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                layer.cornerRadius = 0
+                CATransaction.commit()
+                layer.setNeedsDisplay()
+            }
+        }
+
+        let staleLayerIdentifiers = layerCornerRadiusObservations.keys.filter {
+            !activeLayerIdentifiers.contains($0)
+        }
+        for identifier in staleLayerIdentifiers {
+            layerCornerRadiusObservations.removeValue(forKey: identifier)?
+                .invalidate()
+        }
     }
 
     @available(macOS 26.0, *)
-    private func expandGlassSidebarSurface(from view: NSView) {
-        DispatchQueue.main.async {
-            var ancestor = view.superview
-            var glassSurface: NSGlassEffectView?
+    private func setCornerRadiusToZero(on glassSurface: NSGlassEffectView) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            glassSurface.cornerRadius = 0
+        }
+    }
 
-            while let current = ancestor {
-                if let glass = current as? NSGlassEffectView {
-                    glassSurface = glass
-                    break
-                }
-                ancestor = current.superview
-            }
-
-            guard let glassSurface, let container = glassSurface.superview else { return }
-
-            for constraint in container.constraints {
-                let firstView = constraint.firstItem as? NSView
-                let secondView = constraint.secondItem as? NSView
-                let directlyPositionsSurface =
-                    (firstView === glassSurface && secondView === container)
-                    || (firstView === container && secondView === glassSurface)
-
-                guard directlyPositionsSurface else { continue }
-                constraint.constant = 0
-            }
-
-            container.needsUpdateConstraints = true
-            container.needsLayout = true
+    private func setBackdropCornerRadiusToZero(
+        on backdropView: NSView,
+        key: String
+    ) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            backdropView.setValue(
+                NSNumber(value: 0),
+                forKey: key
+            )
         }
     }
 }
@@ -950,6 +1656,8 @@ private struct ControlPanelWindowStateReader: NSViewRepresentable {
         }
 
         func update(window: NSWindow?) {
+            window?.titlebarSeparatorStyle = .none
+
             let newValue = window?.styleMask.contains(.fullScreen) == true
             guard isFullScreen.wrappedValue != newValue else { return }
             isFullScreen.wrappedValue = newValue
@@ -975,15 +1683,538 @@ private final class ControlPanelWindowStateReaderView: NSView {
     }
 }
 
+private struct ControlPanelCollapseButtons: NSViewRepresentable {
+    let showsModelConfigurationButton: Bool
+    let sidebarHelp: String
+    let modelConfigurationHelp: String
+    let onToggleSidebar: () -> Void
+    let onToggleModelConfiguration: () -> Void
+
+    func makeNSView(context: Context) -> ControlPanelCollapseButtonsView {
+        let view = ControlPanelCollapseButtonsView()
+        update(view)
+        return view
+    }
+
+    func updateNSView(_ view: ControlPanelCollapseButtonsView, context: Context) {
+        update(view)
+    }
+
+    static func dismantleNSView(
+        _ view: ControlPanelCollapseButtonsView,
+        coordinator: ()
+    ) {
+        view.detachButtons()
+    }
+
+    private func update(_ view: ControlPanelCollapseButtonsView) {
+        view.update(
+            showsModelConfigurationButton: showsModelConfigurationButton,
+            sidebarHelp: sidebarHelp,
+            modelConfigurationHelp: modelConfigurationHelp,
+            onToggleSidebar: onToggleSidebar,
+            onToggleModelConfiguration: onToggleModelConfiguration
+        )
+    }
+}
+
+@MainActor
+private final class ControlPanelCollapseButtonsView: NSView {
+    private let sidebarButton = ControlPanelCollapseButton(
+        systemImageName: "sidebar.left"
+    )
+    private let modelConfigurationButton = ControlPanelCollapseButton(
+        systemImageName: "sidebar.right"
+    )
+    private weak var attachedContentView: NSView?
+    private weak var actionWindow: NSWindow?
+    private var localMouseEventMonitor: Any?
+
+    deinit {
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        attachButtons()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.attachButtons()
+        }
+    }
+
+    func update(
+        showsModelConfigurationButton: Bool,
+        sidebarHelp: String,
+        modelConfigurationHelp: String,
+        onToggleSidebar: @escaping () -> Void,
+        onToggleModelConfiguration: @escaping () -> Void
+    ) {
+        sidebarButton.toolTip = sidebarHelp
+        sidebarButton.setAccessibilityLabel(sidebarHelp)
+        sidebarButton.onAction = onToggleSidebar
+
+        modelConfigurationButton.toolTip = modelConfigurationHelp
+        modelConfigurationButton.setAccessibilityLabel(modelConfigurationHelp)
+        modelConfigurationButton.onAction = onToggleModelConfiguration
+        modelConfigurationButton.isHidden = !showsModelConfigurationButton
+
+        attachButtons()
+    }
+
+    func detachButtons() {
+        stopMonitoringButtonEvents()
+        sidebarButton.removeFromSuperview()
+        modelConfigurationButton.removeFromSuperview()
+        attachedContentView = nil
+        actionWindow = nil
+    }
+
+    private func attachButtons() {
+        guard let window, let contentView = window.contentView else { return }
+
+        if actionWindow !== window {
+            stopMonitoringButtonEvents()
+            observeButtonEvents(in: window)
+            actionWindow = window
+        }
+
+        if attachedContentView !== contentView {
+            detachButtons()
+            observeButtonEvents(in: window)
+            actionWindow = window
+            for button in [sidebarButton, modelConfigurationButton] {
+                button.translatesAutoresizingMaskIntoConstraints = true
+                contentView.addSubview(button, positioned: .above, relativeTo: nil)
+            }
+            attachedContentView = contentView
+        }
+
+        positionButtons(in: contentView)
+        contentView.addSubview(sidebarButton, positioned: .above, relativeTo: nil)
+        contentView.addSubview(
+            modelConfigurationButton,
+            positioned: .above,
+            relativeTo: nil
+        )
+    }
+
+    private func positionButtons(in contentView: NSView) {
+        let buttonSize = ControlPanelLayout.collapseButtonSize
+        let topOrigin = ControlPanelLayout.windowControlsCenterY - (buttonSize / 2)
+        let originY = contentView.isFlipped
+            ? topOrigin
+            : contentView.bounds.height - topOrigin - buttonSize
+        let topAutoresizingMask: NSView.AutoresizingMask = contentView.isFlipped
+            ? .maxYMargin
+            : .minYMargin
+
+        sidebarButton.frame = NSRect(
+            x: ControlPanelLayout.sidebarButtonLeadingPadding,
+            y: originY,
+            width: buttonSize,
+            height: buttonSize
+        )
+        sidebarButton.autoresizingMask = [.maxXMargin, topAutoresizingMask]
+
+        modelConfigurationButton.frame = NSRect(
+            x: contentView.bounds.width
+                - ControlPanelLayout.modelConfigurationButtonTrailingPadding
+                - buttonSize,
+            y: originY,
+            width: buttonSize,
+            height: buttonSize
+        )
+        modelConfigurationButton.autoresizingMask = [.minXMargin, topAutoresizingMask]
+    }
+
+    private func observeButtonEvents(in window: NSWindow) {
+        localMouseEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown]
+        ) { [weak self, weak window] event in
+            var result: NSEvent? = event
+            MainActor.assumeIsolated {
+                guard let self, let window,
+                      event.window === window || window.isKeyWindow,
+                      let contentView = self.attachedContentView else {
+                    return
+                }
+
+                let location = contentView.convert(event.locationInWindow, from: nil)
+                let buttons = [
+                    self.sidebarButton,
+                    self.modelConfigurationButton,
+                ]
+                guard let button = buttons.first(where: {
+                    !$0.isHidden
+                        && $0.frame.insetBy(dx: -3, dy: -3).contains(location)
+                }) else {
+                    return
+                }
+
+                button.highlight(true)
+                DispatchQueue.main.async { [weak button] in
+                    button?.highlight(false)
+                }
+                button.performClick(nil)
+                result = nil
+            }
+            return result
+        }
+    }
+
+    private func stopMonitoringButtonEvents() {
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+            self.localMouseEventMonitor = nil
+        }
+    }
+}
+
+@MainActor
+private final class ControlPanelCollapseButton: NSButton {
+    var onAction: (() -> Void)?
+
+    init(systemImageName: String) {
+        super.init(frame: .zero)
+
+        let symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 15,
+            weight: .medium
+        )
+        image = NSImage(
+            systemSymbolName: systemImageName,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(symbolConfiguration)
+        image?.isTemplate = true
+        imagePosition = .imageOnly
+        imageScaling = .scaleNone
+        contentTintColor = .labelColor
+        isBordered = false
+        bezelStyle = .inline
+        focusRingType = .none
+        target = self
+        action = #selector(performButtonAction(_:))
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    @objc
+    private func performButtonAction(_ sender: Any?) {
+        onAction?()
+    }
+}
+
+private struct ControlPanelWindowControls: NSViewRepresentable {
+    let refreshTrigger: Int
+
+    func makeNSView(context: Context) -> ControlPanelWindowControlsView {
+        let view = ControlPanelWindowControlsView()
+        view.update(refreshTrigger: refreshTrigger)
+        return view
+    }
+
+    func updateNSView(_ view: ControlPanelWindowControlsView, context: Context) {
+        view.update(refreshTrigger: refreshTrigger)
+    }
+
+    static func dismantleNSView(_ view: ControlPanelWindowControlsView, coordinator: ()) {
+        view.detachControls()
+    }
+}
+
+@MainActor
+private final class ControlPanelWindowControlsView: NSView {
+    private let controlsOverlay = ControlPanelWindowControlsOverlayView()
+    private weak var attachedContentView: NSView?
+    private var controlsConstraints: [NSLayoutConstraint] = []
+    private var lastRefreshTrigger: Int?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        attachControls()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.attachControls()
+        }
+    }
+
+    func update(refreshTrigger: Int) {
+        controlsOverlay.isHidden = false
+        attachControls()
+
+        guard refreshTrigger != lastRefreshTrigger else { return }
+        lastRefreshTrigger = refreshTrigger
+
+        // AppKit resets the native buttons to a disabled, transparent state at
+        // the end of a full-screen transition. Reapply our custom placement
+        // after that final transition pass has completed.
+        DispatchQueue.main.async { [weak self] in
+            self?.attachControls()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.attachControls()
+        }
+    }
+
+    func detachControls() {
+        NSLayoutConstraint.deactivate(controlsConstraints)
+        controlsConstraints.removeAll()
+        controlsOverlay.detachWindow()
+        controlsOverlay.removeFromSuperview()
+        attachedContentView = nil
+    }
+
+    private func attachControls() {
+        guard let window, let contentView = window.contentView else { return }
+
+        if attachedContentView !== contentView {
+            detachControls()
+            controlsOverlay.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(controlsOverlay, positioned: .above, relativeTo: nil)
+            controlsConstraints = [
+                controlsOverlay.leadingAnchor.constraint(
+                    equalTo: contentView.leadingAnchor,
+                    constant: ControlPanelLayout.windowControlsLeadingPadding
+                ),
+                controlsOverlay.topAnchor.constraint(
+                    equalTo: contentView.topAnchor,
+                    constant: ControlPanelLayout.windowControlsTopPadding
+                ),
+                controlsOverlay.widthAnchor.constraint(
+                    equalToConstant: ControlPanelLayout.windowControlsWidth
+                ),
+                controlsOverlay.heightAnchor.constraint(
+                    equalToConstant: ControlPanelLayout.windowControlsHeight
+                ),
+            ]
+            NSLayoutConstraint.activate(controlsConstraints)
+            attachedContentView = contentView
+        }
+
+        contentView.addSubview(controlsOverlay, positioned: .above, relativeTo: nil)
+        controlsOverlay.installWindowButtons(from: window)
+    }
+}
+
+@MainActor
+private final class ControlPanelWindowControlsOverlayView: NSView {
+    private static let buttonTypes: [NSWindow.ButtonType] = [
+        .closeButton,
+        .miniaturizeButton,
+        .zoomButton,
+    ]
+    private static let buttonStyleMask: NSWindow.StyleMask = [
+        .titled,
+        .closable,
+        .miniaturizable,
+        .resizable,
+    ]
+
+    private let windowButtons: [NSButton]
+    private weak var actionWindow: NSWindow?
+    private var shouldMiniaturizeAfterExitingFullScreen = false
+    private var localMouseEventMonitor: Any?
+
+    override init(frame frameRect: NSRect) {
+        windowButtons = Self.buttonTypes.compactMap {
+            NSWindow.standardWindowButton($0, for: Self.buttonStyleMask)
+        }
+        super.init(frame: frameRect)
+
+        for button in windowButtons {
+            button.autoresizingMask = []
+            addSubview(button)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+        }
+    }
+
+    override func layout() {
+        super.layout()
+
+        let spacing: CGFloat = 6
+        var originX: CGFloat = 0
+
+        for button in windowButtons {
+            button.frame.origin = NSPoint(
+                x: originX,
+                y: (bounds.height - button.frame.height) / 2
+            )
+            originX += button.frame.width + spacing
+        }
+    }
+
+    func installWindowButtons(from window: NSWindow) {
+        for buttonType in Self.buttonTypes {
+            window.standardWindowButton(buttonType)?.isHidden = true
+        }
+
+        if actionWindow !== window {
+            stopMonitoringWindowButtonEvents()
+            observeWindowButtonEvents(in: window)
+        }
+        actionWindow = window
+        for (buttonType, button) in zip(Self.buttonTypes, windowButtons) {
+            button.isHidden = false
+            button.isEnabled = true
+            button.alphaValue = 1
+            button.target = self
+
+            switch buttonType {
+            case .closeButton:
+                button.action = #selector(closeWindow(_:))
+            case .miniaturizeButton:
+                button.action = #selector(miniaturizeWindow(_:))
+            case .zoomButton:
+                button.action = #selector(toggleFullScreen(_:))
+            default:
+                break
+            }
+        }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    func detachWindow() {
+        NotificationCenter.default.removeObserver(self)
+        shouldMiniaturizeAfterExitingFullScreen = false
+        stopMonitoringWindowButtonEvents()
+
+        if let actionWindow {
+            for buttonType in Self.buttonTypes {
+                actionWindow.standardWindowButton(buttonType)?.isHidden = false
+            }
+        }
+        actionWindow = nil
+    }
+
+    private func observeWindowButtonEvents(in window: NSWindow) {
+        localMouseEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown]
+        ) { [weak self, weak window] event in
+            var result: NSEvent? = event
+            MainActor.assumeIsolated {
+                guard let self, let window,
+                      event.window === window || window.isKeyWindow else {
+                    return
+                }
+                result = self.handleWindowButtonEvent(event)
+            }
+            return result
+        }
+    }
+
+    private func stopMonitoringWindowButtonEvents() {
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+            self.localMouseEventMonitor = nil
+        }
+    }
+
+    private func handleWindowButtonEvent(_ event: NSEvent) -> NSEvent? {
+        let location = convert(event.locationInWindow, from: nil)
+        guard let button = windowButtons.first(where: {
+            $0.frame.insetBy(dx: -3, dy: -3).contains(location)
+        }) else {
+            return event
+        }
+
+        button.highlight(true)
+        DispatchQueue.main.async { [weak button] in
+            button?.highlight(false)
+        }
+        performWindowAction(for: button)
+        return nil
+    }
+
+    private func performWindowAction(for button: NSButton) {
+        guard let index = windowButtons.firstIndex(where: { $0 === button }),
+              Self.buttonTypes.indices.contains(index) else {
+            return
+        }
+
+        switch Self.buttonTypes[index] {
+        case .closeButton:
+            closeWindow(button)
+        case .miniaturizeButton:
+            miniaturizeWindow(button)
+        case .zoomButton:
+            toggleFullScreen(button)
+        default:
+            break
+        }
+    }
+
+    @objc
+    private func closeWindow(_ sender: Any?) {
+        actionWindow?.close()
+    }
+
+    @objc
+    private func miniaturizeWindow(_ sender: Any?) {
+        guard let actionWindow else { return }
+
+        if actionWindow.styleMask.contains(.fullScreen) {
+            shouldMiniaturizeAfterExitingFullScreen = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(didExitFullScreen(_:)),
+                name: NSWindow.didExitFullScreenNotification,
+                object: actionWindow
+            )
+            actionWindow.toggleFullScreen(sender)
+        } else {
+            actionWindow.miniaturize(sender)
+        }
+    }
+
+    @objc
+    private func toggleFullScreen(_ sender: Any?) {
+        actionWindow?.toggleFullScreen(sender)
+    }
+
+    @objc
+    private func didExitFullScreen(_ notification: Notification) {
+        guard shouldMiniaturizeAfterExitingFullScreen,
+              let window = notification.object as? NSWindow,
+              window === actionWindow else {
+            return
+        }
+
+        shouldMiniaturizeAfterExitingFullScreen = false
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didExitFullScreenNotification,
+            object: window
+        )
+        window.miniaturize(nil)
+    }
+}
+
 private struct ControlPanelDetailSafeArea: ViewModifier {
     let isFullScreen: Bool
+    let extendsIntoTitlebar: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if isFullScreen {
-            content
-        } else {
+        if !isFullScreen || extendsIntoTitlebar {
             content.ignoresSafeArea(.container, edges: .top)
+        } else {
+            content
         }
     }
 }

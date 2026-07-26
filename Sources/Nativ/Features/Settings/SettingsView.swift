@@ -32,14 +32,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         }
     }
 
-    var preferredColorScheme: ColorScheme? {
+    var appKitAppearance: NSAppearance? {
         switch self {
         case .system:
             nil
         case .light:
-            .light
+            NSAppearance(named: .aqua)
         case .dark:
-            .dark
+            NSAppearance(named: .darkAqua)
         }
     }
 }
@@ -60,7 +60,7 @@ struct SettingsView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 26)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
     }
 
     private var pageHeader: some View {
@@ -119,7 +119,7 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
-                    .frame(width: 220)
+                    .frame(width: 220, alignment: .trailing)
                 }
 
                 Divider()

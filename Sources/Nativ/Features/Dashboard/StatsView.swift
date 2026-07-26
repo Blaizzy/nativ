@@ -120,22 +120,39 @@ private struct DashboardContentView: View, Equatable {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
                 pageHeader
-                filterBar
-                overviewCards
-                analyticsGrid
-                modelPerformanceSection
-                recentRequestsSection
+                    .padding(.horizontal, 22)
+                    .padding(.top, 20)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: 1500, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        filterBar
+                        overviewCards
+                        analyticsGrid
+                        modelPerformanceSection
+                        recentRequestsSection
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.top, 20)
+                    .padding(.bottom, 22)
+                    .frame(maxWidth: 1500, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 20)
-            .padding(.bottom, 22)
-            .frame(maxWidth: 1500, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(
+                width: geometry.size.width,
+                height: geometry.size.height,
+                alignment: .topLeading
+            )
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.nativMainContentBackground)
         .contentShape(Rectangle())
         .onTapGesture {
             isModelSearchFocused = false

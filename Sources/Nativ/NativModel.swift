@@ -86,6 +86,7 @@ final class NativModel: ObservableObject {
         configureServerCallbacks()
         isRunning = server.isRunning
         resolveHuggingFaceEnvironmentFromLoginShell()
+        migrateCustomHuggingFaceCredentialIfNeeded()
     }
 
     /// GUI apps inherit launchd's environment, which excludes exports from
@@ -148,6 +149,28 @@ final class NativModel: ObservableObject {
         restartServerForHuggingFaceCredentialChangeIfNeeded()
     }
 
+    func logInToHuggingFace(_ token: String) async throws {
+        guard let token = HuggingFaceAuthentication.normalizedToken(token) else {
+            throw HuggingFaceAuthenticationError.invalidResponse
+        }
+
+        let metadata = try await HuggingFaceAuthentication.tokenMetadata(for: token)
+        guard let tokenName = metadata.name else {
+            throw HuggingFaceAuthenticationError.invalidResponse
+        }
+        let credential = try HuggingFaceAuthentication.logIn(
+            token: token,
+            tokenName: tokenName
+        )
+        try? HuggingFaceTokenMetadataCache.save(metadata, for: token)
+
+        settings.huggingFaceToken = nil
+        if systemHuggingFaceCredential?.source != .environment {
+            systemHuggingFaceCredential = credential
+        }
+        restartServerForHuggingFaceCredentialChangeIfNeeded()
+    }
+
     func setServerAPIKey(_ token: String?) {
         let normalizedToken = ServerAPIAuthentication.normalizedToken(token)
         guard normalizedToken != settings.normalized().serverAPIKey else {
@@ -177,6 +200,18 @@ final class NativModel: ObservableObject {
             return
         }
         restartServer()
+    }
+
+    private func migrateCustomHuggingFaceCredentialIfNeeded() {
+        guard let token = HuggingFaceAuthentication.normalizedToken(
+            settings.huggingFaceToken
+        ) else {
+            return
+        }
+
+        Task { [weak self] in
+            try? await self?.logInToHuggingFace(token)
+        }
     }
 
     var metricsAreStale: Bool {

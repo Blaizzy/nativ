@@ -3,6 +3,12 @@ import Foundation
 import NativServerKit
 import SwiftUI
 
+private enum ModelConfigurationLayoutMetrics {
+    static let contentMinimumWidth: CGFloat = 420
+    static let contentMinimumWidthWithConfiguration: CGFloat = 360
+    static let configurationWidth: CGFloat = 320
+}
+
 struct ModelConfigurationLayout<Content: View>: View {
     @ObservedObject var model: NativModel
     @Binding var isConfigurationVisible: Bool
@@ -21,41 +27,32 @@ struct ModelConfigurationLayout<Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             content
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: isConfigurationVisible
+                        ? ModelConfigurationLayoutMetrics.contentMinimumWidthWithConfiguration
+                        : ModelConfigurationLayoutMetrics.contentMinimumWidth,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
+                .clipped()
 
             if isConfigurationVisible {
-                Divider()
-
                 ModelConfigurationView(
                     settings: $model.settings,
                     settingsRequireRestart: model.settingsRequireRestart,
                     onReset: model.resetSettings
                 )
-                .frame(width: 320)
+                .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
+                .ignoresSafeArea(.container, edges: .top)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .toolbar {
-            if #available(macOS 26.0, *) {
-                ToolbarSpacer(.flexible)
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    withAnimation(.snappy(duration: 0.2)) {
-                        isConfigurationVisible.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help(configurationVisibilityHelp)
-                .accessibilityLabel(configurationVisibilityHelp)
-            }
-        }
-    }
-
-    private var configurationVisibilityHelp: String {
-        isConfigurationVisible ? "Hide model configuration" : "Show model configuration"
     }
 }
 
@@ -87,7 +84,10 @@ struct ModelConfigurationView: View {
                 .padding(.vertical, 18)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+        .background {
+            Color(nsColor: .windowBackgroundColor)
+                .ignoresSafeArea(.container, edges: [.top, .bottom, .trailing])
+        }
         .task(id: modelConfigurationLookupID) {
             await loadModelConfiguration(for: modelConfigurationLookupID)
         }
@@ -121,8 +121,10 @@ struct ModelConfigurationView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
+        .padding(.leading, 16)
+        .padding(.trailing, 52)
+        .padding(.top, 13)
+        .padding(.bottom, 16)
     }
 
     private var modelContextSection: some View {
