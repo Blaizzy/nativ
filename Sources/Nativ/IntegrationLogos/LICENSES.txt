@@ -12,5 +12,6 @@ Qwen Code mark: https://github.com/QwenLM/qwen-code/blob/main/packages/chrome-ex
 OpenClaw mark: https://github.com/openclaw/openclaw/blob/main/apps/ios/Sources/Assets.xcassets/AppIcon.appiconset/258.png
 Zed mark: https://github.com/zed-industries/zed/blob/main/assets/images/zed_logo.svg
 Continue mark: https://github.com/continuedev/continue/blob/main/extensions/intellij/src/main/resources/META-INF/pluginIcon.svg
+Buzz mark: https://github.com/block/buzz/blob/main/desktop/public/buzz.svg
 
 All product names, logos, and trademarks remain the property of their respective owners.

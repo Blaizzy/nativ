@@ -17,7 +17,8 @@ final class IntegrationServicesTests: XCTestCase {
         .vscode,
         .cline,
         .cursor,
-        .jetbrains
+        .jetbrains,
+        .buzz
     ]
 
     private var temporaryRoot: URL!
@@ -383,6 +384,21 @@ final class IntegrationServicesTests: XCTestCase {
             launchCommand(for: .continueDev),
             "cd '/tmp/Nativ Project'\n'/tools/cn' '--config' '\(configurationURL.path)'"
         )
+    }
+
+    func testBuzzIsGuidedSetupWithoutManagedConfiguration() throws {
+        XCTAssertTrue(IntegrationTool.buzz.isGuidedSetup)
+        XCTAssertNotNil(IntegrationTool.buzz.guidedSetupCaveat)
+
+        let steps = IntegrationTool.buzz.guidedSetupSteps.joined(separator: "\n")
+        XCTAssertFalse(steps.isEmpty)
+        XCTAssertTrue(steps.contains("BUZZ_AGENT_PROVIDER"))
+        XCTAssertTrue(steps.contains("OPENAI_COMPAT_BASE_URL"))
+        XCTAssertTrue(steps.contains("OPENAI_COMPAT_MODEL"))
+
+        try configure(.buzz)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.configurationURL(for: .buzz).path))
+        XCTAssertEqual(launchCommand(for: .buzz), "cd '/tmp/Nativ Project'\n'/tools/buzz'")
     }
 
     private func configure(_ tool: IntegrationTool) throws {
