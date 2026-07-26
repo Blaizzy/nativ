@@ -1501,13 +1501,6 @@ private struct ControlPanelWindowStateReader: NSViewRepresentable {
 
         func update(window: NSWindow?) {
             window?.titlebarSeparatorStyle = .none
-            for buttonType in [
-                NSWindow.ButtonType.closeButton,
-                .miniaturizeButton,
-                .zoomButton,
-            ] {
-                window?.standardWindowButton(buttonType)?.isHidden = false
-            }
 
             let newValue = window?.styleMask.contains(.fullScreen) == true
             guard isFullScreen.wrappedValue != newValue else { return }
@@ -1589,6 +1582,7 @@ private final class ControlPanelWindowControlsView: NSView {
     func detachControls() {
         NSLayoutConstraint.deactivate(controlsConstraints)
         controlsConstraints.removeAll()
+        controlsOverlay.detachWindow()
         controlsOverlay.removeFromSuperview()
         attachedContentView = nil
     }
@@ -1602,7 +1596,7 @@ private final class ControlPanelWindowControlsView: NSView {
             contentView.addSubview(controlsOverlay, positioned: .above, relativeTo: nil)
             controlsConstraints = [
                 controlsOverlay.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 19),
-                controlsOverlay.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+                controlsOverlay.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 9),
                 controlsOverlay.widthAnchor.constraint(equalToConstant: 64),
                 controlsOverlay.heightAnchor.constraint(equalToConstant: 28),
             ]
@@ -1610,19 +1604,52 @@ private final class ControlPanelWindowControlsView: NSView {
             attachedContentView = contentView
         }
 
+        contentView.addSubview(controlsOverlay, positioned: .above, relativeTo: nil)
         controlsOverlay.installWindowButtons(from: window)
     }
 }
 
 @MainActor
 private final class ControlPanelWindowControlsOverlayView: NSView {
-    private let buttonTypes: [NSWindow.ButtonType] = [
+    private static let buttonTypes: [NSWindow.ButtonType] = [
         .closeButton,
         .miniaturizeButton,
         .zoomButton,
     ]
-    private var windowButtons: [NSButton] = []
+    private static let buttonStyleMask: NSWindow.StyleMask = [
+        .titled,
+        .closable,
+        .miniaturizable,
+        .resizable,
+    ]
+
+    private let windowButtons: [NSButton]
     private weak var actionWindow: NSWindow?
+    private var shouldMiniaturizeAfterExitingFullScreen = false
+    private var localMouseEventMonitor: Any?
+
+    override init(frame frameRect: NSRect) {
+        windowButtons = Self.buttonTypes.compactMap {
+            NSWindow.standardWindowButton($0, for: Self.buttonStyleMask)
+        }
+        super.init(frame: frameRect)
+
+        for button in windowButtons {
+            button.autoresizingMask = []
+            addSubview(button)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+        }
+    }
 
     override func layout() {
         super.layout()
@@ -1640,24 +1667,19 @@ private final class ControlPanelWindowControlsOverlayView: NSView {
     }
 
     func installWindowButtons(from window: NSWindow) {
-        let resolvedButtons = buttonTypes.compactMap {
-            window.standardWindowButton($0)
+        for buttonType in Self.buttonTypes {
+            window.standardWindowButton(buttonType)?.isHidden = true
         }
-        guard resolvedButtons.count == buttonTypes.count else { return }
 
+        if actionWindow !== window {
+            stopMonitoringWindowButtonEvents()
+            observeWindowButtonEvents(in: window)
+        }
         actionWindow = window
-        windowButtons = resolvedButtons
-        for (buttonType, button) in zip(buttonTypes, windowButtons) {
-            if button.superview !== self {
-                button.removeFromSuperview()
-                button.autoresizingMask = []
-                addSubview(button)
-            }
-
+        for (buttonType, button) in zip(Self.buttonTypes, windowButtons) {
             button.isHidden = false
             button.isEnabled = true
             button.alphaValue = 1
-            button.layer?.opacity = 1
             button.target = self
 
             switch buttonType {
@@ -1675,19 +1697,119 @@ private final class ControlPanelWindowControlsOverlayView: NSView {
         layoutSubtreeIfNeeded()
     }
 
+    func detachWindow() {
+        NotificationCenter.default.removeObserver(self)
+        shouldMiniaturizeAfterExitingFullScreen = false
+        stopMonitoringWindowButtonEvents()
+
+        if let actionWindow {
+            for buttonType in Self.buttonTypes {
+                actionWindow.standardWindowButton(buttonType)?.isHidden = false
+            }
+        }
+        actionWindow = nil
+    }
+
+    private func observeWindowButtonEvents(in window: NSWindow) {
+        localMouseEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown]
+        ) { [weak self, weak window] event in
+            var result: NSEvent? = event
+            MainActor.assumeIsolated {
+                guard let self, let window,
+                      event.window === window || window.isKeyWindow else {
+                    return
+                }
+                result = self.handleWindowButtonEvent(event)
+            }
+            return result
+        }
+    }
+
+    private func stopMonitoringWindowButtonEvents() {
+        if let localMouseEventMonitor {
+            NSEvent.removeMonitor(localMouseEventMonitor)
+            self.localMouseEventMonitor = nil
+        }
+    }
+
+    private func handleWindowButtonEvent(_ event: NSEvent) -> NSEvent? {
+        let location = convert(event.locationInWindow, from: nil)
+        guard let button = windowButtons.first(where: {
+            $0.frame.insetBy(dx: -3, dy: -3).contains(location)
+        }) else {
+            return event
+        }
+
+        button.highlight(true)
+        DispatchQueue.main.async { [weak button] in
+            button?.highlight(false)
+        }
+        performWindowAction(for: button)
+        return nil
+    }
+
+    private func performWindowAction(for button: NSButton) {
+        guard let index = windowButtons.firstIndex(where: { $0 === button }),
+              Self.buttonTypes.indices.contains(index) else {
+            return
+        }
+
+        switch Self.buttonTypes[index] {
+        case .closeButton:
+            closeWindow(button)
+        case .miniaturizeButton:
+            miniaturizeWindow(button)
+        case .zoomButton:
+            toggleFullScreen(button)
+        default:
+            break
+        }
+    }
+
     @objc
     private func closeWindow(_ sender: Any?) {
-        actionWindow?.performClose(sender)
+        actionWindow?.close()
     }
 
     @objc
     private func miniaturizeWindow(_ sender: Any?) {
-        actionWindow?.performMiniaturize(sender)
+        guard let actionWindow else { return }
+
+        if actionWindow.styleMask.contains(.fullScreen) {
+            shouldMiniaturizeAfterExitingFullScreen = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(didExitFullScreen(_:)),
+                name: NSWindow.didExitFullScreenNotification,
+                object: actionWindow
+            )
+            actionWindow.toggleFullScreen(sender)
+        } else {
+            actionWindow.miniaturize(sender)
+        }
     }
 
     @objc
     private func toggleFullScreen(_ sender: Any?) {
         actionWindow?.toggleFullScreen(sender)
+    }
+
+    @objc
+    private func didExitFullScreen(_ notification: Notification) {
+        guard shouldMiniaturizeAfterExitingFullScreen,
+              let window = notification.object as? NSWindow,
+              window === actionWindow else {
+            return
+        }
+
+        shouldMiniaturizeAfterExitingFullScreen = false
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didExitFullScreenNotification,
+            object: window
+        )
+        window.miniaturize(nil)
     }
 }
 
