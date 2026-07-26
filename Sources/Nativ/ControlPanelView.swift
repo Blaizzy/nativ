@@ -114,9 +114,8 @@ extension Color {
     )
 }
 
-/// A small pulsing download arrow shown next to the Models sidebar row while a model
-/// is downloading. When concurrent downloads are supported this can show the number of
-/// models still downloading beside the arrow.
+/// A small pulsing download arrow shown at the trailing edge of the Models sidebar row
+/// while a model is downloading.
 private struct ModelsDownloadArrow: View {
     @State private var pulse = false
 
@@ -438,17 +437,20 @@ struct ControlPanelView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Label(tab.rawValue, systemImage: tab.systemImage)
-                        if tab == .models, downloads.downloadingModelID != nil {
-                            ModelsDownloadArrow()
-                        }
                         Spacer(minLength: 0)
-                        if tab == .models,
-                           model.isModelLoading,
-                           let percentage = model.modelLoadingPercentageText {
-                            Text(percentage)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 34, alignment: .trailing)
+                        if tab == .models {
+                            HStack(spacing: 6) {
+                                if model.isModelLoading,
+                                   let percentage = model.modelLoadingPercentageText {
+                                    Text(percentage)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 34, alignment: .trailing)
+                                }
+                                if downloads.downloadingModelID != nil {
+                                    ModelsDownloadArrow()
+                                }
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
