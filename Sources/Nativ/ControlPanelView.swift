@@ -83,7 +83,8 @@ private enum ControlPanelLayout {
     static let sidebarIdealWidth: CGFloat = 260
     static let sidebarMaximumWidth: CGFloat = 320
     static let collapsedSidebarTitleClearance: CGFloat = 56
-    static let sidebarButtonTopOffset: CGFloat = -60
+    static let sidebarButtonTopOffset: CGFloat = -56
+    static let modelConfigurationButtonTopOffset: CGFloat = -56
     static let sidebarButtonLeadingPadding: CGFloat = 88
     static let coordinateSpaceName = "ControlPanelLayout"
 }
@@ -200,7 +201,7 @@ struct ControlPanelView: View {
             if showsModelConfigurationToggle {
                 modelConfigurationVisibilityButton
                     .padding(12)
-                    .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
+                    .offset(y: ControlPanelLayout.modelConfigurationButtonTopOffset)
             }
         }
         .overlay(alignment: .top) {
