@@ -163,10 +163,7 @@ struct ModelsView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 pageTitle
-                HStack {
-                    Spacer()
-                    sectionPicker
-                }
+                sectionPicker
             }
         }
         .padding(.horizontal, 22)
@@ -573,7 +570,7 @@ struct ModelsView: View {
         }
         .labelsHidden()
         .pickerStyle(.segmented)
-        .frame(width: 230)
+        .frame(width: 230, alignment: .leading)
     }
 
     private var typeFilterPicker: some View {
