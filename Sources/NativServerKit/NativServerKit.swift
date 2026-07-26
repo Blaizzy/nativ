@@ -176,8 +176,20 @@ public enum Nativ {
         let process = Process()
         process.executableURL = try executableURL()
         process.arguments = arguments
-        var processEnvironment = ProcessInfo.processInfo.environment
-        processEnvironment.merge(environment) { _, newValue in newValue }
+        process.environment = makeProcessEnvironment(overrides: environment)
+        return process
+    }
+
+    static func makeProcessEnvironment(
+        inherited: [String: String] = ProcessInfo.processInfo.environment,
+        overrides: [String: String] = [:]
+    ) -> [String: String] {
+        var processEnvironment = inherited
+        processEnvironment.merge(overrides) { _, newValue in newValue }
+        // The raw server key is handed to the child once over stdin. Remove
+        // both inherited and caller-provided copies of mlx-vlm's legacy
+        // environment credential so it cannot remain in the child process.
+        processEnvironment.removeValue(forKey: "MLX_VLM_SERVER_API_KEY")
         // Xcode enables Metal API validation for the app process and exports
         // these variables to children. The inference server creates and
         // releases many Metal buffers during chunked prefill; running that
@@ -195,8 +207,7 @@ public enum Nativ {
         }
         processEnvironment["PYTHONNOUSERSITE"] = "1"
         processEnvironment["PYTHONUNBUFFERED"] = "1"
-        process.environment = processEnvironment
-        return process
+        return processEnvironment
     }
 
     public static func run(arguments: [String], timeout: TimeInterval = 30) throws -> String {

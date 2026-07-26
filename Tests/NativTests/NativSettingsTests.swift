@@ -112,6 +112,26 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertTrue(settings.serverAPIKeyStandardInput.isEmpty)
     }
 
+    func testServerProcessRemovesInheritedAndOverriddenLegacyAPIKey() {
+        let environment = Nativ.makeProcessEnvironment(
+            inherited: [
+                "MLX_VLM_SERVER_API_KEY": "inherited_secret",
+                "PATH": "/usr/bin"
+            ],
+            overrides: [
+                "MLX_VLM_SERVER_API_KEY": "override_secret",
+                ServerAPIAuthentication.standardInputEnvironmentVariableName: "1"
+            ]
+        )
+
+        XCTAssertNil(environment["MLX_VLM_SERVER_API_KEY"])
+        XCTAssertEqual(environment["PATH"], "/usr/bin")
+        XCTAssertEqual(
+            environment[ServerAPIAuthentication.standardInputEnvironmentVariableName],
+            "1"
+        )
+    }
+
     func testGeneratedServerAPITokenHasNativPrefix() {
         let token = ServerAPIAuthentication.generateToken()
 
