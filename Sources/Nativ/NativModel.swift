@@ -326,7 +326,7 @@ final class NativModel: ObservableObject {
         } catch {
             appendLog(
                 "\nCouldn’t synchronize the server credential database; "
-                    + "starting with the process verifier instead: \(error)\n"
+                    + "starting with the Keychain credential instead: \(error)\n"
             )
         }
         do {
@@ -337,7 +337,8 @@ final class NativModel: ObservableObject {
             }
             try server.start(
                 arguments: settings.launchArguments,
-                environment: launchEnvironment
+                environment: launchEnvironment,
+                standardInput: settings.serverAPIKeyStandardInput
             )
             isRunning = true
             settingsAppliedAtServerStart = settings.normalized()

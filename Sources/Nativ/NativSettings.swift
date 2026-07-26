@@ -279,7 +279,7 @@ struct ServerAPITokenInfo: Equatable, Sendable {
 }
 
 enum ServerAPIAuthentication {
-    static let verifierEnvironmentVariableName = "MLX_PLATFORM_SERVER_API_KEY_SHA256"
+    static let standardInputEnvironmentVariableName = "MLX_PLATFORM_SERVER_API_KEY_STDIN"
 
     static func normalizedToken(_ token: String?) -> String? {
         guard let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -880,12 +880,11 @@ struct NativSettings: Codable, Equatable {
     var launchEnvironment: [String: String] {
         let settings = normalized()
         var environment = [
-            "HF_HUB_CACHE": settings.expandedModelSearchPath
+            "HF_HUB_CACHE": settings.expandedModelSearchPath,
+            ServerAPIAuthentication.standardInputEnvironmentVariableName: "1"
         ]
 
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
-        environment[ServerAPIAuthentication.verifierEnvironmentVariableName] = settings.serverAPIKey
-            .map(ServerAPICredentialDatabase.verifier(for:)) ?? ""
         if let huggingFaceToken = settings.huggingFaceToken {
             environment[HuggingFaceAuthentication.environmentVariableName] = huggingFaceToken
         }
@@ -894,6 +893,10 @@ struct NativSettings: Codable, Equatable {
             environment["APC_BLOCK_SIZE"] = "\(settings.prefixCacheBlockSize)"
         }
         return environment
+    }
+
+    var serverAPIKeyStandardInput: Data {
+        Data((normalized().serverAPIKey ?? "").utf8)
     }
 
     var launchArguments: [String] {

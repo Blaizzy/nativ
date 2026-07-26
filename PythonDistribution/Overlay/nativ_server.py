@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import atexit
-import hashlib
 import importlib
 import json
 import logging
 import os
-import secrets
 import sqlite3
+import sys
 import time
 import uuid
 from contextvars import ContextVar
@@ -37,7 +36,7 @@ TRACKED_PATHS = {
     "/v1/responses",
 }
 METRICS_PATHS = {"/metrics", "/v1/metrics"}
-SERVER_API_KEY_SHA256_ENV = "MLX_PLATFORM_SERVER_API_KEY_SHA256"
+SERVER_API_KEY_STDIN_ENV = "MLX_PLATFORM_SERVER_API_KEY_STDIN"
 MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
 MODEL_LOAD_EVAL_BATCH_BYTES = 64 * 1024 * 1024
 
@@ -348,20 +347,6 @@ class AnalyticsStore:
             """
         )
 
-    def server_api_key_sha256(self) -> str | None:
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT api_key_sha256
-                FROM server_credentials
-                WHERE id = 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        verifier = str(row[0]).strip().lower()
-        return verifier if verifier else None
-
     def _start_session(self) -> None:
         started_at = time.time()
         with self._lock:
@@ -561,47 +546,25 @@ class AnalyticsStore:
 ANALYTICS_STORE = AnalyticsStore(analytics_db_path())
 
 
-def request_has_valid_api_key(request: Request, expected_sha256: str) -> bool:
-    authorization = request.headers.get("Authorization", "")
-    scheme, separator, token = authorization.partition(" ")
-    if not separator or scheme.lower() != "bearer" or not token:
-        return False
-
-    supplied_sha256 = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return secrets.compare_digest(supplied_sha256, expected_sha256)
+def read_server_api_key_from_stdin() -> str | None:
+    if os.environ.get(SERVER_API_KEY_STDIN_ENV) != "1":
+        return None
+    token = sys.stdin.buffer.read().decode("utf-8").strip()
+    return token if token else None
 
 
-def expected_server_api_key_sha256() -> str | None:
-    if SERVER_API_KEY_SHA256_ENV in os.environ:
-        verifier = os.environ[SERVER_API_KEY_SHA256_ENV].strip().lower()
-        if not verifier:
-            return None
-        if len(verifier) == 64 and all(character in "0123456789abcdef" for character in verifier):
-            return verifier
-        logging.error("Rejecting API requests because %s is malformed", SERVER_API_KEY_SHA256_ENV)
-        return "invalid"
-
-    return ANALYTICS_STORE.server_api_key_sha256()
-
-
-def require_server_api_key(request: Request) -> None:
-    expected_sha256 = expected_server_api_key_sha256()
-    if expected_sha256 is None or request_has_valid_api_key(request, expected_sha256):
+def install_server_api_key_source() -> None:
+    if getattr(base.app.state, "nativ_server_api_key_source_installed", False):
         return
-    raise HTTPException(
-        status_code=401,
-        detail="Invalid API key",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-def install_server_api_key_verifier() -> None:
-    if getattr(base.app.state, "nativ_server_api_key_verifier_installed", False):
+    base.app.state.nativ_server_api_key_source_installed = True
+    if SERVER_API_KEY_STDIN_ENV not in os.environ:
         return
-    base.app.state.nativ_server_api_key_verifier_installed = True
-    # Preserve mlx-vlm's endpoint-level authentication boundary while replacing
-    # its plaintext environment lookup with Nativ's hash-backed verifier.
-    base_app._require_management_api_key = require_server_api_key
+
+    server_api_key = read_server_api_key_from_stdin()
+    # Keep mlx-vlm's authentication guard as the only enforcement path. Its
+    # current management routes and upcoming inference-router dependency both
+    # resolve this key source when handling a request.
+    base_app._server_api_key = lambda: server_api_key
 
 
 class MetricsTracker:
@@ -1347,7 +1310,7 @@ def install_metrics_overlay() -> None:
 
 
 def main() -> None:
-    install_server_api_key_verifier()
+    install_server_api_key_source()
     install_metrics_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
@@ -1364,7 +1327,7 @@ def main() -> None:
 
 
 install_model_load_progress()
-install_server_api_key_verifier()
+install_server_api_key_source()
 install_metrics_overlay()
 
 

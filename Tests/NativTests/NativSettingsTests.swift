@@ -87,8 +87,14 @@ final class NativSettingsTests: XCTestCase {
         )
         XCTAssertNil(normalized.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
         XCTAssertEqual(
-            normalized.launchEnvironment[ServerAPIAuthentication.verifierEnvironmentVariableName],
-            ServerAPICredentialDatabase.verifier(for: "nativ_1234567890abcdef")
+            normalized.launchEnvironment[
+                ServerAPIAuthentication.standardInputEnvironmentVariableName
+            ],
+            "1"
+        )
+        XCTAssertEqual(
+            String(data: normalized.serverAPIKeyStandardInput, encoding: .utf8),
+            "nativ_1234567890abcdef"
         )
     }
 
@@ -98,9 +104,12 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(settings.serverAPIKey)
         XCTAssertNil(settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
         XCTAssertEqual(
-            settings.launchEnvironment[ServerAPIAuthentication.verifierEnvironmentVariableName],
-            ""
+            settings.launchEnvironment[
+                ServerAPIAuthentication.standardInputEnvironmentVariableName
+            ],
+            "1"
         )
+        XCTAssertTrue(settings.serverAPIKeyStandardInput.isEmpty)
     }
 
     func testGeneratedServerAPITokenHasNativPrefix() {
@@ -149,7 +158,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(try database.storedVerifier())
     }
 
-    func testServerLaunchVerifierSurvivesDatabaseSynchronizationFailure() throws {
+    func testServerLaunchCredentialSurvivesDatabaseSynchronizationFailure() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "NativServerAPICredentialFailureTests-\(UUID().uuidString)",
@@ -166,8 +175,8 @@ final class NativSettingsTests: XCTestCase {
             try settings.synchronizeServerAPICredential(databaseURL: directory)
         )
         XCTAssertEqual(
-            settings.launchEnvironment[ServerAPIAuthentication.verifierEnvironmentVariableName],
-            ServerAPICredentialDatabase.verifier(for: "nativ_available_at_launch")
+            String(data: settings.serverAPIKeyStandardInput, encoding: .utf8),
+            "nativ_available_at_launch"
         )
     }
 

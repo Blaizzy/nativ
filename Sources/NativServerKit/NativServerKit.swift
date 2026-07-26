@@ -670,7 +670,8 @@ public final class NativProcessController {
     @discardableResult
     public func start(
         arguments: [String] = [],
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        standardInput: Data? = nil
     ) throws -> Process {
         try lock.withLock {
             if process?.isRunning == true {
@@ -680,8 +681,12 @@ public final class NativProcessController {
             let process = try Nativ.makeProcess(arguments: arguments, environment: environment)
             let outputPipe = Pipe()
             let errorPipe = Pipe()
+            let inputPipe = standardInput.map { _ in Pipe() }
             process.standardOutput = outputPipe
             process.standardError = errorPipe
+            if let inputPipe {
+                process.standardInput = inputPipe
+            }
 
             self.outputPipe = outputPipe
             self.errorPipe = errorPipe
@@ -700,7 +705,16 @@ public final class NativProcessController {
 
             do {
                 try process.run()
+                if let standardInput, let inputPipe {
+                    inputPipe.fileHandleForWriting.write(standardInput)
+                    try inputPipe.fileHandleForWriting.close()
+                }
             } catch {
+                if process.isRunning {
+                    process.terminate()
+                }
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                errorPipe.fileHandleForReading.readabilityHandler = nil
                 self.process = nil
                 self.outputPipe = nil
                 self.errorPipe = nil
