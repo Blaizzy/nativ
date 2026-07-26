@@ -520,7 +520,6 @@ private struct WelcomeView: View {
             downloadedRecommendedModelID = hubModel.id
             selectedModelID = hubModel.id
             modelLibrary.scan(path: model.settings.modelSearchPath)
-            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
         }
     }
 }

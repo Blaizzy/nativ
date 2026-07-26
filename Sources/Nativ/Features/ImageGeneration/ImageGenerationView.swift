@@ -58,6 +58,7 @@ struct ImageGenerationView: View {
                             turn: turn,
                             activeReferenceID: viewModel.activeReference?.id,
                             isGenerating: viewModel.isGenerating,
+                            progressText: viewModel.statusText,
                             onUseOutput: viewModel.useAsReference,
                             onUseInput: viewModel.useAsReference,
                             onSave: viewModel.save
@@ -196,6 +197,14 @@ private struct ImageGenerationComposer: View {
                 additionalPaths: model.settings.normalized().additionalModelSearchPaths
             )
         }
+        .onChange(of: localLibrary.models) { _, models in
+            viewModel.applyDefaultModel(
+                model.settings.normalized().imageGenerationModelID,
+                installedImageModelIDs: models
+                    .filter { $0.capabilities.contains(.imageGeneration) }
+                    .map(\.repoID)
+            )
+        }
         .onDisappear {
             localLibrary.cancel()
         }
@@ -331,7 +340,10 @@ private struct ImageGenerationComposer: View {
         guard canSubmit else {
             return
         }
-        viewModel.run(using: model)
+        viewModel.run(
+            using: model,
+            modelIsInstalled: imageModels.contains { $0.repoID == viewModel.modelID }
+        )
     }
 
     private func selectImageModel(_ localModel: LocalModel) {
@@ -432,6 +444,7 @@ private struct ImageGenerationTurnView: View {
     let turn: ImageGenerationTurn
     let activeReferenceID: UUID?
     let isGenerating: Bool
+    let progressText: String?
     let onUseOutput: (GeneratedImage) -> Void
     let onUseInput: (ChatImageAttachment) -> Void
     let onSave: (GeneratedImage) -> Void
@@ -487,7 +500,7 @@ private struct ImageGenerationTurnView: View {
         case .inProgress:
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text(turn.isEdit ? "Editing image…" : "Generating image…")
+                Text(progressText ?? (turn.isEdit ? "Editing image…" : "Generating image…"))
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 12)
