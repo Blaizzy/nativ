@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ from typing import Any
 
 import mlx.core as mx
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
@@ -27,6 +28,7 @@ import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
 
 
+base_app = importlib.import_module("mlx_vlm.server.app")
 BACKEND_NAME = f"mlx_vlm/{base.__version__}"
 TRACKED_PATHS = {
     "/chat/completions",
@@ -35,12 +37,6 @@ TRACKED_PATHS = {
     "/v1/responses",
 }
 METRICS_PATHS = {"/metrics", "/v1/metrics"}
-PUBLIC_API_PATHS = {
-    "/docs",
-    "/docs/oauth2-redirect",
-    "/openapi.json",
-    "/redoc",
-}
 SERVER_API_KEY_SHA256_ENV = "MLX_PLATFORM_SERVER_API_KEY_SHA256"
 MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
 MODEL_LOAD_EVAL_BATCH_BYTES = 64 * 1024 * 1024
@@ -588,27 +584,24 @@ def expected_server_api_key_sha256() -> str | None:
     return ANALYTICS_STORE.server_api_key_sha256()
 
 
-def install_server_api_key_authentication() -> None:
-    if getattr(base.app.state, "nativ_server_api_key_authentication_installed", False):
+def require_server_api_key(request: Request) -> None:
+    expected_sha256 = expected_server_api_key_sha256()
+    if expected_sha256 is None or request_has_valid_api_key(request, expected_sha256):
         return
-    base.app.state.nativ_server_api_key_authentication_installed = True
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
-    @base.app.middleware("http")
-    async def database_api_key_middleware(request: Request, call_next):
-        if request.method == "OPTIONS" or request.url.path in PUBLIC_API_PATHS:
-            return await call_next(request)
 
-        expected_sha256 = expected_server_api_key_sha256()
-        if expected_sha256 is None:
-            return await call_next(request)
-        if request_has_valid_api_key(request, expected_sha256):
-            return await call_next(request)
-
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Invalid API key"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+def install_server_api_key_verifier() -> None:
+    if getattr(base.app.state, "nativ_server_api_key_verifier_installed", False):
+        return
+    base.app.state.nativ_server_api_key_verifier_installed = True
+    # Preserve mlx-vlm's endpoint-level authentication boundary while replacing
+    # its plaintext environment lookup with Nativ's hash-backed verifier.
+    base_app._require_management_api_key = require_server_api_key
 
 
 class MetricsTracker:
@@ -1354,7 +1347,7 @@ def install_metrics_overlay() -> None:
 
 
 def main() -> None:
-    install_server_api_key_authentication()
+    install_server_api_key_verifier()
     install_metrics_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
@@ -1371,7 +1364,7 @@ def main() -> None:
 
 
 install_model_load_progress()
-install_server_api_key_authentication()
+install_server_api_key_verifier()
 install_metrics_overlay()
 
 
