@@ -622,7 +622,12 @@ struct ControlPanelView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .modifier(ControlPanelDetailSafeArea(isFullScreen: isFullScreen))
+        .modifier(
+            ControlPanelDetailSafeArea(
+                isFullScreen: isFullScreen,
+                extendsIntoTitlebar: detailExtendsIntoTitlebar
+            )
+        )
         .alert(
             "Models May Not Fit in Memory",
             isPresented: Binding(
@@ -690,6 +695,15 @@ struct ControlPanelView: View {
         let expandedLeadingEdge = max(expandedDetailLeadingEdge, 1)
         let visibleFraction = min(max(detailLeadingEdge / expandedLeadingEdge, 0), 1)
         return ControlPanelLayout.collapsedSidebarTitleClearance * (1 - visibleFraction)
+    }
+
+    private var detailExtendsIntoTitlebar: Bool {
+        switch selectedTab {
+        case .dashboard, .system, .models, .integrations, .developer:
+            true
+        case .chat, .imageGeneration, .settings:
+            false
+        }
     }
 
     private func beginSidebarTransition(to visibility: NavigationSplitViewVisibility) {
@@ -1817,13 +1831,14 @@ private final class ControlPanelWindowControlsOverlayView: NSView {
 
 private struct ControlPanelDetailSafeArea: ViewModifier {
     let isFullScreen: Bool
+    let extendsIntoTitlebar: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if isFullScreen {
-            content
-        } else {
+        if !isFullScreen || extendsIntoTitlebar {
             content.ignoresSafeArea(.container, edges: .top)
+        } else {
+            content
         }
     }
 }
