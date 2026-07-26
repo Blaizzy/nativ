@@ -84,7 +84,7 @@ private enum ControlPanelLayout {
     static let sidebarMaximumWidth: CGFloat = 320
     static let collapsedSidebarTitleClearance: CGFloat = 56
     static let sidebarButtonTopOffset: CGFloat = -60
-    static let collapsedSidebarButtonLeadingPadding: CGFloat = 88
+    static let collapsedSidebarButtonLeadingPadding: CGFloat = 124
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
@@ -170,6 +170,7 @@ struct ControlPanelView: View {
     @State private var isSidebarTransitioning = false
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
+    @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
     private let sidebarItemInsets = EdgeInsets(top: -1, leading: 0, bottom: -1, trailing: 0)
 
@@ -219,7 +220,7 @@ struct ControlPanelView: View {
         .background {
             ZStack {
                 ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
-                ControlPanelWindowControls(isHidden: isFullScreen)
+                ControlPanelWindowControls(refreshTrigger: windowControlsRefreshTrigger)
             }
             .frame(width: 0, height: 0)
         }
@@ -240,8 +241,12 @@ struct ControlPanelView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            windowControlsRefreshTrigger += 1
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             isFullScreen = false
+            windowControlsRefreshTrigger += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()
@@ -1530,16 +1535,16 @@ private final class ControlPanelWindowStateReaderView: NSView {
 }
 
 private struct ControlPanelWindowControls: NSViewRepresentable {
-    let isHidden: Bool
+    let refreshTrigger: Int
 
     func makeNSView(context: Context) -> ControlPanelWindowControlsView {
         let view = ControlPanelWindowControlsView()
-        view.update(isHidden: isHidden)
+        view.update(refreshTrigger: refreshTrigger)
         return view
     }
 
     func updateNSView(_ view: ControlPanelWindowControlsView, context: Context) {
-        view.update(isHidden: isHidden)
+        view.update(refreshTrigger: refreshTrigger)
     }
 
     static func dismantleNSView(_ view: ControlPanelWindowControlsView, coordinator: ()) {
@@ -1552,6 +1557,7 @@ private final class ControlPanelWindowControlsView: NSView {
     private let controlsOverlay = ControlPanelWindowControlsOverlayView()
     private weak var attachedContentView: NSView?
     private var controlsConstraints: [NSLayoutConstraint] = []
+    private var lastRefreshTrigger: Int?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1562,9 +1568,22 @@ private final class ControlPanelWindowControlsView: NSView {
         }
     }
 
-    func update(isHidden: Bool) {
-        controlsOverlay.isHidden = isHidden
+    func update(refreshTrigger: Int) {
+        controlsOverlay.isHidden = false
         attachControls()
+
+        guard refreshTrigger != lastRefreshTrigger else { return }
+        lastRefreshTrigger = refreshTrigger
+
+        // AppKit resets the native buttons to a disabled, transparent state at
+        // the end of a full-screen transition. Reapply our custom placement
+        // after that final transition pass has completed.
+        DispatchQueue.main.async { [weak self] in
+            self?.attachControls()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.attachControls()
+        }
     }
 
     func detachControls() {
@@ -1637,6 +1656,8 @@ private final class ControlPanelWindowControlsOverlayView: NSView {
 
             button.isHidden = false
             button.isEnabled = true
+            button.alphaValue = 1
+            button.layer?.opacity = 1
             button.target = self
 
             switch buttonType {
