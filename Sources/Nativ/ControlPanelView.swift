@@ -82,9 +82,11 @@ private enum ControlPanelLayout {
     static let sidebarMinimumWidth: CGFloat = 220
     static let sidebarIdealWidth: CGFloat = 260
     static let sidebarMaximumWidth: CGFloat = 320
+    static let detailMinimumWidth: CGFloat = 720
+    static let titlebarHeight: CGFloat = 52
     static let collapsedSidebarTitleClearance: CGFloat = 108
-    static let sidebarButtonTopOffset: CGFloat = -56
-    static let modelConfigurationButtonTopOffset: CGFloat = -56
+    static let sidebarButtonTopOffset: CGFloat = -38
+    static let modelConfigurationButtonTopOffset: CGFloat = -38
     static let sidebarButtonLeadingPadding: CGFloat = 88
     static let coordinateSpaceName = "ControlPanelLayout"
 }
@@ -166,6 +168,8 @@ struct ControlPanelView: View {
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
+    @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
+    @State private var sidebarDragStartWidth: CGFloat?
     @State private var detailLeadingEdge = ControlPanelLayout.sidebarIdealWidth
     @State private var expandedDetailLeadingEdge = ControlPanelLayout.sidebarIdealWidth
     @State private var isSidebarTransitioning = false
@@ -175,17 +179,20 @@ struct ControlPanelView: View {
     @State private var isNewChatHovering = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $splitColumnVisibility) {
-            sidebar
-                .navigationSplitViewColumnWidth(
-                    min: ControlPanelLayout.sidebarMinimumWidth,
-                    ideal: ControlPanelLayout.sidebarIdealWidth,
-                    max: ControlPanelLayout.sidebarMaximumWidth
-                )
-        } detail: {
+        HStack(spacing: 0) {
+            if splitColumnVisibility != .detailOnly {
+                resizableSidebar
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
             detail
+                .frame(
+                    minWidth: ControlPanelLayout.detailMinimumWidth,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
+                .clipped()
         }
-        .navigationSplitViewStyle(.balanced)
         .toolbarVisibility(.hidden, for: .windowToolbar)
         .ignoresSafeArea(.container, edges: .top)
         .coordinateSpace(name: ControlPanelLayout.coordinateSpaceName)
@@ -194,13 +201,21 @@ struct ControlPanelView: View {
             sidebarVisibilityButton
                 .padding(.top, 12)
                 .padding(.leading, ControlPanelLayout.sidebarButtonLeadingPadding)
-                .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
+                .offset(
+                    y: isFullScreen
+                        ? 0
+                        : ControlPanelLayout.sidebarButtonTopOffset
+                )
         }
         .overlay(alignment: .topTrailing) {
             if showsModelConfigurationToggle {
                 modelConfigurationVisibilityButton
                     .padding(12)
-                    .offset(y: ControlPanelLayout.modelConfigurationButtonTopOffset)
+                    .offset(
+                        y: isFullScreen
+                            ? 0
+                            : ControlPanelLayout.modelConfigurationButtonTopOffset
+                    )
             }
         }
         .overlay(alignment: .top) {
@@ -270,6 +285,9 @@ struct ControlPanelView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
+            Color.clear
+                .frame(height: ControlPanelLayout.titlebarHeight)
+
             sidebarNavigation
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
@@ -327,7 +345,61 @@ struct ControlPanelView: View {
         }
         .navigationTitle("Nativ")
         .background(
-            ControlPanelSurfaceReader(isFullScreen: isFullScreen)
+            ControlPanelSurfaceReader(
+                isFullScreen: isFullScreen,
+                isSidebarTransitioning: isSidebarTransitioning
+            )
+        )
+    }
+
+    private var resizableSidebar: some View {
+        sidebar
+            .frame(width: sidebarWidth)
+            .background {
+                Color.clear
+                    .glassEffect(.regular, in: Rectangle())
+                    .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
+            }
+            .overlay(alignment: .trailing) {
+                sidebarResizeHandle
+            }
+            .zIndex(1)
+    }
+
+    private var sidebarResizeHandle: some View {
+        ZStack {
+            Color.clear
+
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+        }
+        .frame(width: 9)
+        .contentShape(Rectangle())
+        .offset(x: 4)
+        .onHover { isHovering in
+            (isHovering ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if sidebarDragStartWidth == nil {
+                        sidebarDragStartWidth = sidebarWidth
+                    }
+
+                    let startWidth = sidebarDragStartWidth ?? sidebarWidth
+                    let proposedWidth = startWidth + value.translation.width
+                    sidebarWidth = min(
+                        max(proposedWidth, ControlPanelLayout.sidebarMinimumWidth),
+                        ControlPanelLayout.sidebarMaximumWidth
+                    )
+                    expandedDetailLeadingEdge = sidebarWidth
+                }
+                .onEnded { _ in
+                    sidebarDragStartWidth = nil
+                    expandedDetailLeadingEdge = sidebarWidth
+                    NSCursor.arrow.set()
+                }
         )
     }
 
@@ -398,9 +470,11 @@ struct ControlPanelView: View {
             : "Hide Sidebar"
 
         return Button {
+            let newVisibility: NavigationSplitViewVisibility =
+                splitColumnVisibility == .detailOnly ? .all : .detailOnly
+            beginSidebarTransition(to: newVisibility)
             withAnimation(.snappy(duration: 0.2)) {
-                splitColumnVisibility =
-                    splitColumnVisibility == .detailOnly ? .all : .detailOnly
+                splitColumnVisibility = newVisibility
             }
         } label: {
             Image(systemName: "sidebar.left")
@@ -712,7 +786,7 @@ struct ControlPanelView: View {
 
     private func beginSidebarTransition(to visibility: NavigationSplitViewVisibility) {
         if visibility == .detailOnly {
-            expandedDetailLeadingEdge = max(detailLeadingEdge, 1)
+            expandedDetailLeadingEdge = sidebarWidth
         }
         isSidebarTransitioning = true
     }
@@ -977,15 +1051,22 @@ private final class FooterControlTrackingNSView: NSView {
 
 private struct ControlPanelSurfaceReader: NSViewRepresentable {
     let isFullScreen: Bool
+    let isSidebarTransitioning: Bool
 
     func makeNSView(context: Context) -> ControlPanelSurfaceReaderView {
         let view = ControlPanelSurfaceReaderView()
-        view.update(isFullScreen: isFullScreen)
+        view.update(
+            isFullScreen: isFullScreen,
+            isSidebarTransitioning: isSidebarTransitioning
+        )
         return view
     }
 
     func updateNSView(_ view: ControlPanelSurfaceReaderView, context: Context) {
-        view.update(isFullScreen: isFullScreen)
+        view.update(
+            isFullScreen: isFullScreen,
+            isSidebarTransitioning: isSidebarTransitioning
+        )
     }
 }
 
@@ -1048,10 +1129,18 @@ private final class ControlPanelSurfaceReaderView: NSView {
         configureGlassSurface()
     }
 
-    func update(isFullScreen: Bool) {
+    func update(
+        isFullScreen: Bool,
+        isSidebarTransitioning: Bool
+    ) {
         self.isFullScreen = isFullScreen
         updateCornerCorrectionTimer()
-        configureGlassSurface()
+
+        if isSidebarTransitioning {
+            beginLiveSidebarResizeCornerCorrection()
+        } else {
+            configureGlassSurface()
+        }
     }
 
     private func observeFullScreenTransitions() {
@@ -1152,10 +1241,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
 
     @objc
     private func splitViewDidResize(_ notification: Notification) {
-        configureGlassSurface(adjustsConstraints: false)
-        DispatchQueue.main.async { [weak self] in
-            self?.configureGlassSurface(adjustsConstraints: false)
-        }
+        beginLiveSidebarResizeCornerCorrection()
     }
 
     private func updateCornerCorrectionTimer() {
@@ -1213,7 +1299,11 @@ private final class ControlPanelSurfaceReaderView: NSView {
                 options: [.new]
             ) { surface, _ in
                 guard surface.cornerRadius != 0 else { return }
-                surface.cornerRadius = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    context.allowsImplicitAnimation = false
+                    surface.cornerRadius = 0
+                }
             }
             glassFrameObservation = glassSurface.observe(
                 \.frame,
@@ -1224,7 +1314,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
                 }
             }
         }
-        glassSurface.cornerRadius = 0
+        setCornerRadiusToZero(on: glassSurface)
 
         configureSidebarBackdrop(in: container, excluding: glassSurface)
         configureFullSizeGlassLayers(in: glassSurface)
@@ -1305,7 +1395,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
         }
         liveResizeStopWorkItem = stopWorkItem
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + 0.15,
+            deadline: .now() + 0.35,
             execute: stopWorkItem
         )
     }
@@ -1392,9 +1482,9 @@ private final class ControlPanelSurfaceReaderView: NSView {
             (backdropView.value(forKey: "punchOutCornerRadius") as? NSNumber)?
             .doubleValue ?? 0
         if cornerRadius != 0 {
-            backdropView.setValue(
-                NSNumber(value: 0),
-                forKey: "punchOutCornerRadius"
+            setBackdropCornerRadiusToZero(
+                on: backdropView,
+                key: "punchOutCornerRadius"
             )
         }
     }
@@ -1408,34 +1498,51 @@ private final class ControlPanelSurfaceReaderView: NSView {
         let cornerRadiusSelector = NSSelectorFromString(cornerRadiusKey)
         let edgeInsetsSelector = NSSelectorFromString(edgeInsetsKey)
 
-        guard let backdropView = container.subviews.first(where: {
-            $0 !== glassSurface
-                && $0.responds(to: cornerRadiusSelector)
-                && $0.responds(to: edgeInsetsSelector)
-        }) else {
-            return
+        var candidateViews = container.subviews
+        var backdropViews = [NSView]()
+        var index = 0
+
+        while index < candidateViews.count {
+            let candidate = candidateViews[index]
+            index += 1
+            candidateViews.append(contentsOf: candidate.subviews)
+
+            guard candidate !== glassSurface,
+                  !candidate.isDescendant(of: glassSurface),
+                  candidate.responds(to: cornerRadiusSelector),
+                  candidate.responds(to: edgeInsetsSelector) else {
+                continue
+            }
+            backdropViews.append(candidate)
         }
 
-        if sidebarBackdropView !== backdropView {
+        guard let primaryBackdropView = backdropViews.first else { return }
+
+        if sidebarBackdropView !== primaryBackdropView {
             stopObservingBackdropCornerRadius()
-            sidebarBackdropView = backdropView
+            sidebarBackdropView = primaryBackdropView
             defaultBackdropEdgeInsets =
-                (backdropView.value(forKey: edgeInsetsKey) as? NSValue)?.edgeInsetsValue
-            startObservingBackdropCornerRadius(backdropView)
+                (primaryBackdropView.value(forKey: edgeInsetsKey) as? NSValue)?
+                .edgeInsetsValue
+            startObservingBackdropCornerRadius(primaryBackdropView)
         }
 
-        backdropView.setValue(
-            NSNumber(value: 0),
-            forKey: cornerRadiusKey
-        )
-
-        if let edgeInsets = isFullScreen
-            ? NSEdgeInsets(top: 0, left: -4, bottom: 2, right: 0)
-            : defaultBackdropEdgeInsets {
-            backdropView.setValue(
-                NSValue(edgeInsets: edgeInsets),
-                forKey: edgeInsetsKey
+        for backdropView in backdropViews {
+            setBackdropCornerRadiusToZero(
+                on: backdropView,
+                key: cornerRadiusKey
             )
+
+            if let edgeInsets = isFullScreen
+                ? NSEdgeInsets(top: 0, left: -4, bottom: 2, right: 0)
+                : backdropView === primaryBackdropView
+                    ? defaultBackdropEdgeInsets
+                    : nil {
+                backdropView.setValue(
+                    NSValue(edgeInsets: edgeInsets),
+                    forKey: edgeInsetsKey
+                )
+            }
         }
     }
 
@@ -1488,6 +1595,29 @@ private final class ControlPanelSurfaceReaderView: NSView {
         for identifier in staleLayerIdentifiers {
             layerCornerRadiusObservations.removeValue(forKey: identifier)?
                 .invalidate()
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private func setCornerRadiusToZero(on glassSurface: NSGlassEffectView) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            glassSurface.cornerRadius = 0
+        }
+    }
+
+    private func setBackdropCornerRadiusToZero(
+        on backdropView: NSView,
+        key: String
+    ) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            backdropView.setValue(
+                NSNumber(value: 0),
+                forKey: key
+            )
         }
     }
 }
