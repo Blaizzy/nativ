@@ -32,14 +32,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         }
     }
 
-    var preferredColorScheme: ColorScheme? {
+    var appKitAppearance: NSAppearance? {
         switch self {
         case .system:
             nil
         case .light:
-            .light
+            NSAppearance(named: .aqua)
         case .dark:
-            .dark
+            NSAppearance(named: .darkAqua)
         }
     }
 }
