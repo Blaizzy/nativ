@@ -28,20 +28,33 @@ struct DeveloperView: View {
             isConfigurationVisible: $showsConfiguration
         ) {
             GeometryReader { geometry in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        pageHeader
-                        runtimeGrid
-                        serverEndpointsPanel
-                        authenticationPanels
-                        logPanel
-                            .frame(height: max(320, geometry.size.height - 550))
+                VStack(spacing: 0) {
+                    pageHeader
+                        .padding(.horizontal, 22)
+                        .padding(.top, 20)
+                        .padding(.bottom, 16)
+
+                    Divider()
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            runtimeGrid
+                            serverEndpointsPanel
+                            authenticationPanels
+                            logPanel
+                                .frame(height: max(320, geometry.size.height - 550))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 18)
+                        .padding(.bottom, 22)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 22)
-                    .padding(.top, 20)
-                    .padding(.bottom, 22)
                 }
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.size.height,
+                    alignment: .topLeading
+                )
                 .background(Color(nsColor: .windowBackgroundColor))
             }
         }
