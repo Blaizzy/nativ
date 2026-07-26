@@ -83,6 +83,8 @@ private enum ControlPanelLayout {
     static let sidebarIdealWidth: CGFloat = 260
     static let sidebarMaximumWidth: CGFloat = 320
     static let collapsedSidebarTitleClearance: CGFloat = 56
+    static let sidebarButtonTopOffset: CGFloat = -60
+    static let collapsedSidebarButtonLeadingPadding: CGFloat = 88
     static let coordinateSpaceName = "ControlPanelLayout"
 }
 
@@ -190,15 +192,16 @@ struct ControlPanelView: View {
         .overlay(alignment: .topLeading) {
             if splitColumnVisibility == .detailOnly {
                 sidebarVisibilityButton
-                    .padding(12)
-                    .offset(y: -32)
+                    .padding(.top, 12)
+                    .padding(.leading, ControlPanelLayout.collapsedSidebarButtonLeadingPadding)
+                    .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
             }
         }
         .overlay(alignment: .topTrailing) {
             if showsModelConfigurationToggle {
                 modelConfigurationVisibilityButton
                     .padding(12)
-                    .offset(y: -32)
+                    .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
             }
         }
         .overlay(alignment: .top) {
@@ -214,8 +217,11 @@ struct ControlPanelView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
-            ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
-                .frame(width: 0, height: 0)
+            ZStack {
+                ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
+                ControlPanelWindowControls(isHidden: isFullScreen)
+            }
+            .frame(width: 0, height: 0)
         }
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
@@ -370,7 +376,7 @@ struct ControlPanelView: View {
         .overlay(alignment: .topTrailing) {
             sidebarVisibilityButton
                 .padding(12)
-                .offset(y: -32)
+                .offset(y: ControlPanelLayout.sidebarButtonTopOffset)
         }
         .background(
             ControlPanelSurfaceReader(isFullScreen: isFullScreen)
@@ -1520,6 +1526,147 @@ private final class ControlPanelWindowStateReaderView: NSView {
 
     func reportWindowState() {
         onWindowChange?(window)
+    }
+}
+
+private struct ControlPanelWindowControls: NSViewRepresentable {
+    let isHidden: Bool
+
+    func makeNSView(context: Context) -> ControlPanelWindowControlsView {
+        let view = ControlPanelWindowControlsView()
+        view.update(isHidden: isHidden)
+        return view
+    }
+
+    func updateNSView(_ view: ControlPanelWindowControlsView, context: Context) {
+        view.update(isHidden: isHidden)
+    }
+
+    static func dismantleNSView(_ view: ControlPanelWindowControlsView, coordinator: ()) {
+        view.detachControls()
+    }
+}
+
+@MainActor
+private final class ControlPanelWindowControlsView: NSView {
+    private let controlsOverlay = ControlPanelWindowControlsOverlayView()
+    private weak var attachedContentView: NSView?
+    private var controlsConstraints: [NSLayoutConstraint] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        attachControls()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.attachControls()
+        }
+    }
+
+    func update(isHidden: Bool) {
+        controlsOverlay.isHidden = isHidden
+        attachControls()
+    }
+
+    func detachControls() {
+        NSLayoutConstraint.deactivate(controlsConstraints)
+        controlsConstraints.removeAll()
+        controlsOverlay.removeFromSuperview()
+        attachedContentView = nil
+    }
+
+    private func attachControls() {
+        guard let window, let contentView = window.contentView else { return }
+
+        if attachedContentView !== contentView {
+            detachControls()
+            controlsOverlay.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(controlsOverlay, positioned: .above, relativeTo: nil)
+            controlsConstraints = [
+                controlsOverlay.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 19),
+                controlsOverlay.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+                controlsOverlay.widthAnchor.constraint(equalToConstant: 64),
+                controlsOverlay.heightAnchor.constraint(equalToConstant: 28),
+            ]
+            NSLayoutConstraint.activate(controlsConstraints)
+            attachedContentView = contentView
+        }
+
+        controlsOverlay.installWindowButtons(from: window)
+    }
+}
+
+@MainActor
+private final class ControlPanelWindowControlsOverlayView: NSView {
+    private let buttonTypes: [NSWindow.ButtonType] = [
+        .closeButton,
+        .miniaturizeButton,
+        .zoomButton,
+    ]
+    private var windowButtons: [NSButton] = []
+    private weak var actionWindow: NSWindow?
+
+    override func layout() {
+        super.layout()
+
+        let spacing: CGFloat = 6
+        var originX: CGFloat = 0
+
+        for button in windowButtons {
+            button.frame.origin = NSPoint(
+                x: originX,
+                y: (bounds.height - button.frame.height) / 2
+            )
+            originX += button.frame.width + spacing
+        }
+    }
+
+    func installWindowButtons(from window: NSWindow) {
+        let resolvedButtons = buttonTypes.compactMap {
+            window.standardWindowButton($0)
+        }
+        guard resolvedButtons.count == buttonTypes.count else { return }
+
+        actionWindow = window
+        windowButtons = resolvedButtons
+        for (buttonType, button) in zip(buttonTypes, windowButtons) {
+            if button.superview !== self {
+                button.removeFromSuperview()
+                button.autoresizingMask = []
+                addSubview(button)
+            }
+
+            button.isHidden = false
+            button.isEnabled = true
+            button.target = self
+
+            switch buttonType {
+            case .closeButton:
+                button.action = #selector(closeWindow(_:))
+            case .miniaturizeButton:
+                button.action = #selector(miniaturizeWindow(_:))
+            case .zoomButton:
+                button.action = #selector(toggleFullScreen(_:))
+            default:
+                break
+            }
+        }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    @objc
+    private func closeWindow(_ sender: Any?) {
+        actionWindow?.performClose(sender)
+    }
+
+    @objc
+    private func miniaturizeWindow(_ sender: Any?) {
+        actionWindow?.performMiniaturize(sender)
+    }
+
+    @objc
+    private func toggleFullScreen(_ sender: Any?) {
+        actionWindow?.toggleFullScreen(sender)
     }
 }
 
