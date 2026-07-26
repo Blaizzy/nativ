@@ -172,6 +172,7 @@ struct DeveloperView: View {
         HuggingFaceAuthenticationPanel(
             customToken: model.settings.huggingFaceToken,
             systemCredential: model.systemHuggingFaceCredential,
+            onLogIn: model.logInToHuggingFace,
             onSetCustomToken: model.setCustomHuggingFaceToken,
             onLogOutSystemCredential: model.logOutSystemHuggingFaceCredential
         )
@@ -1049,10 +1050,12 @@ private enum HuggingFaceTokenMetadataState {
 private struct HuggingFaceAuthenticationPanel: View {
     let customToken: String?
     let systemCredential: HuggingFaceCredential?
+    let onLogIn: (String) async throws -> Void
     let onSetCustomToken: (String?) -> Void
     let onLogOutSystemCredential: () throws -> Void
     @State private var tokenEntry = ""
     @State private var isAddingToken = false
+    @State private var isLoggingIn = false
     @State private var showsLogoutConfirmation = false
     @State private var managementError: String?
     @State private var tokenMetadataState = HuggingFaceTokenMetadataState.idle
@@ -1100,7 +1103,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
                         tokenEditor
 
-                        Text("The running server restarts automatically after the credential changes.")
+                        Text("Nativ validates and saves this as your active Hugging Face login.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1129,7 +1132,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             Text(logoutConfirmationMessage)
         }
         .alert(
-            "Unable to Log Out",
+            "Hugging Face Authentication Error",
             isPresented: Binding(
                 get: { managementError != nil },
                 set: { if !$0 { managementError = nil } }
@@ -1348,7 +1351,12 @@ private struct HuggingFaceAuthenticationPanel: View {
             .focused($tokenFieldIsFocused)
             .privacySensitive()
             .accessibilityLabel("Hugging Face token")
-            .onSubmit(saveToken)
+            .disabled(isLoggingIn)
+            .onSubmit {
+                Task {
+                    await saveToken()
+                }
+            }
     }
 
     private var tokenEditorActions: some View {
@@ -1357,13 +1365,24 @@ private struct HuggingFaceAuthenticationPanel: View {
                 cancelAddingToken()
             }
             .buttonStyle(.bordered)
+            .disabled(isLoggingIn)
 
-            Button("Use Token") {
-                saveToken()
+            Button {
+                Task {
+                    await saveToken()
+                }
+            } label: {
+                if isLoggingIn {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text("Log In")
+                }
             }
             .buttonStyle(.borderedProminent)
             .disabled(
-                HuggingFaceAuthentication.normalizedToken(tokenEntry) == nil
+                isLoggingIn
+                    || HuggingFaceAuthentication.normalizedToken(tokenEntry) == nil
             )
         }
     }
@@ -1468,12 +1487,23 @@ private struct HuggingFaceAuthenticationPanel: View {
         }
     }
 
-    private func saveToken() {
+    @MainActor
+    private func saveToken() async {
         guard let token = HuggingFaceAuthentication.normalizedToken(tokenEntry) else {
             return
         }
-        onSetCustomToken(token)
-        cancelAddingToken()
+        isLoggingIn = true
+        tokenFieldIsFocused = false
+        defer {
+            isLoggingIn = false
+        }
+
+        do {
+            try await onLogIn(token)
+            cancelAddingToken()
+        } catch {
+            managementError = error.localizedDescription
+        }
     }
 
     @MainActor
