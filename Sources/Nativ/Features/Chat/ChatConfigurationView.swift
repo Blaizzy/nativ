@@ -3,6 +3,12 @@ import Foundation
 import NativServerKit
 import SwiftUI
 
+private enum ModelConfigurationLayoutMetrics {
+    static let contentMinimumWidth: CGFloat = 420
+    static let contentMinimumWidthWithConfiguration: CGFloat = 360
+    static let configurationWidth: CGFloat = 320
+}
+
 struct ModelConfigurationLayout<Content: View>: View {
     @ObservedObject var model: NativModel
     @Binding var isConfigurationVisible: Bool
@@ -21,7 +27,13 @@ struct ModelConfigurationLayout<Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             content
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: isConfigurationVisible
+                        ? ModelConfigurationLayoutMetrics.contentMinimumWidthWithConfiguration
+                        : ModelConfigurationLayoutMetrics.contentMinimumWidth,
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
 
             if isConfigurationVisible {
                 ModelConfigurationView(
@@ -29,7 +41,7 @@ struct ModelConfigurationLayout<Content: View>: View {
                     settingsRequireRestart: model.settingsRequireRestart,
                     onReset: model.resetSettings
                 )
-                .frame(width: 320)
+                .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
                 .ignoresSafeArea(.container, edges: .top)
                 .overlay(alignment: .leading) {
                     Rectangle()
