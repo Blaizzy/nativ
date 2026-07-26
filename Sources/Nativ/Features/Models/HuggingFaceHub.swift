@@ -288,6 +288,7 @@ enum HuggingFaceHubError: LocalizedError {
     case requestFailed(Int, String)
     case pythonUnavailable
     case downloadFailed(String)
+    case anotherDownloadInProgress(String)
 
     var errorDescription: String? {
         switch self {
@@ -299,6 +300,8 @@ enum HuggingFaceHubError: LocalizedError {
             "The bundled model downloader is unavailable."
         case .downloadFailed(let message):
             message.isEmpty ? "The model download failed." : message
+        case .anotherDownloadInProgress(let modelID):
+            "Wait for \(modelID) to finish downloading before starting another model download."
         }
     }
 }
@@ -528,8 +531,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private var downloadTask: Task<Void, Never>?
     private var activeOperation: HuggingFaceDownloadOperation?
     private var activeCachePath: String?
-    private var activeToken: String?
     private var activeCompletion: (() -> Void)?
+    private var activeWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
     deinit {
         downloadTask?.cancel()
@@ -542,15 +545,61 @@ final class HuggingFaceDownloadManager: ObservableObject {
         onCompletion: @escaping () -> Void
     ) {
         guard downloadingModelID == nil else { return }
-        downloadingModelID = repoID
-        downloadProgress = 0
-        isDownloadPaused = false
-        errorByModelID[repoID] = nil
-        activeCachePath = LocalModelDiscovery.expandedPath(cachePath)
-        activeToken = HuggingFaceAuthentication.normalizedToken(token)
-        activeCompletion = onCompletion
+        do {
+            try startDownload(
+                repoID: repoID,
+                cachePath: cachePath,
+                token: token,
+                onCompletion: onCompletion
+            )
+        } catch {
+            errorByModelID[repoID] =
+                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
 
-        startActiveDownload()
+    func downloadIfNeeded(
+        repoID: String,
+        cachePath: String,
+        token: String?
+    ) async throws {
+        let expandedCachePath = LocalModelDiscovery.expandedPath(cachePath)
+        if let downloadingModelID {
+            guard downloadingModelID == repoID,
+                  activeCachePath == expandedCachePath
+            else {
+                throw HuggingFaceHubError.anotherDownloadInProgress(downloadingModelID)
+            }
+        } else {
+            do {
+                try startDownload(
+                    repoID: repoID,
+                    cachePath: expandedCachePath,
+                    token: token,
+                    onCompletion: nil
+                )
+            } catch {
+                errorByModelID[repoID] =
+                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                throw error
+            }
+        }
+
+        let waiterID = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                activeWaiters[waiterID] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelWaiter(waiterID)
+            }
+        }
     }
 
     func pauseDownload() {
@@ -569,8 +618,9 @@ final class HuggingFaceDownloadManager: ObservableObject {
         guard let repoID = downloadingModelID, let cachePath = activeCachePath else { return }
         let task = downloadTask
         task?.cancel()
-        downloadTask = nil
+        let waiters = Array(activeWaiters.values)
         clearActiveDownload()
+        waiters.forEach { $0.resume(throwing: CancellationError()) }
 
         Task {
             await task?.value
@@ -580,56 +630,81 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
     }
 
-    private func startActiveDownload() {
-        guard let repoID = downloadingModelID, let cachePath = activeCachePath else { return }
-
-        let operation: HuggingFaceDownloadOperation
-        do {
-            operation = try HuggingFaceDownloadOperation(
-                repoID: repoID,
-                cachePath: cachePath,
-                token: activeToken
-            ) { progress in
-                Task { @MainActor [weak self] in
-                    guard self?.downloadingModelID == repoID else { return }
-                    self?.downloadProgress = progress
-                }
+    private func startDownload(
+        repoID: String,
+        cachePath: String,
+        token: String?,
+        onCompletion: (() -> Void)?
+    ) throws {
+        let expandedCachePath = LocalModelDiscovery.expandedPath(cachePath)
+        let normalizedToken = HuggingFaceAuthentication.normalizedToken(token)
+        let operation = try HuggingFaceDownloadOperation(
+            repoID: repoID,
+            cachePath: expandedCachePath,
+            token: normalizedToken
+        ) { progress in
+            Task { @MainActor [weak self] in
+                guard self?.downloadingModelID == repoID else { return }
+                self?.downloadProgress = progress
             }
-            activeOperation = operation
-        } catch {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            clearActiveDownload()
-            return
         }
 
+        downloadingModelID = repoID
+        downloadProgress = 0
+        isDownloadPaused = false
+        errorByModelID[repoID] = nil
+        activeCachePath = expandedCachePath
+        activeCompletion = onCompletion
+        activeOperation = operation
         downloadTask = Task { [weak self] in
             do {
                 try await HuggingFaceSnapshotDownloader.download(operation: operation)
                 guard !Task.isCancelled else { return }
-                self?.downloadProgress = 1
-                let completion = self?.activeCompletion
-                self?.clearActiveDownload()
-                completion?()
+                self?.finishDownload(repoID: repoID, error: nil)
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.errorByModelID[repoID] =
-                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self?.clearActiveDownload()
+                self?.finishDownload(repoID: repoID, error: error)
             }
         }
     }
 
+    private func finishDownload(repoID: String, error: Error?) {
+        guard downloadingModelID == repoID else { return }
+        let completion = activeCompletion
+        let waiters = Array(activeWaiters.values)
+        if let error {
+            errorByModelID[repoID] =
+                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        } else {
+            downloadProgress = 1
+        }
+        clearActiveDownload()
+
+        if let error {
+            waiters.forEach { $0.resume(throwing: error) }
+        } else {
+            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+            completion?()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    private func cancelWaiter(_ waiterID: UUID) {
+        activeWaiters.removeValue(forKey: waiterID)?
+            .resume(throwing: CancellationError())
+    }
+
     private func clearActiveDownload() {
+        downloadTask = nil
         downloadingModelID = nil
         downloadProgress = 0
         isDownloadPaused = false
         activeOperation = nil
         activeCachePath = nil
-        activeToken = nil
         activeCompletion = nil
+        activeWaiters.removeAll()
     }
 }
 
