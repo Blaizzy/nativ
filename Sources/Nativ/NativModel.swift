@@ -256,15 +256,9 @@ final class NativModel: ObservableObject {
         let cacheName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
         let fileManager = FileManager.default
 
-        var roots: [String] = []
-        let configured = settings.normalized().modelSearchPath.trimmingCharacters(in: .whitespaces)
-        if !configured.isEmpty {
-            roots.append((configured as NSString).expandingTildeInPath)
-        }
-        if let hubCache = ProcessInfo.processInfo.environment["HF_HUB_CACHE"] {
-            roots.append(hubCache)
-        }
-        roots.append(("~/.cache/huggingface/hub" as NSString).expandingTildeInPath)
+        // Consolidated roots (primary folder + user-added folders + HF hub cache) so
+        // this check also covers models the user keeps in custom folders.
+        let roots = settings.normalized().modelSearchRoots
 
         let generativeMarkers = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
         for root in roots {
