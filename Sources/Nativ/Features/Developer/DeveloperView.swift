@@ -48,26 +48,44 @@ struct DeveloperView: View {
     }
 
     private var pageHeader: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Developer")
-                    .font(.title2.weight(.semibold))
-                Text("Runtime diagnostics, server authentication, API endpoints, and live server output.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+                pageHeaderTitle
+                    .frame(minWidth: 420, alignment: .leading)
+
+                Spacer()
+
+                runtimeStatus
             }
 
-            Spacer()
-
-            Label(model.isRunning ? "Live" : "Offline", systemImage: "circle.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(model.isRunning ? .green : .secondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(Color.secondary.opacity(0.10)))
+            VStack(alignment: .leading, spacing: 10) {
+                pageHeaderTitle
+                runtimeStatus
+            }
         }
         .padding(.leading, titleLeadingInset)
         .padding(.trailing, Self.configurationToggleClearance)
+    }
+
+    private var pageHeaderTitle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Developer")
+                .font(.title2.weight(.semibold))
+            Text("Runtime diagnostics, server authentication, API endpoints, and live server output.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private var runtimeStatus: some View {
+        Label(model.isRunning ? "Live" : "Offline", systemImage: "circle.fill")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(model.isRunning ? .green : .secondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.secondary.opacity(0.10)))
+            .fixedSize()
     }
 
     private var runtimeGrid: some View {
@@ -170,7 +188,7 @@ struct DeveloperView: View {
         LazyVGrid(
             columns: [
                 GridItem(
-                    .adaptive(minimum: 500),
+                    .adaptive(minimum: 300),
                     spacing: 12,
                     alignment: .top
                 )
@@ -210,6 +228,19 @@ struct DeveloperView: View {
                         serverPortField
 
                         Spacer()
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 9) {
+                    endpointPanelTitle
+
+                    endpointCategoryPicker
+                        .frame(maxWidth: .infinity)
+
+                    HStack(spacing: 10) {
+                        serverHostField
+                        serverPortField
+                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -400,23 +431,39 @@ struct DeveloperView: View {
                 }
             }
 
-            HStack(spacing: 10) {
-                LogSearchField(text: $logQuery)
-                    .frame(maxWidth: 360)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    LogSearchField(text: $logQuery)
+                        .frame(minWidth: 180, maxWidth: 360)
 
-                logPanelActions(output)
+                    logPanelActions(output)
 
-                Spacer(minLength: 0)
+                    Spacer(minLength: 0)
 
-                Text("\(output.visibleLineCount) shown")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize()
+                    visibleLogCount(output)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    LogSearchField(text: $logQuery)
+
+                    HStack(spacing: 10) {
+                        logPanelActions(output)
+                        Spacer(minLength: 0)
+                        visibleLogCount(output)
+                    }
+                }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(PanelHeaderAccent(tint: .blue))
+    }
+
+    private func visibleLogCount(_ output: LogOutput) -> some View {
+        Text("\(output.visibleLineCount) shown")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .fixedSize()
     }
 
     private func logPanelTitle(_ output: LogOutput) -> some View {

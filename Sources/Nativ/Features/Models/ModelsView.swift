@@ -177,24 +177,9 @@ struct ModelsView: View {
 
     private var installedPage: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                ModelsSearchField(prompt: "Search installed models", text: $localQuery)
-
-                typeFilterPicker
-
-                sourcesMenu
-
-                Button {
-                    rescanLocalModels()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .disabled(localLibrary.isScanning)
-
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 14)
+            installedToolbar
+                .padding(.horizontal, 22)
+                .padding(.vertical, 14)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
@@ -273,6 +258,54 @@ struct ModelsView: View {
                 .padding(.bottom, 22)
             }
         }
+    }
+
+    private var installedToolbar: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                ModelsSearchField(prompt: "Search installed models", text: $localQuery)
+                    .frame(minWidth: 180)
+
+                typeFilterPicker
+
+                sourcesMenu
+
+                refreshButton
+            }
+
+            VStack(spacing: 10) {
+                ModelsSearchField(prompt: "Search installed models", text: $localQuery)
+
+                HStack(spacing: 10) {
+                    typeFilterPicker
+                    sourcesMenu
+                    Spacer(minLength: 0)
+
+                    Button {
+                        rescanLocalModels()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(localLibrary.isScanning)
+                    .help("Refresh installed models")
+                    .accessibilityLabel("Refresh installed models")
+                }
+            }
+        }
+    }
+
+    private var refreshButton: some View {
+        Button {
+            rescanLocalModels()
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.bordered)
+        .disabled(localLibrary.isScanning)
+        .help("Refresh installed models")
+        .accessibilityLabel("Refresh installed models")
     }
 
     private var discoverPage: some View {
@@ -957,6 +990,8 @@ private struct InstalledModelRow: View {
                                 )
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .clipped()
 
                         Text(localModel.repoID)
                             .font(.caption)
@@ -979,6 +1014,8 @@ private struct InstalledModelRow: View {
                                 )
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .clipped()
 
                         HStack(spacing: 6) {
                             ForEach(LocalModelCapability.visibleModelTags, id: \.self) {
@@ -988,8 +1025,10 @@ private struct InstalledModelRow: View {
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .clipped()
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
                     Spacer(minLength: 12)
                 }
@@ -1095,6 +1134,8 @@ private struct HubModelRow: View {
                             .help("Pre-download estimate. \(memoryEstimate.explanation)")
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
 
                     Text(model.id)
                         .font(.caption)
@@ -1114,6 +1155,8 @@ private struct HubModelRow: View {
                             )
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
 
                     if !model.capabilities.isEmpty {
                         HStack(spacing: 6) {
@@ -1124,9 +1167,11 @@ private struct HubModelRow: View {
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .clipped()
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: 12)
 

@@ -34,6 +34,7 @@ struct ModelConfigurationLayout<Content: View>: View {
                     maxWidth: .infinity,
                     maxHeight: .infinity
                 )
+                .clipped()
 
             if isConfigurationVisible {
                 ModelConfigurationView(
@@ -84,8 +85,7 @@ struct ModelConfigurationView: View {
             }
         }
         .background {
-            Color(nsColor: .controlBackgroundColor)
-                .opacity(0.45)
+            Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea(.container, edges: [.top, .bottom, .trailing])
         }
         .task(id: modelConfigurationLookupID) {
