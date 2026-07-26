@@ -3,6 +3,7 @@ import Foundation
 
 struct IntegrationProfileManager {
     static let providerID = CodexCLIProfile.providerID
+    static let apiKeyEnvironmentVariable = "NATIV_API_KEY"
 
     private let fileManager: FileManager
     private let homeDirectory: URL
@@ -106,7 +107,8 @@ struct IntegrationProfileManager {
             return openAICompatible[Self.providerID] != nil
         case .codex, .hermes, .aider, .qwenCode, .continueDev:
             guard let text = String(data: data, encoding: .utf8) else { return false }
-            return text.contains(Self.providerID) && text.contains(openAIBaseURL)
+            return text.range(of: Self.providerID, options: .caseInsensitive) != nil
+                && text.contains(openAIBaseURL)
         case .vscode, .cursor, .jetbrains:
             return false
         case .cline:
@@ -170,16 +172,12 @@ struct IntegrationProfileManager {
         selectedModelID: String,
         workingDirectory: URL
     ) throws {
-        let scriptURL = try terminalScriptURL(for: tool)
-        let script = "#!/bin/zsh\n" + launchCommand(
+        let scriptURL = try prepareTerminalLaunchScript(
             tool: tool,
             executableURL: executableURL,
             selectedModelID: selectedModelID,
-            workingDirectory: workingDirectory,
-            usesExec: true
+            workingDirectory: workingDirectory
         )
-        try writeText(script, to: scriptURL)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -193,6 +191,42 @@ struct IntegrationProfileManager {
         guard process.terminationStatus == 0 else {
             throw IntegrationServiceError.terminalLaunchFailed("open exited with status \(process.terminationStatus)")
         }
+    }
+
+    func prepareTerminalLaunchScript(
+        tool: IntegrationTool,
+        executableURL: URL,
+        selectedModelID: String,
+        workingDirectory: URL
+    ) throws -> URL {
+        let scriptURL = try terminalScriptURL(for: tool)
+        let script = terminalLaunchScript(
+            tool: tool,
+            executableURL: executableURL,
+            selectedModelID: selectedModelID,
+            workingDirectory: workingDirectory
+        )
+        try writeLaunchScript(script, to: scriptURL)
+        return scriptURL
+    }
+
+    func terminalLaunchScript(
+        tool: IntegrationTool,
+        executableURL: URL,
+        selectedModelID: String,
+        workingDirectory: URL
+    ) -> String {
+        """
+        #!/bin/zsh
+        rm -f -- "$0"
+        \(launchCommand(
+            tool: tool,
+            executableURL: executableURL,
+            selectedModelID: selectedModelID,
+            workingDirectory: workingDirectory,
+            usesExec: true
+        ))
+        """
     }
 
     func launchCommand(
@@ -345,7 +379,7 @@ struct IntegrationProfileManager {
         providers[Self.providerID] = [
             "baseUrl": openAIBaseURL,
             "api": "openai-completions",
-            "apiKey": apiKey,
+            "apiKey": Self.apiKeyEnvironmentVariable,
             "compat": [
                 "supportsDeveloperRole": false,
                 "supportsReasoningEffort": false,
@@ -374,7 +408,6 @@ struct IntegrationProfileManager {
     private func claudeSettings(selectedModelID: String) -> [String: Any] {
         [
             "env": [
-                "ANTHROPIC_AUTH_TOKEN": apiKey,
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_BASE_URL": anthropicBaseURL,
                 "ANTHROPIC_MODEL": selectedModelID,
@@ -404,13 +437,11 @@ struct IntegrationProfileManager {
           default: \(yamlString(selectedModelID))
           provider: custom
           base_url: \(yamlString(openAIBaseURL))
-          api_key: \(yamlString(apiKey))
         display:
           streaming: true
         custom_providers:
           - name: nativ
             base_url: \(yamlString(openAIBaseURL))
-            api_key: \(yamlString(apiKey))
             api_mode: chat_completions
             models:
         \(modelLines)
@@ -460,7 +491,7 @@ struct IntegrationProfileManager {
                     "name": "Nativ",
                     "options": [
                         "baseURL": openAIBaseURL,
-                        "apiKey": apiKey
+                        "apiKey": "{env:\(Self.apiKeyEnvironmentVariable)}"
                     ],
                     "models": modelCatalog
                 ]
@@ -469,7 +500,7 @@ struct IntegrationProfileManager {
     }
 
     private func configureAider() throws {
-        let contents = "OPENAI_API_BASE=\(openAIBaseURL)\nOPENAI_API_KEY=\(apiKey)\n"
+        let contents = "# Managed by Nativ.\nOPENAI_API_BASE=\(openAIBaseURL)\n"
         try writeText(contents, to: configurationURL(for: .aider))
     }
 
@@ -516,7 +547,7 @@ struct IntegrationProfileManager {
                 Self.providerID: [
                     "type": "openai-compat",
                     "base_url": openAIBaseURL,
-                    "api_key": apiKey,
+                    "api_key": "$\(Self.apiKeyEnvironmentVariable)",
                     "models": providerModels
                 ]
             ]
@@ -525,7 +556,12 @@ struct IntegrationProfileManager {
     }
 
     private func configureQwenCode(selectedModelID: String) throws {
-        let contents = "OPENAI_API_KEY=\(apiKey)\nOPENAI_BASE_URL=\(openAIBaseURL)\nOPENAI_MODEL=\(selectedModelID)\n"
+        let contents = """
+        # Managed by Nativ. Credentials are injected only for the launched process.
+        OPENAI_BASE_URL=\(openAIBaseURL)
+        OPENAI_MODEL=\(selectedModelID)
+
+        """
         try writeText(contents, to: configurationURL(for: .qwenCode))
     }
 
@@ -543,7 +579,7 @@ struct IntegrationProfileManager {
         var providers = modelsRoot["providers"] as? [String: Any] ?? [:]
         providers[Self.providerID] = [
             "baseUrl": openAIBaseURL,
-            "apiKey": apiKey,
+            "apiKey": "${\(Self.apiKeyEnvironmentVariable)}",
             "api": "openai-completions",
             "models": models.map(openClawModel)
         ]
@@ -597,7 +633,7 @@ struct IntegrationProfileManager {
             lines.append("    provider: openai")
             lines.append("    apiBase: \(yamlString(openAIBaseURL))")
             lines.append("    model: \(yamlString(model.id))")
-            lines.append("    apiKey: \(yamlString(apiKey))")
+            lines.append("    apiKey: ${{ secrets.\(Self.apiKeyEnvironmentVariable) }}")
             lines.append("    roles:")
             lines.append("      - chat")
             lines.append("      - edit")
@@ -612,7 +648,10 @@ struct IntegrationProfileManager {
     ) -> (arguments: [String], environment: [String: String]) {
         switch tool {
         case .pi:
-            return (["--provider", Self.providerID, "--model", selectedModelID], [:])
+            return (
+                ["--provider", Self.providerID, "--model", selectedModelID],
+                [Self.apiKeyEnvironmentVariable: apiKey]
+            )
         case .codex:
             return (
                 ["--profile", Self.providerID, "--model", selectedModelID],
@@ -628,16 +667,22 @@ struct IntegrationProfileManager {
                 ]
             )
         case .hermes:
-            return (["-p", Self.providerID, "chat", "--provider", "custom", "--model", selectedModelID], [:])
+            return (
+                ["-p", Self.providerID, "chat", "--provider", "custom", "--model", selectedModelID],
+                ["OPENAI_API_KEY": apiKey, "OPENAI_BASE_URL": openAIBaseURL]
+            )
         case .openCode:
             return (
                 ["--model", "\(Self.providerID)/\(selectedModelID)"],
-                ["OPENCODE_CONFIG": configurationURL(for: tool).path]
+                [
+                    Self.apiKeyEnvironmentVariable: apiKey,
+                    "OPENCODE_CONFIG": configurationURL(for: tool).path
+                ]
             )
         case .aider:
             return (
                 ["--env-file", configurationURL(for: tool).path, "--model", "openai/\(selectedModelID)"],
-                [:]
+                ["OPENAI_API_BASE": openAIBaseURL, "OPENAI_API_KEY": apiKey]
             )
         case .goose:
             return (
@@ -645,7 +690,13 @@ struct IntegrationProfileManager {
                 ["NATIV_API_KEY": apiKey, "GOOSE_MODEL": selectedModelID]
             )
         case .crush:
-            return ([], ["CRUSH_GLOBAL_CONFIG": configurationURL(for: tool).path])
+            return (
+                [],
+                [
+                    "CRUSH_GLOBAL_CONFIG": configurationURL(for: tool).path,
+                    Self.apiKeyEnvironmentVariable: apiKey
+                ]
+            )
         case .qwenCode:
             return (
                 [],
@@ -656,11 +707,17 @@ struct IntegrationProfileManager {
                 ]
             )
         case .openClaw:
-            return (["agent", "--model", "\(Self.providerID)/\(selectedModelID)"], [:])
+            return (
+                ["agent", "--model", "\(Self.providerID)/\(selectedModelID)"],
+                [Self.apiKeyEnvironmentVariable: apiKey]
+            )
         case .zed:
             return (["."], ["NATIV_API_KEY": apiKey])
         case .continueDev:
-            return (["--config", configurationURL(for: tool).path], [:])
+            return (
+                ["--config", configurationURL(for: tool).path],
+                [Self.apiKeyEnvironmentVariable: apiKey]
+            )
         case .vscode, .cursor, .jetbrains:
             return ([], [:])
         case .cline:
@@ -686,6 +743,23 @@ struct IntegrationProfileManager {
     private func writeData(_ data: Data, to url: URL) throws {
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    private func writeLaunchScript(_ script: String, to url: URL) throws {
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+        guard fileManager.createFile(
+            atPath: url.path,
+            contents: Data(script.utf8),
+            attributes: [.posixPermissions: 0o700]
+        ) else {
+            throw IntegrationServiceError.terminalLaunchFailed(
+                "Unable to write the temporary launch script."
+            )
+        }
     }
 
     private func shellQuote(_ value: String) -> String {

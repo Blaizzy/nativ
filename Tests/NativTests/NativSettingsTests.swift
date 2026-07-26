@@ -86,6 +86,10 @@ final class NativSettingsTests: XCTestCase {
             )
         )
         XCTAssertNil(normalized.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
+        XCTAssertEqual(
+            normalized.launchEnvironment[ServerAPIAuthentication.verifierEnvironmentVariableName],
+            ServerAPICredentialDatabase.verifier(for: "nativ_1234567890abcdef")
+        )
     }
 
     func testBlankServerAPITokenIsOmitted() {
@@ -93,6 +97,10 @@ final class NativSettingsTests: XCTestCase {
 
         XCTAssertNil(settings.serverAPIKey)
         XCTAssertNil(settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
+        XCTAssertEqual(
+            settings.launchEnvironment[ServerAPIAuthentication.verifierEnvironmentVariableName],
+            ""
+        )
     }
 
     func testGeneratedServerAPITokenHasNativPrefix() {
@@ -139,6 +147,28 @@ final class NativSettingsTests: XCTestCase {
 
         try database.synchronize(token: nil)
         XCTAssertNil(try database.storedVerifier())
+    }
+
+    func testServerLaunchVerifierSurvivesDatabaseSynchronizationFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NativServerAPICredentialFailureTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let settings = NativSettings(serverAPIKey: "nativ_available_at_launch")
+
+        XCTAssertThrowsError(
+            try settings.synchronizeServerAPICredential(databaseURL: directory)
+        )
+        XCTAssertEqual(
+            settings.launchEnvironment[ServerAPIAuthentication.verifierEnvironmentVariableName],
+            ServerAPICredentialDatabase.verifier(for: "nativ_available_at_launch")
+        )
     }
 
     func testServerAuthorizationAddsBearerHeader() {

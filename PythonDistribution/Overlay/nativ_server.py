@@ -41,6 +41,7 @@ PUBLIC_API_PATHS = {
     "/openapi.json",
     "/redoc",
 }
+SERVER_API_KEY_SHA256_ENV = "MLX_PLATFORM_SERVER_API_KEY_SHA256"
 MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
 MODEL_LOAD_EVAL_BATCH_BYTES = 64 * 1024 * 1024
 
@@ -574,17 +575,30 @@ def request_has_valid_api_key(request: Request, expected_sha256: str) -> bool:
     return secrets.compare_digest(supplied_sha256, expected_sha256)
 
 
-def install_database_api_key_authentication() -> None:
-    if getattr(base.app.state, "nativ_database_api_key_authentication_installed", False):
+def expected_server_api_key_sha256() -> str | None:
+    if SERVER_API_KEY_SHA256_ENV in os.environ:
+        verifier = os.environ[SERVER_API_KEY_SHA256_ENV].strip().lower()
+        if not verifier:
+            return None
+        if len(verifier) == 64 and all(character in "0123456789abcdef" for character in verifier):
+            return verifier
+        logging.error("Rejecting API requests because %s is malformed", SERVER_API_KEY_SHA256_ENV)
+        return "invalid"
+
+    return ANALYTICS_STORE.server_api_key_sha256()
+
+
+def install_server_api_key_authentication() -> None:
+    if getattr(base.app.state, "nativ_server_api_key_authentication_installed", False):
         return
-    base.app.state.nativ_database_api_key_authentication_installed = True
+    base.app.state.nativ_server_api_key_authentication_installed = True
 
     @base.app.middleware("http")
     async def database_api_key_middleware(request: Request, call_next):
         if request.method == "OPTIONS" or request.url.path in PUBLIC_API_PATHS:
             return await call_next(request)
 
-        expected_sha256 = ANALYTICS_STORE.server_api_key_sha256()
+        expected_sha256 = expected_server_api_key_sha256()
         if expected_sha256 is None:
             return await call_next(request)
         if request_has_valid_api_key(request, expected_sha256):
@@ -1340,7 +1354,7 @@ def install_metrics_overlay() -> None:
 
 
 def main() -> None:
-    install_database_api_key_authentication()
+    install_server_api_key_authentication()
     install_metrics_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
@@ -1357,7 +1371,7 @@ def main() -> None:
 
 
 install_model_load_progress()
-install_database_api_key_authentication()
+install_server_api_key_authentication()
 install_metrics_overlay()
 
 

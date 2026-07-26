@@ -18,6 +18,7 @@ enum CodexCLIProfile {
         let url = configurationURL(in: homeDirectory)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(contents(selectedModelID: selectedModelID, baseURL: baseURL).utf8).write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     static func contents(selectedModelID: String, baseURL: String) -> String {

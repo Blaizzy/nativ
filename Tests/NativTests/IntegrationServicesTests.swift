@@ -71,27 +71,69 @@ final class IntegrationServicesTests: XCTestCase {
     }
 
     func testConfiguredServerAPIKeyIsUsedByProfilesAndLaunchEnvironment() throws {
+        let token = "nativ_configured_token"
         manager = IntegrationProfileManager(
             serverBaseURL: serverBaseURL,
-            serverAPIKey: "  nativ_configured_token\n",
+            serverAPIKey: "  \(token)\n",
             homeDirectory: homeDirectory,
             applicationSupportDirectory: applicationSupportDirectory
         )
 
+        XCTAssertEqual(manager.apiKey, token)
+        for tool in IntegrationTool.allCases where !tool.isGuidedSetup {
+            try configure(tool)
+            let configuration = try String(
+                contentsOf: manager.configurationURL(for: tool),
+                encoding: .utf8
+            )
+            XCTAssertFalse(
+                configuration.contains(token),
+                "\(tool.displayName) persisted the raw API key"
+            )
+            XCTAssertTrue(
+                launchCommand(for: tool).contains(token),
+                "\(tool.displayName) did not receive the configured API key"
+            )
+        }
+    }
+
+    func testManagedConfigurationUsesOwnerOnlyPermissions() throws {
         try configure(.pi)
 
-        let root = try json(at: manager.configurationURL(for: .pi))
-        let providers = try XCTUnwrap(root["providers"] as? [String: Any])
-        let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
-        XCTAssertEqual(provider["apiKey"] as? String, "nativ_configured_token")
-        XCTAssertTrue(
-            launchCommand(for: .codex)
-                .contains("export NATIV_API_KEY='nativ_configured_token'")
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: manager.configurationURL(for: .pi).path
         )
-        XCTAssertTrue(
-            launchCommand(for: .goose)
-                .contains("export NATIV_API_KEY='nativ_configured_token'")
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+    }
+
+    func testTerminalLaunchScriptIsOwnerOnlyAndDeletesItselfBeforeRunning() throws {
+        let scriptURL = try manager.prepareTerminalLaunchScript(
+            tool: .codex,
+            executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+            selectedModelID: selectedModel.id,
+            workingDirectory: temporaryRoot
         )
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: scriptURL.path
+        )
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+
+        XCTAssertTrue(script.hasPrefix("#!/bin/zsh\nrm -f -- \"$0\"\n"))
+        XCTAssertTrue(script.contains("export NATIV_API_KEY='nativ'"))
+        XCTAssertTrue(script.contains("exec '/usr/bin/true'"))
+        XCTAssertEqual(permissions.intValue & 0o777, 0o700)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [scriptURL.path]
+        try process.run()
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scriptURL.path))
     }
 
     func testPiConfigurationAndLaunchCommand() throws {
@@ -111,6 +153,7 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["baseUrl"] as? String, "http://nativ.test:49152/v1")
         XCTAssertEqual(provider["api"] as? String, "openai-completions")
+        XCTAssertEqual(provider["apiKey"] as? String, "NATIV_API_KEY")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["id"] as? String, selectedModel.id)
@@ -120,7 +163,11 @@ final class IntegrationServicesTests: XCTestCase {
 
         XCTAssertEqual(
             launchCommand(for: .pi),
-            "cd '/tmp/Nativ Project'\n'/tools/pi' '--provider' 'nativ' '--model' 'org/local-model'"
+            """
+            cd '/tmp/Nativ Project'
+            export NATIV_API_KEY='nativ'
+            '/tools/pi' '--provider' 'nativ' '--model' 'org/local-model'
+            """
         )
     }
 
@@ -149,6 +196,9 @@ final class IntegrationServicesTests: XCTestCase {
         )
         XCTAssertFalse(profile.contains(selectedModel.id))
         XCTAssertEqual(profile.components(separatedBy: "# Managed by Nativ.").count - 1, 1)
+        let attributes = try FileManager.default.attributesOfItem(atPath: profileURL.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
         XCTAssertEqual(
             launchCommand(for: .codex),
             """
@@ -165,7 +215,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .claudeCode)
         let root = try json(at: configurationURL)
         let environment = try XCTUnwrap(root["env"] as? [String: Any])
-        XCTAssertEqual(environment["ANTHROPIC_AUTH_TOKEN"] as? String, "nativ")
+        XCTAssertNil(environment["ANTHROPIC_AUTH_TOKEN"])
         XCTAssertEqual(environment["ANTHROPIC_API_KEY"] as? String, "")
         XCTAssertEqual(environment["ANTHROPIC_BASE_URL"] as? String, "http://nativ.test:49152")
         XCTAssertEqual(environment["ANTHROPIC_MODEL"] as? String, selectedModel.id)
@@ -189,6 +239,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configuration = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(configuration.contains("default: \"org/local-model\""))
         XCTAssertTrue(configuration.contains("base_url: \"http://nativ.test:49152/v1\""))
+        XCTAssertFalse(configuration.contains("api_key:"))
         XCTAssertTrue(configuration.contains("\"org/local-model\":\n        context_length: 32768\n        supports_vision: true"))
         XCTAssertTrue(configuration.contains("\"org/basic-model\":\n        context_length: 131072"))
         XCTAssertEqual(
@@ -200,7 +251,12 @@ final class IntegrationServicesTests: XCTestCase {
         )
         XCTAssertEqual(
             launchCommand(for: .hermes),
-            "cd '/tmp/Nativ Project'\n'/tools/hermes' '-p' 'nativ' 'chat' '--provider' 'custom' '--model' 'org/local-model'"
+            """
+            cd '/tmp/Nativ Project'
+            export OPENAI_API_KEY='nativ'
+            export OPENAI_BASE_URL='http://nativ.test:49152/v1'
+            '/tools/hermes' '-p' 'nativ' 'chat' '--provider' 'custom' '--model' 'org/local-model'
+            """
         )
     }
 
@@ -215,6 +271,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(provider["npm"] as? String, "@ai-sdk/openai-compatible")
         let options = try XCTUnwrap(provider["options"] as? [String: Any])
         XCTAssertEqual(options["baseURL"] as? String, "http://nativ.test:49152/v1")
+        XCTAssertEqual(options["apiKey"] as? String, "{env:NATIV_API_KEY}")
         let models = try XCTUnwrap(provider["models"] as? [String: Any])
         let selected = try XCTUnwrap(models[selectedModel.id] as? [String: Any])
         XCTAssertEqual(selected["attachment"] as? Bool, true)
@@ -229,6 +286,7 @@ final class IntegrationServicesTests: XCTestCase {
             launchCommand(for: .openCode),
             """
             cd '/tmp/Nativ Project'
+            export NATIV_API_KEY='nativ'
             export OPENCODE_CONFIG='\(configurationURL.path)'
             '/tools/opencode' '--model' 'nativ/org/local-model'
             """
@@ -241,10 +299,15 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .aider)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(contents.contains("OPENAI_API_BASE=http://nativ.test:49152/v1"))
-        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
+        XCTAssertFalse(contents.contains("OPENAI_API_KEY="))
         XCTAssertEqual(
             launchCommand(for: .aider),
-            "cd '/tmp/Nativ Project'\n'/tools/aider' '--env-file' '\(configurationURL.path)' '--model' 'openai/org/local-model'"
+            """
+            cd '/tmp/Nativ Project'
+            export OPENAI_API_BASE='http://nativ.test:49152/v1'
+            export OPENAI_API_KEY='nativ'
+            '/tools/aider' '--env-file' '\(configurationURL.path)' '--model' 'openai/org/local-model'
+            """
         )
     }
 
@@ -282,7 +345,7 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["type"] as? String, "openai-compat")
         XCTAssertEqual(provider["base_url"] as? String, "http://nativ.test:49152/v1")
-        XCTAssertEqual(provider["api_key"] as? String, "nativ")
+        XCTAssertEqual(provider["api_key"] as? String, "$NATIV_API_KEY")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["id"] as? String, selectedModel.id)
@@ -298,6 +361,7 @@ final class IntegrationServicesTests: XCTestCase {
             """
             cd '/tmp/Nativ Project'
             export CRUSH_GLOBAL_CONFIG='\(configurationURL.path)'
+            export NATIV_API_KEY='nativ'
             '/tools/crush'
             """
         )
@@ -308,7 +372,7 @@ final class IntegrationServicesTests: XCTestCase {
 
         let configurationURL = manager.configurationURL(for: .qwenCode)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
-        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
+        XCTAssertFalse(contents.contains("OPENAI_API_KEY="))
         XCTAssertTrue(contents.contains("OPENAI_BASE_URL=http://nativ.test:49152/v1"))
         XCTAssertTrue(contents.contains("OPENAI_MODEL=org/local-model"))
         XCTAssertEqual(
@@ -333,7 +397,7 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["baseUrl"] as? String, "http://nativ.test:49152/v1")
         XCTAssertEqual(provider["api"] as? String, "openai-completions")
-        XCTAssertEqual(provider["apiKey"] as? String, "nativ")
+        XCTAssertEqual(provider["apiKey"] as? String, "${NATIV_API_KEY}")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["id"] as? String, selectedModel.id)
@@ -341,7 +405,11 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertNil(models[1]["contextWindow"])
         XCTAssertEqual(
             launchCommand(for: .openClaw),
-            "cd '/tmp/Nativ Project'\n'/tools/openclaw' 'agent' '--model' 'nativ/org/local-model'"
+            """
+            cd '/tmp/Nativ Project'
+            export NATIV_API_KEY='nativ'
+            '/tools/openclaw' 'agent' '--model' 'nativ/org/local-model'
+            """
         )
     }
 
@@ -378,10 +446,14 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertTrue(contents.contains("provider: openai"))
         XCTAssertTrue(contents.contains("apiBase: \"http://nativ.test:49152/v1\""))
         XCTAssertTrue(contents.contains("model: \"org/local-model\""))
-        XCTAssertTrue(contents.contains("apiKey: \"nativ\""))
+        XCTAssertTrue(contents.contains("apiKey: ${{ secrets.NATIV_API_KEY }}"))
         XCTAssertEqual(
             launchCommand(for: .continueDev),
-            "cd '/tmp/Nativ Project'\n'/tools/cn' '--config' '\(configurationURL.path)'"
+            """
+            cd '/tmp/Nativ Project'
+            export NATIV_API_KEY='nativ'
+            '/tools/cn' '--config' '\(configurationURL.path)'
+            """
         )
     }
 

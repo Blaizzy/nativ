@@ -318,11 +318,18 @@ final class NativModel: ObservableObject {
         currentServerOutput = ""
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
+        let analyticsDatabaseURL = currentAnalyticsDatabaseURL()
         do {
-            let analyticsDatabaseURL = currentAnalyticsDatabaseURL()
             try settings.synchronizeServerAPICredential(
                 databaseURL: analyticsDatabaseURL
             )
+        } catch {
+            appendLog(
+                "\nCouldn’t synchronize the server credential database; "
+                    + "starting with the process verifier instead: \(error)\n"
+            )
+        }
+        do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = analyticsDatabaseURL.path
             if let effectiveHuggingFaceToken {

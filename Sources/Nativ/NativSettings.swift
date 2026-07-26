@@ -279,6 +279,8 @@ struct ServerAPITokenInfo: Equatable, Sendable {
 }
 
 enum ServerAPIAuthentication {
+    static let verifierEnvironmentVariableName = "MLX_PLATFORM_SERVER_API_KEY_SHA256"
+
     static func normalizedToken(_ token: String?) -> String? {
         guard let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else {
@@ -882,6 +884,8 @@ struct NativSettings: Codable, Equatable {
         ]
 
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
+        environment[ServerAPIAuthentication.verifierEnvironmentVariableName] = settings.serverAPIKey
+            .map(ServerAPICredentialDatabase.verifier(for:)) ?? ""
         if let huggingFaceToken = settings.huggingFaceToken {
             environment[HuggingFaceAuthentication.environmentVariableName] = huggingFaceToken
         }
