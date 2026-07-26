@@ -73,7 +73,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
     }
 
-    func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {
+    func testServerAPITokenIsNormalizedMaskedAndKeptOutOfServerEnvironment() {
         let settings = NativSettings(serverAPIKey: "  nativ_1234567890abcdef\n")
         let normalized = settings.normalized()
 
@@ -85,10 +85,7 @@ final class NativSettingsTests: XCTestCase {
                 characterCount: 22
             )
         )
-        XCTAssertEqual(
-            normalized.launchEnvironment["MLX_VLM_SERVER_API_KEY"],
-            "nativ_1234567890abcdef"
-        )
+        XCTAssertNil(normalized.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
     }
 
     func testBlankServerAPITokenIsOmitted() {
@@ -103,6 +100,45 @@ final class NativSettingsTests: XCTestCase {
 
         XCTAssertTrue(token.hasPrefix("nativ_"))
         XCTAssertEqual(token, ServerAPIAuthentication.normalizedToken(token))
+    }
+
+    func testServerAPIKeyIsOmittedFromEncodedSettings() throws {
+        let settings = NativSettings(serverAPIKey: "nativ_plaintext_token")
+        let data = try PropertyListEncoder().encode(settings)
+        let propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil)
+                as? [String: Any]
+        )
+
+        XCTAssertNil(propertyList["serverAPIKey"])
+    }
+
+    func testServerAPIDatabaseStoresOnlyVerifier() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NativServerAPICredentialTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let database = ServerAPICredentialDatabase(
+            databaseURL: directory.appendingPathComponent("Analytics.sqlite3")
+        )
+        let token = "nativ_plaintext_token"
+
+        try database.synchronize(token: token)
+
+        let storedVerifier = try XCTUnwrap(database.storedVerifier())
+        XCTAssertEqual(
+            storedVerifier,
+            ServerAPICredentialDatabase.verifier(for: token)
+        )
+        XCTAssertNotEqual(storedVerifier, token)
+
+        try database.synchronize(token: nil)
+        XCTAssertNil(try database.storedVerifier())
     }
 
     func testServerAuthorizationAddsBearerHeader() {

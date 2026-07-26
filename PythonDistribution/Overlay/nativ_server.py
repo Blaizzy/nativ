@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 import uuid
@@ -16,7 +18,7 @@ from typing import Any
 
 import mlx.core as mx
 from fastapi import HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
@@ -33,6 +35,12 @@ TRACKED_PATHS = {
     "/v1/responses",
 }
 METRICS_PATHS = {"/metrics", "/v1/metrics"}
+PUBLIC_API_PATHS = {
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/openapi.json",
+    "/redoc",
+}
 MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
 MODEL_LOAD_EVAL_BATCH_BYTES = 64 * 1024 * 1024
 
@@ -324,6 +332,12 @@ class AnalyticsStore:
                 loaded_adapter TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS server_credentials (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                api_key_sha256 TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_request_events_completed_at
                 ON request_events (completed_at);
             CREATE INDEX IF NOT EXISTS idx_request_events_model_completed_at
@@ -336,6 +350,20 @@ class AnalyticsStore:
                 ON analytics_buckets (granularity, model_id, bucket_start);
             """
         )
+
+    def server_api_key_sha256(self) -> str | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT api_key_sha256
+                FROM server_credentials
+                WHERE id = 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        verifier = str(row[0]).strip().lower()
+        return verifier if verifier else None
 
     def _start_session(self) -> None:
         started_at = time.time()
@@ -534,6 +562,39 @@ class AnalyticsStore:
 
 
 ANALYTICS_STORE = AnalyticsStore(analytics_db_path())
+
+
+def request_has_valid_api_key(request: Request, expected_sha256: str) -> bool:
+    authorization = request.headers.get("Authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token:
+        return False
+
+    supplied_sha256 = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return secrets.compare_digest(supplied_sha256, expected_sha256)
+
+
+def install_database_api_key_authentication() -> None:
+    if getattr(base.app.state, "nativ_database_api_key_authentication_installed", False):
+        return
+    base.app.state.nativ_database_api_key_authentication_installed = True
+
+    @base.app.middleware("http")
+    async def database_api_key_middleware(request: Request, call_next):
+        if request.method == "OPTIONS" or request.url.path in PUBLIC_API_PATHS:
+            return await call_next(request)
+
+        expected_sha256 = ANALYTICS_STORE.server_api_key_sha256()
+        if expected_sha256 is None:
+            return await call_next(request)
+        if request_has_valid_api_key(request, expected_sha256):
+            return await call_next(request)
+
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid API key"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 class MetricsTracker:
@@ -1279,6 +1340,7 @@ def install_metrics_overlay() -> None:
 
 
 def main() -> None:
+    install_database_api_key_authentication()
     install_metrics_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
@@ -1295,6 +1357,7 @@ def main() -> None:
 
 
 install_model_load_progress()
+install_database_api_key_authentication()
 install_metrics_overlay()
 
 

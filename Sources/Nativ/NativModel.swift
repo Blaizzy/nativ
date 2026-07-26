@@ -319,8 +319,12 @@ final class NativModel: ObservableObject {
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         do {
+            let analyticsDatabaseURL = currentAnalyticsDatabaseURL()
+            try settings.synchronizeServerAPICredential(
+                databaseURL: analyticsDatabaseURL
+            )
             var launchEnvironment = settings.launchEnvironment
-            launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
+            launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = analyticsDatabaseURL.path
             if let effectiveHuggingFaceToken {
                 launchEnvironment[HuggingFaceAuthentication.environmentVariableName] = effectiveHuggingFaceToken
             }

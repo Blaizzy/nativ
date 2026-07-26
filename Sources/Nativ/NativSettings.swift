@@ -1,6 +1,277 @@
+import CryptoKit
 import Foundation
 import NativServerKit
 import Security
+import SQLite3
+
+enum ServerAPICredentialPersistenceError: Error {
+    case keychain(OSStatus)
+    case invalidKeychainData
+    case sqlite(String)
+}
+
+struct ServerAPICredentialDatabase {
+    let databaseURL: URL
+
+    static func defaultDatabaseURL() -> URL {
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+
+        return applicationSupport
+            .appendingPathComponent("Nativ", isDirectory: true)
+            .appendingPathComponent("Analytics.sqlite3")
+    }
+
+    static func verifier(for token: String) -> String {
+        SHA256.hash(data: Data(token.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    func synchronize(token: String?) throws {
+        let connection = try openConnection()
+        defer {
+            sqlite3_close(connection)
+        }
+
+        if let token = ServerAPIAuthentication.normalizedToken(token) {
+            let statement = try prepare(
+                """
+                INSERT INTO server_credentials (id, api_key_sha256, updated_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    api_key_sha256 = excluded.api_key_sha256,
+                    updated_at = excluded.updated_at
+                """,
+                connection: connection
+            )
+            defer {
+                sqlite3_finalize(statement)
+            }
+
+            let verifier = Self.verifier(for: token)
+            sqlite3_bind_text(
+                statement,
+                1,
+                verifier,
+                -1,
+                serverCredentialSQLiteTransientDestructor
+            )
+            sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+            try stepToCompletion(statement, connection: connection)
+        } else {
+            try execute(
+                "DELETE FROM server_credentials WHERE id = 1;",
+                connection: connection
+            )
+        }
+    }
+
+    func storedVerifier() throws -> String? {
+        let connection = try openConnection()
+        defer {
+            sqlite3_close(connection)
+        }
+
+        let statement = try prepare(
+            "SELECT api_key_sha256 FROM server_credentials WHERE id = 1;",
+            connection: connection
+        )
+        defer {
+            sqlite3_finalize(statement)
+        }
+
+        switch sqlite3_step(statement) {
+        case SQLITE_ROW:
+            guard let value = sqlite3_column_text(statement, 0) else {
+                return nil
+            }
+            return String(cString: value)
+        case SQLITE_DONE:
+            return nil
+        default:
+            throw sqliteError(connection)
+        }
+    }
+
+    private func openConnection() throws -> OpaquePointer {
+        try FileManager.default.createDirectory(
+            at: databaseURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        var connection: OpaquePointer?
+        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(databaseURL.path, &connection, flags, nil) == SQLITE_OK,
+              let connection else {
+            let message = connection
+                .flatMap(sqlite3_errmsg)
+                .map(String.init(cString:)) ?? "Unable to open credential database"
+            sqlite3_close(connection)
+            throw ServerAPICredentialPersistenceError.sqlite(message)
+        }
+
+        do {
+            try execute("PRAGMA journal_mode = WAL;", connection: connection)
+            try execute("PRAGMA synchronous = NORMAL;", connection: connection)
+            try execute("PRAGMA busy_timeout = 3000;", connection: connection)
+            try execute(Self.schemaSQL, connection: connection)
+            return connection
+        } catch {
+            sqlite3_close(connection)
+            throw error
+        }
+    }
+
+    private func prepare(
+        _ sql: String,
+        connection: OpaquePointer
+    ) throws -> OpaquePointer {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw sqliteError(connection)
+        }
+        return statement
+    }
+
+    private func execute(
+        _ sql: String,
+        connection: OpaquePointer
+    ) throws {
+        guard sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK else {
+            throw sqliteError(connection)
+        }
+    }
+
+    private func stepToCompletion(
+        _ statement: OpaquePointer,
+        connection: OpaquePointer
+    ) throws {
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw sqliteError(connection)
+        }
+    }
+
+    private func sqliteError(
+        _ connection: OpaquePointer
+    ) -> ServerAPICredentialPersistenceError {
+        let message = sqlite3_errmsg(connection)
+            .map(String.init(cString:)) ?? "Unknown SQLite error"
+        return .sqlite(message)
+    }
+
+    private static let schemaSQL = """
+        CREATE TABLE IF NOT EXISTS server_credentials (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            api_key_sha256 TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """
+}
+
+struct ServerAPIKeychain {
+    let service: String
+    let account: String
+
+    init(
+        service: String = "dev.local.Nativ.server-api-key",
+        account: String = "nativ-server"
+    ) {
+        self.service = service
+        self.account = account
+    }
+
+    func load() throws -> String? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(status)
+        }
+        guard let data = item as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            throw ServerAPICredentialPersistenceError.invalidKeychainData
+        }
+        return ServerAPIAuthentication.normalizedToken(token)
+    }
+
+    func save(_ token: String?) throws {
+        guard let token = ServerAPIAuthentication.normalizedToken(token) else {
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw ServerAPICredentialPersistenceError.keychain(status)
+            }
+            return
+        }
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw ServerAPICredentialPersistenceError.keychain(updateStatus)
+        }
+
+        var item = baseQuery
+        attributes.forEach { item[$0.key] = $0.value }
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(addStatus)
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+}
+
+struct ServerAPICredentialStore {
+    static let live = Self(
+        keychain: ServerAPIKeychain(),
+        database: ServerAPICredentialDatabase(
+            databaseURL: ServerAPICredentialDatabase.defaultDatabaseURL()
+        )
+    )
+
+    let keychain: ServerAPIKeychain
+    let database: ServerAPICredentialDatabase
+
+    func loadToken() throws -> String? {
+        try keychain.load()
+    }
+
+    func synchronizeVerifier(for token: String?) throws {
+        try database.synchronize(
+            token: ServerAPIAuthentication.normalizedToken(token)
+        )
+    }
+}
+
+private let serverCredentialSQLiteTransientDestructor = unsafeBitCast(
+    -1,
+    to: sqlite3_destructor_type.self
+)
 
 struct ServerAPITokenInfo: Equatable, Sendable {
     let maskedValue: String
@@ -409,7 +680,6 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
-        try container.encodeIfPresent(serverAPIKey, forKey: .serverAPIKey)
         try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
@@ -445,24 +715,81 @@ struct NativSettings: Codable, Equatable {
     }
 
     static func load() -> Self {
-        guard let data = try? Data(contentsOf: storageURL) else {
-            return Self()
+        let storedSettings: Self
+        if let data = try? Data(contentsOf: storageURL),
+           let decoded = try? PropertyListDecoder().decode(Self.self, from: data) {
+            storedSettings = decoded
+        } else {
+            storedSettings = Self()
         }
-        return (try? PropertyListDecoder().decode(Self.self, from: data)) ?? Self()
+
+        var settings = storedSettings
+        let legacyToken = ServerAPIAuthentication.normalizedToken(
+            storedSettings.serverAPIKey
+        )
+
+        do {
+            if let keychainToken = try ServerAPICredentialStore.live.loadToken() {
+                settings.serverAPIKey = keychainToken
+                try? ServerAPICredentialStore.live.synchronizeVerifier(
+                    for: keychainToken
+                )
+                if legacyToken != nil {
+                    try? settings.writePropertyList()
+                }
+            } else if let legacyToken {
+                try ServerAPICredentialStore.live.keychain.save(legacyToken)
+                settings.serverAPIKey = legacyToken
+                try settings.writePropertyList()
+                try? ServerAPICredentialStore.live.synchronizeVerifier(
+                    for: legacyToken
+                )
+            } else {
+                settings.serverAPIKey = nil
+                try? ServerAPICredentialStore.live.synchronizeVerifier(for: nil)
+                if storedSettings.serverAPIKey != nil {
+                    try? settings.writePropertyList()
+                }
+            }
+        } catch {
+            // Keep a legacy token available until it can be migrated without data loss.
+            settings.serverAPIKey = legacyToken
+        }
+
+        return settings
     }
 
     func save() {
+        let settings = normalized()
         do {
-            let url = Self.storageURL
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            try ServerAPICredentialStore.live.keychain.save(
+                settings.serverAPIKey
             )
-            let data = try PropertyListEncoder().encode(normalized())
-            try data.write(to: url, options: .atomic)
+            try settings.writePropertyList()
+            try? ServerAPICredentialStore.live.synchronizeVerifier(
+                for: settings.serverAPIKey
+            )
         } catch {
-            // Settings should not prevent the server from running.
+            // Settings should not replace the last recoverable credential.
         }
+    }
+
+    func synchronizeServerAPICredential(
+        databaseURL: URL = ServerAPICredentialDatabase.defaultDatabaseURL()
+    ) throws {
+        try ServerAPICredentialDatabase(databaseURL: databaseURL).synchronize(
+            token: normalized().serverAPIKey
+        )
+    }
+
+    private func writePropertyList() throws {
+        let url = Self.storageURL
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try PropertyListEncoder().encode(normalized())
+        try data.write(to: url, options: .atomic)
     }
 
     func normalized() -> Self {
@@ -555,9 +882,6 @@ struct NativSettings: Codable, Equatable {
         ]
 
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
-        if let serverAPIKey = settings.serverAPIKey {
-            environment["MLX_VLM_SERVER_API_KEY"] = serverAPIKey
-        }
         if let huggingFaceToken = settings.huggingFaceToken {
             environment[HuggingFaceAuthentication.environmentVariableName] = huggingFaceToken
         }

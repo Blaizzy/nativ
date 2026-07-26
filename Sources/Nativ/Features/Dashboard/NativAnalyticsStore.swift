@@ -928,6 +928,12 @@ private let schemaSQL = """
         loaded_adapter TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS server_credentials (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        api_key_sha256 TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_request_events_completed_at
         ON request_events (completed_at);
     CREATE INDEX IF NOT EXISTS idx_request_events_model_completed_at
