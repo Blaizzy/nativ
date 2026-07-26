@@ -35,27 +35,6 @@ struct ModelConfigurationLayout<Content: View>: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .toolbar {
-            if #available(macOS 26.0, *) {
-                ToolbarSpacer(.flexible)
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    withAnimation(.snappy(duration: 0.2)) {
-                        isConfigurationVisible.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help(configurationVisibilityHelp)
-                .accessibilityLabel(configurationVisibilityHelp)
-            }
-        }
-    }
-
-    private var configurationVisibilityHelp: String {
-        isConfigurationVisible ? "Hide model configuration" : "Show model configuration"
     }
 }
 
