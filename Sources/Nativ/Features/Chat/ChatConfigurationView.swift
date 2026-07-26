@@ -111,7 +111,8 @@ struct ModelConfigurationView: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, 52)
-        .padding(.vertical, 16)
+        .padding(.top, 13)
+        .padding(.bottom, 16)
     }
 
     private var modelContextSection: some View {
