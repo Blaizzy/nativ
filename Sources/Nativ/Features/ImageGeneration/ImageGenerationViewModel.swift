@@ -151,7 +151,7 @@ struct ImageGenerationTurn: Identifiable, Equatable, Codable, Sendable {
 
 @MainActor
 final class ImageGenerationViewModel: ObservableObject {
-    static let fallbackModelID = "black-forest-labs/FLUX.2-klein-9B-kv"
+    static let fallbackModelID = "mlx-community/flux2-klein-4b-8bit"
 
     @Published var prompt = ""
     @Published var modelID = fallbackModelID
@@ -216,11 +216,17 @@ final class ImageGenerationViewModel: ObservableObject {
         !effectiveReferenceImages.isEmpty
     }
 
-    func applyDefaultModel(_ selectedModelID: String?) {
-        guard let selectedModelID = normalized(selectedModelID) else {
+    func applyDefaultModel(
+        _ selectedModelID: String?,
+        installedImageModelIDs: [String] = []
+    ) {
+        let resolvedModelID = normalized(selectedModelID)
+            ?? installedImageModelIDs.lazy.compactMap(normalized).first
+            ?? Self.fallbackModelID
+        guard modelID != resolvedModelID else {
             return
         }
-        modelID = selectedModelID
+        modelID = resolvedModelID
         persistCurrentSession(updateTimestamp: false)
     }
 
@@ -351,7 +357,7 @@ final class ImageGenerationViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func run(using appModel: NativModel) {
+    func run(using appModel: NativModel, modelIsInstalled: Bool = true) {
         guard !isGenerating,
               appModel.isRunning,
               let requestModelID = normalized(modelID),
@@ -395,7 +401,13 @@ final class ImageGenerationViewModel: ObservableObject {
         prompt = ""
         pendingImageAttachments.removeAll()
         isGenerating = true
-        statusText = references.isEmpty ? "Generating image…" : "Editing image…"
+        if modelIsInstalled {
+            statusText = references.isEmpty ? "Generating image…" : "Editing image…"
+        } else {
+            statusText = references.isEmpty
+                ? "Downloading model before generating image…"
+                : "Downloading model before editing image…"
+        }
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
 
@@ -403,12 +415,24 @@ final class ImageGenerationViewModel: ObservableObject {
         let serverSettings = appModel.settings.normalized()
         let serverBaseURL = serverSettings.serverBaseURL
         let serverAPIKey = serverSettings.serverAPIKey
+        let modelSearchPath = serverSettings.modelSearchPath
+        let huggingFaceToken = appModel.effectiveHuggingFaceToken
         activeTask = Task { @MainActor [weak self, weak appModel] in
             guard let self else {
                 return
             }
 
             do {
+                if !modelIsInstalled {
+                    try await HuggingFaceDownloadManager.shared.downloadIfNeeded(
+                        repoID: requestModelID,
+                        cachePath: modelSearchPath,
+                        token: huggingFaceToken
+                    )
+                    try Task.checkCancellation()
+                    statusText = references.isEmpty ? "Generating image…" : "Editing image…"
+                }
+
                 let outputs = try await ImageGenerationExecutor().run(
                     baseURL: serverBaseURL,
                     apiKey: serverAPIKey,

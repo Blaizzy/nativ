@@ -84,6 +84,9 @@ struct ModelsView: View {
         .task(id: modelScanPath) {
             rescanLocalModels()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            rescanLocalModels()
+        }
         .task(id: hubSearchTaskID) {
             guard section == .discover else { return }
             try? await Task.sleep(for: .milliseconds(350))
@@ -378,13 +381,7 @@ struct ModelsView: View {
                                             repoID: hubModel.id,
                                             cachePath: model.settings.modelSearchPath,
                                             token: model.effectiveHuggingFaceToken
-                                        ) {
-                                            rescanLocalModels()
-                                            NotificationCenter.default.post(
-                                                name: .localModelLibraryDidChange,
-                                                object: nil
-                                            )
-                                        }
+                                        ) {}
                                     },
                                     onPauseResume: {
                                         if downloadManager.isDownloadPaused {
