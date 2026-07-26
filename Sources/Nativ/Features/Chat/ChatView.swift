@@ -2281,23 +2281,40 @@ private struct ChatMessageText: View {
     }
 }
 
+private extension Color {
+    static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark ? NSColor.black : NSColor(white: 0.86, alpha: 1)
+    })
+}
+
 private struct ChatEmptyTranscriptView: View {
     let isRunning: Bool
     let selectedModelID: String?
     let modelLoadingProgress: Double?
 
     var body: some View {
-        VStack(spacing: 9) {
+        VStack(spacing: 16) {
+            Image("NativMark")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 64)
+                .foregroundStyle(Color.nativMark)
+
             if let modelLoadingProgress {
                 ProgressView(value: modelLoadingProgress)
                     .progressViewStyle(.linear)
                     .frame(width: 180)
             }
-            Text(title)
-                .font(.headline)
-            Text(detail)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+
+            VStack(spacing: 7) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

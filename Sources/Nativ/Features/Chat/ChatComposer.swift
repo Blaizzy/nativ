@@ -88,6 +88,7 @@ struct ChatComposer: View {
     let canCompose: Bool
     let canSend: Bool
     let onSend: (Bool) -> Void
+    @Environment(\.colorScheme) private var colorScheme
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
     private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
@@ -203,6 +204,7 @@ struct ChatComposer: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            .shadow(color: Color.accentColor.opacity(colorScheme == .dark ? 0.16 : 0), radius: 26, x: 0, y: 10)
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {
