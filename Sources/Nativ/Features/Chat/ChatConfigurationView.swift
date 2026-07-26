@@ -24,14 +24,19 @@ struct ModelConfigurationLayout<Content: View>: View {
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
 
             if isConfigurationVisible {
-                Divider()
-
                 ModelConfigurationView(
                     settings: $model.settings,
                     settingsRequireRestart: model.settingsRequireRestart,
                     onReset: model.resetSettings
                 )
                 .frame(width: 320)
+                .ignoresSafeArea(.container, edges: .top)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                }
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -66,7 +71,11 @@ struct ModelConfigurationView: View {
                 .padding(.vertical, 18)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+        .background {
+            Color(nsColor: .controlBackgroundColor)
+                .opacity(0.45)
+                .ignoresSafeArea(.container, edges: [.top, .bottom, .trailing])
+        }
         .task(id: modelConfigurationLookupID) {
             await loadModelConfiguration(for: modelConfigurationLookupID)
         }
@@ -100,7 +109,8 @@ struct ModelConfigurationView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 16)
+        .padding(.trailing, 52)
         .padding(.vertical, 16)
     }
 
