@@ -154,6 +154,7 @@ private struct GlobalModelLoadFailureBanner: View {
 }
 
 struct ControlPanelView: View {
+    @Environment(\.displayScale) private var displayScale
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
@@ -330,8 +331,9 @@ struct ControlPanelView: View {
             }
             .frame(maxHeight: .infinity)
 
-            Divider()
-                .overlay(Color.secondary.opacity(0.25))
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: sidebarSeparatorThickness)
 
             HStack(spacing: 4) {
                 settingsButton
@@ -356,8 +358,15 @@ struct ControlPanelView: View {
         sidebar
             .frame(width: sidebarWidth)
             .background {
-                Color.clear
-                    .glassEffect(.regular, in: Rectangle())
+                Group {
+                    if isFullScreen {
+                        Rectangle()
+                            .fill(.regularMaterial)
+                    } else {
+                        Color.clear
+                            .glassEffect(.regular, in: Rectangle())
+                    }
+                }
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
             }
             .overlay(alignment: .trailing) {
@@ -372,7 +381,7 @@ struct ControlPanelView: View {
 
             Rectangle()
                 .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
+                .frame(width: sidebarSeparatorThickness)
         }
         .frame(width: 9)
         .contentShape(Rectangle())
@@ -401,6 +410,10 @@ struct ControlPanelView: View {
                     NSCursor.arrow.set()
                 }
         )
+    }
+
+    private var sidebarSeparatorThickness: CGFloat {
+        1 / max(displayScale, 1)
     }
 
     private var sidebarNavigation: some View {
