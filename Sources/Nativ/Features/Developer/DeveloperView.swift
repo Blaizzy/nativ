@@ -185,19 +185,22 @@ struct DeveloperView: View {
     }
 
     private var authenticationPanels: some View {
-        LazyVGrid(
-            columns: [
-                GridItem(
-                    .adaptive(minimum: 300),
-                    spacing: 12,
-                    alignment: .top
-                )
-            ],
-            alignment: .leading,
-            spacing: 12
-        ) {
-            huggingFaceAuthenticationPanel
-            serverAPIAuthenticationPanel
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                huggingFaceAuthenticationPanel
+                    .frame(minWidth: 300, maxWidth: .infinity)
+
+                serverAPIAuthenticationPanel
+                    .frame(minWidth: 300, maxWidth: .infinity)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                huggingFaceAuthenticationPanel
+                    .frame(maxWidth: .infinity)
+
+                serverAPIAuthenticationPanel
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
@@ -235,7 +238,7 @@ struct DeveloperView: View {
                     endpointPanelTitle
 
                     endpointCategoryPicker
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(spacing: 10) {
                         serverHostField
@@ -649,30 +652,7 @@ private struct ServerAPIAuthenticationPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "lock.shield")
-                    .foregroundStyle(.blue)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Server API Authentication")
-                        .font(.callout.weight(.semibold))
-                    Text("Protect API requests with a custom Bearer token.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Label(authenticationStatus, systemImage: authenticationStatusImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(authenticationStatusColor)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(
-                        authenticationStatusColor.opacity(0.12),
-                        in: Capsule()
-                    )
-            }
+            authenticationHeader
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(PanelHeaderAccent(tint: .blue))
@@ -712,6 +692,53 @@ private struct ServerAPIAuthenticationPanel: View {
         }
     }
 
+    private var authenticationHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                authenticationHeaderTitle
+                    .frame(width: 240, alignment: .leading)
+
+                Spacer(minLength: 8)
+
+                authenticationStatusBadge
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                authenticationHeaderTitle
+                authenticationStatusBadge
+            }
+        }
+    }
+
+    private var authenticationHeaderTitle: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "lock.shield")
+                .foregroundStyle(.blue)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Server API Authentication")
+                    .font(.callout.weight(.semibold))
+                Text("Protect API requests with a custom Bearer token.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var authenticationStatusBadge: some View {
+        Label(authenticationStatus, systemImage: authenticationStatusImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(authenticationStatusColor)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(
+                authenticationStatusColor.opacity(0.12),
+                in: Capsule()
+            )
+            .fixedSize()
+    }
+
     private var authenticationStatus: String {
         activeToken == nil ? "Not Configured" : "Configured"
     }
@@ -726,67 +753,59 @@ private struct ServerAPIAuthenticationPanel: View {
 
     private var credentialOverview: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Label(
-                    activeToken == nil ? "No Active Credential" : "Active Credential",
-                    systemImage: activeToken == nil ? "key" : "key.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(activeToken == nil ? .secondary : .primary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    credentialStatus
+                    Spacer(minLength: 8)
+                    credentialActions
+                }
 
-                Spacer()
-
-                if activeToken != nil {
-                    Button {
-                        copyToken()
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                    .buttonStyle(.bordered)
-                    .help("Copy the active server API token")
-
-                    Button {
-                        beginEditingToken()
-                    } label: {
-                        Label("Change", systemImage: "pencil")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button(role: .destructive) {
-                        showsRemovalConfirmation = true
-                    } label: {
-                        Label("Remove", systemImage: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button {
-                        beginEditingToken()
-                    } label: {
-                        Label("Add Token", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
+                VStack(alignment: .leading, spacing: 8) {
+                    credentialStatus
+                    credentialActions
                 }
             }
 
-            HStack(spacing: 14) {
+            LazyVGrid(
+                columns: [
+                    GridItem(
+                        .adaptive(minimum: 105),
+                        spacing: 12,
+                        alignment: .leading
+                    )
+                ],
+                alignment: .leading,
+                spacing: 10
+            ) {
                 credentialAttribute(
                     title: "Token",
                     value: tokenInfo?.maskedValue ?? "Not available",
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
-                .frame(minWidth: 190, maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .privacySensitive()
 
-                Divider()
-                    .frame(height: 36)
+                credentialAttribute(
+                    title: "Header",
+                    value: "Authorization",
+                    systemImage: "textformat"
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                credentialAttribute(
+                    title: "Scheme",
+                    value: "Bearer",
+                    systemImage: "lock"
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 credentialAttribute(
                     title: "Length",
                     value: activeTokenLength,
                     systemImage: "number"
                 )
-                .frame(minWidth: 110, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(12)
@@ -800,46 +819,100 @@ private struct ServerAPIAuthenticationPanel: View {
         )
     }
 
+    private var credentialStatus: some View {
+        Label(
+            activeToken == nil ? "No Active Credential" : "Active Credential",
+            systemImage: activeToken == nil ? "key" : "key.fill"
+        )
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(activeToken == nil ? .secondary : .primary)
+        .fixedSize()
+    }
+
+    @ViewBuilder
+    private var credentialActions: some View {
+        if activeToken != nil {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    copyTokenButton
+                    changeTokenButton
+                    removeTokenButton
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    copyTokenButton
+                    changeTokenButton
+                    removeTokenButton
+                }
+            }
+        } else {
+            addTokenButton
+        }
+    }
+
+    private var copyTokenButton: some View {
+        Button {
+            copyToken()
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+        .buttonStyle(.bordered)
+        .help("Copy the active server API token")
+    }
+
+    private var changeTokenButton: some View {
+        Button {
+            beginEditingToken()
+        } label: {
+            Label("Change", systemImage: "pencil")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var removeTokenButton: some View {
+        Button(role: .destructive) {
+            showsRemovalConfirmation = true
+        } label: {
+            Label("Remove", systemImage: "trash")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var addTokenButton: some View {
+        Button {
+            beginEditingToken()
+        } label: {
+            Label("Add Token", systemImage: "plus")
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
     private var tokenEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label(
-                    activeToken == nil ? "Add Server API Token" : "Replace Server API Token",
-                    systemImage: "key.fill"
-                )
-                .font(.caption.weight(.semibold))
-
-                Spacer()
-
-                Button {
-                    tokenEntry = ServerAPIAuthentication.generateToken()
-                    tokenFieldIsFocused = true
-                } label: {
-                    Label("Generate Secure Token", systemImage: "arrow.clockwise")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    tokenEditorTitle
+                    Spacer(minLength: 8)
+                    generateTokenButton
                 }
-                .buttonStyle(.borderless)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    tokenEditorTitle
+                    generateTokenButton
+                }
             }
 
-            HStack(spacing: 8) {
-                SecureField("Paste or generate a server API token", text: $tokenEntry)
-                    .textFieldStyle(.plain)
-                    .font(.callout.monospaced())
-                    .focused($tokenFieldIsFocused)
-                    .editableFieldChrome(isFocused: tokenFieldIsFocused)
-                    .privacySensitive()
-                    .accessibilityLabel("Server API token")
-                    .onSubmit(saveToken)
-
-                Button("Cancel") {
-                    cancelEditingToken()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    tokenField
+                        .frame(minWidth: 180)
+                    tokenEditorActions
                 }
-                .buttonStyle(.bordered)
 
-                Button("Save Token") {
-                    saveToken()
+                VStack(alignment: .leading, spacing: 8) {
+                    tokenField
+                    tokenEditorActions
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(ServerAPIAuthentication.normalizedToken(tokenEntry) == nil)
             }
 
             Text("Clients send this value as an Authorization Bearer token.")
@@ -857,6 +930,52 @@ private struct ServerAPIAuthenticationPanel: View {
         )
         .task {
             tokenFieldIsFocused = true
+        }
+    }
+
+    private var tokenEditorTitle: some View {
+        Label(
+            activeToken == nil ? "Add Server API Token" : "Replace Server API Token",
+            systemImage: "key.fill"
+        )
+        .font(.caption.weight(.semibold))
+        .fixedSize()
+    }
+
+    private var generateTokenButton: some View {
+        Button {
+            tokenEntry = ServerAPIAuthentication.generateToken()
+            tokenFieldIsFocused = true
+        } label: {
+            Label("Generate Secure Token", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.borderless)
+        .fixedSize()
+    }
+
+    private var tokenField: some View {
+        SecureField("Paste or generate a server API token", text: $tokenEntry)
+            .textFieldStyle(.plain)
+            .font(.callout.monospaced())
+            .focused($tokenFieldIsFocused)
+            .editableFieldChrome(isFocused: tokenFieldIsFocused)
+            .privacySensitive()
+            .accessibilityLabel("Server API token")
+            .onSubmit(saveToken)
+    }
+
+    private var tokenEditorActions: some View {
+        HStack(spacing: 8) {
+            Button("Cancel") {
+                cancelEditingToken()
+            }
+            .buttonStyle(.bordered)
+
+            Button("Save Token") {
+                saveToken()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(ServerAPIAuthentication.normalizedToken(tokenEntry) == nil)
         }
     }
 
@@ -964,30 +1083,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "key.horizontal")
-                    .foregroundStyle(.blue)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Hugging Face Authentication")
-                        .font(.callout.weight(.semibold))
-                    Text("Authenticate Hub requests and downloads for gated models.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Label(authenticationStatus, systemImage: authenticationStatusImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(authenticationStatusColor)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(
-                        authenticationStatusColor.opacity(0.12),
-                        in: Capsule()
-                    )
-            }
+            authenticationHeader
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(PanelHeaderAccent(tint: .blue))
@@ -1002,28 +1098,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                         Text("Add Hugging Face token")
                             .font(.caption.weight(.semibold))
 
-                        HStack(spacing: 8) {
-                            SecureField("Paste Hugging Face token", text: $tokenEntry)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.callout.monospaced())
-                                .focused($tokenFieldIsFocused)
-                                .privacySensitive()
-                                .accessibilityLabel("Hugging Face token")
-                                .onSubmit(saveToken)
-
-                            Button("Cancel") {
-                                cancelAddingToken()
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button("Use Token") {
-                                saveToken()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(
-                                HuggingFaceAuthentication.normalizedToken(tokenEntry) == nil
-                            )
-                        }
+                        tokenEditor
 
                         Text("The running server restarts automatically after the credential changes.")
                             .font(.caption)
@@ -1071,6 +1146,53 @@ private struct HuggingFaceAuthenticationPanel: View {
         }
     }
 
+    private var authenticationHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                authenticationHeaderTitle
+                    .frame(width: 240, alignment: .leading)
+
+                Spacer(minLength: 8)
+
+                authenticationStatusBadge
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                authenticationHeaderTitle
+                authenticationStatusBadge
+            }
+        }
+    }
+
+    private var authenticationHeaderTitle: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "key.horizontal")
+                .foregroundStyle(.blue)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Hugging Face Authentication")
+                    .font(.callout.weight(.semibold))
+                Text("Authenticate Hub requests and downloads for gated models.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var authenticationStatusBadge: some View {
+        Label(authenticationStatus, systemImage: authenticationStatusImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(authenticationStatusColor)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(
+                authenticationStatusColor.opacity(0.12),
+                in: Capsule()
+            )
+            .fixedSize()
+    }
+
     private var authenticationStatus: String {
         hasActiveCredential ? "Configured" : "Not Configured"
     }
@@ -1085,80 +1207,59 @@ private struct HuggingFaceAuthenticationPanel: View {
 
     private var credentialOverview: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Label(
-                    hasActiveCredential ? "Active Credential" : "No Active Credential",
-                    systemImage: hasActiveCredential ? "key.fill" : "key"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(hasActiveCredential ? .primary : .secondary)
-
-                Spacer()
-
-                if hasCustomToken || systemCredential != nil {
-                    Button(role: .destructive) {
-                        requestLogout()
-                    } label: {
-                        Label(
-                            "Log Out",
-                            systemImage: "rectangle.portrait.and.arrow.right"
-                        )
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button {
-                        beginAddingToken()
-                    } label: {
-                        Label("Add Token", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    credentialStatus
+                    Spacer(minLength: 8)
+                    credentialActions
                 }
 
-                Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
-                    Label("Manage on Hugging Face", systemImage: "arrow.up.right")
+                VStack(alignment: .leading, spacing: 8) {
+                    credentialStatus
+                    credentialActions
                 }
-                .buttonStyle(.bordered)
             }
 
-            HStack(spacing: 14) {
+            LazyVGrid(
+                columns: [
+                    GridItem(
+                        .adaptive(minimum: 105),
+                        spacing: 12,
+                        alignment: .leading
+                    )
+                ],
+                alignment: .leading,
+                spacing: 10
+            ) {
                 credentialAttribute(
                     title: "Token",
                     value: activeTokenInfo?.maskedValue ?? "Not available",
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
-                .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .privacySensitive()
-
-                Divider()
-                    .frame(height: 36)
 
                 credentialAttribute(
                     title: "Token Name",
                     value: activeTokenName,
                     systemImage: "tag"
                 )
-                .frame(minWidth: 72, alignment: .leading)
-
-                Divider()
-                    .frame(height: 36)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 credentialAttribute(
                     title: "Permission",
                     value: activeTokenPermission,
                     systemImage: "lock.shield"
                 )
-                .frame(minWidth: 72, alignment: .leading)
-
-                Divider()
-                    .frame(height: 36)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 credentialAttribute(
                     title: "Length",
                     value: activeTokenLength,
                     systemImage: "number"
                 )
-                .frame(minWidth: 88, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(12)
@@ -1170,6 +1271,101 @@ private struct HuggingFaceAuthenticationPanel: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
+    }
+
+    private var credentialStatus: some View {
+        Label(
+            hasActiveCredential ? "Active Credential" : "No Active Credential",
+            systemImage: hasActiveCredential ? "key.fill" : "key"
+        )
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(hasActiveCredential ? .primary : .secondary)
+        .fixedSize()
+    }
+
+    private var credentialActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                primaryCredentialAction
+                manageTokensLink
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                primaryCredentialAction
+                manageTokensLink
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var primaryCredentialAction: some View {
+        if hasCustomToken || systemCredential != nil {
+            Button(role: .destructive) {
+                requestLogout()
+            } label: {
+                Label(
+                    "Log Out",
+                    systemImage: "rectangle.portrait.and.arrow.right"
+                )
+            }
+            .buttonStyle(.bordered)
+        } else {
+            Button {
+                beginAddingToken()
+            } label: {
+                Label("Add Token", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var manageTokensLink: some View {
+        Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
+            Label("HF Hub", systemImage: "arrow.up.right")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var tokenEditor: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                tokenField
+                    .frame(minWidth: 180)
+                tokenEditorActions
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                tokenField
+                tokenEditorActions
+            }
+        }
+    }
+
+    private var tokenField: some View {
+        SecureField("Paste Hugging Face token", text: $tokenEntry)
+            .textFieldStyle(.roundedBorder)
+            .font(.callout.monospaced())
+            .focused($tokenFieldIsFocused)
+            .privacySensitive()
+            .accessibilityLabel("Hugging Face token")
+            .onSubmit(saveToken)
+    }
+
+    private var tokenEditorActions: some View {
+        HStack(spacing: 8) {
+            Button("Cancel") {
+                cancelAddingToken()
+            }
+            .buttonStyle(.bordered)
+
+            Button("Use Token") {
+                saveToken()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                HuggingFaceAuthentication.normalizedToken(tokenEntry) == nil
+            )
+        }
     }
 
     private var activeTokenLength: String {
