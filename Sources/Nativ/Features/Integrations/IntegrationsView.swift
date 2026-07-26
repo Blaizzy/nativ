@@ -336,17 +336,26 @@ final class IntegrationsViewModel: ObservableObject {
 
 struct IntegrationsView: View {
     @StateObject private var viewModel: IntegrationsViewModel
+    var titleLeadingInset: CGFloat
 
-    init(model: NativModel) {
+    init(model: NativModel, titleLeadingInset: CGFloat = 0) {
         _viewModel = StateObject(wrappedValue: IntegrationsViewModel(serverModel: model))
+        self.titleLeadingInset = titleLeadingInset
     }
 
     var body: some View {
         Group {
             if let selectedTool = viewModel.selectedTool {
-                IntegrationDetailView(tool: selectedTool, viewModel: viewModel)
+                IntegrationDetailView(
+                    tool: selectedTool,
+                    viewModel: viewModel,
+                    titleLeadingInset: titleLeadingInset
+                )
             } else {
-                IntegrationCatalogView(viewModel: viewModel)
+                IntegrationCatalogView(
+                    viewModel: viewModel,
+                    titleLeadingInset: titleLeadingInset
+                )
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -370,6 +379,7 @@ struct IntegrationsView: View {
 
 private struct IntegrationCatalogView: View {
     @ObservedObject var viewModel: IntegrationsViewModel
+    let titleLeadingInset: CGFloat
     private let columns = [
         GridItem(.adaptive(minimum: 245, maximum: 330), spacing: 16)
     ]
@@ -398,6 +408,7 @@ private struct IntegrationCatalogView: View {
                 .disabled(viewModel.isRefreshingStatuses)
             }
             .padding(.horizontal, 22)
+            .padding(.leading, titleLeadingInset)
             .padding(.top, 20)
             .padding(.bottom, 16)
 
@@ -491,6 +502,7 @@ private struct IntegrationCard: View {
 private struct IntegrationDetailView: View {
     let tool: IntegrationTool
     @ObservedObject var viewModel: IntegrationsViewModel
+    let titleLeadingInset: CGFloat
     @State private var workingDirectory: URL?
 
     private var status: IntegrationToolStatus {
@@ -517,6 +529,7 @@ private struct IntegrationDetailView: View {
                 IntegrationAvailabilityBadge(status: status, isGuidedSetup: tool.isGuidedSetup)
             }
             .padding(.horizontal, 24)
+            .padding(.leading, titleLeadingInset)
             .padding(.vertical, 18)
 
             Divider()

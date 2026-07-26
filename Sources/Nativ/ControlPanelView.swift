@@ -82,7 +82,7 @@ private enum ControlPanelLayout {
     static let sidebarMinimumWidth: CGFloat = 220
     static let sidebarIdealWidth: CGFloat = 260
     static let sidebarMaximumWidth: CGFloat = 320
-    static let collapsedSidebarTitleClearance: CGFloat = 56
+    static let collapsedSidebarTitleClearance: CGFloat = 108
     static let sidebarButtonTopOffset: CGFloat = -56
     static let modelConfigurationButtonTopOffset: CGFloat = -56
     static let sidebarButtonLeadingPadding: CGFloat = 88
@@ -596,7 +596,8 @@ struct ControlPanelView: View {
                 case .system:
                     SystemMonitorView(
                         store: systemMonitor,
-                        menuBarPreferences: .shared
+                        menuBarPreferences: .shared,
+                        titleLeadingInset: detailTitleLeadingInset
                     )
                 case .models:
                     ModelsView(
@@ -605,7 +606,10 @@ struct ControlPanelView: View {
                         titleLeadingInset: detailTitleLeadingInset
                     )
                 case .integrations:
-                    IntegrationsView(model: model)
+                    IntegrationsView(
+                        model: model,
+                        titleLeadingInset: detailTitleLeadingInset
+                    )
                 case .developer:
                     DeveloperView(
                         model: model,
