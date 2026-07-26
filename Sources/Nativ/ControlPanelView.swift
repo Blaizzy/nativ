@@ -173,7 +173,6 @@ struct ControlPanelView: View {
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
-    private let sidebarItemInsets = EdgeInsets(top: -1, leading: 0, bottom: -1, trailing: 0)
 
     var body: some View {
         NavigationSplitView(columnVisibility: $splitColumnVisibility) {
@@ -271,38 +270,17 @@ struct ControlPanelView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List {
-                Section {
-                    ForEach(ControlPanelTab.allCases) { tab in
-                        let selection = ControlPanelSidebarSelection.tab(tab)
-                        Button {
-                            applySidebarSelection(selection)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Label(tab.rawValue, systemImage: tab.systemImage)
-                                if tab == .models, downloads.downloadingModelID != nil {
-                                    ModelsDownloadArrow()
-                                }
-                                Spacer(minLength: 0)
-                                if tab == .models,
-                                   model.isModelLoading,
-                                   let percentage = model.modelLoadingPercentageText {
-                                    Text(percentage)
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 34, alignment: .trailing)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(.rect)
-                        }
-                        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
-                        .buttonStyle(.plain)
-                        .listRowInsets(sidebarItemInsets)
-                    }
-                }
+            sidebarNavigation
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
 
-                Section {
+            sidebarRecentsHeader
+                .padding(.leading, 17)
+                .padding(.trailing, 10)
+                .padding(.bottom, 4)
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
                     ForEach(recentSessions) { recent in
                         ControlPanelRecentSessionRow(
                             recent: recent,
@@ -327,44 +305,12 @@ struct ControlPanelView: View {
                                 revealRecentSession(recent)
                             }
                         )
-                        .listRowInsets(sidebarItemInsets)
                     }
-                } header: {
-                    HStack(spacing: 8) {
-                        Text("Recents")
-                            .font(.system(size: 15, weight: .regular))
-                            .foregroundStyle(.secondary.opacity(0.7))
-
-                        Spacer(minLength: 0)
-
-                        Button {
-                            withAnimation(.snappy(duration: 0.2)) {
-                                createRecentSession()
-                            }
-                        } label: {
-                            Image(systemName: "square.and.pencil")
-                                .font(.system(size: 15, weight: .medium))
-                                .frame(width: 28, height: 28)
-                                .foregroundStyle(
-                                    isNewChatHovering
-                                        ? Color.primary
-                                        : Color.secondary.opacity(0.7)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
-                        .help(newRecentHelp)
-                        .padding(.trailing, 4)
-                        .onHover { isNewChatHovering = $0 }
-                    }
-                    .textCase(nil)
-                    .padding(.horizontal, 7)
                 }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
             }
-            .listStyle(.sidebar)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                Color.clear.frame(height: 18)
-            }
+            .frame(maxHeight: .infinity)
 
             Divider()
                 .overlay(Color.secondary.opacity(0.25))
@@ -383,6 +329,67 @@ struct ControlPanelView: View {
         .background(
             ControlPanelSurfaceReader(isFullScreen: isFullScreen)
         )
+    }
+
+    private var sidebarNavigation: some View {
+        VStack(spacing: 0) {
+            ForEach(ControlPanelTab.allCases) { tab in
+                let selection = ControlPanelSidebarSelection.tab(tab)
+                Button {
+                    applySidebarSelection(selection)
+                } label: {
+                    HStack(spacing: 8) {
+                        Label(tab.rawValue, systemImage: tab.systemImage)
+                        if tab == .models, downloads.downloadingModelID != nil {
+                            ModelsDownloadArrow()
+                        }
+                        Spacer(minLength: 0)
+                        if tab == .models,
+                           model.isModelLoading,
+                           let percentage = model.modelLoadingPercentageText {
+                            Text(percentage)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+                }
+                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var sidebarRecentsHeader: some View {
+        HStack(spacing: 8) {
+            Text("Recents")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(.secondary.opacity(0.7))
+
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    createRecentSession()
+                }
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(
+                        isNewChatHovering
+                            ? Color.primary
+                            : Color.secondary.opacity(0.7)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
+            .help(newRecentHelp)
+            .padding(.trailing, 4)
+            .onHover { isNewChatHovering = $0 }
+        }
     }
 
     private var sidebarVisibilityButton: some View {
