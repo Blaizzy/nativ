@@ -547,9 +547,7 @@ struct ControlPanelView: View {
     }
 
     private func toggleModelConfigurationVisibility() {
-        withAnimation(.snappy(duration: 0.2)) {
-            isModelConfigurationVisible.toggle()
-        }
+        isModelConfigurationVisible.toggle()
     }
 
     private var showsModelConfigurationToggle: Bool {
