@@ -94,7 +94,8 @@ private enum ControlPanelLayout {
     static let windowControlsHeight: CGFloat = 28
     static let windowControlsCenterY =
         windowControlsTopPadding + (windowControlsHeight / 2)
-    static let coordinateSpaceName = "ControlPanelLayout"
+    static let sidebarTransitionDuration: TimeInterval = 0.2
+    static let sidebarTransitionSettleDuration: Duration = .milliseconds(250)
 }
 
 extension Color {
@@ -206,9 +207,8 @@ struct ControlPanelView: View {
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
     @State private var sidebarDragStartWidth: CGFloat?
-    @State private var detailLeadingEdge = ControlPanelLayout.sidebarIdealWidth
-    @State private var expandedDetailLeadingEdge = ControlPanelLayout.sidebarIdealWidth
     @State private var isSidebarTransitioning = false
+    @State private var sidebarTransitionGeneration = 0
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
@@ -231,7 +231,6 @@ struct ControlPanelView: View {
         }
         .toolbarVisibility(.hidden, for: .windowToolbar)
         .ignoresSafeArea(.container, edges: .top)
-        .coordinateSpace(name: ControlPanelLayout.coordinateSpaceName)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .top) {
             if selectedTab != .models, let failure = model.modelLoadFailure {
@@ -273,9 +272,6 @@ struct ControlPanelView: View {
         }
         .onChange(of: navigation.newChatRequest) { _, _ in
             handleNewChatRequest()
-        }
-        .onChange(of: splitColumnVisibility) { _, newVisibility in
-            beginSidebarTransition(to: newVisibility)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -427,11 +423,9 @@ struct ControlPanelView: View {
                         max(proposedWidth, ControlPanelLayout.sidebarMinimumWidth),
                         ControlPanelLayout.sidebarMaximumWidth
                     )
-                    expandedDetailLeadingEdge = sidebarWidth
                 }
                 .onEnded { _ in
                     sidebarDragStartWidth = nil
-                    expandedDetailLeadingEdge = sidebarWidth
                     NSCursor.arrow.set()
                 }
         )
@@ -508,8 +502,8 @@ struct ControlPanelView: View {
     private func toggleSidebarVisibility() {
         let newVisibility: NavigationSplitViewVisibility =
             splitColumnVisibility == .detailOnly ? .all : .detailOnly
-        beginSidebarTransition(to: newVisibility)
-        withAnimation(.snappy(duration: 0.2)) {
+        beginSidebarTransition()
+        withAnimation(.snappy(duration: ControlPanelLayout.sidebarTransitionDuration)) {
             splitColumnVisibility = newVisibility
         }
     }
@@ -745,11 +739,6 @@ struct ControlPanelView: View {
         } message: {
             Text(model.modelPreloadMemoryWarning?.message ?? "")
         }
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.frame(in: .named(ControlPanelLayout.coordinateSpaceName)).minX
-        } action: { leadingEdge in
-            updateDetailLeadingEdge(leadingEdge)
-        }
     }
 
     private func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
@@ -783,15 +772,9 @@ struct ControlPanelView: View {
     }
 
     private var detailTitleLeadingInset: CGFloat {
-        guard isSidebarTransitioning else {
-            return splitColumnVisibility == .detailOnly
-                ? ControlPanelLayout.collapsedSidebarTitleClearance
-                : 0
-        }
-
-        let expandedLeadingEdge = max(expandedDetailLeadingEdge, 1)
-        let visibleFraction = min(max(detailLeadingEdge / expandedLeadingEdge, 0), 1)
-        return ControlPanelLayout.collapsedSidebarTitleClearance * (1 - visibleFraction)
+        splitColumnVisibility == .detailOnly
+            ? ControlPanelLayout.collapsedSidebarTitleClearance
+            : 0
     }
 
     private var detailExtendsIntoTitlebar: Bool {
@@ -803,32 +786,15 @@ struct ControlPanelView: View {
         }
     }
 
-    private func beginSidebarTransition(to visibility: NavigationSplitViewVisibility) {
-        if visibility == .detailOnly {
-            expandedDetailLeadingEdge = sidebarWidth
-        }
+    private func beginSidebarTransition() {
+        sidebarTransitionGeneration &+= 1
+        let generation = sidebarTransitionGeneration
         isSidebarTransitioning = true
-    }
 
-    private func updateDetailLeadingEdge(_ leadingEdge: CGFloat) {
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            detailLeadingEdge = max(0, leadingEdge)
-
-            if isSidebarTransitioning {
-                if splitColumnVisibility == .detailOnly {
-                    if detailLeadingEdge <= 0.5 {
-                        isSidebarTransitioning = false
-                    }
-                } else if detailLeadingEdge >= expandedDetailLeadingEdge - 0.5 {
-                    expandedDetailLeadingEdge = detailLeadingEdge
-                    isSidebarTransitioning = false
-                }
-            } else if splitColumnVisibility != .detailOnly,
-                      detailLeadingEdge >= ControlPanelLayout.sidebarMinimumWidth {
-                expandedDetailLeadingEdge = detailLeadingEdge
-            }
+        Task { @MainActor in
+            try? await Task.sleep(for: ControlPanelLayout.sidebarTransitionSettleDuration)
+            guard sidebarTransitionGeneration == generation else { return }
+            isSidebarTransitioning = false
         }
     }
 
@@ -1093,6 +1059,8 @@ private var controlPanelBackdropCornerRadiusObservationContext = 0
 
 @MainActor
 private final class ControlPanelSurfaceReaderView: NSView {
+    private static let liveCornerCorrectionInterval: TimeInterval = 1 / 30
+
     private weak var glassSurface: NSView?
     private weak var sidebarBackdropView: NSView?
     private weak var observedSplitView: NSSplitView?
@@ -1109,6 +1077,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
     private var liveResizeStopWorkItem: DispatchWorkItem?
     private var localMouseEventMonitor: Any?
     private var isFullScreen = false
+    private var isTrackingSidebarTransition = false
 
     deinit {
         cornerCorrectionTimer?.invalidate()
@@ -1145,7 +1114,9 @@ private final class ControlPanelSurfaceReaderView: NSView {
 
     override func layout() {
         super.layout()
-        configureGlassSurface()
+        if liveResizeCornerCorrectionTimer == nil {
+            configureGlassSurface()
+        }
     }
 
     func update(
@@ -1156,8 +1127,12 @@ private final class ControlPanelSurfaceReaderView: NSView {
         updateCornerCorrectionTimer()
 
         if isSidebarTransitioning {
+            isTrackingSidebarTransition = true
             beginLiveSidebarResizeCornerCorrection()
-        } else {
+        } else if isTrackingSidebarTransition {
+            isTrackingSidebarTransition = false
+            endLiveSidebarResizeCornerCorrection()
+        } else if liveResizeCornerCorrectionTimer == nil {
             configureGlassSurface()
         }
     }
@@ -1387,11 +1362,10 @@ private final class ControlPanelSurfaceReaderView: NSView {
     }
 
     private func beginLiveSidebarResizeCornerCorrection() {
-        configureGlassSurface(adjustsConstraints: false)
-
         if liveResizeCornerCorrectionTimer == nil {
+            configureGlassSurface(adjustsConstraints: false)
             let timer = Timer(
-                timeInterval: 1 / 120,
+                timeInterval: Self.liveCornerCorrectionInterval,
                 target: self,
                 selector: #selector(correctLiveSidebarResizeCorners(_:)),
                 userInfo: nil,
