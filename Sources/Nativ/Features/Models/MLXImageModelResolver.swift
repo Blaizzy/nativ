@@ -4,7 +4,7 @@ import NativServerKit
 struct MLXImageModelResolver: Sendable {
     static let shared = MLXImageModelResolver(
         supportedModelTypes: (try? Nativ.imageGenerationModelTypes())
-            ?? ["bonsai", "flux2", "ideogram4"]
+            ?? ["bonsai", "flux2", "ideogram4", "mage_flow"]
     )
 
     private let supportedModelTypes: Set<String>
@@ -18,6 +18,65 @@ struct MLXImageModelResolver: Sendable {
         at root: URL,
         fileManager: FileManager
     ) -> Bool {
+        guard let modelType = supportedModelType(
+            model: model,
+            at: root,
+            fileManager: fileManager
+        ) else {
+            return false
+        }
+        return modelType != "mage_flow"
+            || !isMageFlowEditModel(
+                model: model,
+                at: root,
+                fileManager: fileManager
+            )
+    }
+
+    func isImageEditingModel(
+        model: String,
+        at root: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard supportedModelType(
+            model: model,
+            at: root,
+            fileManager: fileManager
+        ) == "mage_flow" else {
+            return false
+        }
+        return isMageFlowEditModel(
+            model: model,
+            at: root,
+            fileManager: fileManager
+        )
+    }
+
+    func isSupportedImageModel(
+        model: String,
+        at root: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        supportedModelType(
+            model: model,
+            at: root,
+            fileManager: fileManager
+        ) != nil
+    }
+
+    static func isKnownImageEditOnlyModelID(_ model: String) -> Bool {
+        guard let normalizedName = normalizedModelName(model) else {
+            return false
+        }
+        return normalizedName == "mage_flow_edit"
+            || normalizedName.hasPrefix("mage_flow_edit_")
+    }
+
+    private func supportedModelType(
+        model: String,
+        at root: URL,
+        fileManager: FileManager
+    ) -> String? {
         var candidates = localModelTypes(at: root, fileManager: fileManager)
         addModelType(modelType(from: model), to: &candidates)
 
@@ -27,10 +86,31 @@ struct MLXImageModelResolver: Sendable {
                 at: root,
                 fileManager: fileManager
             ) {
-                return true
+                return candidate
             }
         }
-        return false
+        return nil
+    }
+
+    private func isMageFlowEditModel(
+        model: String,
+        at root: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        if Self.isKnownImageEditOnlyModelID(model) {
+            return true
+        }
+
+        let metadataURL = root.appendingPathComponent("mlx_mage_flow.json")
+        guard let metadata = loadJSONObject(
+            at: metadataURL,
+            fileManager: fileManager
+        ) else {
+            return false
+        }
+        return Self.isKnownImageEditOnlyModelID(
+            String(describing: metadata["variant"] ?? "")
+        )
     }
 
     private func localModelTypes(
@@ -153,15 +233,16 @@ struct MLXImageModelResolver: Sendable {
     }
 
     private func modelType(from model: String) -> String? {
-        let normalized =
-            model
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let name = normalized.split(separator: "/").last else {
+        guard let normalizedName = Self.normalizedModelName(model) else {
             return nil
         }
-        let modelType = String(name.split(separator: "-", maxSplits: 1).first ?? name)
+        if normalizedName == "mage_flow"
+            || normalizedName.hasPrefix("mage_flow_")
+        {
+            return "mage_flow"
+        }
+        let name = Substring(normalizedName)
+        let modelType = String(name.split(separator: "_", maxSplits: 1).first ?? name)
         switch modelType {
         case "ternary", "2bit":
             return "bonsai"
@@ -170,6 +251,20 @@ struct MLXImageModelResolver: Sendable {
         default:
             return normalizedModelType(modelType)
         }
+    }
+
+    private static func normalizedModelName(_ model: String) -> String? {
+        let normalized =
+            model
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let name = normalized.split(separator: "/").last else {
+            return nil
+        }
+        let normalizedName = String(name)
+            .replacingOccurrences(of: "-", with: "_")
+        return normalizedName.isEmpty ? nil : normalizedName
     }
 
     private func isBonsaiManifest(_ manifest: [String: Any]) -> Bool {
@@ -265,6 +360,29 @@ struct MLXImageModelResolver: Sendable {
                         "tokenizer/tokenizer.json"
                     ).path
                 )
+        case "mage_flow":
+            return [
+                "model_index.json",
+                "transformer/config.json",
+                "vae/config.json",
+                "text_encoder/config.json",
+                "text_encoder/tokenizer.json",
+            ].allSatisfy {
+                fileManager.fileExists(
+                    atPath: root.appendingPathComponent($0).path
+                )
+            }
+                && [
+                    "transformer",
+                    "vae",
+                    "text_encoder",
+                ].allSatisfy {
+                    hasSafetensors(
+                        in: $0,
+                        at: root,
+                        fileManager: fileManager
+                    )
+                }
         default:
             // The generated manifest is authoritative for newly bundled
             // backends whose local layout is not yet known to the app.

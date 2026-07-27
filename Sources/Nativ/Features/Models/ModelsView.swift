@@ -31,7 +31,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
         case .language:
             capabilities.contains(.text)
         case .image:
-            capabilities.contains(.imageGeneration)
+            !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing])
         case .speech:
             !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
         }
@@ -967,7 +967,15 @@ private struct InstalledModelRow: View {
                                     color: .orange
                                 )
                             }
-                            if preloadSlots.isEmpty {
+                            if localModel.capabilities.contains(.imageEditing)
+                                && !localModel.capabilities.contains(.imageGeneration)
+                            {
+                                ModelPill(
+                                    title: "Loads on demand",
+                                    systemImage: "photo.on.rectangle.angled",
+                                    color: .accentColor
+                                )
+                            } else if preloadSlots.isEmpty {
                                 ModelPill(
                                     title: "Not supported",
                                     systemImage: "exclamationmark.triangle",
@@ -1520,6 +1528,8 @@ extension LocalModelCapability {
             URLQueryItem(name: "other", value: "video")
         case .imageGeneration:
             URLQueryItem(name: "pipeline_tag", value: "text-to-image")
+        case .imageEditing:
+            URLQueryItem(name: "pipeline_tag", value: "image-to-image")
         case .speechToText:
             URLQueryItem(name: "pipeline_tag", value: "automatic-speech-recognition")
         case .textToSpeech:
@@ -1540,6 +1550,7 @@ extension LocalModelCapability {
         case .audio: "waveform"
         case .video: "film"
         case .imageGeneration: "photo.badge.plus"
+        case .imageEditing: "photo.on.rectangle.angled"
         case .speechToText: "captions.bubble"
         case .textToSpeech: "speaker.wave.2"
         case .embeddings: "circle.grid.3x3"

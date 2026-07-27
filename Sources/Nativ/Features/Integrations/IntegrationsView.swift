@@ -43,7 +43,9 @@ final class IntegrationsViewModel: ObservableObject {
         library.models
             .filter {
                 ($0.capabilities.contains(.text) || $0.capabilities.contains(.vision))
-                    && !$0.capabilities.contains(.imageGeneration)
+                    && $0.capabilities.isDisjoint(
+                        with: [.imageGeneration, .imageEditing]
+                    )
                     && !$0.capabilities.contains(.embeddings)
             }
             .map(IntegrationModelDescriptor.init)
