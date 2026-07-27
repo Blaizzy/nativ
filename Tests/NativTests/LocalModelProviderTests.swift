@@ -10,7 +10,7 @@ final class LocalModelProviderTests: XCTestCase {
 
         XCTAssertEqual(provider, .blackForestLabs)
         XCTAssertEqual(provider?.displayName, "Black Forest Labs")
-        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-flux")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-bfl")
     }
 
     func testRepublishedFluxModelResolvesToBlackForestLabs() {

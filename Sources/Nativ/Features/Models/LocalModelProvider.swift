@@ -60,7 +60,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .openMOSS: "ModelProviderIcon-openmoss"
         case .poolside: "ModelProviderIcon-poolside"
         case .prismML: "ModelProviderIcon-prism-ml"
-        case .blackForestLabs: "ModelProviderIcon-flux"
+        case .blackForestLabs: "ModelProviderIcon-bfl"
         case .nvidia: "ModelProviderIcon-nvidia"
         case .apple: "ModelProviderIcon-apple"
         case .ibm: "ModelProviderIcon-ibm"
