@@ -176,6 +176,9 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         if pipeline == "text-to-image" {
             result.insert(.imageGeneration)
         }
+        if pipeline == "image-to-image" {
+            result.insert(.imageEditing)
+        }
 
         if pipeline == "automatic-speech-recognition"
             || descriptors.contains("whisper")

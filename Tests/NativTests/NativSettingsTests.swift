@@ -43,6 +43,15 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
     }
 
+    func testImageEditModelIsNotPassedToGenerationPreloadFlag() {
+        let settings = NativSettings(
+            imageGenerationModelID: "microsoft/Mage-Flow-Edit-Turbo"
+        )
+
+        XCTAssertNil(settings.normalized().imageGenerationModelID)
+        XCTAssertFalse(settings.launchArguments.contains("--image-model"))
+    }
+
     func testServerHostIsNormalizedAndPassedToServer() {
         let settings = NativSettings(serverHost: "  0.0.0.0  ", serverPort: 9_001)
 

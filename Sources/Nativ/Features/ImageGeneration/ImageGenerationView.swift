@@ -198,10 +198,16 @@ private struct ImageGenerationComposer: View {
             )
         }
         .onChange(of: localLibrary.models) { _, models in
+            let generationModels = models.filter {
+                $0.capabilities.contains(.imageGeneration)
+            }
+            let editOnlyModels = models.filter {
+                $0.capabilities.contains(.imageEditing)
+                    && !$0.capabilities.contains(.imageGeneration)
+            }
             viewModel.applyDefaultModel(
                 model.settings.normalized().imageGenerationModelID,
-                installedImageModelIDs: models
-                    .filter { $0.capabilities.contains(.imageGeneration) }
+                installedImageModelIDs: (generationModels + editOnlyModels)
                     .map(\.repoID)
             )
         }
@@ -246,10 +252,16 @@ private struct ImageGenerationComposer: View {
 
     private var canSubmit: Bool {
         viewModel.canSubmit(isRunning: model.isRunning)
+            && (!selectedModelIsEditOnly || viewModel.nextRequestIsEdit)
     }
 
     private var placeholder: String {
-        viewModel.nextRequestIsEdit ? "Describe how to change the image" : "Describe an image to create"
+        if selectedModelIsEditOnly && !viewModel.nextRequestIsEdit {
+            return "Add a reference image to use this edit model"
+        }
+        return viewModel.nextRequestIsEdit
+            ? "Describe how to change the image"
+            : "Describe an image to create"
     }
 
     private var editorHeight: CGFloat {
@@ -284,8 +296,22 @@ private struct ImageGenerationComposer: View {
 
     private var imageModels: [LocalModel] {
         localLibrary.models.filter {
-            $0.capabilities.contains(.imageGeneration)
+            !$0.capabilities.isDisjoint(
+                with: [.imageGeneration, .imageEditing]
+            )
         }
+    }
+
+    private var selectedModelIsEditOnly: Bool {
+        if let selectedModel = imageModels.first(where: {
+            $0.repoID == viewModel.modelID
+        }) {
+            return selectedModel.capabilities.contains(.imageEditing)
+                && !selectedModel.capabilities.contains(.imageGeneration)
+        }
+        return MLXImageModelResolver.isKnownImageEditOnlyModelID(
+            viewModel.modelID
+        )
     }
 
     private var selectedModelProvider: LocalModelProvider? {
@@ -319,6 +345,9 @@ private struct ImageGenerationComposer: View {
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(modelLabel)"
         }
+        if selectedModelIsEditOnly {
+            return "This model loads on demand when you edit an image"
+        }
         return "Change image model"
     }
 
@@ -333,7 +362,12 @@ private struct ImageGenerationComposer: View {
     }
 
     private var actionHelp: String {
-        viewModel.nextRequestIsEdit ? "Edit image (Return)" : "Generate image (Return)"
+        if selectedModelIsEditOnly && !viewModel.nextRequestIsEdit {
+            return "Add a reference image to use this edit model"
+        }
+        return viewModel.nextRequestIsEdit
+            ? "Edit image (Return)"
+            : "Generate image (Return)"
     }
 
     private func submit() {
@@ -347,6 +381,12 @@ private struct ImageGenerationComposer: View {
     }
 
     private func selectImageModel(_ localModel: LocalModel) {
+        if localModel.capabilities.contains(.imageEditing)
+            && !localModel.capabilities.contains(.imageGeneration)
+        {
+            viewModel.applyDefaultModel(localModel.repoID)
+            return
+        }
         model.requestPreloadedModelSwitch(
             to: localModel,
             for: .imageGeneration,
@@ -358,6 +398,9 @@ private struct ImageGenerationComposer: View {
 
     private func selectImageModel(_ modelID: String) {
         viewModel.applyDefaultModel(modelID)
+        guard !MLXImageModelResolver.isKnownImageEditOnlyModelID(modelID) else {
+            return
+        }
         model.switchPreloadedModel(to: modelID, for: .imageGeneration)
     }
 

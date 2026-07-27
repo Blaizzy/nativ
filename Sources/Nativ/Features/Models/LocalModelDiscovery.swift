@@ -10,6 +10,7 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case audio
     case video
     case imageGeneration
+    case imageEditing
     case speechToText
     case textToSpeech
     case embeddings
@@ -28,6 +29,8 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
             "Video"
         case .imageGeneration:
             "Image Generation"
+        case .imageEditing:
+            "Image Editing"
         case .speechToText:
             "Speech to Text"
         case .textToSpeech:
@@ -170,7 +173,10 @@ struct LocalModelMemoryEstimate: Equatable, Sendable {
     static let imageGenerationActivationReserveBytes: UInt64 = 6 * 1024 * 1024 * 1024
 
     static func activationReserveBytes(for capabilities: Set<LocalModelCapability>) -> UInt64 {
-        capabilities.contains(.imageGeneration) ? imageGenerationActivationReserveBytes : 0
+        capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+            ? imageGenerationActivationReserveBytes
+            : 0
     }
 
     let estimatedModelBytes: UInt64
@@ -563,7 +569,19 @@ enum LocalModelDiscovery {
         ) else {
             return false
         }
-        return contents.contains { $0.pathExtension == "safetensors" }
+        if contents.contains(where: { $0.pathExtension == "safetensors" }) {
+            return true
+        }
+
+        // Image-generation pipelines commonly store weights in component
+        // directories rather than at the snapshot root. Let the generated
+        // backend manifest and its family-specific layout checks decide
+        // whether such a snapshot is complete and loadable.
+        return MLXImageModelResolver.shared.isSupportedImageModel(
+            model: "",
+            at: snapshotURL,
+            fileManager: fileManager
+        )
     }
 
     private static func snapshotSize(at snapshotURL: URL, fileManager: FileManager) -> Int64? {
@@ -977,6 +995,13 @@ enum LocalModelDiscovery {
             fileManager: fileManager
         ) {
             capabilities.insert(.imageGeneration)
+        }
+        if MLXImageModelResolver.shared.isImageEditingModel(
+            model: model,
+            at: snapshotURL,
+            fileManager: fileManager
+        ) {
+            capabilities.insert(.imageEditing)
         }
 
         let audioKeys: Set<String> = [

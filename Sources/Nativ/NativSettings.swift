@@ -475,6 +475,10 @@ struct NativSettings: Codable, Equatable {
             .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
+        if let imageModelID = settings.imageGenerationModelID,
+           MLXImageModelResolver.isKnownImageEditOnlyModelID(imageModelID) {
+            settings.imageGenerationModelID = nil
+        }
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)

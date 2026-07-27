@@ -93,6 +93,8 @@ targets:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
+      - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
+      - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
       - path: Sources/Nativ/Features/Models/ModelPrimaryTaskResolver.swift
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift

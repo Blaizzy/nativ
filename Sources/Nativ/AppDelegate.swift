@@ -139,6 +139,9 @@ private final class ModelMenuRowView: NSView {
             case .imageGeneration:
                 symbolName = "photo.badge.plus"
                 description = capability.displayName
+            case .imageEditing:
+                symbolName = "photo.on.rectangle.angled"
+                description = capability.displayName
             case .speechToText:
                 symbolName = "captions.bubble.fill"
                 description = capability.displayName

@@ -7,6 +7,7 @@ final class MLXImageModelResolverTests: XCTestCase {
         "bonsai",
         "flux2",
         "ideogram4",
+        "mage_flow",
     ]
     private var temporaryRoot: URL!
 
@@ -95,6 +96,85 @@ final class MLXImageModelResolverTests: XCTestCase {
         )
     }
 
+    func testMageFlowFamilyResolvesToImageGeneration() throws {
+        try makeCompleteMageFlowFixture()
+
+        for model in [
+            "microsoft/Mage-Flow-Base",
+            "microsoft/Mage-Flow",
+            "microsoft/Mage-Flow-Turbo",
+        ] {
+            XCTAssertTrue(
+                resolver().isImageGenerationModel(
+                    model: model,
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                model
+            )
+            XCTAssertFalse(
+                resolver().isImageEditingModel(
+                    model: model,
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                model
+            )
+        }
+    }
+
+    func testMageFlowEditFamilyResolvesToImageEditingOnly() throws {
+        try makeCompleteMageFlowFixture()
+
+        for model in [
+            "microsoft/Mage-Flow-Edit-Base",
+            "microsoft/Mage-Flow-Edit",
+            "microsoft/Mage-Flow-Edit-Turbo",
+        ] {
+            XCTAssertTrue(
+                resolver().isSupportedImageModel(
+                    model: model,
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                model
+            )
+            XCTAssertTrue(
+                resolver().isImageEditingModel(
+                    model: model,
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                model
+            )
+            XCTAssertFalse(
+                resolver().isImageGenerationModel(
+                    model: model,
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                model
+            )
+        }
+    }
+
+    func testMageFlowRequiresLoadableLocalLayout() throws {
+        try makeCompleteMageFlowFixture()
+        try FileManager.default.removeItem(
+            at: temporaryRoot.appendingPathComponent(
+                "text_encoder/tokenizer.json"
+            )
+        )
+
+        XCTAssertFalse(
+            resolver().isImageGenerationModel(
+                model: "microsoft/Mage-Flow",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
     func testBundledManifestGatesMetadataCandidates() throws {
         try makeCompleteFlux2Fixture()
         let resolver = MLXImageModelResolver(supportedModelTypes: [])
@@ -112,6 +192,7 @@ final class MLXImageModelResolverTests: XCTestCase {
         let modelTypes = try Nativ.imageGenerationModelTypes()
 
         XCTAssertTrue(modelTypes.contains("flux2"))
+        XCTAssertTrue(modelTypes.contains("mage_flow"))
         XCTAssertFalse(modelTypes.contains("diffusion_gemma"))
     }
 
@@ -137,6 +218,30 @@ final class MLXImageModelResolverTests: XCTestCase {
         try touch("text_encoder/model.safetensors")
         try touch("vae/model.safetensors")
         try touch("tokenizer/tokenizer.json")
+    }
+
+    private func makeCompleteMageFlowFixture() throws {
+        try writeJSON(
+            [
+                "_class_name": "MageFlowPipeline",
+                "scheduler": [
+                    "diffusers",
+                    "FlowMatchEulerDiscreteScheduler",
+                ],
+                "text_encoder": [
+                    "transformers",
+                    "Qwen3VLForConditionalGeneration",
+                ],
+                "transformer": ["mage_flow", "MageFlow"],
+                "vae": ["mage_flow", "MageVAE"],
+            ],
+            to: "model_index.json"
+        )
+        for component in ["transformer", "text_encoder", "vae"] {
+            try writeJSON([:], to: "\(component)/config.json")
+            try touch("\(component)/model.safetensors")
+        }
+        try touch("text_encoder/tokenizer.json")
     }
 
     private func writeJSON(_ object: Any, to path: String) throws {
