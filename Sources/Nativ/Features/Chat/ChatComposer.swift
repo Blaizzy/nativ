@@ -623,6 +623,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.parent = self
         button.isEnabled = isEnabled
+        context.coordinator.updateActionAvailability(isEnabled)
     }
 
     @MainActor
@@ -630,6 +631,10 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         var parent: ComposerModelPickerMenuControl
 
         private static let menuFont = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        private weak var modelSummaryItem: NSMenuItem?
+        private weak var secondarySummaryItem: NSMenuItem?
+        private var modelOptionViews = [PersistentMenuActionView]()
+        private var secondaryOptionViews = [PersistentMenuActionView]()
 
         init(parent: ComposerModelPickerMenuControl) {
             self.parent = parent
@@ -638,6 +643,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         @objc func showMenu(_ sender: NSButton) {
             // Build the entire tree before tracking begins. Keeping both submenus
             // alive for the whole session prevents hover-driven view replacement.
+            modelOptionViews.removeAll()
+            secondaryOptionViews.removeAll()
             let menu = makeMenu()
             parent.onTrackingChanged(true)
             defer { parent.onTrackingChanged(false) }
@@ -665,6 +672,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             )
             modelItem.submenu = makeModelMenu()
             menu.addItem(modelItem)
+            modelSummaryItem = modelItem
 
             if let secondarySection = parent.secondarySection {
                 let secondaryItem = NSMenuItem(
@@ -674,6 +682,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                 )
                 secondaryItem.submenu = makeSecondaryMenu(secondarySection)
                 menu.addItem(secondaryItem)
+                secondarySummaryItem = secondaryItem
             }
 
             return menu
@@ -689,9 +698,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                     title: modelMenuLabel(selectedModelID),
                     repoID: selectedModelID,
                     provider: parent.selectedModelProvider,
-                    action: #selector(switchModel(_:))
+                    isSelected: true
                 )
-                item.state = .on
                 menu.addItem(item)
 
                 if !parent.models.isEmpty {
@@ -704,9 +712,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                     title: modelMenuLabel(model.repoID),
                     repoID: model.repoID,
                     provider: model.provider,
-                    action: #selector(selectModel(_:))
+                    isSelected: model.repoID == parent.selectedModelID
                 )
-                item.state = model.repoID == parent.selectedModelID ? .on : .off
                 menu.addItem(item)
             }
 
@@ -726,18 +733,21 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             menu.autoenablesItems = false
 
             for option in section.options {
-                let item = NSMenuItem(
-                    title: option.title,
-                    action: #selector(selectSecondaryOption(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.representedObject = option.id
-                item.state = option.id == section.selectedID ? .on : .off
-                item.attributedTitle = secondaryOptionTitle(
+                let title = secondaryOptionTitle(
                     option,
                     options: section.options
                 )
+                let item = persistentMenuItem(
+                    title: title,
+                    optionID: option.id,
+                    image: nil,
+                    isSelected: option.id == section.selectedID
+                ) { [weak self] in
+                    self?.selectSecondaryOption(option.id)
+                }
+                if let itemView = item.view as? PersistentMenuActionView {
+                    secondaryOptionViews.append(itemView)
+                }
                 menu.addItem(item)
             }
 
@@ -748,32 +758,68 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             title: String,
             repoID: String,
             provider: LocalModelProvider?,
-            action: Selector
+            isSelected: Bool
         ) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = repoID
-            item.image = providerImage(provider)
+            let item = persistentMenuItem(
+                title: NSAttributedString(
+                    string: title,
+                    attributes: [.font: Self.menuFont]
+                ),
+                optionID: repoID,
+                image: providerImage(provider),
+                isSelected: isSelected
+            ) { [weak self] in
+                self?.selectModel(repoID)
+            }
+            if let itemView = item.view as? PersistentMenuActionView {
+                modelOptionViews.append(itemView)
+            }
             return item
         }
 
-        @objc private func selectModel(_ sender: NSMenuItem) {
-            guard let repoID = sender.representedObject as? String,
-                  let model = parent.models.first(where: { $0.repoID == repoID })
-            else { return }
-            parent.onSelectModel(model)
+        private func persistentMenuItem(
+            title: NSAttributedString,
+            optionID: String,
+            image: NSImage?,
+            isSelected: Bool,
+            onSelect: @escaping () -> Void
+        ) -> NSMenuItem {
+            let item = NSMenuItem(title: title.string, action: nil, keyEquivalent: "")
+            item.isEnabled = true
+            item.view = PersistentMenuActionView(
+                optionID: optionID,
+                title: title,
+                image: image,
+                isSelected: isSelected,
+                onSelect: onSelect
+            )
+            return item
         }
 
-        @objc private func switchModel(_ sender: NSMenuItem) {
-            guard let repoID = sender.representedObject as? String else { return }
-            parent.onSwitchModel(repoID)
-        }
+        private func selectModel(_ repoID: String) {
+            modelOptionViews.forEach { $0.isSelected = $0.optionID == repoID }
+            modelSummaryItem?.title = "Model   \(modelMenuLabel(repoID))"
 
-        @objc private func selectSecondaryOption(_ sender: NSMenuItem) {
-            guard let optionID = sender.representedObject as? String else {
-                return
+            if let model = parent.models.first(where: { $0.repoID == repoID }) {
+                parent.onSelectModel(model)
+            } else {
+                parent.onSwitchModel(repoID)
             }
-            parent.secondarySection?.onSelect(optionID)
+        }
+
+        private func selectSecondaryOption(_ optionID: String) {
+            guard let section = parent.secondarySection,
+                  let option = section.options.first(where: { $0.id == optionID })
+            else { return }
+
+            secondaryOptionViews.forEach { $0.isSelected = $0.optionID == optionID }
+            secondarySummaryItem?.title = "\(section.title)   \(option.title)"
+            section.onSelect(optionID)
+        }
+
+        func updateActionAvailability(_ isEnabled: Bool) {
+            modelOptionViews.forEach { $0.isActionEnabled = isEnabled }
+            secondaryOptionViews.forEach { $0.isActionEnabled = isEnabled }
         }
 
         private func modelMenuLabel(_ modelID: String) -> String {

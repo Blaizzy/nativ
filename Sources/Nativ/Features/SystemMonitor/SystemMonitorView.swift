@@ -119,95 +119,47 @@ struct SystemMonitorView: View {
     }
 
     private var menuBarControl: some View {
-        Menu {
-            Section("Menu bar") {
-                Toggle(
-                    isOn: Binding(
-                        get: { menuBarPreferences.items.isEmpty },
-                        set: { isEnabled in
-                            if isEnabled {
-                                menuBarPreferences.useNativIcon()
-                            }
-                        }
-                    )
-                ) {
-                    Label(
-                        "Nativ icon",
-                        systemImage: SystemMenuBarMetric.nativ.systemImage
-                    )
-                }
-            }
+        HStack(spacing: 8) {
+            Image(systemName: "menubar.rectangle")
+                .foregroundStyle(Color.accentColor)
 
-            ForEach(
-                SystemMenuBarMetric.allCases.filter { $0 != .nativ }
-            ) { metric in
-                Section(metric.title) {
-                    ForEach(metric.menuBarStyles) { style in
-                        Toggle(
-                            isOn: Binding(
-                                get: {
-                                    menuBarPreferences.contains(
-                                        metric: metric,
-                                        style: style
-                                    )
-                                },
-                                set: { isEnabled in
-                                    menuBarPreferences.setEnabled(
-                                        isEnabled,
-                                        metric: metric,
-                                        style: style
-                                    )
-                                }
-                            )
-                        ) {
-                            Label(style.title, systemImage: style.systemImage)
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "menubar.rectangle")
-                    .foregroundStyle(Color.accentColor)
+            Text("Customize Menu Bar")
+                .foregroundStyle(.primary)
 
-                Text("Customize Menu Bar")
-                    .foregroundStyle(.primary)
+            Text("\(menuBarItemCount)")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(minWidth: 18, minHeight: 18)
+                .background(Color.accentColor, in: Capsule())
 
-                Text("\(menuBarItemCount)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 18, minHeight: 18)
-                    .background(Color.accentColor, in: Capsule())
-
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-            }
-            .font(.callout.weight(.semibold))
-            .padding(.horizontal, 11)
-            .frame(height: 34)
-            .background {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(
-                        Color.accentColor.opacity(
-                            isMenuBarControlHovered ? 0.14 : 0.07
-                        )
-                    )
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(
-                        Color.accentColor.opacity(
-                            isMenuBarControlHovered ? 0.65 : 0.32
-                        ),
-                        lineWidth: 1
-                    )
-            }
-            .contentShape(.rect)
+            Image(systemName: "chevron.down")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
+        .font(.callout.weight(.semibold))
+        .padding(.horizontal, 11)
+        .frame(height: 34)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(
+                    Color.accentColor.opacity(
+                        isMenuBarControlHovered ? 0.14 : 0.07
+                    )
+                )
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(
+                    Color.accentColor.opacity(
+                        isMenuBarControlHovered ? 0.65 : 0.32
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .contentShape(.rect)
+        .overlay {
+            MenuBarCustomizationMenuControl(preferences: menuBarPreferences)
+        }
         .fixedSize()
         .onHover { isHovered in
             withAnimation(.easeOut(duration: 0.12)) {
@@ -1998,6 +1950,153 @@ private enum SystemMonitorFormat {
 
     static func integer(_ value: UInt64) -> String {
         value.formatted()
+    }
+}
+
+private struct MenuBarCustomizationMenuControl: NSViewRepresentable {
+    @ObservedObject var preferences: SystemMenuBarPreferences
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(preferences: preferences)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.title = ""
+        button.image = nil
+        button.focusRingType = .none
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.setAccessibilityLabel("Customize Menu Bar")
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.preferences = preferences
+        context.coordinator.refreshSelection()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var preferences: SystemMenuBarPreferences
+
+        private static let menuFont = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        private var optionViews = [PersistentMenuActionView]()
+
+        init(preferences: SystemMenuBarPreferences) {
+            self.preferences = preferences
+        }
+
+        @objc func showMenu(_ sender: NSButton) {
+            optionViews.removeAll()
+            let menu = makeMenu()
+            menu.update()
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(
+                    x: -8,
+                    y: sender.isFlipped
+                        ? sender.bounds.minY - menu.size.height - 4
+                        : sender.bounds.maxY + menu.size.height + 4
+                ),
+                in: sender
+            )
+        }
+
+        func refreshSelection() {
+            for optionView in optionViews {
+                if optionView.optionID == SystemMenuBarMetric.nativ.rawValue {
+                    optionView.isSelected = preferences.items.isEmpty
+                    continue
+                }
+                guard let item = SystemMenuBarItem(id: optionView.optionID) else {
+                    continue
+                }
+                optionView.isSelected = preferences.contains(
+                    metric: item.metric,
+                    style: item.style
+                )
+            }
+        }
+
+        private func makeMenu() -> NSMenu {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+
+            menu.addItem(.sectionHeader(title: "Menu bar"))
+            menu.addItem(menuItem(
+                title: "Nativ icon",
+                systemImage: SystemMenuBarMetric.nativ.systemImage,
+                optionID: SystemMenuBarMetric.nativ.rawValue,
+                isSelected: preferences.items.isEmpty
+            ) { [weak self] in
+                self?.preferences.useNativIcon()
+                self?.refreshSelection()
+            })
+
+            for metric in SystemMenuBarMetric.allCases where metric != .nativ {
+                menu.addItem(.separator())
+                menu.addItem(.sectionHeader(title: metric.title))
+
+                for style in metric.menuBarStyles {
+                    let item = SystemMenuBarItem(metric: metric, style: style)
+                    menu.addItem(menuItem(
+                        title: style.title,
+                        systemImage: style.systemImage,
+                        optionID: item.id,
+                        isSelected: preferences.contains(metric: metric, style: style)
+                    ) { [weak self] in
+                        guard let self else { return }
+                        let isSelected = self.preferences.contains(
+                            metric: metric,
+                            style: style
+                        )
+                        self.preferences.setEnabled(
+                            !isSelected,
+                            metric: metric,
+                            style: style
+                        )
+                        self.refreshSelection()
+                    })
+                }
+            }
+
+            return menu
+        }
+
+        private func menuItem(
+            title: String,
+            systemImage: String,
+            optionID: String,
+            isSelected: Bool,
+            onSelect: @escaping () -> Void
+        ) -> NSMenuItem {
+            let configuration = NSImage.SymbolConfiguration(
+                pointSize: NSFont.systemFontSize,
+                weight: .regular
+            )
+            let image = NSImage(
+                systemSymbolName: systemImage,
+                accessibilityDescription: title
+            )?.withSymbolConfiguration(configuration)
+            let attributedTitle = NSAttributedString(
+                string: title,
+                attributes: [.font: Self.menuFont]
+            )
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let itemView = PersistentMenuActionView(
+                optionID: optionID,
+                title: attributedTitle,
+                image: image,
+                isSelected: isSelected,
+                onSelect: onSelect
+            )
+            item.view = itemView
+            item.isEnabled = true
+            optionViews.append(itemView)
+            return item
+        }
     }
 }
 
