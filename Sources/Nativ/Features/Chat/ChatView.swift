@@ -305,7 +305,7 @@ struct ChatView: View {
 
     private var transcript: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
