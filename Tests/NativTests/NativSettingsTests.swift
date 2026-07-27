@@ -114,6 +114,83 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(token, ServerAPIAuthentication.normalizedToken(token))
     }
 
+    func testServerAPIKeyIsOmittedFromEncodedSettings() throws {
+        let data = try PropertyListEncoder().encode(
+            NativSettings(serverAPIKey: "nativ_secret")
+        )
+        let propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+
+        XCTAssertNil(propertyList["serverAPIKey"])
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("nativ_secret"))
+    }
+
+    func testSavingSettingsStoresServerAPIKeyInCredentialStore() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let credentialStore = TestServerAPICredentialStore()
+
+        NativSettings(serverAPIKey: "  nativ_secret\n").save(
+            to: url,
+            credentialStore: credentialStore
+        )
+
+        XCTAssertEqual(credentialStore.token, "nativ_secret")
+        XCTAssertEqual(try propertyList(at: url)["serverAPIKey"] as? String, nil)
+        XCTAssertEqual(
+            NativSettings.load(from: url, credentialStore: credentialStore).serverAPIKey,
+            "nativ_secret"
+        )
+    }
+
+    func testLoadingMigratesLegacyServerAPIKeyIntoCredentialStore() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(serverAPIKey: "  nativ_legacy\n", to: url)
+        let credentialStore = TestServerAPICredentialStore()
+
+        let settings = NativSettings.load(from: url, credentialStore: credentialStore)
+
+        XCTAssertEqual(settings.serverAPIKey, "nativ_legacy")
+        XCTAssertEqual(credentialStore.token, "nativ_legacy")
+        XCTAssertNil(try propertyList(at: url)["serverAPIKey"])
+    }
+
+    func testFailedLegacyMigrationRetainsRecoverableCredential() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(serverAPIKey: "nativ_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        let settings = NativSettings.load(from: url, credentialStore: credentialStore)
+
+        XCTAssertEqual(settings.serverAPIKey, "nativ_legacy")
+        XCTAssertEqual(
+            try propertyList(at: url)["serverAPIKey"] as? String,
+            "nativ_legacy"
+        )
+    }
+
+    func testKeychainCredentialTakesPrecedenceOverLegacyCredential() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(serverAPIKey: "nativ_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore(token: "nativ_keychain")
+
+        let settings = NativSettings.load(from: url, credentialStore: credentialStore)
+
+        XCTAssertEqual(settings.serverAPIKey, "nativ_keychain")
+        XCTAssertEqual(credentialStore.token, "nativ_keychain")
+        XCTAssertNil(try propertyList(at: url)["serverAPIKey"])
+    }
+
     func testServerAuthorizationAddsBearerHeader() {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
 
@@ -249,6 +326,79 @@ final class NativSettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(warning?.estimatedWorkingSetBytes, 90)
+    }
+
+    private func temporarySettingsURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("settings.plist")
+    }
+
+    private func propertyList(at url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        return try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+    }
+
+    private func writeLegacySettings(serverAPIKey: String, to url: URL) throws {
+        let encoded = try PropertyListEncoder().encode(NativSettings())
+        var propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: encoded,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        propertyList["serverAPIKey"] = serverAPIKey
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: propertyList,
+            format: .binary,
+            options: 0
+        )
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: url)
+    }
+}
+
+private enum TestCredentialStoreError: Error {
+    case unavailable
+}
+
+private final class TestServerAPICredentialStore: ServerAPICredentialStoring {
+    var token: String?
+    var loadError: Error?
+    var saveError: Error?
+
+    init(
+        token: String? = nil,
+        loadError: Error? = nil,
+        saveError: Error? = nil
+    ) {
+        self.token = token
+        self.loadError = loadError
+        self.saveError = saveError
+    }
+
+    func load() throws -> String? {
+        if let loadError {
+            throw loadError
+        }
+        return token
+    }
+
+    func save(_ token: String?) throws {
+        if let saveError {
+            throw saveError
+        }
+        self.token = token
     }
 }
 

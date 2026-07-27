@@ -2,6 +2,90 @@ import Foundation
 import NativServerKit
 import Security
 
+enum ServerAPICredentialPersistenceError: Error {
+    case keychain(OSStatus)
+    case invalidKeychainData
+}
+
+protocol ServerAPICredentialStoring {
+    func load() throws -> String?
+    func save(_ token: String?) throws
+}
+
+struct ServerAPIKeychain: ServerAPICredentialStoring {
+    let service: String
+    let account: String
+
+    init(
+        service: String = "dev.local.Nativ.server-api-key",
+        account: String = "nativ-server"
+    ) {
+        self.service = service
+        self.account = account
+    }
+
+    func load() throws -> String? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(status)
+        }
+        guard let data = item as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            throw ServerAPICredentialPersistenceError.invalidKeychainData
+        }
+        return ServerAPIAuthentication.normalizedToken(token)
+    }
+
+    func save(_ token: String?) throws {
+        guard let token = ServerAPIAuthentication.normalizedToken(token) else {
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw ServerAPICredentialPersistenceError.keychain(status)
+            }
+            return
+        }
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw ServerAPICredentialPersistenceError.keychain(updateStatus)
+        }
+
+        var item = baseQuery
+        attributes.forEach { item[$0.key] = $0.value }
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(addStatus)
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+}
+
 struct ServerAPITokenInfo: Equatable, Sendable {
     let maskedValue: String
     let characterCount: Int
@@ -409,7 +493,6 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
-        try container.encodeIfPresent(serverAPIKey, forKey: .serverAPIKey)
         try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
@@ -444,25 +527,67 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
     }
 
-    static func load() -> Self {
-        guard let data = try? Data(contentsOf: storageURL) else {
-            return Self()
+    static func load(
+        from url: URL = storageURL,
+        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain()
+    ) -> Self {
+        let storedSettings: Self
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? PropertyListDecoder().decode(Self.self, from: data) {
+            storedSettings = decoded
+        } else {
+            storedSettings = Self()
         }
-        return (try? PropertyListDecoder().decode(Self.self, from: data)) ?? Self()
+
+        var settings = storedSettings
+        let legacyToken = ServerAPIAuthentication.normalizedToken(
+            storedSettings.serverAPIKey
+        )
+
+        do {
+            if let keychainToken = try credentialStore.load() {
+                settings.serverAPIKey = keychainToken
+                if storedSettings.serverAPIKey != nil {
+                    try? settings.writePropertyList(to: url)
+                }
+            } else if let legacyToken {
+                try credentialStore.save(legacyToken)
+                settings.serverAPIKey = legacyToken
+                try? settings.writePropertyList(to: url)
+            } else {
+                settings.serverAPIKey = nil
+                if storedSettings.serverAPIKey != nil {
+                    try? settings.writePropertyList(to: url)
+                }
+            }
+        } catch {
+            // Keep the legacy value until it can be migrated without data loss.
+            settings.serverAPIKey = legacyToken
+        }
+
+        return settings
     }
 
-    func save() {
+    func save(
+        to url: URL = storageURL,
+        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain()
+    ) {
+        let settings = normalized()
         do {
-            let url = Self.storageURL
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = try PropertyListEncoder().encode(normalized())
-            try data.write(to: url, options: .atomic)
+            try credentialStore.save(settings.serverAPIKey)
+            try settings.writePropertyList(to: url)
         } catch {
-            // Settings should not prevent the server from running.
+            // Do not replace the last recoverable credential on failure.
         }
+    }
+
+    private func writePropertyList(to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try PropertyListEncoder().encode(normalized())
+        try data.write(to: url, options: .atomic)
     }
 
     func normalized() -> Self {
