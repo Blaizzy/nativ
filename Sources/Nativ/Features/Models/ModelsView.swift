@@ -1104,9 +1104,7 @@ private struct ActiveDownloadBannerRow: View {
                     .monospacedDigit()
             }
             Spacer(minLength: 12)
-            if download.state != .queued {
-                Button(download.state == .paused ? "Resume" : "Pause", action: onPauseResume)
-            }
+            Button(download.state == .paused ? "Resume" : "Pause", action: onPauseResume)
             Button("Cancel", role: .destructive, action: onCancel)
         }
         .padding(.horizontal, 20)
@@ -1120,8 +1118,6 @@ private struct ActiveDownloadBannerRow: View {
             "Downloading… \(Int((download.progress * 100).rounded()))%"
         case .paused:
             "Download paused"
-        case .queued:
-            "Queued"
         }
     }
 }

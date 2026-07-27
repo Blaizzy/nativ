@@ -551,7 +551,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     enum DownloadState: Equatable {
         case downloading
         case paused
-        case queued
     }
 
     struct ActiveDownload: Identifiable, Equatable {
@@ -583,7 +582,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     @Published private(set) var downloads: [ActiveDownload] = []
     @Published private(set) var errorByModelID: [String: String] = [:]
 
-    private let maxConcurrentDownloads = 3
     private var contexts: [String: DownloadContext] = [:]
 
     deinit {
@@ -710,14 +708,11 @@ final class HuggingFaceDownloadManager: ObservableObject {
         guard let context = contexts[modelID] else { return }
         let task = context.task
         let cachePath = context.cachePath
-        let hadOperation = context.operation != nil
         task?.cancel()
         let waiters = Array(context.waiters.values)
         removeContext(modelID)
         waiters.forEach { $0.resume(throwing: CancellationError()) }
-        startNextIfPossible()
 
-        guard hadOperation else { return }
         Task {
             await task?.value
             await Task.detached(priority: .utility) {
@@ -742,21 +737,14 @@ final class HuggingFaceDownloadManager: ObservableObject {
         )
         contexts[repoID] = context
         errorByModelID[repoID] = nil
-
-        if runningCount < maxConcurrentDownloads {
-            downloads.append(
-                ActiveDownload(modelID: repoID, sizeBytes: sizeBytes, progress: 0, state: .downloading)
-            )
-            do {
-                try startDownload(context)
-            } catch {
-                removeContext(repoID)
-                throw error
-            }
-        } else {
-            downloads.append(
-                ActiveDownload(modelID: repoID, sizeBytes: sizeBytes, progress: 0, state: .queued)
-            )
+        downloads.append(
+            ActiveDownload(modelID: repoID, sizeBytes: sizeBytes, progress: 0, state: .downloading)
+        )
+        do {
+            try startDownload(context)
+        } catch {
+            removeContext(repoID)
+            throw error
         }
     }
 
@@ -797,7 +785,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         removeContext(repoID)
-        startNextIfPossible()
 
         if let error {
             waiters.forEach { $0.resume(throwing: error) }
@@ -806,30 +793,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
             completion?()
             waiters.forEach { $0.resume() }
         }
-    }
-
-    private func startNextIfPossible() {
-        while runningCount < maxConcurrentDownloads,
-              let next = downloads.first(where: { $0.state == .queued }) {
-            guard let context = contexts[next.modelID] else {
-                removeContext(next.modelID)
-                continue
-            }
-            setState(next.modelID, .downloading)
-            do {
-                try startDownload(context)
-            } catch {
-                let waiters = Array(context.waiters.values)
-                errorByModelID[next.modelID] =
-                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                removeContext(next.modelID)
-                waiters.forEach { $0.resume(throwing: error) }
-            }
-        }
-    }
-
-    private var runningCount: Int {
-        downloads.reduce(0) { $1.state == .queued ? $0 : $0 + 1 }
     }
 
     private func updateProgress(_ modelID: String, _ progress: Double) {
