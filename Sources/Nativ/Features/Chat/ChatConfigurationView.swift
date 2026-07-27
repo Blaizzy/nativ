@@ -7,6 +7,7 @@ private enum ModelConfigurationLayoutMetrics {
     static let contentMinimumWidth: CGFloat = 420
     static let contentMinimumWidthWithConfiguration: CGFloat = 360
     static let configurationWidth: CGFloat = 320
+    static let transitionDuration: TimeInterval = 0.2
 }
 
 struct ModelConfigurationLayout<Content: View>: View {
@@ -25,33 +26,51 @@ struct ModelConfigurationLayout<Content: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            content
-                .frame(
-                    minWidth: isConfigurationVisible
-                        ? ModelConfigurationLayoutMetrics.contentMinimumWidthWithConfiguration
-                        : ModelConfigurationLayoutMetrics.contentMinimumWidth,
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
-                )
-                .clipped()
+        ZStack(alignment: .trailing) {
+            HStack(spacing: 0) {
+                content
+                    .frame(
+                        minWidth: isConfigurationVisible
+                            ? ModelConfigurationLayoutMetrics.contentMinimumWidthWithConfiguration
+                            : ModelConfigurationLayoutMetrics.contentMinimumWidth,
+                        maxWidth: .infinity,
+                        maxHeight: .infinity
+                    )
+                    .clipped()
 
-            if isConfigurationVisible {
-                ModelConfigurationView(
-                    settings: $model.settings,
-                    settingsRequireRestart: model.settingsRequireRestart,
-                    onReset: model.resetSettings
-                )
-                .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
-                .ignoresSafeArea(.container, edges: .top)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(Color(nsColor: .separatorColor))
-                        .frame(width: 1)
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
-                }
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                Color.clear
+                    .frame(
+                        width: isConfigurationVisible
+                            ? ModelConfigurationLayoutMetrics.configurationWidth
+                            : 0
+                    )
             }
+            .animation(nil, value: isConfigurationVisible)
+
+            ModelConfigurationView(
+                settings: $model.settings,
+                settingsRequireRestart: model.settingsRequireRestart,
+                onReset: model.resetSettings
+            )
+            .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
+            .ignoresSafeArea(.container, edges: .top)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                    .ignoresSafeArea(.container, edges: [.top, .bottom])
+            }
+            .offset(
+                x: isConfigurationVisible
+                    ? 0
+                    : ModelConfigurationLayoutMetrics.configurationWidth + 5
+            )
+            .allowsHitTesting(isConfigurationVisible)
+            .accessibilityHidden(!isConfigurationVisible)
+            .animation(
+                .smooth(duration: ModelConfigurationLayoutMetrics.transitionDuration),
+                value: isConfigurationVisible
+            )
         }
     }
 }

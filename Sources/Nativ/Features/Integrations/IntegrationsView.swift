@@ -545,10 +545,10 @@ private struct IntegrationDetailView: View {
                         missingToolPanel
                     } else {
                         modelPanel
+                        actionBar
                         projectPanel
                         launchCommandPanel
                         configurationPanel
-                        actionBar
                     }
                 }
                 .frame(maxWidth: 760)
