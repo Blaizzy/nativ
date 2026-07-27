@@ -217,6 +217,11 @@ private struct WelcomeView: View {
             }
 
             HStack {
+                if downloadManager.activeCount > 0 {
+                    Label("Downloads continue in the background", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Continue") {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -226,10 +231,7 @@ private struct WelcomeView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
-                .disabled(downloadManager.activeCount > 0)
-                .help(downloadManager.activeCount == 0
-                    ? "Continue setup"
-                    : "Finish or cancel the model downloads before continuing")
+                .help("Continue setup")
             }
         }
     }
