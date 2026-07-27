@@ -41,12 +41,6 @@ enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendabl
         }
     }
 
-    /// The Hugging Face search API can't sort by model size, so `.size` fetches by
-    /// downloads and the results are re-sorted client-side.
-    var apiValue: String {
-        self == .size ? Self.downloads.rawValue : rawValue
-    }
-
     /// Whether results are re-sorted client-side by model size.
     var sortsBySize: Bool { self == .size }
 }
@@ -335,7 +329,7 @@ private struct HuggingFaceHubClient: Sendable {
 
         var queryItems = [
             URLQueryItem(name: "filter", value: "safetensors"),
-            URLQueryItem(name: "sort", value: sort.apiValue),
+            URLQueryItem(name: "sort", value: sort.rawValue),
             URLQueryItem(name: "direction", value: "-1"),
             URLQueryItem(name: "limit", value: "50")
         ]
@@ -531,9 +525,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         return Array(ordered[start..<min(start + pageSize, ordered.count)])
     }
 
-    /// The buffered results in display order. Hugging Face can't sort by size, so the
-    /// `.size` sort re-orders the fetched results locally (smallest first; models whose
-    /// size is unknown go last).
+    /// Buffered results in display order; `.size` re-sorts locally (smallest first).
     private var orderedBuffer: [HuggingFaceModel] {
         guard activeSort.sortsBySize else { return buffer }
         return buffer.sorted { lhs, rhs in
