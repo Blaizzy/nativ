@@ -95,7 +95,6 @@ private enum ControlPanelLayout {
     static let windowControlsCenterY =
         windowControlsTopPadding + (windowControlsHeight / 2)
     static let sidebarTransitionDuration: TimeInterval = 0.2
-    static let sidebarTransitionSettleDuration: Duration = .milliseconds(250)
 }
 
 extension Color {
@@ -207,27 +206,41 @@ struct ControlPanelView: View {
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
     @State private var sidebarDragStartWidth: CGFloat?
-    @State private var isSidebarTransitioning = false
-    @State private var sidebarTransitionGeneration = 0
+    @State private var isSidebarVisuallyVisible = true
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            if splitColumnVisibility != .detailOnly {
-                resizableSidebar
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+        ZStack(alignment: .leading) {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(
+                        width: splitColumnVisibility == .detailOnly
+                            ? 0
+                            : sidebarWidth
+                    )
 
-            detail
-                .frame(
-                    minWidth: ControlPanelLayout.detailMinimumWidth,
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
+                detail
+                    .frame(
+                        minWidth: ControlPanelLayout.detailMinimumWidth,
+                        maxWidth: .infinity,
+                        maxHeight: .infinity
+                    )
+                    .clipped()
+            }
+            .animation(nil, value: splitColumnVisibility)
+
+            resizableSidebar
+                .compositingGroup()
+                .offset(
+                    x: isSidebarVisuallyVisible
+                        ? 0
+                        : -(sidebarWidth + 5)
                 )
-                .clipped()
+                .allowsHitTesting(isSidebarVisuallyVisible)
+                .accessibilityHidden(!isSidebarVisuallyVisible)
         }
         .toolbarVisibility(.hidden, for: .windowToolbar)
         .ignoresSafeArea(.container, edges: .top)
@@ -369,8 +382,7 @@ struct ControlPanelView: View {
         .navigationTitle("Nativ")
         .background(
             ControlPanelSurfaceReader(
-                isFullScreen: isFullScreen,
-                isSidebarTransitioning: isSidebarTransitioning
+                isFullScreen: isFullScreen
             )
         )
     }
@@ -502,9 +514,13 @@ struct ControlPanelView: View {
     private func toggleSidebarVisibility() {
         let newVisibility: NavigationSplitViewVisibility =
             splitColumnVisibility == .detailOnly ? .all : .detailOnly
-        beginSidebarTransition()
-        withAnimation(.snappy(duration: ControlPanelLayout.sidebarTransitionDuration)) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             splitColumnVisibility = newVisibility
+        }
+        withAnimation(.snappy(duration: ControlPanelLayout.sidebarTransitionDuration)) {
+            isSidebarVisuallyVisible = newVisibility != .detailOnly
         }
     }
 
@@ -786,18 +802,6 @@ struct ControlPanelView: View {
         }
     }
 
-    private func beginSidebarTransition() {
-        sidebarTransitionGeneration &+= 1
-        let generation = sidebarTransitionGeneration
-        isSidebarTransitioning = true
-
-        Task { @MainActor in
-            try? await Task.sleep(for: ControlPanelLayout.sidebarTransitionSettleDuration)
-            guard sidebarTransitionGeneration == generation else { return }
-            isSidebarTransitioning = false
-        }
-    }
-
     private func createRecentSession() {
         if selectedTab == .imageGeneration {
             imageGeneration.createSession()
@@ -1036,22 +1040,15 @@ private final class FooterControlTrackingNSView: NSView {
 
 private struct ControlPanelSurfaceReader: NSViewRepresentable {
     let isFullScreen: Bool
-    let isSidebarTransitioning: Bool
 
     func makeNSView(context: Context) -> ControlPanelSurfaceReaderView {
         let view = ControlPanelSurfaceReaderView()
-        view.update(
-            isFullScreen: isFullScreen,
-            isSidebarTransitioning: isSidebarTransitioning
-        )
+        view.update(isFullScreen: isFullScreen)
         return view
     }
 
     func updateNSView(_ view: ControlPanelSurfaceReaderView, context: Context) {
-        view.update(
-            isFullScreen: isFullScreen,
-            isSidebarTransitioning: isSidebarTransitioning
-        )
+        view.update(isFullScreen: isFullScreen)
     }
 }
 
@@ -1077,7 +1074,6 @@ private final class ControlPanelSurfaceReaderView: NSView {
     private var liveResizeStopWorkItem: DispatchWorkItem?
     private var localMouseEventMonitor: Any?
     private var isFullScreen = false
-    private var isTrackingSidebarTransition = false
 
     deinit {
         cornerCorrectionTimer?.invalidate()
@@ -1119,20 +1115,11 @@ private final class ControlPanelSurfaceReaderView: NSView {
         }
     }
 
-    func update(
-        isFullScreen: Bool,
-        isSidebarTransitioning: Bool
-    ) {
+    func update(isFullScreen: Bool) {
         self.isFullScreen = isFullScreen
         updateCornerCorrectionTimer()
 
-        if isSidebarTransitioning {
-            isTrackingSidebarTransition = true
-            beginLiveSidebarResizeCornerCorrection()
-        } else if isTrackingSidebarTransition {
-            isTrackingSidebarTransition = false
-            endLiveSidebarResizeCornerCorrection()
-        } else if liveResizeCornerCorrectionTimer == nil {
+        if liveResizeCornerCorrectionTimer == nil {
             configureGlassSurface()
         }
     }
