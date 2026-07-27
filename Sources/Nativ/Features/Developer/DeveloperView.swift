@@ -103,7 +103,10 @@ struct DeveloperView: View {
 
     private var runtimeGrid: some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 165), spacing: 10)],
+            columns: Array(
+                repeating: GridItem(.flexible(minimum: 165), spacing: 10),
+                count: 4
+            ),
             alignment: .leading,
             spacing: 10
         ) {
