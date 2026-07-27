@@ -530,7 +530,7 @@ struct ControlPanelView: View {
             splitColumnVisibility = willShowSidebar ? .all : .detailOnly
             detailTransitionOffset = willShowSidebar ? -sidebarWidth : sidebarWidth
         }
-        withAnimation(.snappy(duration: ControlPanelLayout.sidebarTransitionDuration)) {
+        withAnimation(.smooth(duration: ControlPanelLayout.sidebarTransitionDuration)) {
             isSidebarVisuallyVisible = willShowSidebar
             detailTransitionOffset = 0
         }
