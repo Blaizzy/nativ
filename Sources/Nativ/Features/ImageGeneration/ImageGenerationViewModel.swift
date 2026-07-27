@@ -426,6 +426,7 @@ final class ImageGenerationViewModel: ObservableObject {
                 if !modelIsInstalled {
                     try await HuggingFaceDownloadManager.shared.downloadIfNeeded(
                         repoID: requestModelID,
+                        sizeBytes: nil,
                         cachePath: modelSearchPath,
                         token: huggingFaceToken
                     )

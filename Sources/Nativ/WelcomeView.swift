@@ -169,7 +169,7 @@ private struct WelcomeView: View {
                                 Image(systemName: "arrow.clockwise")
                             }
                             .buttonStyle(.borderless)
-                            .disabled(downloadManager.downloadingModelID != nil)
+                            .disabled(downloadManager.activeCount > 0)
                             .help("Refresh installed models")
                         }
                     }
@@ -226,10 +226,10 @@ private struct WelcomeView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
-                .disabled(downloadManager.downloadingModelID != nil)
-                .help(downloadManager.downloadingModelID == nil
+                .disabled(downloadManager.activeCount > 0)
+                .help(downloadManager.activeCount == 0
                     ? "Continue setup"
-                    : "Finish or cancel the model download before continuing")
+                    : "Finish or cancel the model downloads before continuing")
             }
         }
     }
@@ -279,15 +279,16 @@ private struct WelcomeView: View {
                         model: hubModel,
                         isDownloaded: downloadedRecommendedModelID == hubModel.id,
                         isSelected: selectedModelID == hubModel.id,
-                        isDownloading: downloadManager.downloadingModelID == hubModel.id,
-                        downloadProgress: downloadManager.downloadingModelID == hubModel.id
-                            ? downloadManager.downloadProgress
-                            : 0,
-                        anotherDownloadIsActive: downloadManager.downloadingModelID != nil,
+                        isDownloading: downloadManager.isDownloading(hubModel.id),
+                        downloadProgress: downloadManager.progress(for: hubModel.id),
+                        downloadBlockedReason: downloadManager.capacityBlocker(
+                            sizeBytes: hubModel.sizeBytes,
+                            cachePath: model.settings.modelSearchPath
+                        ),
                         downloadError: downloadManager.errorByModelID[hubModel.id],
                         onSelect: { selectedModelID = hubModel.id },
                         onDownload: { downloadRecommendedModel(hubModel) },
-                        onCancel: { downloadManager.removeDownload() }
+                        onCancel: { downloadManager.removeDownload(hubModel.id) }
                     )
                 }
             }
@@ -514,6 +515,7 @@ private struct WelcomeView: View {
         selectedModelID = nil
         downloadManager.download(
             repoID: hubModel.id,
+            sizeBytes: hubModel.sizeBytes,
             cachePath: model.settings.modelSearchPath,
             token: model.effectiveHuggingFaceToken
         ) {
@@ -707,7 +709,7 @@ private struct WelcomeDownloadModelRow: View {
     let isSelected: Bool
     let isDownloading: Bool
     let downloadProgress: Double
-    let anotherDownloadIsActive: Bool
+    let downloadBlockedReason: String?
     let downloadError: String?
     let onSelect: () -> Void
     let onDownload: () -> Void
@@ -773,8 +775,8 @@ private struct WelcomeDownloadModelRow: View {
                     Button("Download", action: onDownload)
                         .buttonStyle(.bordered)
                         .controlSize(.small)
-                        .disabled(anotherDownloadIsActive)
-                        .help("Download \(model.id) to the configured cache")
+                        .disabled(downloadBlockedReason != nil)
+                        .help(downloadBlockedReason ?? "Download \(model.id) to the configured cache")
                 }
             }
 

@@ -117,17 +117,30 @@ extension Color {
 /// A small pulsing download arrow shown at the trailing edge of the Models sidebar row
 /// while a model is downloading.
 private struct ModelsDownloadArrow: View {
+    let count: Int
     @State private var pulse = false
 
     var body: some View {
-        Image(systemName: "arrow.down.circle.fill")
-            .font(.caption)
-            .foregroundStyle(.tint)
-            .opacity(pulse ? 0.4 : 1.0)
-            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
-            .onAppear { pulse = true }
-            .help("A model is downloading")
-            .accessibilityLabel("A model is downloading")
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.tint)
+                .opacity(pulse ? 0.4 : 1.0)
+                .animation(
+                    .easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
+                .onAppear { pulse = true }
+            if count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.tint)
+            }
+        }
+        .help(helpText)
+        .accessibilityLabel(helpText)
+    }
+
+    private var helpText: String {
+        count == 1 ? "A model is downloading" : "\(count) models are downloading"
     }
 }
 
@@ -447,8 +460,8 @@ struct ControlPanelView: View {
                                         .foregroundStyle(.secondary)
                                         .frame(width: 34, alignment: .trailing)
                                 }
-                                if downloads.downloadingModelID != nil {
-                                    ModelsDownloadArrow()
+                                if downloads.activeCount > 0 {
+                                    ModelsDownloadArrow(count: downloads.activeCount)
                                 }
                             }
                         }
