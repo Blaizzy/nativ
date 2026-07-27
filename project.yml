@@ -84,8 +84,8 @@ targets:
         INFOPLIST_FILE: Configuration/Nativ-Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        MARKETING_VERSION: 0.0.1
-        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 2
   NativTests:
     type: bundle.unit-test
     platform: macOS

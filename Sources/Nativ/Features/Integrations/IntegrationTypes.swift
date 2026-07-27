@@ -17,6 +17,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case cline
     case cursor
     case jetbrains
+    case buzz
 
     var id: String { rawValue }
 
@@ -38,6 +39,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: "Cline"
         case .cursor: "Cursor"
         case .jetbrains: "JetBrains"
+        case .buzz: "Buzz"
         }
     }
 
@@ -59,6 +61,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: "cline"
         case .cursor: "cursor"
         case .jetbrains: "jetbrains"
+        case .buzz: "buzz"
         }
     }
 
@@ -82,6 +85,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: "OpenAI-compatible provider in the Cline extension"
         case .cursor: "OpenAI-compatible endpoint in Cursor's AI panel"
         case .jetbrains: "OpenAI-compatible endpoint in JetBrains AI Assistant"
+        case .buzz: "Self-hostable workspace for people and AI agents"
         }
     }
 
@@ -103,6 +107,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: URL(string: "https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev")!
         case .cursor: URL(string: "https://docs.cursor.com/settings/models")!
         case .jetbrains: URL(string: "https://www.jetbrains.com/help/ai-assistant/configure-openai-compatible-models.html")!
+        case .buzz: URL(string: "https://github.com/block/buzz")!
         }
     }
 
@@ -119,6 +124,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: true
         case .cursor: true
         case .jetbrains: true
+        case .buzz: true
         default: false
         }
     }
@@ -161,6 +167,13 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
                 "Under Providers & API keys, add an \u{201C}OpenAI Compatible\u{201D} provider with the Base URL and API key shown above.",
                 "Select your model, then use it from the AI Assistant chat."
             ]
+        case .buzz:
+            [
+                "Start Nativ's server and load a model from the Models page.",
+                "Install Buzz from github.com/block/buzz, then set the variables below where its agent runs.",
+                "Set BUZZ_AGENT_PROVIDER to \u{201C}openai\u{201D}, OPENAI_COMPAT_BASE_URL to the Base URL above, and OPENAI_COMPAT_API_KEY to the API key above.",
+                "Set OPENAI_COMPAT_MODEL to your model ID, then start Buzz \u{2014} its agent will use your local model."
+            ]
         default:
             []
         }
@@ -172,6 +185,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: "Cline runs inside VS Code and compatible editors."
         case .cursor: "Only Cursor's chat/AI panel honors a custom OpenAI endpoint \u{2014} Tab and inline edits stay on Cursor's own models."
         case .jetbrains: "Requires the AI Assistant plugin (recent JetBrains IDE versions)."
+        case .buzz: "These variables configure Buzz's agent runtime; set them where Buzz runs its agent."
         default: nil
         }
     }
