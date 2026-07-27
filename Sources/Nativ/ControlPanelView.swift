@@ -95,6 +95,7 @@ private enum ControlPanelLayout {
     static let windowControlsCenterY =
         windowControlsTopPadding + (windowControlsHeight / 2)
     static let sidebarTransitionDuration: TimeInterval = 0.2
+    static let sidebarTransitionSettleDuration: Duration = .milliseconds(225)
 }
 
 extension Color {
@@ -207,6 +208,9 @@ struct ControlPanelView: View {
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
     @State private var sidebarDragStartWidth: CGFloat?
     @State private var isSidebarVisuallyVisible = true
+    @State private var detailTransitionOffset: CGFloat = 0
+    @State private var isSidebarTransitioning = false
+    @State private var sidebarTransitionGeneration = 0
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
@@ -229,6 +233,7 @@ struct ControlPanelView: View {
                         maxHeight: .infinity
                     )
                     .clipped()
+                    .offset(x: detailTransitionOffset)
             }
             .animation(nil, value: splitColumnVisibility)
 
@@ -263,9 +268,9 @@ struct ControlPanelView: View {
                 ControlPanelWindowControls(refreshTrigger: windowControlsRefreshTrigger)
                 ControlPanelCollapseButtons(
                     showsModelConfigurationButton: showsModelConfigurationToggle,
-                    sidebarHelp: splitColumnVisibility == .detailOnly
-                        ? "Show Sidebar"
-                        : "Hide Sidebar",
+                    sidebarHelp: isSidebarVisuallyVisible
+                        ? "Hide Sidebar"
+                        : "Show Sidebar",
                     modelConfigurationHelp: isModelConfigurationVisible
                         ? "Hide model configuration"
                         : "Show model configuration",
@@ -392,7 +397,10 @@ struct ControlPanelView: View {
             .frame(width: sidebarWidth)
             .background {
                 Group {
-                    if isFullScreen {
+                    if isSidebarTransitioning {
+                        Rectangle()
+                            .fill(Color(nsColor: .windowBackgroundColor))
+                    } else if isFullScreen {
                         Rectangle()
                             .fill(.regularMaterial)
                     } else {
@@ -512,15 +520,29 @@ struct ControlPanelView: View {
     }
 
     private func toggleSidebarVisibility() {
-        let newVisibility: NavigationSplitViewVisibility =
-            splitColumnVisibility == .detailOnly ? .all : .detailOnly
+        let willShowSidebar = !isSidebarVisuallyVisible
+        sidebarTransitionGeneration &+= 1
+        let transitionGeneration = sidebarTransitionGeneration
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            splitColumnVisibility = newVisibility
+            isSidebarTransitioning = true
+            splitColumnVisibility = willShowSidebar ? .all : .detailOnly
+            detailTransitionOffset = willShowSidebar ? -sidebarWidth : sidebarWidth
         }
         withAnimation(.snappy(duration: ControlPanelLayout.sidebarTransitionDuration)) {
-            isSidebarVisuallyVisible = newVisibility != .detailOnly
+            isSidebarVisuallyVisible = willShowSidebar
+            detailTransitionOffset = 0
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: ControlPanelLayout.sidebarTransitionSettleDuration)
+            guard sidebarTransitionGeneration == transitionGeneration else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isSidebarTransitioning = false
+            }
         }
     }
 
