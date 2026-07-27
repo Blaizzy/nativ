@@ -347,8 +347,7 @@ private struct SystemOverviewPage: View {
                     tint: SystemMonitorPalette.orange
                 )
             }
-            .frame(maxWidth: 1200)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity)
 
             adaptivePair {
                 SystemInfoCard(title: "Hardware") {

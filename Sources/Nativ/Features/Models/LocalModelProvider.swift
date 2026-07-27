@@ -14,6 +14,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
     case openMOSS
     case poolside
     case prismML
+    case blackForestLabs
     case nvidia
     case apple
     case ibm
@@ -35,6 +36,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .openMOSS: "OpenMOSS"
         case .poolside: "Poolside"
         case .prismML: "Prism ML"
+        case .blackForestLabs: "Black Forest Labs"
         case .nvidia: "NVIDIA"
         case .apple: "Apple"
         case .ibm: "IBM"
@@ -58,6 +60,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .openMOSS: "ModelProviderIcon-openmoss"
         case .poolside: "ModelProviderIcon-poolside"
         case .prismML: "ModelProviderIcon-prism-ml"
+        case .blackForestLabs: "ModelProviderIcon-bfl"
         case .nvidia: "ModelProviderIcon-nvidia"
         case .apple: "ModelProviderIcon-apple"
         case .ibm: "ModelProviderIcon-ibm"
@@ -81,6 +84,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .openMOSS: "M"
         case .poolside: "P"
         case .prismML: "P"
+        case .blackForestLabs: "BFL"
         case .nvidia: "N"
         case .apple: "A"
         case .ibm: "IBM"
@@ -116,6 +120,8 @@ enum LocalModelProvider: String, Hashable, Sendable {
             NSColor(srgbRed: 255 / 255, green: 103 / 255, blue: 170 / 255, alpha: 1)
         case .openBMB, .openMOSS, .poolside, .prismML:
             .labelColor
+        case .blackForestLabs:
+            .labelColor
         case .nvidia:
             NSColor(srgbRed: 118 / 255, green: 185 / 255, blue: 0 / 255, alpha: 1)
         case .ibm:
@@ -149,6 +155,7 @@ enum LocalModelProviderResolver {
         ModelFamilyMapping(provider: .openMOSS, identifiers: ["moss"]),
         ModelFamilyMapping(provider: .poolside, identifiers: ["laguna"]),
         ModelFamilyMapping(provider: .prismML, identifiers: ["bonsai"]),
+        ModelFamilyMapping(provider: .blackForestLabs, identifiers: ["flux"]),
         ModelFamilyMapping(provider: .openAI, identifiers: ["gptoss", "whisper"]),
         ModelFamilyMapping(provider: .meta, identifiers: ["llama"]),
         ModelFamilyMapping(provider: .deepSeek, identifiers: ["deepseek"]),
@@ -183,6 +190,7 @@ enum LocalModelProviderResolver {
         "poolside": .poolside,
         "poolsideai": .poolside,
         "prismml": .prismML,
+        "blackforestlabs": .blackForestLabs,
         "nvidia": .nvidia,
         "apple": .apple,
         "ibm": .ibm,
