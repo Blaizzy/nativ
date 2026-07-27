@@ -1263,7 +1263,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
             updateCornerCorrectionTimer()
             return
         }
-        correctCachedSurfaceCorners()
+        configureGlassSurface()
     }
 
     private func configureGlassSurface(adjustsConstraints: Bool = true) {
@@ -1375,9 +1375,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
             liveResizeCornerCorrectionTimer = timer
         }
 
-        if !isTrackingSidebarTransition {
-            scheduleEndLiveSidebarResizeCornerCorrection()
-        }
+        scheduleEndLiveSidebarResizeCornerCorrection()
     }
 
     private func scheduleEndLiveSidebarResizeCornerCorrection() {
@@ -1397,7 +1395,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
 
     @objc
     private func correctLiveSidebarResizeCorners(_ timer: Timer) {
-        correctCachedSurfaceCorners()
+        configureGlassSurface(adjustsConstraints: false)
     }
 
     private func endLiveSidebarResizeCornerCorrection() {
@@ -1405,24 +1403,6 @@ private final class ControlPanelSurfaceReaderView: NSView {
         liveResizeCornerCorrectionTimer = nil
         liveResizeStopWorkItem = nil
         configureGlassSurface(adjustsConstraints: false)
-    }
-
-    private func correctCachedSurfaceCorners() {
-        guard #available(macOS 26.0, *) else { return }
-
-        // Full surface discovery walks the surrounding AppKit hierarchy. Keep
-        // animated corrections local to the already discovered sidebar views.
-        if let glassSurface = glassSurface as? NSGlassEffectView {
-            setCornerRadiusToZero(on: glassSurface)
-            configureFullSizeGlassLayers(in: glassSurface)
-        }
-
-        if let sidebarBackdropView {
-            setBackdropCornerRadiusToZero(
-                on: sidebarBackdropView,
-                key: "punchOutCornerRadius"
-            )
-        }
     }
 
     private func observeSidebarResizing(above view: NSView) {
