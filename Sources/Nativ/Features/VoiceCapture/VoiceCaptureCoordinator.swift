@@ -21,6 +21,7 @@ final class VoiceCaptureCoordinator {
     private let overlay = VoiceCaptureOverlayController()
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
+    private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
     private var insertionTarget: VoiceTranscriptInsertionTarget?
     private var isShortcutHeld = false
     private var isPresentingAlert = false
@@ -36,6 +37,7 @@ final class VoiceCaptureCoordinator {
     }
 
     func start() {
+        scheduleExistingAudioDeletion()
         shortcutMonitor.start()
     }
 
@@ -44,8 +46,13 @@ final class VoiceCaptureCoordinator {
         permissionTask = nil
         transcriptionTasks.values.forEach { $0.cancel() }
         transcriptionTasks.removeAll()
+        audioDeletionTasks.values.forEach { $0.cancel() }
+        audioDeletionTasks.removeAll()
         shortcutMonitor.stop()
         recorder.stop()
+        if let directory = try? VoiceAudioRecorder.recordingsDirectory {
+            VoiceAudioRetention.removeAllAudioFiles(in: directory)
+        }
         overlay.hide()
         insertionTarget = nil
         isShortcutHeld = false
@@ -100,9 +107,45 @@ final class VoiceCaptureCoordinator {
         insertionTarget = nil
         if let recordingURL = recorder.stop() {
             NSLog("Nativ saved voice recording to %@", recordingURL.path)
+            scheduleAudioDeletion(recordingURL)
             transcribe(recordingURL, target: target)
         }
         overlay.hide()
+    }
+
+    private func scheduleExistingAudioDeletion() {
+        guard let directory = try? VoiceAudioRecorder.recordingsDirectory else {
+            return
+        }
+        VoiceAudioRetention.removeExpiredAudioFiles(in: directory)
+        for audioURL in VoiceAudioRetention.audioFiles(in: directory) {
+            scheduleAudioDeletion(audioURL)
+        }
+    }
+
+    private func scheduleAudioDeletion(_ audioURL: URL) {
+        let standardizedURL = audioURL.standardizedFileURL
+        audioDeletionTasks[standardizedURL]?.cancel()
+        let delay = VoiceAudioRetention.deletionDelay(for: standardizedURL)
+        let task = Task { [weak self] in
+            if delay > 0 {
+                do {
+                    let milliseconds = Int64((delay * 1_000).rounded(.up))
+                    try await Task.sleep(for: .milliseconds(milliseconds))
+                } catch {
+                    return
+                }
+            }
+
+            if VoiceAudioRetention.removeAudioFile(at: standardizedURL) {
+                NSLog(
+                    "Nativ removed temporary voice recording at %@",
+                    standardizedURL.path
+                )
+            }
+            self?.audioDeletionTasks[standardizedURL] = nil
+        }
+        audioDeletionTasks[standardizedURL] = task
     }
 
     private func transcribe(

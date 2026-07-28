@@ -89,10 +89,11 @@ On first launch:
 
 Nativ asks for Accessibility permission so it can detect the Fn + Control hold gesture
 outside the app, and for Microphone permission the first time you record. Recordings are
-saved as `.wav` files with matching `.txt` transcripts and can be opened from
-**Show Voice Recordings** in the menu-bar menu. The transcript is inserted into the focused
-text field and remains on the clipboard. If no speech-to-text model is installed, Nativ links
-directly to filtered speech-model discovery.
+saved temporarily as `.wav` files with matching `.txt` transcripts and can be opened from
+**Show Voice Recordings** in the menu-bar menu. Raw audio is deleted automatically after five
+minutes (or immediately when Nativ quits), while transcript files remain available. The
+transcript is inserted into the focused text field and remains on the clipboard. If no
+speech-to-text model is installed, Nativ links directly to filtered speech-model discovery.
 
 ### Build from source
 
