@@ -101,6 +101,7 @@ targets:
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
+      - path: Sources/Nativ/Features/VoiceCapture/FnControlShortcutMonitor.swift
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift

@@ -53,6 +53,7 @@ struct ModelsView: View {
     @ObservedObject var model: NativModel
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
+    var speechModelDiscoveryRequest = 0
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
@@ -63,6 +64,7 @@ struct ModelsView: View {
     @State private var hubSort: HuggingFaceModelSort = .downloads
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
+    @State private var handledSpeechModelDiscoveryRequest = 0
 
     var body: some View {
         ModelConfigurationLayout(
@@ -90,6 +92,12 @@ struct ModelsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             rescanLocalModels()
         }
+        .onAppear {
+            openSpeechModelDiscoveryIfRequested()
+        }
+        .onChange(of: speechModelDiscoveryRequest) { _, _ in
+            openSpeechModelDiscoveryIfRequested()
+        }
         .task(id: hubSearchTaskID) {
             guard section == .discover else { return }
             try? await Task.sleep(for: .milliseconds(350))
@@ -104,6 +112,18 @@ struct ModelsView: View {
             localLibrary.cancel()
             hubLibrary.cancel()
         }
+    }
+
+    private func openSpeechModelDiscoveryIfRequested() {
+        guard speechModelDiscoveryRequest > handledSpeechModelDiscoveryRequest else {
+            return
+        }
+        handledSpeechModelDiscoveryRequest = speechModelDiscoveryRequest
+        section = .discover
+        typeFilter = .speech
+        hubQuery = ""
+        hubCapabilityFilters = [.speechToText]
+        hubAccessFilter = .all
     }
 
     @ViewBuilder
