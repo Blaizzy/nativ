@@ -26,7 +26,7 @@ struct FnRetryShortcutState {
     }
 }
 
-private let fnRetryHotKeyHandler: EventHandlerUPP = { _, event, userData in
+private let voiceHotKeyHandler: EventHandlerUPP = { _, event, userData in
     guard let event, let userData else {
         return OSStatus(eventNotHandledErr)
     }
@@ -34,9 +34,22 @@ private let fnRetryHotKeyHandler: EventHandlerUPP = { _, event, userData in
     let monitor = Unmanaged<FnControlShortcutMonitor>
         .fromOpaque(userData)
         .takeUnretainedValue()
+    var hotKeyID = EventHotKeyID()
+    let parameterStatus = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &hotKeyID
+    )
+    guard parameterStatus == noErr else {
+        return parameterStatus
+    }
     let eventKind = GetEventKind(event)
     Task { @MainActor in
-        monitor.consumeRetryHotKeyEvent(kind: eventKind)
+        monitor.consumeHotKeyEvent(id: hotKeyID.id, kind: eventKind)
     }
     return noErr
 }
@@ -48,14 +61,21 @@ final class FnControlShortcutMonitor {
 
     private var localMonitor: Any?
     private var globalMonitor: Any?
-    private var state = FnControlShortcutState()
+    private var modifierPollTimer: Timer?
+    private var preferenceObserver: NSObjectProtocol?
+    private var recordIsHeld = false
+    private var retryModifierIsHeld = false
     private var retryState = FnRetryShortcutState()
-    private var retryHotKey: EventHotKeyRef?
-    private var retryEventHandler: EventHandlerRef?
-    private let retryHotKeyID = EventHotKeyID(
-        signature: OSType(0x4E_41_54_52),
-        id: 1
-    )
+    private var hotKeys: [UInt32: EventHotKeyRef] = [:]
+    private var hotKeyEventHandler: EventHandlerRef?
+    private let preferences: VoiceShortcutPreferences
+    private let hotKeySignature = OSType(0x4E_41_54_56)
+    private let recordHotKeyID: UInt32 = 1
+    private let retryHotKeyID: UInt32 = 2
+
+    init(preferences: VoiceShortcutPreferences? = nil) {
+        self.preferences = preferences ?? .shared
+    }
 
     func start() {
         guard localMonitor == nil, globalMonitor == nil else {
@@ -75,7 +95,17 @@ final class FnControlShortcutMonitor {
                 self?.consume(event.modifierFlags)
             }
         }
-        installRetryHotKey()
+        startModifierPolling()
+        preferenceObserver = NotificationCenter.default.addObserver(
+            forName: .voiceShortcutPreferencesDidChange,
+            object: preferences,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.reloadShortcuts()
+            }
+        }
+        installHotKeys()
     }
 
     func stop() {
@@ -87,23 +117,70 @@ final class FnControlShortcutMonitor {
         }
         localMonitor = nil
         globalMonitor = nil
-        state = FnControlShortcutState()
-        uninstallRetryHotKey()
+        modifierPollTimer?.invalidate()
+        modifierPollTimer = nil
+        if let preferenceObserver {
+            NotificationCenter.default.removeObserver(preferenceObserver)
+        }
+        preferenceObserver = nil
+        if recordIsHeld {
+            onChange?(false)
+        }
+        recordIsHeld = false
+        retryModifierIsHeld = false
+        uninstallHotKeys()
         retryState = FnRetryShortcutState()
     }
 
-    private func consume(_ modifierFlags: NSEvent.ModifierFlags) {
-        let deviceIndependentFlags = modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard let isHeld = state.update(
-            functionIsDown: deviceIndependentFlags.contains(.function),
-            controlIsDown: deviceIndependentFlags.contains(.control)
-        ) else {
-            return
+    private func startModifierPolling() {
+        modifierPollTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) {
+            [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.consumeCurrentModifierFlags()
+            }
         }
-        onChange?(isHeld)
+        RunLoop.main.add(timer, forMode: .common)
+        modifierPollTimer = timer
+        consumeCurrentModifierFlags()
     }
 
-    fileprivate func consumeRetryHotKeyEvent(kind: UInt32) {
+    private func consumeCurrentModifierFlags() {
+        consume(
+            VoiceShortcutModifiers(
+                cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+            )
+        )
+    }
+
+    private func consume(_ modifierFlags: NSEvent.ModifierFlags) {
+        consume(
+            VoiceShortcutModifiers(
+                eventFlags: modifierFlags.intersection(.deviceIndependentFlagsMask)
+            )
+        )
+    }
+
+    private func consume(_ activeModifiers: VoiceShortcutModifiers) {
+        if preferences.recordShortcut.keyCode == nil {
+            let isHeld =
+                activeModifiers == preferences.recordShortcut.modifiers
+                && !activeModifiers.isEmpty
+            updateRecordState(isHeld)
+        }
+
+        if preferences.retryShortcut.keyCode == nil {
+            let isHeld =
+                activeModifiers == preferences.retryShortcut.modifiers
+                && !activeModifiers.isEmpty
+            if isHeld && !retryModifierIsHeld {
+                onRetry?()
+            }
+            retryModifierIsHeld = isHeld
+        }
+    }
+
+    fileprivate func consumeHotKeyEvent(id: UInt32, kind: UInt32) {
         let isPressed: Bool
         switch kind {
         case UInt32(kEventHotKeyPressed):
@@ -114,13 +191,47 @@ final class FnControlShortcutMonitor {
             return
         }
 
-        if retryState.update(isPressed: isPressed) {
-            onRetry?()
+        switch id {
+        case recordHotKeyID:
+            updateRecordState(isPressed)
+        case retryHotKeyID:
+            if retryState.update(isPressed: isPressed) {
+                onRetry?()
+            }
+        default:
+            break
         }
     }
 
-    private func installRetryHotKey() {
-        guard retryHotKey == nil, retryEventHandler == nil else {
+    private func updateRecordState(_ isHeld: Bool) {
+        guard isHeld != recordIsHeld else {
+            return
+        }
+        recordIsHeld = isHeld
+        onChange?(isHeld)
+    }
+
+    private func reloadShortcuts() {
+        if recordIsHeld {
+            updateRecordState(false)
+        }
+        retryModifierIsHeld = false
+        retryState = FnRetryShortcutState()
+        uninstallHotKeys()
+        installHotKeys()
+        consumeCurrentModifierFlags()
+    }
+
+    private func installHotKeys() {
+        guard hotKeys.isEmpty, hotKeyEventHandler == nil else {
+            return
+        }
+
+        let keyedShortcuts = [
+            (recordHotKeyID, preferences.recordShortcut),
+            (retryHotKeyID, preferences.retryShortcut),
+        ].filter { $0.1.keyCode != nil }
+        guard !keyedShortcuts.isEmpty else {
             return
         }
 
@@ -138,7 +249,7 @@ final class FnControlShortcutMonitor {
         let handlerStatus = eventTypes.withUnsafeBufferPointer { events in
             InstallEventHandler(
                 GetApplicationEventTarget(),
-                fnRetryHotKeyHandler,
+                voiceHotKeyHandler,
                 events.count,
                 events.baseAddress,
                 Unmanaged.passUnretained(self).toOpaque(),
@@ -146,38 +257,50 @@ final class FnControlShortcutMonitor {
             )
         }
         guard handlerStatus == noErr, let eventHandler else {
-            NSLog("Nativ could not install the Fn + R event handler: %d", handlerStatus)
+            NSLog("Nativ could not install the voice shortcut handler: %d", handlerStatus)
             return
         }
-        retryEventHandler = eventHandler
+        hotKeyEventHandler = eventHandler
 
-        var hotKey: EventHotKeyRef?
-        let hotKeyStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_R),
-            UInt32(kEventKeyModifierFnMask),
-            retryHotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKey
-        )
-        guard hotKeyStatus == noErr, let hotKey else {
-            NSLog("Nativ could not register Fn + R: %d", hotKeyStatus)
-            RemoveEventHandler(eventHandler)
-            retryEventHandler = nil
-            return
+        for (id, shortcut) in keyedShortcuts {
+            guard let keyCode = shortcut.keyCode else {
+                continue
+            }
+            var hotKey: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                UInt32(keyCode),
+                shortcut.modifiers.carbonFlags,
+                EventHotKeyID(signature: hotKeySignature, id: id),
+                GetApplicationEventTarget(),
+                0,
+                &hotKey
+            )
+            if status == noErr, let hotKey {
+                hotKeys[id] = hotKey
+            } else {
+                NSLog(
+                    "Nativ could not register voice shortcut %@: %d",
+                    shortcut.displayName,
+                    status
+                )
+            }
         }
-        retryHotKey = hotKey
+
+        if hotKeys.isEmpty {
+            RemoveEventHandler(eventHandler)
+            hotKeyEventHandler = nil
+        }
     }
 
-    private func uninstallRetryHotKey() {
-        if let retryHotKey {
-            UnregisterEventHotKey(retryHotKey)
+    private func uninstallHotKeys() {
+        for hotKey in hotKeys.values {
+            UnregisterEventHotKey(hotKey)
         }
-        if let retryEventHandler {
-            RemoveEventHandler(retryEventHandler)
+        hotKeys.removeAll()
+        if let hotKeyEventHandler {
+            RemoveEventHandler(hotKeyEventHandler)
         }
-        retryHotKey = nil
-        retryEventHandler = nil
+        hotKeyEventHandler = nil
     }
 
     private func requestAccessibilityAccessIfNeeded() {

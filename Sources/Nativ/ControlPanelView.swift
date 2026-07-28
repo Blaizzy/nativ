@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
     case imageGeneration = "Images"
+    case audio = "Audio"
     case artifacts = "Artifacts"
     case dashboard = "Dashboard"
     case system = "System"
@@ -17,6 +18,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         [
             .chat,
             .imageGeneration,
+            .audio,
             .artifacts,
             .dashboard,
             .system,
@@ -34,6 +36,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "bubble.left.and.bubble.right"
         case .imageGeneration:
             "photo.on.rectangle"
+        case .audio:
+            "waveform.badge.mic"
         case .artifacts:
             "photo.on.rectangle.angled"
         case .dashboard:
@@ -1072,7 +1076,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .settings:
+        case .imageGeneration, .audio, .artifacts, .dashboard, .system, .integrations, .settings:
             false
         }
     }
@@ -1539,6 +1543,14 @@ struct ControlPanelView: View {
                     )
                 case .imageGeneration:
                     ImageGenerationView(model: model, viewModel: imageGeneration)
+                case .audio:
+                    AudioView(
+                        model: model,
+                        titleLeadingInset: detailTitleLeadingInset,
+                        onOpenSpeechModels: {
+                            navigation.openSpeechModelDiscovery()
+                        }
+                    )
                 case .artifacts:
                     ArtifactsView(
                         store: artifacts,
@@ -1672,7 +1684,7 @@ struct ControlPanelView: View {
 
     private var detailExtendsIntoTitlebar: Bool {
         switch selectedTab {
-        case .dashboard, .system, .models, .integrations, .developer:
+        case .audio, .dashboard, .system, .models, .integrations, .developer:
             true
         case .chat, .imageGeneration, .artifacts, .settings:
             false

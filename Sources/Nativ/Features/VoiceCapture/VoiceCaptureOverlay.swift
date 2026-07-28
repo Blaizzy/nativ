@@ -2,6 +2,10 @@ import AppKit
 import Combine
 import SwiftUI
 
+private enum VoiceIslandLayoutMetrics {
+    static let sideWidth: CGFloat = 48
+}
+
 @MainActor
 final class VoiceCaptureOverlayModel: ObservableObject {
     enum State {
@@ -13,17 +17,39 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     @Published var state: State = .preparing
     @Published var level: Float = 0
     @Published var elapsed: TimeInterval = 0
+    @Published var islandUsesCameraCutout = false
 }
 
 @MainActor
 final class VoiceCaptureOverlayController {
-    private static let panelSize = NSSize(width: 184, height: 58)
-    private let model = VoiceCaptureOverlayModel()
-    private let panel: NSPanel
+    private static let waveformPanelSize = NSSize(width: 184, height: 58)
+    private static let floatingIslandPanelSize = NSSize(width: 128, height: 52)
+    private let model: VoiceCaptureOverlayModel
+    private let animationPreferences: VoiceAnimationPreferences
+    private let waveformPanel: NSPanel
+    private let islandPanel: NSPanel
+    private var activeStyle: VoiceCaptureAnimationStyle = .cursorWaveform
 
-    init() {
-        panel = VoiceCapturePanel(
-            contentRect: NSRect(origin: .zero, size: Self.panelSize),
+    init(animationPreferences: VoiceAnimationPreferences? = nil) {
+        let model = VoiceCaptureOverlayModel()
+        self.model = model
+        self.animationPreferences = animationPreferences ?? .shared
+        waveformPanel = Self.makePanel(
+            size: Self.waveformPanelSize,
+            content: VoiceCaptureOverlayView(model: model)
+        )
+        islandPanel = Self.makePanel(
+            size: Self.floatingIslandPanelSize,
+            content: VoiceCaptureIslandView(model: model)
+        )
+    }
+
+    private static func makePanel<Content: View>(
+        size: NSSize,
+        content: Content
+    ) -> NSPanel {
+        let panel = VoiceCapturePanel(
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -42,16 +68,27 @@ final class VoiceCaptureOverlayController {
             .ignoresCycle,
             .stationary,
         ]
-        panel.contentView = NSHostingView(rootView: VoiceCaptureOverlayView(model: model))
-        panel.setContentSize(Self.panelSize)
+        panel.contentView = NSHostingView(rootView: content)
+        panel.setContentSize(size)
+        return panel
     }
 
     func show(at cursorPosition: NSPoint) {
         model.state = .preparing
         model.level = 0
         model.elapsed = 0
-        positionPanel(near: cursorPosition)
-        panel.orderFrontRegardless()
+        activeStyle = animationPreferences.selectedStyle
+        waveformPanel.orderOut(nil)
+        islandPanel.orderOut(nil)
+
+        switch activeStyle {
+        case .cursorWaveform:
+            positionWaveformPanel(near: cursorPosition)
+            waveformPanel.orderFrontRegardless()
+        case .gradientIsland:
+            positionIslandPanel(on: screen(containing: cursorPosition))
+            islandPanel.orderFrontRegardless()
+        }
     }
 
     func update(level: Float, elapsed: TimeInterval) {
@@ -66,24 +103,19 @@ final class VoiceCaptureOverlayController {
     }
 
     func hide() {
-        panel.orderOut(nil)
+        waveformPanel.orderOut(nil)
+        islandPanel.orderOut(nil)
         model.level = 0
         model.elapsed = 0
     }
 
-    private func positionPanel(near cursorPosition: NSPoint) {
-        let panelSize = Self.panelSize
+    private func positionWaveformPanel(near cursorPosition: NSPoint) {
+        let panelSize = Self.waveformPanelSize
         let preferredOrigin = NSPoint(
             x: cursorPosition.x - (panelSize.width / 2),
             y: cursorPosition.y - panelSize.height - 18
         )
-        let screen = NSScreen.screens.first {
-            NSMouseInRect(cursorPosition, $0.frame, false)
-        } ?? NSScreen.main
-        guard let visibleFrame = screen?.visibleFrame else {
-            panel.setFrameOrigin(preferredOrigin)
-            return
-        }
+        let visibleFrame = screen(containing: cursorPosition).visibleFrame
 
         let horizontalInset: CGFloat = 8
         let verticalInset: CGFloat = 8
@@ -97,7 +129,47 @@ final class VoiceCaptureOverlayController {
                 visibleFrame.maxY - panelSize.height - verticalInset
             )
         )
-        panel.setFrameOrigin(origin)
+        waveformPanel.setFrameOrigin(origin)
+    }
+
+    private func positionIslandPanel(on screen: NSScreen) {
+        if let leftArea = screen.auxiliaryTopLeftArea,
+           let rightArea = screen.auxiliaryTopRightArea,
+           rightArea.minX - leftArea.maxX > 20 {
+            let wingWidth = min(
+                VoiceIslandLayoutMetrics.sideWidth,
+                leftArea.width,
+                rightArea.width
+            )
+            let height = min(leftArea.height, rightArea.height)
+            let frame = NSRect(
+                x: leftArea.maxX - wingWidth,
+                y: max(leftArea.minY, rightArea.minY),
+                width: wingWidth + (rightArea.minX - leftArea.maxX) + wingWidth,
+                height: height
+            )
+            model.islandUsesCameraCutout = true
+            islandPanel.setFrame(frame, display: true)
+            return
+        }
+
+        let size = Self.floatingIslandPanelSize
+        model.islandUsesCameraCutout = false
+        islandPanel.setFrame(
+            NSRect(
+                x: screen.frame.midX - (size.width / 2),
+                y: screen.visibleFrame.maxY - size.height - 5,
+                width: size.width,
+                height: size.height
+            ),
+            display: true
+        )
+    }
+
+    private func screen(containing point: NSPoint) -> NSScreen {
+        NSScreen.screens.first {
+            NSMouseInRect(point, $0.frame, false)
+        } ?? NSScreen.main ?? NSScreen.screens[0]
     }
 }
 
@@ -118,7 +190,7 @@ private struct VoiceCaptureOverlayView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
             } else {
-                LiveWaveform(
+                VoiceLiveWaveform(
                     level: model.level,
                     isRecording: model.state == .recording
                 )
@@ -180,7 +252,200 @@ private struct VoiceCaptureOverlayView: View {
     }
 }
 
-private struct LiveWaveform: View {
+private struct VoiceCaptureIslandView: View {
+    @ObservedObject var model: VoiceCaptureOverlayModel
+
+    var body: some View {
+        Group {
+            if model.islandUsesCameraCutout {
+                VoiceCaptureNotchIslandView(model: model)
+            } else {
+                floatingIsland
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var floatingIsland: some View {
+        HStack(spacing: 10) {
+            if model.state == .failed {
+                Image(systemName: "mic.slash.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(width: 30, height: 30)
+            } else {
+                VoiceGradientOrb(
+                    level: model.level,
+                    isRecording: model.state == .recording
+                )
+                .frame(width: 30, height: 30)
+            }
+
+            Text(model.state == .failed ? "Mic" : formattedElapsed)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.76))
+                .frame(width: 38, alignment: .trailing)
+        }
+        .padding(.horizontal, 15)
+        .frame(width: 128, height: 46)
+        .background {
+            Capsule()
+                .fill(Color.black.opacity(0.96))
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var formattedElapsed: String {
+        let seconds = max(0, Int(model.elapsed))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var accessibilityLabel: String {
+        switch model.state {
+        case .preparing:
+            "Preparing microphone in Dynamic Island"
+        case .recording:
+            "Recording audio in Dynamic Island, \(formattedElapsed)"
+        case .failed:
+            "Microphone unavailable"
+        }
+    }
+}
+
+struct VoiceCaptureNotchIslandView: View {
+    @ObservedObject var model: VoiceCaptureOverlayModel
+
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(Color.black.opacity(0.98))
+
+            HStack(spacing: 0) {
+                leftContent
+                    .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+
+                Spacer(minLength: 0)
+
+                rightContent
+                    .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var leftContent: some View {
+        Group {
+            if model.state == .failed {
+                Image(systemName: "mic.slash.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red)
+            } else {
+                orbWithRecordingDot
+            }
+        }
+    }
+
+    private var rightContent: some View {
+        Group {
+            if model.state == .failed {
+                Text("Mic")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            } else {
+                Text(formattedElapsed)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+        }
+    }
+
+    private var orbWithRecordingDot: some View {
+        ZStack(alignment: .bottomTrailing) {
+            VoiceGradientOrb(
+                level: model.level,
+                isRecording: model.state == .recording
+            )
+            .frame(width: 22, height: 22)
+
+            Circle()
+                .fill(.red)
+                .frame(width: 5, height: 5)
+                .overlay {
+                    Circle()
+                        .stroke(Color.black, lineWidth: 1)
+                }
+                .shadow(color: .red.opacity(0.5), radius: 2)
+        }
+    }
+
+    private var formattedElapsed: String {
+        let seconds = max(0, Int(model.elapsed))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+struct VoiceGradientOrb: View {
+    let level: Float
+    let isRecording: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            let energy = isRecording ? max(0, min(1, Double(level))) : 0
+            let isSpeaking = energy > 0.12
+            let speed = isSpeaking ? 0.8 + (energy * 2.8) : 0.08
+            let rotation = time * speed * 150
+
+            ZStack {
+                Circle()
+                    .fill(
+                        AngularGradient(
+                            colors: [
+                                .cyan,
+                                .blue,
+                                .purple,
+                                .pink,
+                                .orange,
+                                .cyan,
+                            ],
+                            center: .center,
+                            startAngle: .degrees(rotation),
+                            endAngle: .degrees(rotation + 360)
+                        )
+                    )
+
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                .white.opacity(0.82),
+                                .white.opacity(0.08),
+                                .clear,
+                            ],
+                            center: UnitPoint(x: 0.32, y: 0.25),
+                            startRadius: 0,
+                            endRadius: 16
+                        )
+                    )
+                    .blendMode(.screen)
+            }
+            .hueRotation(.degrees(sin(time * speed * 1.7) * 42))
+            .scaleEffect(0.94 + (energy * 0.12))
+            .shadow(
+                color: Color.cyan.opacity(0.24 + (energy * 0.35)),
+                radius: 4 + (energy * 5)
+            )
+        }
+        .padding(2)
+    }
+}
+
+struct VoiceLiveWaveform: View {
     let level: Float
     let isRecording: Bool
 
