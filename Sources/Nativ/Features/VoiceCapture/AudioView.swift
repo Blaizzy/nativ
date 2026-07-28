@@ -483,8 +483,8 @@ struct AudioView: View {
         case .gradientIsland:
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                 let time = timeline.date.timeIntervalSinceReferenceDate
-                let voicePulse = (sin(time * 0.85) + 1) / 2
-                let previewLevel = Float(0.16 + (voicePulse * 0.5))
+                let voicePulse = (sin(time * 1.25) + 1) / 2
+                let previewLevel = Float(0.16 + (voicePulse * 0.62))
 
                 ZStack {
                     Capsule()
@@ -533,8 +533,8 @@ struct AudioView: View {
         case .notchShelf:
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                 let time = timeline.date.timeIntervalSinceReferenceDate
-                let voicePulse = (sin(time * 0.85) + 1) / 2
-                let previewLevel = Float(0.16 + (voicePulse * 0.5))
+                let voicePulse = (sin(time * 1.25) + 1) / 2
+                let previewLevel = Float(0.16 + (voicePulse * 0.62))
 
                 ZStack(alignment: .top) {
                     ZStack {

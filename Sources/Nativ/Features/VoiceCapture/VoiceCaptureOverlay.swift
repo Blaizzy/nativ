@@ -42,7 +42,6 @@ final class VoiceCaptureOverlayController {
     private let islandPanel: NSPanel
     private let soundPlayer = VoiceCaptureSoundPlayer()
     private var activeStyle: VoiceCaptureAnimationStyle = .cursorWaveform
-    private var displayedIslandLevel: Float = 0
     private var islandDismissalTask: Task<Void, Never>?
 
     init(animationPreferences: VoiceAnimationPreferences? = nil) {
@@ -93,7 +92,6 @@ final class VoiceCaptureOverlayController {
         islandDismissalTask = nil
         model.transition(to: .preparing)
         model.level = 0
-        displayedIslandLevel = 0
         model.elapsed = 0
         activeStyle = animationPreferences.selectedStyle
         model.islandStyle = activeStyle
@@ -113,31 +111,18 @@ final class VoiceCaptureOverlayController {
 
     func update(level: Float, elapsed: TimeInterval) {
         model.transition(to: .recording)
-        let normalizedLevel = max(0, min(1, level))
-        if activeStyle == .cursorWaveform {
-            model.level = normalizedLevel
-        } else {
-            let response: Float = normalizedLevel > displayedIslandLevel
-                ? 0.14
-                : 0.07
-            displayedIslandLevel += (
-                normalizedLevel - displayedIslandLevel
-            ) * response
-            model.level = displayedIslandLevel
-        }
+        model.level = max(0, min(1, level))
         model.elapsed = elapsed
     }
 
     func showFailure() {
         model.transition(to: .failed)
         model.level = 0
-        displayedIslandLevel = 0
     }
 
     func hide() {
         waveformPanel.orderOut(nil)
         model.level = 0
-        displayedIslandLevel = 0
 
         guard activeStyle != .cursorWaveform, islandPanel.isVisible else {
             islandPanel.orderOut(nil)
@@ -805,9 +790,14 @@ struct VoiceGradientOrb: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             GeometryReader { geometry in
                 let time = timeline.date.timeIntervalSinceReferenceDate
-                let energy = phase == .listening
+                let meterLevel = phase == .listening
                     ? max(0, min(1, Double(level)))
                     : 0
+                let audibleLevel = max(0, (meterLevel - 0.055) / 0.56)
+                let energy = pow(min(1, audibleLevel), 0.72)
+                let motionEnergy = eased(
+                    max(0, min(1, (energy - 0.14) / 0.86))
+                )
                 let phaseAge = max(0, timeline.date.timeIntervalSince(phaseStartedAt))
                 let activationProgress = phase == .activating
                     ? eased(min(1, phaseAge / 0.28))
@@ -816,17 +806,50 @@ struct VoiceGradientOrb: View {
                     ? eased(min(1, phaseAge / 0.38))
                     : 0
                 let shortestSide = min(geometry.size.width, geometry.size.height)
-                let primaryPhase = time * 0.22
-                let secondaryPhase = time * 0.16
+                let primaryPhase = time * 0.48
+                let secondaryPhase = time * 0.34
                 let driftX = sin(primaryPhase)
-                    * geometry.size.width * 0.035
+                    * geometry.size.width * 0.07
                 let driftY = cos(primaryPhase * 0.73)
-                    * geometry.size.height * 0.025
+                    * geometry.size.height * 0.055
                 let secondaryDriftX = cos(secondaryPhase)
-                    * geometry.size.width * 0.028
+                    * geometry.size.width * 0.06
                 let secondaryDriftY = sin(secondaryPhase * 0.81)
-                    * geometry.size.height * 0.022
-                let voiceLift = energy * geometry.size.height * 0.025
+                    * geometry.size.height * 0.048
+                let restMix = 1 - motionEnergy
+                let flowPhase = time * 3.9
+                let leadFlowX = (
+                    (sin(flowPhase * 0.72) * 0.78)
+                        + (sin((flowPhase * 1.41) + 0.4) * 0.22)
+                ) * motionEnergy
+                let leadFlowY = (
+                    (sin((flowPhase * 0.43) + 1.2) * 0.76)
+                        + (cos((flowPhase * 1.17) + 0.1) * 0.24)
+                ) * motionEnergy
+                let middleFlowX = (
+                    (sin((-flowPhase * 0.61) + 1.0) * 0.74)
+                        + (cos((flowPhase * 1.26) + 0.7) * 0.26)
+                ) * motionEnergy
+                let middleFlowY = (
+                    (cos((flowPhase * 0.84) + 2.1) * 0.8)
+                        + (sin((-flowPhase * 1.09) + 0.3) * 0.2)
+                ) * motionEnergy
+                let tailFlowX = (
+                    (cos((flowPhase * 0.48) + 2.6) * 0.76)
+                        + (sin((flowPhase * 1.33) + 1.4) * 0.24)
+                ) * motionEnergy
+                let tailFlowY = (
+                    (sin((-flowPhase * 0.77) + 2.0) * 0.72)
+                        + (cos((flowPhase * 1.21) + 2.8) * 0.28)
+                ) * motionEnergy
+                let shadowFlowX = (
+                    (sin((-flowPhase * 0.69) + 3.1) * 0.82)
+                        + (cos((flowPhase * 1.12) + 0.8) * 0.18)
+                ) * motionEnergy
+                let shadowFlowY = (
+                    (cos((flowPhase * 0.52) + 0.4) * 0.75)
+                        + (sin((flowPhase * 1.28) + 2.4) * 0.25)
+                ) * motionEnergy
 
                 ZStack {
                     Circle()
@@ -836,10 +859,10 @@ struct VoiceGradientOrb: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white,
-                                    Color(red: 0.82, green: 0.97, blue: 1.0),
-                                    Color(red: 0.18, green: 0.76, blue: 0.96),
-                                    Color(red: 0.04, green: 0.28, blue: 0.88),
+                                    Color(red: 0.98, green: 0.99, blue: 1.0),
+                                    Color(red: 0.42, green: 0.94, blue: 1.0),
+                                    Color(red: 0.0, green: 0.48, blue: 1.0),
+                                    Color(red: 0.08, green: 0.04, blue: 0.56),
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -861,23 +884,32 @@ struct VoiceGradientOrb: View {
                             )
                         )
                         .frame(
-                            width: geometry.size.width * 1.28,
-                            height: geometry.size.height * 0.92
+                            width: geometry.size.width * 0.9,
+                            height: geometry.size.height * 0.72
                         )
                         .offset(
-                            x: (-geometry.size.width * 0.16) + driftX,
-                            y: -geometry.size.height * 0.24 + driftY - voiceLift
+                            x: (
+                                (-geometry.size.width * 0.16) + driftX
+                            ) * restMix
+                                + (leadFlowX * geometry.size.width * 0.34),
+                            y: (
+                                (-geometry.size.height * 0.24) + driftY
+                            ) * restMix
+                                + (leadFlowY * geometry.size.height * 0.31)
                         )
-                        .opacity(0.84 + (energy * 0.08))
-                        .blur(radius: shortestSide * 0.1)
+                        .scaleEffect(
+                            x: 1 + (leadFlowX * 0.045),
+                            y: 1 - (leadFlowX * 0.032)
+                        )
+                        .opacity(0.78 + (energy * 0.16))
+                        .blur(radius: shortestSide * 0.055)
 
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(red: 0.18, green: 0.92, blue: 1.0),
-                                    Color(red: 0.02, green: 0.58, blue: 0.94)
-                                        .opacity(0.86),
+                                    Color(red: 0.0, green: 1.0, blue: 0.94),
+                                    Color(red: 0.0, green: 0.42, blue: 1.0),
                                     .clear,
                                 ],
                                 center: .center,
@@ -886,25 +918,33 @@ struct VoiceGradientOrb: View {
                             )
                         )
                         .frame(
-                            width: geometry.size.width * 1.34,
-                            height: geometry.size.height * 0.84
+                            width: geometry.size.width * 0.86,
+                            height: geometry.size.height * 0.62
                         )
                         .offset(
-                            x: (geometry.size.width * 0.18) + secondaryDriftX,
-                            y: -geometry.size.height * 0.02
-                                + secondaryDriftY
-                                - (voiceLift * 0.45)
+                            x: (
+                                (geometry.size.width * 0.18) + secondaryDriftX
+                            ) * restMix
+                                + (middleFlowX * geometry.size.width * 0.37),
+                            y: (
+                                (-geometry.size.height * 0.02) + secondaryDriftY
+                            ) * restMix
+                                + (middleFlowY * geometry.size.height * 0.3)
                         )
-                        .opacity(0.48 + (energy * 0.1))
-                        .blur(radius: shortestSide * 0.11)
+                        .scaleEffect(
+                            x: 1 + (middleFlowX * 0.055),
+                            y: 1 - (middleFlowX * 0.042)
+                        )
+                        .opacity(0.52 + (energy * 0.2))
+                        .blur(radius: shortestSide * 0.05)
 
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(red: 0.02, green: 0.22, blue: 0.9),
-                                    Color(red: 0.0, green: 0.48, blue: 0.96)
-                                        .opacity(0.72),
+                                    Color(red: 0.92, green: 0.06, blue: 1.0),
+                                    Color(red: 0.18, green: 0.02, blue: 0.72)
+                                        .opacity(0.94),
                                     .clear,
                                 ],
                                 center: .center,
@@ -913,17 +953,62 @@ struct VoiceGradientOrb: View {
                             )
                         )
                         .frame(
-                            width: geometry.size.width * 1.4,
-                            height: geometry.size.height * 0.78
+                            width: geometry.size.width * 0.9,
+                            height: geometry.size.height * 0.62
                         )
                         .offset(
-                            x: (-geometry.size.width * 0.08) - secondaryDriftX,
-                            y: geometry.size.height * 0.34
-                                - secondaryDriftY
-                                - (voiceLift * 0.3)
+                            x: (
+                                (-geometry.size.width * 0.08) - secondaryDriftX
+                            ) * restMix
+                                + (tailFlowX * geometry.size.width * 0.36),
+                            y: (
+                                (geometry.size.height * 0.34) - secondaryDriftY
+                            ) * restMix
+                                + (tailFlowY * geometry.size.height * 0.32)
                         )
-                        .opacity(0.62 + (energy * 0.06))
-                        .blur(radius: shortestSide * 0.1)
+                        .scaleEffect(
+                            x: 1 + (tailFlowX * 0.052),
+                            y: 1 - (tailFlowX * 0.058)
+                        )
+                        .opacity(0.64 + (energy * 0.14))
+                        .blur(radius: shortestSide * 0.05)
+
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color(red: 0.01, green: 0.02, blue: 0.18)
+                                        .opacity(0.94),
+                                    Color(red: 0.12, green: 0.02, blue: 0.46)
+                                        .opacity(0.72),
+                                    .clear,
+                                ],
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: shortestSide * 0.58
+                            )
+                        )
+                        .frame(
+                            width: geometry.size.width * 0.72,
+                            height: geometry.size.height * 0.5
+                        )
+                        .offset(
+                            x: (
+                                (geometry.size.width * 0.2) - driftX
+                            ) * restMix
+                                + (shadowFlowX * geometry.size.width * 0.33),
+                            y: (
+                                (geometry.size.height * 0.26) + secondaryDriftY
+                            ) * restMix
+                                + (shadowFlowY * geometry.size.height * 0.28)
+                        )
+                        .scaleEffect(
+                            x: 1 + (shadowFlowX * 0.045),
+                            y: 1 - (shadowFlowX * 0.034)
+                        )
+                        .opacity(0.28 + (energy * 0.24))
+                        .blendMode(.multiply)
+                        .blur(radius: shortestSide * 0.035)
 
                     Circle()
                         .fill(
@@ -931,7 +1016,7 @@ struct VoiceGradientOrb: View {
                                 colors: [
                                     .clear,
                                     Color(red: 0.7, green: 0.96, blue: 1.0)
-                                        .opacity(0.28 + (energy * 0.08)),
+                                        .opacity(0.3 + (energy * 0.14)),
                                     .white.opacity(0.84),
                                 ],
                                 startPoint: .top,
@@ -976,9 +1061,9 @@ struct VoiceGradientOrb: View {
                         .strokeBorder(
                             LinearGradient(
                                 colors: [
-                                    .white.opacity(0.62),
-                                    .white.opacity(0.12),
-                                    .white.opacity(0.38),
+                                    .white.opacity(0.62 + (energy * 0.24)),
+                                    .white.opacity(0.12 + (energy * 0.1)),
+                                    .white.opacity(0.38 + (energy * 0.18)),
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -988,14 +1073,14 @@ struct VoiceGradientOrb: View {
                 }
                 .scaleEffect(
                     (0.78 + (activationProgress * 0.22))
-                        + (energy * 0.014)
+                        + (motionEnergy * 0.055)
                         - (finishProgress * 0.06)
                 )
                 .opacity(activationProgress * (1 - finishProgress))
                 .shadow(
                     color: Color(red: 0.38, green: 0.93, blue: 1.0)
-                        .opacity(0.16 + (energy * 0.1)),
-                    radius: 3 + (energy * 1.5)
+                        .opacity(0.16 + (energy * 0.18)),
+                    radius: 3 + (energy * 2.5)
                 )
             }
         }
