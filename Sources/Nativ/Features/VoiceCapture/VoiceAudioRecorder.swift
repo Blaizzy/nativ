@@ -12,6 +12,93 @@ enum VoiceAudioRecorderError: LocalizedError {
     }
 }
 
+enum VoiceAudioRetention {
+    static let duration: TimeInterval = 5 * 60
+
+    static func audioFiles(
+        in directory: URL,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return files.filter { url in
+            guard url.pathExtension.localizedCaseInsensitiveCompare("wav") == .orderedSame,
+                  let values = try? url.resourceValues(
+                    forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                  )
+            else {
+                return false
+            }
+            return values.isRegularFile == true && values.isSymbolicLink != true
+        }
+    }
+
+    static func deletionDelay(
+        for audioURL: URL,
+        now: Date = Date()
+    ) -> TimeInterval {
+        let values = try? audioURL.resourceValues(
+            forKeys: [.contentModificationDateKey, .creationDateKey]
+        )
+        guard let recordedAt = values?.contentModificationDate ?? values?.creationDate else {
+            return duration
+        }
+        return max(0, recordedAt.addingTimeInterval(duration).timeIntervalSince(now))
+    }
+
+    @discardableResult
+    static func removeAudioFile(
+        at audioURL: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard audioURL.pathExtension.localizedCaseInsensitiveCompare("wav") == .orderedSame else {
+            return false
+        }
+        do {
+            try fileManager.removeItem(at: audioURL)
+            return true
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            return true
+        } catch {
+            NSLog(
+                "Nativ could not remove temporary voice recording at %@: %@",
+                audioURL.path,
+                error.localizedDescription
+            )
+            return false
+        }
+    }
+
+    @discardableResult
+    static func removeExpiredAudioFiles(
+        in directory: URL,
+        now: Date = Date(),
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        audioFiles(in: directory, fileManager: fileManager).filter { audioURL in
+            guard deletionDelay(for: audioURL, now: now) <= 0 else {
+                return false
+            }
+            return removeAudioFile(at: audioURL, fileManager: fileManager)
+        }
+    }
+
+    static func removeAllAudioFiles(
+        in directory: URL,
+        fileManager: FileManager = .default
+    ) {
+        for audioURL in audioFiles(in: directory, fileManager: fileManager) {
+            removeAudioFile(at: audioURL, fileManager: fileManager)
+        }
+    }
+}
+
 @MainActor
 final class VoiceAudioRecorder {
     var onMeterUpdate: ((Float, TimeInterval) -> Void)?
