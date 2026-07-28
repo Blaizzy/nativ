@@ -148,6 +148,25 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
+    func testSavingWritesPropertyListEvenWhenCredentialStoreFails() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let credentialStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        NativSettings(languageModelID: "org/model").save(
+            to: url,
+            credentialStore: credentialStore
+        )
+
+        XCTAssertEqual(
+            try propertyList(at: url)["languageModelID"] as? String,
+            "org/model",
+            "a Keychain failure must not block persisting the rest of settings to disk"
+        )
+    }
+
     func testLoadingMigratesLegacyServerAPIKeyIntoCredentialStore() throws {
         let url = temporarySettingsURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
