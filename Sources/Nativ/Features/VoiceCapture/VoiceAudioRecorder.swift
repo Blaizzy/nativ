@@ -120,6 +120,7 @@ final class VoiceAudioRecorder {
     var onMeterUpdate: ((Float, TimeInterval) -> Void)?
 
     private(set) var isRecording = false
+    private(set) var lastRecordingDuration: TimeInterval?
     private var recorder: AVAudioRecorder?
     private var meterTimer: Timer?
     private var smoothedLevel: Float = 0
@@ -168,6 +169,7 @@ final class VoiceAudioRecorder {
 
         self.recorder = recorder
         isRecording = true
+        lastRecordingDuration = nil
         smoothedLevel = 0
         startMetering()
         return outputURL
@@ -185,11 +187,13 @@ final class VoiceAudioRecorder {
         recorder.stop()
         self.recorder = nil
         isRecording = false
+        lastRecordingDuration = duration
         smoothedLevel = 0
         onMeterUpdate?(0, duration)
 
         let outputURL = recorder.url
         guard duration > 0 else {
+            lastRecordingDuration = nil
             try? FileManager.default.removeItem(at: outputURL)
             return nil
         }

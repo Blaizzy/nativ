@@ -480,6 +480,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showMainWindow()
     }
 
+    @objc private func openAudioFromMenu(_ sender: Any?) {
+        controlPanelNavigation.open(.audio)
+        showMainWindow()
+    }
+
     @objc private func openSystemFromMenu(_ sender: Any?) {
         controlPanelNavigation.open(.system)
         showMainWindow()
@@ -951,6 +956,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dashboardMenuItem.target = self
         dashboardMenuItem.image = menuIcon("chart.xyaxis.line", description: "Dashboard")
         menu.addItem(dashboardMenuItem)
+
+        let audioMenuItem = NSMenuItem(
+            title: "Audio…",
+            action: #selector(openAudioFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        audioMenuItem.target = self
+        audioMenuItem.image = menuIcon("waveform.badge.mic", description: "Audio")
+        menu.addItem(audioMenuItem)
 
         let systemMenuItem = NSMenuItem(
             title: "System…",

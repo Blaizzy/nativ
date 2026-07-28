@@ -19,6 +19,7 @@ final class VoiceCaptureCoordinator {
     private let shortcutMonitor = FnControlShortcutMonitor()
     private let recorder = VoiceAudioRecorder()
     private let overlay = VoiceCaptureOverlayController()
+    private let analytics = AudioAnalyticsStore.shared
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
@@ -41,6 +42,9 @@ final class VoiceCaptureCoordinator {
 
     func start() {
         scheduleExistingAudioDeletion()
+        if let directory = try? VoiceAudioRecorder.recordingsDirectory {
+            analytics.importTranscripts(in: directory)
+        }
         shortcutMonitor.start()
     }
 
@@ -111,7 +115,11 @@ final class VoiceCaptureCoordinator {
         if let recordingURL = recorder.stop() {
             NSLog("Nativ saved voice recording to %@", recordingURL.path)
             scheduleAudioDeletion(recordingURL)
-            transcribe(recordingURL, target: target)
+            transcribe(
+                recordingURL,
+                target: target,
+                durationSeconds: recorder.lastRecordingDuration
+            )
         }
         overlay.hide()
     }
@@ -133,7 +141,7 @@ final class VoiceCaptureCoordinator {
 
         let target = VoiceTranscriptInserter.captureTarget()
         NSLog("Nativ retrying voice transcription from %@", recordingURL.path)
-        transcribe(recordingURL, target: target)
+        transcribe(recordingURL, target: target, durationSeconds: nil)
     }
 
     private func scheduleExistingAudioDeletion() {
@@ -173,7 +181,8 @@ final class VoiceCaptureCoordinator {
 
     private func transcribe(
         _ recordingURL: URL,
-        target: VoiceTranscriptInsertionTarget?
+        target: VoiceTranscriptInsertionTarget?,
+        durationSeconds: TimeInterval?
     ) {
         let audioData: Data
         do {
@@ -249,6 +258,13 @@ final class VoiceCaptureCoordinator {
                     .deletingPathExtension()
                     .appendingPathExtension("txt")
                 try transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
+                self.analytics.upsertTranscription(
+                    recordingURL: recordingURL,
+                    transcript: transcript,
+                    durationSeconds: durationSeconds,
+                    modelID: modelID,
+                    applicationName: target?.applicationName
+                )
 
                 let insertedAtCursor = await VoiceTranscriptInserter.insertAtCursor(
                     transcript,

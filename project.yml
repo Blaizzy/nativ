@@ -103,6 +103,9 @@ targets:
       - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAudioRecorder.swift
       - path: Sources/Nativ/Features/VoiceCapture/FnControlShortcutMonitor.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceShortcut.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
