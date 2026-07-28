@@ -373,6 +373,7 @@ struct IntegrationsView: View {
             set: { if !$0 { viewModel.errorMessage = nil } }
         )) {
             Button("OK", role: .cancel) { viewModel.errorMessage = nil }
+                .keyboardShortcut(.defaultAction)
         } message: {
             Text(viewModel.errorMessage ?? "Unknown error")
         }

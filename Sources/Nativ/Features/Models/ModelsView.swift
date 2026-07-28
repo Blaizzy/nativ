@@ -1058,6 +1058,7 @@ private struct InstalledModelRow: View {
         .modelRowBackground(isHighlighted: isSelected, isHovered: isHovered)
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
+                .keyboardShortcut(.defaultAction)
         } message: {
             Text(
                 "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
@@ -1065,6 +1066,7 @@ private struct InstalledModelRow: View {
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
             Button("Delete Model", role: .destructive, action: onDelete)
+                .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This permanently removes \(localModel.repoID) from the local Hugging Face cache.")

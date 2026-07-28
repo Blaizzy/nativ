@@ -2170,6 +2170,7 @@ private struct ChatImageAttachmentView: View {
         .accessibilityLabel(attachment.filename)
         .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
             Button("OK", role: .cancel) {}
+                .keyboardShortcut(.defaultAction)
         } message: {
             Text(saveErrorMessage ?? "The image could not be saved.")
         }
