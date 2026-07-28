@@ -115,6 +115,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case succeeded
         case failed
         case cancelled
+        case awaitingConsent
+        case declined
     }
 
     let id: UUID

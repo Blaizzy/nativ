@@ -500,6 +500,160 @@ private struct ChatServerStatsToolExecutor {
     }
 }
 
+private enum ChatSwitchModelToolRegistry {
+    static let toolName = "switch_model"
+
+    static func definitions() -> [MLXChatToolDefinition] {
+        [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: toolName,
+            description: "Switch the active local language model. Requires user confirmation before it runs.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([
+                    "model_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Exact model identifier to switch to, e.g. mlx-community/Qwen3-1.7B-4bit")
+                    ])
+                ]),
+                "required": .array([.string("model_id")])
+            ])
+        ))]
+    }
+}
+
+private struct ChatSwitchModelToolArguments: Decodable {
+    let modelID: String
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+    }
+}
+
+private struct ChatSwitchModelToolResultPayload: Encodable {
+    let ok: Bool
+    let previousModelID: String?
+    let newModelID: String?
+    let changed: Bool?
+    let declined: Bool?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case previousModelID = "previous_model_id"
+        case newModelID = "new_model_id"
+        case changed
+        case declined
+        case error
+    }
+}
+
+private enum ChatSwitchModelToolError: LocalizedError {
+    case invalidArguments
+    case timedOut
+    case switchFailed
+    case mismatchedModel(requested: String, active: String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArguments:
+            return "The switch_model arguments were not valid JSON."
+        case .timedOut:
+            return "The model switch did not finish in time."
+        case .switchFailed:
+            return "The server failed to start with the requested model."
+        case .mismatchedModel(let requested, let active):
+            return "Requested \(requested) but the active model is now \(active ?? "unknown")."
+        }
+    }
+}
+
+private struct ChatSwitchModelToolExecutor {
+    @MainActor
+    func execute(call: MLXChatToolCall, appModel: NativModel) async throws -> String {
+        guard call.function?.name == ChatSwitchModelToolRegistry.toolName else {
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        }
+        guard let argumentsData = call.function?.arguments?.data(using: .utf8),
+              let arguments = try? JSONDecoder().decode(ChatSwitchModelToolArguments.self, from: argumentsData)
+        else {
+            throw ChatSwitchModelToolError.invalidArguments
+        }
+
+        let previousModelID = appModel.settings.normalized().languageModelID
+        if previousModelID == arguments.modelID {
+            return try encodedPayload(ChatSwitchModelToolResultPayload(
+                ok: true,
+                previousModelID: previousModelID,
+                newModelID: arguments.modelID,
+                changed: false,
+                declined: false,
+                error: nil
+            ))
+        }
+
+        appModel.switchLanguageModel(to: arguments.modelID)
+
+        let deadline = Date().addingTimeInterval(60)
+        while appModel.modelSwitchInProgress, Date() < deadline {
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        guard !appModel.modelSwitchInProgress else {
+            throw ChatSwitchModelToolError.timedOut
+        }
+        guard appModel.isRunning else {
+            throw ChatSwitchModelToolError.switchFailed
+        }
+
+        let activeModelID = appModel.settings.normalized().languageModelID
+        guard activeModelID == arguments.modelID else {
+            throw ChatSwitchModelToolError.mismatchedModel(
+                requested: arguments.modelID,
+                active: activeModelID
+            )
+        }
+
+        return try encodedPayload(ChatSwitchModelToolResultPayload(
+            ok: true,
+            previousModelID: previousModelID,
+            newModelID: activeModelID,
+            changed: true,
+            declined: false,
+            error: nil
+        ))
+    }
+
+    func declinedPayload() -> String {
+        (try? encodedPayload(ChatSwitchModelToolResultPayload(
+            ok: false,
+            previousModelID: nil,
+            newModelID: nil,
+            changed: nil,
+            declined: true,
+            error: "The user declined this model switch."
+        ))) ?? #"{"ok":false,"declined":true,"error":"The user declined this model switch."}"#
+    }
+
+    func failurePayload(operation: String, error: Error) -> String {
+        let payload = ChatSwitchModelToolResultPayload(
+            ok: false,
+            previousModelID: nil,
+            newModelID: nil,
+            changed: nil,
+            declined: false,
+            error: error.localizedDescription
+        )
+        return (try? encodedPayload(payload))
+            ?? #"{"ok":false,"error":"Model switch failed."}"#
+    }
+
+    private func encodedPayload(_ payload: ChatSwitchModelToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
+    }
+}
+
 private struct ChatToolExecutionContext {
     let imageGenerationModelID: String?
     let baseURL: URL
@@ -526,6 +680,7 @@ private enum ChatToolRegistry {
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
+        tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
         return tools
     }
 }
@@ -579,6 +734,11 @@ private enum ChatToolDispatcher {
         case ChatServerStatsToolRegistry.toolName:
             return ChatServerStatsToolExecutor().failurePayload(
                 operation: toolName ?? ChatServerStatsToolRegistry.toolName,
+                error: error
+            )
+        case ChatSwitchModelToolRegistry.toolName:
+            return ChatSwitchModelToolExecutor().failurePayload(
+                operation: toolName ?? ChatSwitchModelToolRegistry.toolName,
                 error: error
             )
         default:
@@ -685,8 +845,12 @@ struct ChatView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
-                        ChatMessageRow(message: message)
-                            .id(message.id)
+                        ChatMessageRow(
+                            message: message,
+                            onConfirmToolConsent: chat.confirmToolConsent,
+                            onDenyToolConsent: chat.denyToolConsent
+                        )
+                        .id(message.id)
                     }
                 }
             }
@@ -776,6 +940,7 @@ final class ChatViewModel: ObservableObject {
     private var streamFlushDates: [UUID: Date] = [:]
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
+    private var pendingToolConsent: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     init() {
         storedSessions = sessionStore.loadSessions()
@@ -1014,6 +1179,26 @@ final class ChatViewModel: ObservableObject {
         startNextRequestIfNeeded()
     }
 
+    func confirmToolConsent(_ toolMessageID: UUID) {
+        pendingToolConsent.removeValue(forKey: toolMessageID)?.resume(returning: true)
+    }
+
+    func denyToolConsent(_ toolMessageID: UUID) {
+        pendingToolConsent.removeValue(forKey: toolMessageID)?.resume(returning: false)
+    }
+
+    private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                pendingToolConsent[toolMessageID] = continuation
+            }
+        } onCancel: { [weak self] in
+            Task { @MainActor in
+                self?.pendingToolConsent.removeValue(forKey: toolMessageID)?.resume(returning: false)
+            }
+        }
+    }
+
     func cancel() {
         activeTask?.cancel()
     }
@@ -1238,6 +1423,76 @@ final class ChatViewModel: ObservableObject {
                     throw NativChatError.invalidResponse
                 }
                 insertionAnchor = toolMessageID
+
+                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    do {
+                        try Task.checkCancellation()
+                    } catch {
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    }
+
+                    guard approved else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatSwitchModelToolExecutor().declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    guard let appModel else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatSwitchModelToolExecutor().failurePayload(
+                                operation: ChatSwitchModelToolRegistry.toolName,
+                                error: ChatImageToolError.unsupportedTool(ChatSwitchModelToolRegistry.toolName)
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    do {
+                        let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: content,
+                            attachments: []
+                        )
+                        appModel.refreshMetricsIfRunning(force: true)
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatSwitchModelToolExecutor().failurePayload(
+                                operation: ChatSwitchModelToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
 
                 do {
                     let references = latestImageReferences(
@@ -1871,6 +2126,8 @@ private struct ChatMessageRow: View {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
+    let onConfirmToolConsent: (UUID) -> Void
+    let onDenyToolConsent: (UUID) -> Void
     @State private var didCopyResponse = false
     @State private var isHoveringMessage = false
 
@@ -1883,7 +2140,11 @@ private struct ChatMessageRow: View {
             }
 
             if message.role == .tool {
-                ChatAgentStepCell(message: message)
+                ChatAgentStepCell(
+                    message: message,
+                    onConfirm: onConfirmToolConsent,
+                    onDeny: onDenyToolConsent
+                )
             }
 
             VStack(alignment: contentStackAlignment, spacing: 6) {
@@ -2120,7 +2381,13 @@ private struct ChatMessageRow: View {
 
 private struct ChatAgentStepCell: View {
     let message: ChatTranscriptMessage
+    let onConfirm: (UUID) -> Void
+    let onDeny: (UUID) -> Void
     @State private var isExpanded = false
+
+    private var isAwaitingConsent: Bool {
+        message.toolStatus == .awaitingConsent
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2133,8 +2400,13 @@ private struct ChatAgentStepCell: View {
             }
             .buttonStyle(.plain)
             .help(isExpanded ? "Hide call details" : "Show call details")
+            .disabled(isAwaitingConsent)
 
-            if isExpanded {
+            if isAwaitingConsent {
+                Divider()
+                    .padding(.top, 7)
+                consentPrompt
+            } else if isExpanded {
                 Divider()
                     .padding(.top, 7)
                 details
@@ -2164,18 +2436,20 @@ private struct ChatAgentStepCell: View {
 
                 Text(title)
                     .font(.callout.weight(.medium))
-                if message.toolStatus == .failed || message.toolStatus == .cancelled {
-                    Text(message.toolStatus == .cancelled ? "Cancelled" : "Failed")
+                if let statusCaption {
+                    Text(statusCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 12)
 
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                if !isAwaitingConsent {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
             }
             if message.toolStatus == .failed, let toolErrorMessage {
                 Text(toolErrorMessage)
@@ -2185,6 +2459,51 @@ private struct ChatAgentStepCell: View {
             }
         }
         .contentShape(.rect)
+    }
+
+    private var statusCaption: String? {
+        switch message.toolStatus {
+        case .cancelled:
+            "Cancelled"
+        case .failed:
+            "Failed"
+        case .declined:
+            "Declined"
+        case .running, .succeeded, .awaitingConsent, nil:
+            nil
+        }
+    }
+
+    private var consentPrompt: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("The model wants to switch to **\(requestedModelID)**. The server restarts briefly; your session is kept.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Deny") {
+                    onDeny(message.id)
+                }
+                .buttonStyle(.bordered)
+
+                Button("Confirm") {
+                    onConfirm(message.id)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 7)
+    }
+
+    private var requestedModelID: String {
+        guard let data = message.toolArguments?.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelID = object["model_id"] as? String
+        else {
+            return "a different model"
+        }
+        return modelID
     }
 
     @ViewBuilder
@@ -2244,6 +2563,10 @@ private struct ChatAgentStepCell: View {
             "failed"
         case .cancelled:
             "cancelled"
+        case .awaitingConsent:
+            "awaiting your confirmation"
+        case .declined:
+            "declined"
         case nil:
             "unknown"
         }
@@ -2272,6 +2595,8 @@ private enum ChatToolPresentation {
             return modelLibraryTitle(status: status)
         case ChatServerStatsToolRegistry.toolName:
             return serverStatsTitle(status: status)
+        case ChatSwitchModelToolRegistry.toolName:
+            return switchModelTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -2281,8 +2606,10 @@ private enum ChatToolPresentation {
         switch status {
         case .failed:
             return "exclamationmark.triangle.fill"
-        case .cancelled:
+        case .cancelled, .declined:
             return "xmark.circle"
+        case .awaitingConsent:
+            return "questionmark.circle"
         case .succeeded, .running, nil:
             switch toolName {
             case "generate_image", "edit_image":
@@ -2293,6 +2620,8 @@ private enum ChatToolPresentation {
                 return "shippingbox"
             case ChatServerStatsToolRegistry.toolName:
                 return "chart.line.uptrend.xyaxis"
+            case ChatSwitchModelToolRegistry.toolName:
+                return "arrow.triangle.2.circlepath"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -2305,7 +2634,7 @@ private enum ChatToolPresentation {
             return isEdit ? "Editing image…" : "Generating image…"
         case .succeeded:
             return isEdit ? "Edited image" : "Generated image"
-        case .failed, .cancelled:
+        case .failed, .cancelled, .awaitingConsent, .declined:
             return isEdit ? "Image edit" : "Image generation"
         case nil:
             return "Image tool"
@@ -2318,7 +2647,7 @@ private enum ChatToolPresentation {
             return "Checking system stats…"
         case .succeeded:
             return "Checked system stats"
-        case .failed, .cancelled:
+        case .failed, .cancelled, .awaitingConsent, .declined:
             return "System stats"
         case nil:
             return "System tool"
@@ -2331,7 +2660,7 @@ private enum ChatToolPresentation {
             return "Listing downloaded models…"
         case .succeeded:
             return "Listed downloaded models"
-        case .failed, .cancelled:
+        case .failed, .cancelled, .awaitingConsent, .declined:
             return "Model library"
         case nil:
             return "Model library tool"
@@ -2344,10 +2673,27 @@ private enum ChatToolPresentation {
             return "Checking server stats…"
         case .succeeded:
             return "Checked server stats"
-        case .failed, .cancelled:
+        case .failed, .cancelled, .awaitingConsent, .declined:
             return "Server stats"
         case nil:
             return "Server stats tool"
+        }
+    }
+
+    private static func switchModelTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .awaitingConsent:
+            return "Switch model?"
+        case .running:
+            return "Switching model…"
+        case .succeeded:
+            return "Switched model"
+        case .declined:
+            return "Model switch declined"
+        case .failed, .cancelled:
+            return "Model switch"
+        case nil:
+            return "Model switch tool"
         }
     }
 
@@ -2358,7 +2704,7 @@ private enum ChatToolPresentation {
             return "Running \(name)…"
         case .succeeded:
             return "Ran \(name)"
-        case .failed, .cancelled, nil:
+        case .failed, .cancelled, .awaitingConsent, .declined, nil:
             return name
         }
     }
