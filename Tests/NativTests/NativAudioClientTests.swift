@@ -3,17 +3,20 @@ import XCTest
 
 final class NativAudioClientTests: XCTestCase {
     func testTranscriptionRequestUsesExpectedMultipartFields() throws {
+        let serverURL = try XCTUnwrap(URL(string: "http://speech-runtime.local:49152"))
         let client = NativAudioClient(
-            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            baseURL: serverURL,
             apiKey: "test-token"
         )
         let request = client.makeURLRequest(
             audioData: Data([0x00, 0x01, 0x02]),
             fileName: "Voice Recording.wav",
-            model: "mlx-community/Qwen3-ASR-0.6B-8bit",
+            model: "local-owner/custom-speech-model",
             boundary: "TestBoundary"
         )
 
+        XCTAssertEqual(request.url?.host, "speech-runtime.local")
+        XCTAssertEqual(request.url?.port, 49_152)
         XCTAssertEqual(request.url?.path, "/v1/audio/transcriptions")
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(
@@ -27,7 +30,7 @@ final class NativAudioClientTests: XCTestCase {
         )
 
         let body = String(decoding: try XCTUnwrap(request.httpBody), as: UTF8.self)
-        XCTAssertTrue(body.contains("name=\"model\"\r\n\r\nmlx-community/Qwen3-ASR-0.6B-8bit"))
+        XCTAssertTrue(body.contains("name=\"model\"\r\n\r\nlocal-owner/custom-speech-model"))
         XCTAssertTrue(body.contains("name=\"response_format\"\r\n\r\njson"))
         XCTAssertTrue(body.contains("name=\"file\"; filename=\"Voice Recording.wav\""))
         XCTAssertTrue(body.contains("Content-Type: audio/wav"))
@@ -35,7 +38,9 @@ final class NativAudioClientTests: XCTestCase {
     }
 
     func testTranscriptionRequestSanitizesMultipartFileName() throws {
-        let client = NativAudioClient()
+        let client = NativAudioClient(
+            baseURL: try XCTUnwrap(URL(string: "http://dynamic-host.test:32001"))
+        )
         let request = client.makeURLRequest(
             audioData: Data(),
             fileName: "bad\"\r\nname.m4a",

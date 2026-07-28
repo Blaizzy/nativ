@@ -41,7 +41,7 @@ public final class NativAudioClient {
     private let decoder = JSONDecoder()
 
     public init(
-        baseURL: URL = URL(string: "http://127.0.0.1:8080")!,
+        baseURL: URL,
         apiKey: String? = nil,
         timeout: TimeInterval = 1_800
     ) {
