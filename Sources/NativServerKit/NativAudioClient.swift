@@ -65,9 +65,21 @@ public final class NativAudioClient {
         model: String
     ) async throws -> NativAudioTranscription {
         let audioData = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-        let request = makeURLRequest(
+        return try await transcribe(
             audioData: audioData,
             fileName: fileURL.lastPathComponent,
+            model: model
+        )
+    }
+
+    public func transcribe(
+        audioData: Data,
+        fileName: String,
+        model: String
+    ) async throws -> NativAudioTranscription {
+        let request = makeURLRequest(
+            audioData: audioData,
+            fileName: fileName,
             model: model
         )
         let (data, response) = try await session.data(for: request)

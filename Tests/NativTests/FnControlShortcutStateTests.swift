@@ -24,3 +24,21 @@ final class FnControlShortcutStateTests: XCTestCase {
         XCTAssertEqual(state.update(functionIsDown: true, controlIsDown: true), true)
     }
 }
+
+final class FnRetryShortcutStateTests: XCTestCase {
+    func testTriggersOnlyOnInitialPress() {
+        var state = FnRetryShortcutState()
+
+        XCTAssertTrue(state.update(isPressed: true))
+        XCTAssertFalse(state.update(isPressed: true))
+        XCTAssertFalse(state.update(isPressed: true))
+    }
+
+    func testCanTriggerAgainAfterRelease() {
+        var state = FnRetryShortcutState()
+
+        XCTAssertTrue(state.update(isPressed: true))
+        XCTAssertFalse(state.update(isPressed: false))
+        XCTAssertTrue(state.update(isPressed: true))
+    }
+}

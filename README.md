@@ -36,7 +36,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [INTEGRATIONS.md](INTEGRATIONS.md) for per-tool setup. |
 | **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
-| **Hold-to-transcribe voice capture** | Hold Fn + Control anywhere to record with a live waveform beside the pointer; release to transcribe locally, insert the text at the cursor, and save both the audio and transcript. |
+| **Hold-to-transcribe voice capture** | Hold Fn + Control anywhere to record with a live waveform beside the pointer; release to transcribe locally and insert the text at the cursor. Press Fn + R to retry the most recent recording while its temporary audio is available. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
 Inference runs on your Mac after a model has been downloaded. Model downloads and first-time build dependencies still require network access.
@@ -91,9 +91,10 @@ Nativ asks for Accessibility permission so it can detect the Fn + Control hold g
 outside the app, and for Microphone permission the first time you record. Recordings are
 saved temporarily as `.wav` files with matching `.txt` transcripts and can be opened from
 **Show Voice Recordings** in the menu-bar menu. Raw audio is deleted automatically after five
-minutes (or immediately when Nativ quits), while transcript files remain available. The
-transcript is inserted into the focused text field and remains on the clipboard. If no
-speech-to-text model is installed, Nativ links directly to filtered speech-model discovery.
+minutes (or immediately when Nativ quits), while transcript files remain available. Press
+Fn + R to transcribe the newest available audio again and insert it at the current cursor.
+The transcript remains on the clipboard. If no speech-to-text model is installed, Nativ
+links directly to filtered speech-model discovery.
 
 ### Build from source
 

@@ -60,6 +60,27 @@ final class VoiceAudioRetentionTests: XCTestCase {
         )
     }
 
+    func testLatestAudioFileUsesMostRecentRecording() throws {
+        let now = Date()
+        _ = try makeFile(
+            named: "older.wav",
+            modifiedAt: now.addingTimeInterval(-30)
+        )
+        let latestAudio = try makeFile(
+            named: "latest.wav",
+            modifiedAt: now.addingTimeInterval(-10)
+        )
+        _ = try makeFile(
+            named: "newer-transcript.txt",
+            modifiedAt: now
+        )
+
+        XCTAssertEqual(
+            VoiceAudioRetention.latestAudioFile(in: temporaryDirectory)?.lastPathComponent,
+            latestAudio.lastPathComponent
+        )
+    }
+
     func testRemoveAllAudioLeavesTranscriptsUntouched() throws {
         let audioURL = try makeFile(named: "recording.wav", modifiedAt: Date())
         let transcriptURL = try makeFile(named: "recording.txt", modifiedAt: Date())
