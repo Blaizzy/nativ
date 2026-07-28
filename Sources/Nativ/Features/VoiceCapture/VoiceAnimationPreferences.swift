@@ -4,6 +4,7 @@ import Foundation
 enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     case cursorWaveform
     case gradientIsland
+    case notchShelf
 
     var id: String { rawValue }
 
@@ -13,6 +14,8 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
             "Cursor Waveform"
         case .gradientIsland:
             "Gradient Island"
+        case .notchShelf:
+            "Wide Notch"
         }
     }
 
@@ -22,6 +25,8 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
             "A live waveform that follows your pointer."
         case .gradientIsland:
             "A liquid-glass listening orb with start and finish cues."
+        case .notchShelf:
+            "Widens the MacBook notch sideways without making it taller."
         }
     }
 
@@ -31,6 +36,8 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
             "At pointer"
         case .gradientIsland:
             "Beside camera"
+        case .notchShelf:
+            "Around camera"
         }
     }
 }

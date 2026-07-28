@@ -371,7 +371,7 @@ struct AudioView: View {
             }
 
             Label(
-                "Gradient Island forms one pill around the camera cutout, with a liquid-glass orb on the left, elapsed time on the right, and soft audio cues when listening starts and ends. Displays without a cutout use a centered floating version.",
+                "Gradient Island wraps the camera in a pill. Wide Notch extends the physical cutout sideways without increasing its height. Displays without a cutout use the centered floating fallback.",
                 systemImage: "info.circle"
             )
             .font(.caption)
@@ -483,8 +483,8 @@ struct AudioView: View {
         case .gradientIsland:
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                 let time = timeline.date.timeIntervalSinceReferenceDate
-                let voicePulse = (sin(time * 2.2) + 1) / 2
-                let previewLevel = Float(0.18 + (voicePulse * 0.72))
+                let voicePulse = (sin(time * 0.85) + 1) / 2
+                let previewLevel = Float(0.16 + (voicePulse * 0.5))
 
                 ZStack {
                     Capsule()
@@ -527,6 +527,55 @@ struct AudioView: View {
                             ],
                             startPoint: .leading,
                             endPoint: .trailing
+                        )
+                    )
+            }
+        case .notchShelf:
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let voicePulse = (sin(time * 0.85) + 1) / 2
+                let previewLevel = Float(0.16 + (voicePulse * 0.5))
+
+                ZStack(alignment: .top) {
+                    ZStack {
+                        VoiceWideNotchShape(
+                            shoulderWidth: 3,
+                            shoulderDepth: 4,
+                            bottomCornerRadius: 11
+                        )
+                            .fill(Color.black)
+
+                        HStack(spacing: 0) {
+                            VoiceGradientOrb(
+                                level: previewLevel,
+                                isRecording: true
+                            )
+                            .frame(width: 22, height: 22)
+                            .frame(width: 50, height: 36)
+
+                            Color.clear
+                                .frame(width: 130, height: 36)
+
+                            Text("0:08")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.78))
+                                .frame(width: 50, height: 36)
+                        }
+                    }
+                    .frame(width: 230, height: 36)
+                }
+                .frame(maxWidth: .infinity, minHeight: 112, alignment: .top)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.16, green: 0.18, blue: 0.21),
+                                Color(red: 0.06, green: 0.08, blue: 0.1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
                     )
             }
