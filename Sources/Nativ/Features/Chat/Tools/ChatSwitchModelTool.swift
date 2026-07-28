@@ -54,6 +54,7 @@ enum ChatSwitchModelToolError: LocalizedError {
     case timedOut
     case switchFailed
     case mismatchedModel(requested: String, active: String?)
+    case appModelUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -65,6 +66,8 @@ enum ChatSwitchModelToolError: LocalizedError {
             return "The server failed to start with the requested model."
         case .mismatchedModel(let requested, let active):
             return "Requested \(requested) but the active model is now \(active ?? "unknown")."
+        case .appModelUnavailable:
+            return "The app isn't ready to switch models right now."
         }
     }
 }
@@ -81,19 +84,20 @@ struct ChatSwitchModelToolExecutor {
             throw ChatSwitchModelToolError.invalidArguments
         }
 
+        let requestedModelID = arguments.modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         let previousModelID = appModel.settings.normalized().languageModelID
-        if previousModelID == arguments.modelID {
+        if previousModelID == requestedModelID {
             return try encodedPayload(ChatSwitchModelToolResultPayload(
                 ok: true,
                 previousModelID: previousModelID,
-                newModelID: arguments.modelID,
+                newModelID: requestedModelID,
                 changed: false,
                 declined: false,
                 error: nil
             ))
         }
 
-        appModel.switchLanguageModel(to: arguments.modelID)
+        appModel.switchLanguageModel(to: requestedModelID)
 
         let deadline = Date().addingTimeInterval(60)
         while appModel.modelSwitchInProgress, Date() < deadline {
@@ -107,9 +111,9 @@ struct ChatSwitchModelToolExecutor {
         }
 
         let activeModelID = appModel.settings.normalized().languageModelID
-        guard activeModelID == arguments.modelID else {
+        guard activeModelID == requestedModelID else {
             throw ChatSwitchModelToolError.mismatchedModel(
-                requested: arguments.modelID,
+                requested: requestedModelID,
                 active: activeModelID
             )
         }

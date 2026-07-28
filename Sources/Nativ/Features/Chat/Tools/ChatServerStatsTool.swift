@@ -46,12 +46,15 @@ struct ChatServerStatsToolResultPayload: Encodable {
 }
 
 struct ChatServerStatsToolExecutor {
-    func execute(call: MLXChatToolCall) throws -> String {
+    func execute(call: MLXChatToolCall, context: ChatToolExecutionContext) throws -> String {
         guard call.function?.name == ChatServerStatsToolRegistry.toolName else {
             throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
         }
 
-        let summary = NativAnalyticsStore().fetchSummary()
+        let store = NativAnalyticsStore(
+            databaseURL: context.analyticsDatabaseURL ?? NativAnalyticsStore.defaultDatabaseURL()
+        )
+        let summary = store.fetchSummary()
         let payload = ChatServerStatsToolResultPayload(
             ok: true,
             requestsCompleted: summary.requestsCompleted,

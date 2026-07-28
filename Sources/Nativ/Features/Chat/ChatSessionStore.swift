@@ -522,3 +522,9 @@ struct ChatSessionStore {
         chatDirectory.appendingPathComponent("current.json")
     }
 }
+
+enum ChatSessionLoadPolicy {
+    static func shouldNormalizeOnApply(sessionID: UUID, activeRequestSessionID: UUID?) -> Bool {
+        sessionID != activeRequestSessionID
+    }
+}

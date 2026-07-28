@@ -31,12 +31,12 @@ enum ChatImageToolRegistry {
                     ]),
                     "width": .object([
                         "type": .string("integer"),
-                        "minimum": .number(64),
+                        "minimum": .number(256),
                         "maximum": .number(2048)
                     ]),
                     "height": .object([
                         "type": .string("integer"),
-                        "minimum": .number(64),
+                        "minimum": .number(256),
                         "maximum": .number(2048)
                     ]),
                     "count": .object([
@@ -186,7 +186,7 @@ struct ChatImageToolExecutor {
     }
 
     private func boundedDimension(_ value: Int) -> Int {
-        min(max((value / 16) * 16, 64), 2_048)
+        min(max((value / 16) * 16, 256), 2_048)
     }
 
     private func imageSize(for attachment: ChatImageAttachment?) -> ImageGenerationPixelSize? {

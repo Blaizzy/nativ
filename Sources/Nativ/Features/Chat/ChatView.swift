@@ -630,6 +630,7 @@ final class ChatViewModel: ObservableObject {
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
+        var activeSettings = queuedRequest.settings
 
         while true {
             try Task.checkCancellation()
@@ -637,7 +638,8 @@ final class ChatViewModel: ObservableObject {
             guard let request = makeCompletionRequest(
                 for: queuedRequest,
                 before: assistantMessageID,
-                advertisesTools: advertisesTools
+                advertisesTools: advertisesTools,
+                settings: activeSettings
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -709,7 +711,13 @@ final class ChatViewModel: ObservableObject {
                         )
                         continue
                     case .approved:
-                        break
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
                     }
                     guard let appModel else {
                         updateToolMessage(
@@ -718,7 +726,7 @@ final class ChatViewModel: ObservableObject {
                             status: .failed,
                             content: ChatSwitchModelToolExecutor().failurePayload(
                                 operation: ChatSwitchModelToolRegistry.toolName,
-                                error: ChatImageToolError.unsupportedTool(ChatSwitchModelToolRegistry.toolName)
+                                error: ChatSwitchModelToolError.appModelUnavailable
                             ),
                             attachments: []
                         )
@@ -726,6 +734,7 @@ final class ChatViewModel: ObservableObject {
                     }
                     do {
                         let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
+                        activeSettings.languageModelID = appModel.settings.normalized().languageModelID
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -810,7 +819,7 @@ final class ChatViewModel: ObservableObject {
                 id: assistantMessageID,
                 after: insertionAnchor,
                 in: queuedRequest.sessionID,
-                settings: queuedRequest.settings
+                settings: activeSettings
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -820,9 +829,10 @@ final class ChatViewModel: ObservableObject {
     private func makeCompletionRequest(
         for queuedRequest: QueuedChatRequest,
         before assistantMessageID: UUID,
-        advertisesTools: Bool
+        advertisesTools: Bool,
+        settings: NativSettings
     ) -> MLXChatCompletionRequest? {
-        guard let modelID = queuedRequest.settings.languageModelID,
+        guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
               let assistantIndex = sessionMessages.firstIndex(where: { $0.id == assistantMessageID })
         else {
@@ -831,14 +841,13 @@ final class ChatViewModel: ObservableObject {
 
         let precedingMessages = sessionMessages[..<assistantIndex]
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !queuedRequest.settings.systemPrompt.isEmpty {
+        if !settings.systemPrompt.isEmpty {
             requestMessages.insert(
-                MLXChatMessage(role: "system", content: queuedRequest.settings.systemPrompt),
+                MLXChatMessage(role: "system", content: settings.systemPrompt),
                 at: 0
             )
         }
 
-        let settings = queuedRequest.settings
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         let toolDefinitions = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
@@ -1279,9 +1288,27 @@ final class ChatViewModel: ObservableObject {
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
-        messages = session.messages
+        messages = ChatSessionLoadPolicy.shouldNormalizeOnApply(
+            sessionID: session.id,
+            activeRequestSessionID: activeRequestSessionID
+        ) ? normalizedForLoad(session.messages) : session.messages
         refreshSessionList()
         bumpScroll()
+    }
+
+    private func normalizedForLoad(_ messages: [ChatTranscriptMessage]) -> [ChatTranscriptMessage] {
+        messages.map { message in
+            var message = message
+            if message.toolStatus == .awaitingConsent || message.toolStatus == .running {
+                message.toolStatus = .cancelled
+                message.content = ChatToolDispatcher.failurePayload(
+                    toolName: message.toolName,
+                    error: CancellationError()
+                )
+                message.isStreaming = false
+            }
+            return message
+        }
     }
 
     private func persistCurrentSession(updateTimestamp: Bool) {
@@ -1731,7 +1758,9 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("The model wants to switch to **\(requestedModelID)**. The server restarts briefly; your session is kept.")
+            (Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

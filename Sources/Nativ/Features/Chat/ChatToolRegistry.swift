@@ -8,6 +8,7 @@ struct ChatToolExecutionContext {
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
+    var analyticsDatabaseURL: URL? = nil
 }
 
 struct ChatToolExecutionOutcome {
@@ -41,64 +42,94 @@ enum ChatToolRegistry {
 }
 
 enum ChatToolDispatcher {
+    private typealias Handler = (MLXChatToolCall, ChatToolExecutionContext) async throws -> ChatToolExecutionOutcome
+    private typealias FailureHandler = (String, Error) -> String
+
+    private static let handlers: [String: Handler] = [
+        "generate_image": executeImageTool,
+        "edit_image": executeImageTool,
+        ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
+        ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
+        ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
+    ]
+
+    private static let failureHandlers: [String: FailureHandler] = [
+        "generate_image": failurePayloadForImageTool,
+        "edit_image": failurePayloadForImageTool,
+        ChatSystemMonitorToolRegistry.toolName: { name, error in
+            ChatSystemMonitorToolExecutor().failurePayload(operation: name, error: error)
+        },
+        ChatModelLibraryToolRegistry.toolName: { name, error in
+            ChatModelLibraryToolExecutor().failurePayload(operation: name, error: error)
+        },
+        ChatServerStatsToolRegistry.toolName: { name, error in
+            ChatServerStatsToolExecutor().failurePayload(operation: name, error: error)
+        },
+        ChatSwitchModelToolRegistry.toolName: { name, error in
+            ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
+        },
+    ]
+
     static func execute(
         call: MLXChatToolCall,
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        switch call.function?.name {
-        case "generate_image", "edit_image":
-            guard let imageModelID = context.imageGenerationModelID else {
-                throw ChatImageToolError.unsupportedTool(call.function?.name ?? "image")
-            }
-            let result = try await ChatImageToolExecutor().execute(
-                call: call,
-                modelID: imageModelID,
-                baseURL: context.baseURL,
-                apiKey: context.apiKey,
-                references: context.imageReferences
-            )
-            return ChatToolExecutionOutcome(content: result.content, attachments: result.attachments)
-        case ChatSystemMonitorToolRegistry.toolName:
-            let content = try await ChatSystemMonitorToolExecutor().execute(call: call)
-            return ChatToolExecutionOutcome(content: content, attachments: [])
-        case ChatModelLibraryToolRegistry.toolName:
-            let content = try await ChatModelLibraryToolExecutor().execute(call: call, context: context)
-            return ChatToolExecutionOutcome(content: content, attachments: [])
-        case ChatServerStatsToolRegistry.toolName:
-            let content = try ChatServerStatsToolExecutor().execute(call: call)
-            return ChatToolExecutionOutcome(content: content, attachments: [])
-        default:
+        guard let name = call.function?.name, let handler = handlers[name] else {
             throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
         }
+        return try await handler(call, context)
     }
 
     static func failurePayload(toolName: String?, error: Error) -> String {
-        switch toolName {
-        case "generate_image", "edit_image":
-            return ChatImageToolExecutor().failurePayload(operation: toolName ?? "image", error: error)
-        case ChatSystemMonitorToolRegistry.toolName:
-            return ChatSystemMonitorToolExecutor().failurePayload(
-                operation: toolName ?? ChatSystemMonitorToolRegistry.toolName,
-                error: error
-            )
-        case ChatModelLibraryToolRegistry.toolName:
-            return ChatModelLibraryToolExecutor().failurePayload(
-                operation: toolName ?? ChatModelLibraryToolRegistry.toolName,
-                error: error
-            )
-        case ChatServerStatsToolRegistry.toolName:
-            return ChatServerStatsToolExecutor().failurePayload(
-                operation: toolName ?? ChatServerStatsToolRegistry.toolName,
-                error: error
-            )
-        case ChatSwitchModelToolRegistry.toolName:
-            return ChatSwitchModelToolExecutor().failurePayload(
-                operation: toolName ?? ChatSwitchModelToolRegistry.toolName,
-                error: error
-            )
-        default:
+        guard let toolName, let handler = failureHandlers[toolName] else {
             return ChatImageToolExecutor().failurePayload(operation: toolName ?? "tool", error: error)
         }
+        return handler(toolName, error)
+    }
+
+    private static func executeImageTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        guard let imageModelID = context.imageGenerationModelID else {
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "image")
+        }
+        let result = try await ChatImageToolExecutor().execute(
+            call: call,
+            modelID: imageModelID,
+            baseURL: context.baseURL,
+            apiKey: context.apiKey,
+            references: context.imageReferences
+        )
+        return ChatToolExecutionOutcome(content: result.content, attachments: result.attachments)
+    }
+
+    private static func executeSystemMonitorTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatSystemMonitorToolExecutor().execute(call: call)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeModelLibraryTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatModelLibraryToolExecutor().execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeServerStatsTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try ChatServerStatsToolExecutor().execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func failurePayloadForImageTool(name: String, error: Error) -> String {
+        ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
 }
 
@@ -122,6 +153,9 @@ final class ChatToolConsentGate {
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 pending[id] = continuation
+                if Task.isCancelled {
+                    pending.removeValue(forKey: id)?.resume(returning: false)
+                }
             }
         } onCancel: { [weak self] in
             Task { @MainActor in

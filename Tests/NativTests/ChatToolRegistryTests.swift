@@ -19,7 +19,10 @@ private func makeContext(imageModelID: String? = nil) -> ChatToolExecutionContex
         apiKey: nil,
         imageReferences: [],
         modelSearchPath: "",
-        additionalModelSearchPaths: []
+        additionalModelSearchPaths: [],
+        analyticsDatabaseURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("Analytics.sqlite3")
     )
 }
 
@@ -52,6 +55,19 @@ final class ChatToolRegistryTests: XCTestCase {
             canEditImage: true
         ).map(\.function.name)
         XCTAssertTrue(withEdit.contains("edit_image"))
+    }
+
+    func testImageToolSchemasAreGoldenPinned() throws {
+        let golden = #"""
+            [{"function":{"description":"Create one or more new images from a detailed text prompt.","name":"generate_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"},{"function":{"description":"Edit the most recently attached or generated image using a text instruction.","name":"edit_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"}]
+            """#
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(ChatImageToolRegistry.definitions(canEdit: true))
+        let actual = String(decoding: data, as: UTF8.self)
+
+        XCTAssertEqual(actual, golden, "generate_image/edit_image's schema must match the intended schema exactly -- if this fails, either the schema drifted unintentionally or this pin needs updating alongside a deliberate schema change")
     }
 
     func testDispatchRoutesToRegisteredHandler() async throws {
@@ -200,6 +216,20 @@ final class ChatToolConsentGateTests: XCTestCase {
         XCTAssertEqual(gate.pendingCount, 0)
     }
 
+    func testAwaitDecisionResolvesWhenTaskIsAlreadyCancelledBeforeItStarts() async {
+        let gate = ChatToolConsentGate()
+        let id = UUID()
+
+        let task = Task<Bool, Never> {
+            await gate.awaitDecision(for: id)
+        }
+        task.cancel()
+
+        let decision = await task.value
+        XCTAssertFalse(decision, "a task cancelled before awaitDecision ever runs must still resolve false, not hang forever")
+        XCTAssertEqual(gate.pendingCount, 0)
+    }
+
     func testDenyThenReaskAllowsAFreshConsentCycleForTheSameID() async {
         let gate = ChatToolConsentGate()
         let id = UUID()
@@ -229,5 +259,25 @@ final class ChatToolConsentGateTests: XCTestCase {
         for _ in 0..<200 where gate.pendingCount < count {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
+    }
+}
+
+final class ChatSessionLoadPolicyTests: XCTestCase {
+    func testDoesNotNormalizeTheSessionWithTheActiveInFlightRequest() {
+        let sessionID = UUID()
+        XCTAssertFalse(
+            ChatSessionLoadPolicy.shouldNormalizeOnApply(sessionID: sessionID, activeRequestSessionID: sessionID),
+            "switching back into the session that owns the in-flight request must not rewrite its live awaitingConsent/running messages"
+        )
+    }
+
+    func testNormalizesAnySessionThatIsNotTheActiveRequests() {
+        XCTAssertTrue(
+            ChatSessionLoadPolicy.shouldNormalizeOnApply(sessionID: UUID(), activeRequestSessionID: UUID())
+        )
+        XCTAssertTrue(
+            ChatSessionLoadPolicy.shouldNormalizeOnApply(sessionID: UUID(), activeRequestSessionID: nil),
+            "a genuine load with no active request at all must still normalize stale state"
+        )
     }
 }
