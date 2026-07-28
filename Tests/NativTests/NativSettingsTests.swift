@@ -7,7 +7,8 @@ final class NativSettingsTests: XCTestCase {
             languageModelID: "org/language",
             imageGenerationModelID: "org/image",
             textToSpeechModelID: "org/tts",
-            speechToTextModelID: "org/stt"
+            speechToTextModelID: "org/stt",
+            embeddingModelID: "org/embed"
         )
 
         XCTAssertEqual(
@@ -27,6 +28,12 @@ final class NativSettingsTests: XCTestCase {
                 "org/stt"
             )
         )
+        XCTAssertTrue(
+            settings.launchArguments.containsAdjacent(
+                "--embedding-model",
+                "org/embed"
+            )
+        )
     }
 
     func testEmptyPreloadSelectionsAreOmitted() {
@@ -34,13 +41,29 @@ final class NativSettingsTests: XCTestCase {
             languageModelID: " ",
             imageGenerationModelID: "",
             textToSpeechModelID: "\n",
-            speechToTextModelID: nil
+            speechToTextModelID: nil,
+            embeddingModelID: "  "
         )
 
         XCTAssertFalse(settings.launchArguments.contains("--model"))
         XCTAssertFalse(settings.launchArguments.contains("--image-model"))
         XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
+        XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
+    }
+
+    func testEmbeddingModelSlotRoundTripsAndRequiresRestart() throws {
+        var settings = NativSettings()
+        settings.setModelID("org/embed", for: .embeddings)
+        XCTAssertEqual(settings.modelID(for: .embeddings), "org/embed")
+        XCTAssertEqual(settings.embeddingModelID, "org/embed")
+
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.embeddingModelID, "org/embed")
+        XCTAssertFalse(settings.hasSameLaunchConfiguration(as: NativSettings()))
     }
 
     func testImageEditModelIsNotPassedToGenerationPreloadFlag() {
