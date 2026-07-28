@@ -799,13 +799,17 @@ struct ModelsView: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-        model.settings.additionalModelSearchPaths.append(
+        var settings = model.settings
+        settings.additionalModelSearchPaths.append(
             (url.path as NSString).abbreviatingWithTildeInPath
         )
+        model.settings = settings
     }
 
     private func removeModelSourceFolder(_ path: String) {
-        model.settings.additionalModelSearchPaths.removeAll { $0 == path }
+        var settings = model.settings
+        settings.additionalModelSearchPaths.removeAll { $0 == path }
+        model.settings = settings
     }
 
     private func abbreviatedPath(_ path: String) -> String {
