@@ -371,7 +371,7 @@ struct AudioView: View {
             }
 
             Label(
-                "Gradient Island forms one pill around the camera cutout, with the orb on the left and elapsed time on the right. Displays without a cutout use a centered floating version.",
+                "Gradient Island forms one pill around the camera cutout, with a liquid-glass orb on the left, elapsed time on the right, and soft audio cues when listening starts and ends. Displays without a cutout use a centered floating version.",
                 systemImage: "info.circle"
             )
             .font(.caption)
@@ -481,36 +481,55 @@ struct AudioView: View {
                     .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
             }
         case .gradientIsland:
-            ZStack(alignment: .top) {
-                Rectangle()
-                    .fill(Color.blue.opacity(0.18))
-                    .frame(width: 258, height: 32)
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let voicePulse = (sin(time * 2.2) + 1) / 2
+                let previewLevel = Float(0.18 + (voicePulse * 0.72))
 
-                HStack(spacing: 0) {
-                    ZStack(alignment: .bottomTrailing) {
-                        VoiceGradientOrb(level: 0.68, isRecording: true)
-                            .frame(width: 22, height: 22)
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 5, height: 5)
-                            .overlay {
-                                Circle()
-                                    .stroke(Color.black, lineWidth: 1)
-                            }
+                ZStack {
+                    Capsule()
+                        .fill(Color.cyan.opacity(0.08))
+                        .frame(width: 230, height: 50)
+                        .blur(radius: 12)
+
+                    HStack(spacing: 0) {
+                        VoiceGradientOrb(
+                            level: previewLevel,
+                            isRecording: true
+                        )
+                        .frame(width: 26, height: 26)
+                        .frame(width: 48, height: 42)
+
+                        Color.clear
+                            .frame(width: 112, height: 42)
+
+                        Text("0:08")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .frame(width: 54, height: 42)
                     }
-                    .frame(width: 48, height: 32)
-
-                    Color.clear
-                        .frame(width: 106, height: 32)
-
-                    Text("0:08")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.78))
-                        .frame(width: 48, height: 32)
+                    .frame(width: 214, height: 42)
+                    .background(Color.black, in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(.white.opacity(0.14), lineWidth: 0.7)
+                    }
                 }
-                .background(Color.black, in: Capsule())
             }
-            .frame(height: 64, alignment: .top)
+            .frame(maxWidth: .infinity, minHeight: 112)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.03, green: 0.05, blue: 0.08),
+                                Color(red: 0.02, green: 0.12, blue: 0.14),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+            }
         }
     }
 
