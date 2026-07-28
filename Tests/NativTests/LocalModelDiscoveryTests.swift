@@ -104,6 +104,44 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
 
+    func testSelectsAnyInstalledSpeechToTextModelWithoutKnownModelNames() {
+        let models = [
+            makeModel(repoID: "owner/text-only", capabilities: [.text]),
+            makeModel(repoID: "owner/zeta-custom-listener", capabilities: [.speechToText]),
+            makeModel(repoID: "owner/alpha-custom-listener", capabilities: [.speechToText]),
+        ]
+
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(
+                in: models,
+                selectedModelID: nil
+            ),
+            "owner/alpha-custom-listener"
+        )
+    }
+
+    func testUsesSelectedSpeechModelOnlyWhenItIsInstalledAndCompatible() {
+        let models = [
+            makeModel(repoID: "owner/alpha-listener", capabilities: [.speechToText]),
+            makeModel(repoID: "owner/user-choice", capabilities: [.speechToText]),
+        ]
+
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(
+                in: models,
+                selectedModelID: "owner/user-choice"
+            ),
+            "owner/user-choice"
+        )
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(
+                in: models,
+                selectedModelID: "owner/not-installed"
+            ),
+            "owner/alpha-listener"
+        )
+    }
+
     private func makeMageFlowSnapshot(repoID: String) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
@@ -206,5 +244,23 @@ final class LocalModelDiscoveryTests: XCTestCase {
             withIntermediateDirectories: true
         )
         try Data(string.utf8).write(to: url)
+    }
+
+    private func makeModel(
+        repoID: String,
+        capabilities: Set<LocalModelCapability>
+    ) -> LocalModel {
+        LocalModel(
+            repoID: repoID,
+            snapshotURL: nil,
+            modifiedAt: nil,
+            sizeBytes: nil,
+            parameterCount: nil,
+            quantizationBits: nil,
+            quantizationGroupSize: nil,
+            contextSize: nil,
+            provider: nil,
+            capabilities: capabilities
+        )
     }
 }

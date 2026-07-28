@@ -5,7 +5,7 @@ import NativServerKit
 struct VoiceTranscriptionConfiguration {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
-    let preferredModelID: String?
+    let selectedModelID: String?
     let serverBaseURL: URL
     let serverAPIKey: String?
     let serverIsRunning: Bool
@@ -138,14 +138,17 @@ final class VoiceCaptureCoordinator {
             guard !Task.isCancelled else {
                 return
             }
-            guard let modelID = Self.speechToTextModelID(
+            guard let requestConfiguration = self.transcriptionConfigurationProvider?() else {
+                return
+            }
+            guard let modelID = LocalModelDiscovery.speechToTextModelID(
                 in: installedModels,
-                preferredModelID: configuration.preferredModelID
+                selectedModelID: requestConfiguration.selectedModelID
             ) else {
                 self.showMissingSpeechModelAlert()
                 return
             }
-            guard configuration.serverIsRunning else {
+            guard requestConfiguration.serverIsRunning else {
                 self.showTranscriptionError(
                     title: "Nativ Server Is Not Running",
                     message: "Start the Nativ server, then record again to transcribe the audio."
@@ -155,8 +158,8 @@ final class VoiceCaptureCoordinator {
 
             do {
                 let client = NativAudioClient(
-                    baseURL: configuration.serverBaseURL,
-                    apiKey: configuration.serverAPIKey
+                    baseURL: requestConfiguration.serverBaseURL,
+                    apiKey: requestConfiguration.serverAPIKey
                 )
                 let result = try await client.transcribe(
                     fileURL: recordingURL,
@@ -198,43 +201,6 @@ final class VoiceCaptureCoordinator {
             }
         }
         transcriptionTasks[taskID] = task
-    }
-
-    private static func speechToTextModelID(
-        in models: [LocalModel],
-        preferredModelID: String?
-    ) -> String? {
-        let speechModels = models.filter {
-            $0.capabilities.contains(.speechToText)
-        }
-        if let preferredModelID,
-           speechModels.contains(where: { $0.repoID == preferredModelID }) {
-            return preferredModelID
-        }
-
-        return speechModels.sorted { lhs, rhs in
-            let lhsPriority = speechModelPriority(lhs.repoID)
-            let rhsPriority = speechModelPriority(rhs.repoID)
-            if lhsPriority != rhsPriority {
-                return lhsPriority < rhsPriority
-            }
-            return lhs.repoID.localizedCaseInsensitiveCompare(rhs.repoID) == .orderedAscending
-        }.first?.repoID
-    }
-
-    private static func speechModelPriority(_ modelID: String) -> Int {
-        let normalizedID = modelID.lowercased()
-        if normalizedID.contains("qwen3-asr") {
-            return 0
-        }
-        if normalizedID.contains("parakeet") {
-            return 1
-        }
-        if normalizedID.contains("moss-transcribe")
-            || normalizedID.contains("moss_transcribe") {
-            return 2
-        }
-        return 3
     }
 
     private func showMissingSpeechModelAlert() {

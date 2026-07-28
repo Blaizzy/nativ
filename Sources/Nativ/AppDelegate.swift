@@ -382,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return VoiceTranscriptionConfiguration(
                 modelSearchPath: settings.modelSearchPath,
                 additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                preferredModelID: settings.speechToTextModelID,
+                selectedModelID: settings.speechToTextModelID,
                 serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
                 serverAPIKey: settings.serverAPIKey,
                 serverIsRunning: self.model.isRunning
