@@ -72,9 +72,17 @@ enum ChatSwitchModelToolError: LocalizedError {
     }
 }
 
+@MainActor
+protocol ChatModelSwitchingSurface {
+    var settings: NativSettings { get }
+    var modelSwitchInProgress: Bool { get }
+    var isRunning: Bool { get }
+    func switchLanguageModel(to modelID: String?)
+}
+
 struct ChatSwitchModelToolExecutor {
     @MainActor
-    func execute(call: MLXChatToolCall, appModel: NativModel) async throws -> String {
+    func execute(call: MLXChatToolCall, appModel: some ChatModelSwitchingSurface) async throws -> String {
         guard call.function?.name == ChatSwitchModelToolRegistry.toolName else {
             throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
         }

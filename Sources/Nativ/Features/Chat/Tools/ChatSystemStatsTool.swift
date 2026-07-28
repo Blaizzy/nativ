@@ -43,17 +43,15 @@ struct ChatSystemMonitorToolResultPayload: Encodable {
 
 struct ChatSystemMonitorToolExecutor {
     @MainActor
-    func execute(call: MLXChatToolCall) async throws -> String {
+    func execute(
+        call: MLXChatToolCall,
+        collect: () async throws -> SystemMonitorSnapshot = ChatSystemMonitorToolExecutor.defaultCollect
+    ) async throws -> String {
         guard call.function?.name == ChatSystemMonitorToolRegistry.toolName else {
             throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
         }
 
-        let store = SystemMonitorStore()
-        // First read only seeds the previous-tick baseline; second read
-        // after a delay gives a real CPU/disk delta.
-        _ = await store.collectSnapshot()
-        try await Task.sleep(nanoseconds: 300_000_000)
-        let snapshot = await store.collectSnapshot()
+        let snapshot = try await collect()
 
         let payload = ChatSystemMonitorToolResultPayload(
             ok: true,
@@ -67,6 +65,16 @@ struct ChatSystemMonitorToolExecutor {
             error: nil
         )
         return try encodedPayload(payload)
+    }
+
+    @MainActor
+    static func defaultCollect() async throws -> SystemMonitorSnapshot {
+        let store = SystemMonitorStore()
+        // First read only seeds the previous-tick baseline; second read
+        // after a delay gives a real CPU/disk delta.
+        _ = await store.collectSnapshot()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        return await store.collectSnapshot()
     }
 
     func failurePayload(operation: String, error: Error) -> String {
