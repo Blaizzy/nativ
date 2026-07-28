@@ -697,6 +697,7 @@ private struct ServerAPIAuthenticationPanel: View {
             Button("Remove Token", role: .destructive) {
                 onSetToken(nil)
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
@@ -1140,6 +1141,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             Button(logoutConfirmationAction, role: .destructive) {
                 performLogout()
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(logoutConfirmationMessage)
@@ -1154,6 +1156,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             Button("OK", role: .cancel) {
                 managementError = nil
             }
+            .keyboardShortcut(.defaultAction)
         } message: {
             Text(managementError ?? "An unknown error occurred.")
         }

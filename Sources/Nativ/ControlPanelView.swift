@@ -318,6 +318,7 @@ struct ControlPanelView: View {
             Button("OK", role: .cancel) {
                 launchAtLogin.errorMessage = nil
             }
+            .keyboardShortcut(.defaultAction)
         } message: {
             Text(launchAtLogin.errorMessage ?? "An unknown error occurred.")
         }
@@ -769,6 +770,7 @@ struct ControlPanelView: View {
             Button("Load Anyway") {
                 model.confirmPendingModelPreloadSwitch()
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 model.cancelPendingModelPreloadSwitch()
             }
