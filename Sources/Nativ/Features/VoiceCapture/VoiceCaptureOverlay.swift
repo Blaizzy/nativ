@@ -7,6 +7,25 @@ private enum VoiceIslandLayoutMetrics {
     static let shelfSideWidth: CGFloat = 56
 }
 
+private let voiceCaptureDismissalDuration: TimeInterval = 0.38
+
+private func voiceCaptureFinishProgress(
+    state: VoiceCaptureOverlayModel.State,
+    stateChangedAt: Date,
+    date: Date
+) -> CGFloat {
+    guard state == .finishing else {
+        return 0
+    }
+    let linearProgress = min(
+        1,
+        max(0, date.timeIntervalSince(stateChangedAt) / voiceCaptureDismissalDuration)
+    )
+    return CGFloat(
+        linearProgress * linearProgress * (3 - (2 * linearProgress))
+    )
+}
+
 @MainActor
 final class VoiceCaptureOverlayModel: ObservableObject {
     enum State: Equatable {
@@ -14,14 +33,24 @@ final class VoiceCaptureOverlayModel: ObservableObject {
         case recording
         case finishing
         case failed
+        case noSpeech
     }
 
     @Published var state: State = .preparing
     @Published var stateChangedAt = Date()
+    @Published var activationStartedAt = Date()
     @Published var level: Float = 0
+    @Published var closingLevel: Float = 0
     @Published var elapsed: TimeInterval = 0
     @Published var islandUsesCameraCutout = false
     @Published var islandStyle: VoiceCaptureAnimationStyle = .gradientIsland
+
+    func beginActivation() {
+        let now = Date()
+        state = .preparing
+        stateChangedAt = now
+        activationStartedAt = now
+    }
 
     func transition(to newState: State) {
         guard state != newState else {
@@ -42,7 +71,10 @@ final class VoiceCaptureOverlayController {
     private let islandPanel: NSPanel
     private let soundPlayer = VoiceCaptureSoundPlayer()
     private var activeStyle: VoiceCaptureAnimationStyle = .cursorWaveform
-    private var islandDismissalTask: Task<Void, Never>?
+    private var dismissalTask: Task<Void, Never>?
+    private var startCueTask: Task<Void, Never>?
+    private var activationID = UUID()
+    private var didPlayStartCue = false
 
     init(animationPreferences: VoiceAnimationPreferences? = nil) {
         let model = VoiceCaptureOverlayModel()
@@ -88,10 +120,15 @@ final class VoiceCaptureOverlayController {
     }
 
     func show(at cursorPosition: NSPoint) {
-        islandDismissalTask?.cancel()
-        islandDismissalTask = nil
-        model.transition(to: .preparing)
+        dismissalTask?.cancel()
+        dismissalTask = nil
+        startCueTask?.cancel()
+        startCueTask = nil
+        activationID = UUID()
+        didPlayStartCue = false
+        model.beginActivation()
         model.level = 0
+        model.closingLevel = 0
         model.elapsed = 0
         activeStyle = animationPreferences.selectedStyle
         model.islandStyle = activeStyle
@@ -105,13 +142,38 @@ final class VoiceCaptureOverlayController {
         case .gradientIsland, .notchShelf:
             positionIslandPanel(on: screen(containing: cursorPosition))
             islandPanel.orderFrontRegardless()
-            soundPlayer.playStart()
+        }
+    }
+
+    func didStartRecording() {
+        let expectedActivationID = activationID
+        startCueTask?.cancel()
+        startCueTask = Task { [weak self] in
+            do {
+                // Give the newly opened input device one audio buffer to settle
+                // before starting background playback.
+                try await Task.sleep(for: .milliseconds(35))
+            } catch {
+                return
+            }
+            guard let self,
+                  self.activationID == expectedActivationID,
+                  self.isOverlayVisible
+            else {
+                return
+            }
+            self.didPlayStartCue = self.soundPlayer.playStart()
+            self.startCueTask = nil
         }
     }
 
     func update(level: Float, elapsed: TimeInterval) {
         model.transition(to: .recording)
-        model.level = max(0, min(1, level))
+        let clampedLevel = max(0, min(1, level))
+        model.level = clampedLevel
+        if clampedLevel > 0 {
+            model.closingLevel = clampedLevel
+        }
         model.elapsed = elapsed
     }
 
@@ -120,20 +182,78 @@ final class VoiceCaptureOverlayController {
         model.level = 0
     }
 
-    func hide() {
+    func showNoSpeechFeedback() {
+        guard !isOverlayVisible || model.state == .finishing else {
+            return
+        }
+
+        dismissalTask?.cancel()
+        dismissalTask = nil
+        startCueTask?.cancel()
+        startCueTask = nil
+        activationID = UUID()
+        didPlayStartCue = false
+        activeStyle = animationPreferences.selectedStyle
+        model.islandStyle = activeStyle
+        model.level = 0
+        model.transition(to: .noSpeech)
+
         waveformPanel.orderOut(nil)
+        islandPanel.orderOut(nil)
+        let cursorPosition = NSEvent.mouseLocation
+        switch activeStyle {
+        case .cursorWaveform:
+            positionWaveformPanel(near: cursorPosition)
+            waveformPanel.orderFrontRegardless()
+        case .gradientIsland, .notchShelf:
+            positionIslandPanel(on: screen(containing: cursorPosition))
+            islandPanel.orderFrontRegardless()
+        }
+
+        dismissalTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(1_050))
+            } catch {
+                return
+            }
+            guard let self, self.model.state == .noSpeech else {
+                return
+            }
+            self.model.transition(to: .finishing)
+            do {
+                try await Task.sleep(for: .milliseconds(420))
+            } catch {
+                return
+            }
+            self.waveformPanel.orderOut(nil)
+            self.islandPanel.orderOut(nil)
+            self.model.elapsed = 0
+            self.dismissalTask = nil
+        }
+    }
+
+    func hide() {
+        let overlayWasVisible = isOverlayVisible
+        startCueTask?.cancel()
+        startCueTask = nil
+        activationID = UUID()
         model.level = 0
 
-        guard activeStyle != .cursorWaveform, islandPanel.isVisible else {
+        guard overlayWasVisible else {
+            waveformPanel.orderOut(nil)
             islandPanel.orderOut(nil)
             model.elapsed = 0
+            didPlayStartCue = false
             return
         }
 
         model.transition(to: .finishing)
-        soundPlayer.playEnd()
-        islandDismissalTask?.cancel()
-        islandDismissalTask = Task { [weak self] in
+        if didPlayStartCue {
+            soundPlayer.playEnd()
+        }
+        didPlayStartCue = false
+        dismissalTask?.cancel()
+        dismissalTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(420))
             } catch {
@@ -142,10 +262,17 @@ final class VoiceCaptureOverlayController {
             guard let self else {
                 return
             }
+            self.waveformPanel.orderOut(nil)
             self.islandPanel.orderOut(nil)
             self.model.elapsed = 0
-            self.islandDismissalTask = nil
+            self.dismissalTask = nil
         }
+    }
+
+    private var isOverlayVisible: Bool {
+        activeStyle == .cursorWaveform
+            ? waveformPanel.isVisible
+            : islandPanel.isVisible
     }
 
     private func positionWaveformPanel(near cursorPosition: NSPoint) {
@@ -228,91 +355,186 @@ private final class VoiceCaptureSoundPlayer {
         let endFrequency: Double
         let amplitude: Double
         let pan: Double
+        let attack: TimeInterval
+        let release: TimeInterval
+        let decay: Double
+        let brightness: Double
+
+        init(
+            startsAt: TimeInterval,
+            duration: TimeInterval,
+            startFrequency: Double,
+            endFrequency: Double,
+            amplitude: Double,
+            pan: Double,
+            attack: TimeInterval = 0.012,
+            release: TimeInterval = 0.18,
+            decay: Double = 1.35,
+            brightness: Double = 0.32
+        ) {
+            self.startsAt = startsAt
+            self.duration = duration
+            self.startFrequency = startFrequency
+            self.endFrequency = endFrequency
+            self.amplitude = amplitude
+            self.pan = pan
+            self.attack = attack
+            self.release = release
+            self.decay = decay
+            self.brightness = brightness
+        }
     }
 
-    private let startSound: NSSound?
-    private let endSound: NSSound?
+    private let startSoundData: Data
+    private let endSoundData: Data
+    private var activeSound: NSSound?
 
     init() {
-        startSound = Self.makeSound(
+        startSoundData = Self.makeSoundData(
             tones: [
                 Tone(
                     startsAt: 0,
+                    duration: 0.52,
+                    startFrequency: 523.25,
+                    endFrequency: 529.25,
+                    amplitude: 0.2,
+                    pan: -0.26,
+                    attack: 0.009,
+                    release: 0.26,
+                    decay: 1.15,
+                    brightness: 0.3
+                ),
+                Tone(
+                    startsAt: 0.07,
+                    duration: 0.48,
+                    startFrequency: 783.99,
+                    endFrequency: 792.99,
+                    amplitude: 0.15,
+                    pan: 0.28,
+                    attack: 0.008,
+                    release: 0.25,
+                    decay: 1.42,
+                    brightness: 0.36
+                ),
+                Tone(
+                    startsAt: 0.14,
+                    duration: 0.44,
+                    startFrequency: 1_046.5,
+                    endFrequency: 1_058.5,
+                    amplitude: 0.1,
+                    pan: 0.04,
+                    attack: 0.006,
+                    release: 0.24,
+                    decay: 1.68,
+                    brightness: 0.42
+                ),
+                Tone(
+                    startsAt: 0.2,
                     duration: 0.34,
-                    startFrequency: 392,
-                    endFrequency: 523.25,
-                    amplitude: 0.28,
-                    pan: -0.24
+                    startFrequency: 1_567.98,
+                    endFrequency: 1_576.98,
+                    amplitude: 0.034,
+                    pan: 0.34,
+                    attack: 0.005,
+                    release: 0.21,
+                    decay: 2,
+                    brightness: 0.38
+                ),
+            ],
+            ambience: 0.34
+        )
+        endSoundData = Self.makeSoundData(
+            tones: [
+                Tone(
+                    startsAt: 0,
+                    duration: 0.4,
+                    startFrequency: 1_046.5,
+                    endFrequency: 1_038.5,
+                    amplitude: 0.085,
+                    pan: 0.3,
+                    attack: 0.006,
+                    release: 0.23,
+                    decay: 1.72,
+                    brightness: 0.4
                 ),
                 Tone(
                     startsAt: 0.055,
-                    duration: 0.38,
-                    startFrequency: 587.33,
-                    endFrequency: 783.99,
-                    amplitude: 0.18,
-                    pan: 0.22
-                ),
-                Tone(
-                    startsAt: 0.1,
-                    duration: 0.25,
-                    startFrequency: 987.77,
-                    endFrequency: 1_318.51,
-                    amplitude: 0.07,
-                    pan: 0.04
-                ),
-            ]
-        )
-        endSound = Self.makeSound(
-            tones: [
-                Tone(
-                    startsAt: 0,
-                    duration: 0.36,
+                    duration: 0.45,
                     startFrequency: 783.99,
-                    endFrequency: 523.25,
-                    amplitude: 0.24,
-                    pan: 0.22
+                    endFrequency: 777.99,
+                    amplitude: 0.135,
+                    pan: -0.26,
+                    attack: 0.008,
+                    release: 0.25,
+                    decay: 1.45,
+                    brightness: 0.34
                 ),
                 Tone(
-                    startsAt: 0.045,
-                    duration: 0.41,
-                    startFrequency: 587.33,
-                    endFrequency: 392,
-                    amplitude: 0.17,
-                    pan: -0.22
+                    startsAt: 0.11,
+                    duration: 0.5,
+                    startFrequency: 523.25,
+                    endFrequency: 518.25,
+                    amplitude: 0.19,
+                    pan: 0.08,
+                    attack: 0.009,
+                    release: 0.27,
+                    decay: 1.18,
+                    brightness: 0.28
                 ),
-                Tone(
-                    startsAt: 0.02,
-                    duration: 0.24,
-                    startFrequency: 1_174.66,
-                    endFrequency: 783.99,
-                    amplitude: 0.06,
-                    pan: 0
-                ),
-            ]
+            ],
+            ambience: 0.3
         )
-        startSound?.volume = 0.3
-        endSound?.volume = 0.26
     }
 
-    func playStart() {
-        endSound?.stop()
-        startSound?.stop()
-        startSound?.play()
+    @discardableResult
+    func playStart() -> Bool {
+        play(
+            data: startSoundData,
+            volume: 0.42,
+            cueName: "start"
+        )
     }
 
     func playEnd() {
-        startSound?.stop()
-        endSound?.stop()
-        endSound?.play()
+        play(
+            data: endSoundData,
+            volume: 0.36,
+            cueName: "finish"
+        )
     }
 
-    private static func makeSound(tones: [Tone]) -> NSSound? {
+    @discardableResult
+    private func play(
+        data: Data,
+        volume: Float,
+        cueName: String
+    ) -> Bool {
+        activeSound?.stop()
+        guard let sound = NSSound(data: data) else {
+            NSLog("Nativ could not prepare the voice %@ cue.", cueName)
+            return false
+        }
+        sound.volume = volume
+        activeSound = sound
+        let didPlay = sound.play()
+        if !didPlay {
+            NSLog("Nativ could not play the voice %@ cue.", cueName)
+        }
+        return didPlay
+    }
+
+    private static func makeSoundData(
+        tones: [Tone],
+        ambience: Double
+    ) -> Data {
         let sampleRate = 48_000
         let channelCount = 2
         let bytesPerSample = MemoryLayout<Int16>.size
         let duration = tones.map { $0.startsAt + $0.duration }.max() ?? 0
-        let frameCount = Int(ceil((duration + 0.04) * Double(sampleRate)))
+        let frameCount = Int(ceil((duration + 0.14) * Double(sampleRate)))
         let dataSize = frameCount * channelCount * bytesPerSample
+        var leftSamples = [Double](repeating: 0, count: frameCount)
+        var rightSamples = [Double](repeating: 0, count: frameCount)
         var data = Data(capacity: 44 + dataSize)
 
         data.append(contentsOf: "RIFF".utf8)
@@ -334,8 +556,6 @@ private final class VoiceCaptureSoundPlayer {
 
         for frame in 0..<frameCount {
             let time = Double(frame) / Double(sampleRate)
-            var left = 0.0
-            var right = 0.0
 
             for tone in tones {
                 let localTime = time - tone.startsAt
@@ -344,30 +564,96 @@ private final class VoiceCaptureSoundPlayer {
                 }
 
                 let progress = localTime / tone.duration
-                let attack = smoothStep(min(1, localTime / 0.028))
+                let attack = smoothStep(min(1, localTime / tone.attack))
                 let release = smoothStep(
-                    min(1, (tone.duration - localTime) / 0.16)
+                    min(1, (tone.duration - localTime) / tone.release)
                 )
+                let decay = exp(-progress * tone.decay)
                 let frequencyRange = tone.endFrequency - tone.startFrequency
                 let phase = 2 * Double.pi * (
                     (tone.startFrequency * localTime)
                         + (0.5 * frequencyRange * localTime * progress)
                 )
                 let glassWave = sin(phase)
-                    + (sin((phase * 2.01) + 0.35) * 0.14)
-                    + (sin((phase * 3.97) + 0.8) * 0.035)
-                let value = glassWave * tone.amplitude * attack * release
+                    + (
+                        sin((phase * 2.003) + 0.38)
+                            * tone.brightness
+                            * 0.3
+                    )
+                    + (
+                        sin((phase * 3.011) + 1.04)
+                            * tone.brightness
+                            * 0.11
+                    )
+                    + (
+                        sin((phase * 5.017) + 0.72)
+                            * tone.brightness
+                            * 0.035
+                    )
+                let value = glassWave
+                    * tone.amplitude
+                    * attack
+                    * release
+                    * decay
                 let leftGain = sqrt((1 - tone.pan) * 0.5)
                 let rightGain = sqrt((1 + tone.pan) * 0.5)
-                left += value * leftGain
-                right += value * rightGain
+                leftSamples[frame] += value * leftGain
+                rightSamples[frame] += value * rightGain
             }
-
-            appendPCM(left, to: &data)
-            appendPCM(right, to: &data)
         }
 
-        return NSSound(data: data)
+        addAmbience(
+            left: &leftSamples,
+            right: &rightSamples,
+            sampleRate: sampleRate,
+            amount: ambience
+        )
+        let peak = zip(leftSamples, rightSamples).reduce(0.0) {
+            max($0, max(abs($1.0), abs($1.1)))
+        }
+        let gain = peak > 0.88 ? 0.88 / peak : 1
+
+        for frame in 0..<frameCount {
+            appendPCM(leftSamples[frame] * gain, to: &data)
+            appendPCM(rightSamples[frame] * gain, to: &data)
+        }
+
+        return data
+    }
+
+    private static func addAmbience(
+        left: inout [Double],
+        right: inout [Double],
+        sampleRate: Int,
+        amount: Double
+    ) {
+        let dryLeft = left
+        let dryRight = right
+        let taps: [(delay: Double, gain: Double, crossfeed: Double)] = [
+            (0.027, 0.38, 0.28),
+            (0.049, 0.25, 0.52),
+            (0.083, 0.16, 0.68),
+            (0.113, 0.1, 0.44),
+        ]
+
+        for tap in taps {
+            let delay = Int(tap.delay * Double(sampleRate))
+            guard delay < left.count else {
+                continue
+            }
+            let gain = tap.gain * amount
+            for frame in delay..<left.count {
+                let source = frame - delay
+                left[frame] += (
+                    (dryLeft[source] * (1 - tap.crossfeed))
+                        + (dryRight[source] * tap.crossfeed)
+                ) * gain
+                right[frame] += (
+                    (dryRight[source] * (1 - tap.crossfeed))
+                        + (dryLeft[source] * tap.crossfeed)
+                ) * gain
+            }
+        }
     }
 
     private static func smoothStep(_ value: Double) -> Double {
@@ -400,35 +686,56 @@ private struct VoiceCaptureOverlayView: View {
     @ObservedObject var model: VoiceCaptureOverlayModel
 
     var body: some View {
-        HStack(spacing: 9) {
-            recordingIndicator
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            let finishProgress = voiceCaptureFinishProgress(
+                state: model.state,
+                stateChangedAt: model.stateChangedAt,
+                date: timeline.date
+            )
 
-            if model.state == .failed {
-                Label("Mic unavailable", systemImage: "mic.slash.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-            } else {
-                VoiceLiveWaveform(
-                    level: model.level,
-                    isRecording: model.state == .recording
-                )
-                .frame(width: 90, height: 32)
+            HStack(spacing: 9) {
+                recordingIndicator
 
-                Text(formattedElapsed)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.68))
-                    .frame(width: 32, alignment: .trailing)
+                if model.state == .failed {
+                    Label("Mic unavailable", systemImage: "mic.slash.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                } else if model.state == .noSpeech {
+                    Label("No speech detected", systemImage: "waveform.slash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(1)
+                } else {
+                    VoiceLiveWaveform(
+                        level: model.state == .finishing
+                            ? model.closingLevel
+                            : model.level,
+                        isRecording: model.state == .recording
+                            || model.state == .finishing
+                    )
+                    .frame(width: 90, height: 32)
+
+                    Text(formattedElapsed)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.68))
+                        .frame(width: 32, alignment: .trailing)
+                }
             }
-        }
-        .padding(.horizontal, 14)
-        .frame(width: 184, height: 52)
-        .background {
-            Capsule()
-                .fill(Color.black.opacity(0.94))
-        }
-        .overlay {
-            Capsule()
-                .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+            .padding(.horizontal, 14)
+            .frame(width: 184, height: 52)
+            .background {
+                Capsule()
+                    .fill(Color.black.opacity(0.94))
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+            }
+            .scaleEffect(
+                x: 1 - (finishProgress * 0.76),
+                y: 1 - (finishProgress * 0.08)
+            )
+            .opacity(1 - finishProgress)
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .ignore)
@@ -441,7 +748,13 @@ private struct VoiceCaptureOverlayView: View {
                 ? (sin(timeline.date.timeIntervalSinceReferenceDate * 4.8) + 1) / 2
                 : 0
             Circle()
-                .fill(model.state == .failed ? Color.secondary : Color.red)
+                .fill(
+                    model.state == .failed
+                        ? Color.secondary
+                        : model.state == .noSpeech
+                            ? Color.orange
+                            : Color.red
+                )
                 .frame(width: 9, height: 9)
                 .shadow(
                     color: model.state == .recording
@@ -468,6 +781,8 @@ private struct VoiceCaptureOverlayView: View {
             "Finished recording audio"
         case .failed:
             "Microphone unavailable"
+        case .noSpeech:
+            "No speech detected"
         }
     }
 }
@@ -492,35 +807,63 @@ private struct VoiceCaptureIslandView: View {
     }
 
     private var floatingIsland: some View {
-        HStack(spacing: 10) {
-            if model.state == .failed {
-                Image(systemName: "mic.slash.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.red)
-                    .frame(width: 30, height: 30)
-            } else {
-                VoiceGradientOrb(
-                    level: model.level,
-                    state: model.state,
-                    stateChangedAt: model.stateChangedAt
-                )
-                .frame(width: 26, height: 26)
-            }
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            let finishProgress = voiceCaptureFinishProgress(
+                state: model.state,
+                stateChangedAt: model.stateChangedAt,
+                date: timeline.date
+            )
 
-            Text(model.state == .failed ? "Mic" : formattedElapsed)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.76))
-                .frame(width: 38, alignment: .trailing)
-        }
-        .padding(.horizontal, 15)
-        .frame(width: 128, height: 46)
-        .background {
-            Capsule()
-                .fill(Color.black.opacity(0.96))
-        }
-        .overlay {
-            Capsule()
-                .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+            HStack(spacing: 10) {
+                if model.state == .failed {
+                    Image(systemName: "mic.slash.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .frame(width: 30, height: 30)
+                } else if model.state == .noSpeech {
+                    Image(systemName: "waveform.slash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 30, height: 30)
+                } else {
+                    VoiceGradientOrb(
+                        level: model.level,
+                        state: model.state,
+                        stateChangedAt: model.stateChangedAt,
+                        activationStartedAt: model.activationStartedAt
+                    )
+                    .frame(width: 26, height: 26)
+                }
+
+                Text(feedbackText)
+                    .font(
+                        .system(
+                            size: model.state == .noSpeech ? 9 : 11,
+                            weight: .semibold,
+                            design: model.state == .noSpeech ? .default : .monospaced
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.76))
+                    .frame(
+                        width: model.state == .noSpeech ? 48 : 38,
+                        alignment: .trailing
+                    )
+            }
+            .padding(.horizontal, 15)
+            .frame(width: 128, height: 46)
+            .background {
+                Capsule()
+                    .fill(Color.black.opacity(0.96))
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+            }
+            .scaleEffect(
+                x: 1 - (finishProgress * 0.52),
+                y: 1 - (finishProgress * 0.08)
+            )
+            .opacity(1 - finishProgress)
         }
         .padding(.vertical, 3)
     }
@@ -528,6 +871,17 @@ private struct VoiceCaptureIslandView: View {
     private var formattedElapsed: String {
         let seconds = max(0, Int(model.elapsed))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var feedbackText: String {
+        switch model.state {
+        case .failed:
+            "Mic"
+        case .noSpeech:
+            "No speech"
+        case .preparing, .recording, .finishing:
+            formattedElapsed
+        }
     }
 
     private var accessibilityLabel: String {
@@ -540,6 +894,8 @@ private struct VoiceCaptureIslandView: View {
             "Finished recording audio in Dynamic Island"
         case .failed:
             "Microphone unavailable"
+        case .noSpeech:
+            "No speech detected"
         }
     }
 }
@@ -548,18 +904,39 @@ struct VoiceCaptureNotchIslandView: View {
     @ObservedObject var model: VoiceCaptureOverlayModel
 
     var body: some View {
-        ZStack {
-            Capsule()
-                .fill(Color.black.opacity(0.98))
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            GeometryReader { geometry in
+                let finishProgress = voiceCaptureFinishProgress(
+                    state: model.state,
+                    stateChangedAt: model.stateChangedAt,
+                    date: timeline.date
+                )
+                let cameraWidth = max(
+                    1,
+                    geometry.size.width - (VoiceIslandLayoutMetrics.sideWidth * 2)
+                )
+                let collapsedScale = cameraWidth / max(1, geometry.size.width)
+                let backgroundProgress = finishProgress * finishProgress
+                let backgroundScale = 1
+                    - (backgroundProgress * (1 - collapsedScale))
 
-            HStack(spacing: 0) {
-                leftContent
-                    .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+                ZStack {
+                    Capsule()
+                        .fill(Color.black.opacity(0.98))
+                        .scaleEffect(x: backgroundScale, anchor: .center)
 
-                Spacer(minLength: 0)
+                    HStack(spacing: 0) {
+                        leftContent
+                            .frame(width: VoiceIslandLayoutMetrics.sideWidth)
 
-                rightContent
-                    .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+                        Spacer(minLength: 0)
+
+                        rightContent
+                            .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+                    }
+                    .scaleEffect(1 - (finishProgress * 0.08))
+                    .opacity(1 - finishProgress)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -571,6 +948,10 @@ struct VoiceCaptureNotchIslandView: View {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
+            } else if model.state == .noSpeech {
+                Image(systemName: "waveform.slash")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
             } else {
                 orb
             }
@@ -582,6 +963,10 @@ struct VoiceCaptureNotchIslandView: View {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            } else if model.state == .noSpeech {
+                Text("No speech")
+                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.78))
             } else {
                 Text(formattedElapsed)
@@ -595,7 +980,8 @@ struct VoiceCaptureNotchIslandView: View {
         VoiceGradientOrb(
             level: model.level,
             state: model.state,
-            stateChangedAt: model.stateChangedAt
+            stateChangedAt: model.stateChangedAt,
+            activationStartedAt: model.activationStartedAt
         )
         .frame(width: 22, height: 22)
     }
@@ -694,22 +1080,43 @@ private struct VoiceCaptureWideNotchView: View {
     @ObservedObject var model: VoiceCaptureOverlayModel
 
     var body: some View {
-        ZStack {
-            VoiceWideNotchShape(
-                shoulderWidth: 3,
-                shoulderDepth: 4,
-                bottomCornerRadius: 11
-            )
-                .fill(Color.black.opacity(0.985))
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            GeometryReader { geometry in
+                let finishProgress = voiceCaptureFinishProgress(
+                    state: model.state,
+                    stateChangedAt: model.stateChangedAt,
+                    date: timeline.date
+                )
+                let cameraWidth = max(
+                    1,
+                    geometry.size.width - (VoiceIslandLayoutMetrics.shelfSideWidth * 2)
+                )
+                let collapsedScale = cameraWidth / max(1, geometry.size.width)
+                let backgroundProgress = finishProgress * finishProgress
+                let backgroundScale = 1
+                    - (backgroundProgress * (1 - collapsedScale))
 
-            HStack(spacing: 0) {
-                leftContent
-                    .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+                ZStack {
+                    VoiceWideNotchShape(
+                        shoulderWidth: 3,
+                        shoulderDepth: 4,
+                        bottomCornerRadius: 11
+                    )
+                    .fill(Color.black.opacity(0.985))
+                    .scaleEffect(x: backgroundScale, anchor: .center)
 
-                Spacer(minLength: 0)
+                    HStack(spacing: 0) {
+                        leftContent
+                            .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
 
-                rightContent
-                    .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+                        Spacer(minLength: 0)
+
+                        rightContent
+                            .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+                    }
+                    .scaleEffect(1 - (finishProgress * 0.08))
+                    .opacity(1 - finishProgress)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -721,11 +1128,16 @@ private struct VoiceCaptureWideNotchView: View {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
+            } else if model.state == .noSpeech {
+                Image(systemName: "waveform.slash")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
             } else {
                 VoiceGradientOrb(
                     level: model.level,
                     state: model.state,
-                    stateChangedAt: model.stateChangedAt
+                    stateChangedAt: model.stateChangedAt,
+                    activationStartedAt: model.activationStartedAt
                 )
                 .frame(width: 22, height: 22)
             }
@@ -737,6 +1149,10 @@ private struct VoiceCaptureWideNotchView: View {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            } else if model.state == .noSpeech {
+                Text("No speech")
+                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.78))
             } else {
                 Text(formattedElapsed)
@@ -762,26 +1178,30 @@ struct VoiceGradientOrb: View {
     let level: Float
     private let phase: Phase
     private let phaseStartedAt: Date
+    private let activationStartedAt: Date
 
     init(level: Float, isRecording: Bool) {
         self.level = level
         phase = isRecording ? .listening : .activating
         phaseStartedAt = .distantPast
+        activationStartedAt = .distantPast
     }
 
     fileprivate init(
         level: Float,
         state: VoiceCaptureOverlayModel.State,
-        stateChangedAt: Date
+        stateChangedAt: Date,
+        activationStartedAt: Date
     ) {
         self.level = level
         phaseStartedAt = stateChangedAt
+        self.activationStartedAt = activationStartedAt
         switch state {
         case .preparing:
             phase = .activating
         case .recording:
             phase = .listening
-        case .finishing, .failed:
+        case .finishing, .failed, .noSpeech:
             phase = .finishing
         }
     }
@@ -799,9 +1219,11 @@ struct VoiceGradientOrb: View {
                     max(0, min(1, (energy - 0.14) / 0.86))
                 )
                 let phaseAge = max(0, timeline.date.timeIntervalSince(phaseStartedAt))
-                let activationProgress = phase == .activating
-                    ? eased(min(1, phaseAge / 0.28))
-                    : 1
+                let activationAge = max(
+                    0,
+                    timeline.date.timeIntervalSince(activationStartedAt)
+                )
+                let activationProgress = eased(min(1, activationAge / 0.28))
                 let finishProgress = phase == .finishing
                     ? eased(min(1, phaseAge / 0.38))
                     : 0

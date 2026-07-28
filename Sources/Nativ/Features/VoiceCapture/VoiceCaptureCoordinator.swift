@@ -100,6 +100,7 @@ final class VoiceCaptureCoordinator {
 
             do {
                 try self.recorder.start()
+                self.overlay.didStartRecording()
             } catch {
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
                 self.overlay.showFailure()
@@ -254,6 +255,10 @@ final class VoiceCaptureCoordinator {
                 }
 
                 let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !transcript.isEmpty else {
+                    self.handleEmptyTranscription(recordingURL)
+                    return
+                }
                 let transcriptURL = recordingURL
                     .deletingPathExtension()
                     .appendingPathExtension("txt")
@@ -285,6 +290,10 @@ final class VoiceCaptureCoordinator {
                 guard !Task.isCancelled else {
                     return
                 }
+                if Self.isEmptyTranscriptionError(error) {
+                    self.handleEmptyTranscription(recordingURL)
+                    return
+                }
                 self.showTranscriptionError(
                     title: "Transcription Failed",
                     message: error.localizedDescription
@@ -292,6 +301,38 @@ final class VoiceCaptureCoordinator {
             }
         }
         transcriptionTasks[taskID] = task
+    }
+
+    private func handleEmptyTranscription(_ recordingURL: URL) {
+        NSLog(
+            "Nativ transcription produced no text for %@",
+            recordingURL.lastPathComponent
+        )
+        guard !isShortcutHeld, !recorder.isRecording else {
+            return
+        }
+        overlay.showNoSpeechFeedback()
+    }
+
+    private static func isEmptyTranscriptionError(_ error: Error) -> Bool {
+        if case NativAudioTranscriptionError.emptyTranscript = error {
+            return true
+        }
+
+        let message = [
+            error.localizedDescription,
+            String(describing: error),
+        ]
+        .joined(separator: " ")
+        .lowercased()
+
+        return [
+            "no text was generated",
+            "no text generated",
+            "did not include any text",
+            "empty transcript",
+            "empty transcription",
+        ].contains { message.contains($0) }
     }
 
     private func showRecentRecordingUnavailable() {
@@ -322,6 +363,7 @@ final class VoiceCaptureCoordinator {
         alert.addButton(withTitle: "Cancel")
         let response = alert.runModal()
         isPresentingAlert = false
+        shortcutMonitor.resynchronizeAfterModalInteraction()
 
         if response == .alertFirstButtonReturn {
             onOpenSpeechModels?()
@@ -342,6 +384,7 @@ final class VoiceCaptureCoordinator {
         alert.addButton(withTitle: "OK")
         alert.runModal()
         isPresentingAlert = false
+        shortcutMonitor.resynchronizeAfterModalInteraction()
     }
 
     private func showInsertionPermissionAlertIfNeeded() {

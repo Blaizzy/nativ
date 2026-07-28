@@ -132,6 +132,18 @@ final class FnControlShortcutMonitor {
         retryState = FnRetryShortcutState()
     }
 
+    func resynchronizeAfterModalInteraction() {
+        let recordWasHeld = recordIsHeld
+        recordIsHeld = false
+        retryModifierIsHeld = false
+        retryState = FnRetryShortcutState()
+
+        if recordWasHeld {
+            onChange?(false)
+        }
+        consumeCurrentModifierFlags()
+    }
+
     private func startModifierPolling() {
         modifierPollTimer?.invalidate()
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) {
