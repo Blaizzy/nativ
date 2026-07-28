@@ -4,6 +4,7 @@ import SwiftUI
 
 private enum VoiceIslandLayoutMetrics {
     static let sideWidth: CGFloat = 48
+    static let shelfSideWidth: CGFloat = 56
 }
 
 @MainActor
@@ -20,6 +21,7 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     @Published var level: Float = 0
     @Published var elapsed: TimeInterval = 0
     @Published var islandUsesCameraCutout = false
+    @Published var islandStyle: VoiceCaptureAnimationStyle = .gradientIsland
 
     func transition(to newState: State) {
         guard state != newState else {
@@ -40,6 +42,7 @@ final class VoiceCaptureOverlayController {
     private let islandPanel: NSPanel
     private let soundPlayer = VoiceCaptureSoundPlayer()
     private var activeStyle: VoiceCaptureAnimationStyle = .cursorWaveform
+    private var displayedIslandLevel: Float = 0
     private var islandDismissalTask: Task<Void, Never>?
 
     init(animationPreferences: VoiceAnimationPreferences? = nil) {
@@ -90,8 +93,10 @@ final class VoiceCaptureOverlayController {
         islandDismissalTask = nil
         model.transition(to: .preparing)
         model.level = 0
+        displayedIslandLevel = 0
         model.elapsed = 0
         activeStyle = animationPreferences.selectedStyle
+        model.islandStyle = activeStyle
         waveformPanel.orderOut(nil)
         islandPanel.orderOut(nil)
 
@@ -99,7 +104,7 @@ final class VoiceCaptureOverlayController {
         case .cursorWaveform:
             positionWaveformPanel(near: cursorPosition)
             waveformPanel.orderFrontRegardless()
-        case .gradientIsland:
+        case .gradientIsland, .notchShelf:
             positionIslandPanel(on: screen(containing: cursorPosition))
             islandPanel.orderFrontRegardless()
             soundPlayer.playStart()
@@ -108,20 +113,33 @@ final class VoiceCaptureOverlayController {
 
     func update(level: Float, elapsed: TimeInterval) {
         model.transition(to: .recording)
-        model.level = level
+        let normalizedLevel = max(0, min(1, level))
+        if activeStyle == .cursorWaveform {
+            model.level = normalizedLevel
+        } else {
+            let response: Float = normalizedLevel > displayedIslandLevel
+                ? 0.14
+                : 0.07
+            displayedIslandLevel += (
+                normalizedLevel - displayedIslandLevel
+            ) * response
+            model.level = displayedIslandLevel
+        }
         model.elapsed = elapsed
     }
 
     func showFailure() {
         model.transition(to: .failed)
         model.level = 0
+        displayedIslandLevel = 0
     }
 
     func hide() {
         waveformPanel.orderOut(nil)
         model.level = 0
+        displayedIslandLevel = 0
 
-        guard activeStyle == .gradientIsland, islandPanel.isVisible else {
+        guard activeStyle != .cursorWaveform, islandPanel.isVisible else {
             islandPanel.orderOut(nil)
             model.elapsed = 0
             return
@@ -173,16 +191,18 @@ final class VoiceCaptureOverlayController {
            let rightArea = screen.auxiliaryTopRightArea,
            rightArea.minX - leftArea.maxX > 20 {
             let wingWidth = min(
-                VoiceIslandLayoutMetrics.sideWidth,
+                activeStyle == .notchShelf
+                    ? VoiceIslandLayoutMetrics.shelfSideWidth
+                    : VoiceIslandLayoutMetrics.sideWidth,
                 leftArea.width,
                 rightArea.width
             )
-            let height = min(leftArea.height, rightArea.height)
+            let cameraHeight = min(leftArea.height, rightArea.height)
             let frame = NSRect(
                 x: leftArea.maxX - wingWidth,
                 y: max(leftArea.minY, rightArea.minY),
                 width: wingWidth + (rightArea.minX - leftArea.maxX) + wingWidth,
-                height: height
+                height: cameraHeight
             )
             model.islandUsesCameraCutout = true
             islandPanel.setFrame(frame, display: true)
@@ -473,7 +493,11 @@ private struct VoiceCaptureIslandView: View {
     var body: some View {
         Group {
             if model.islandUsesCameraCutout {
-                VoiceCaptureNotchIslandView(model: model)
+                if model.islandStyle == .notchShelf {
+                    VoiceCaptureWideNotchView(model: model)
+                } else {
+                    VoiceCaptureNotchIslandView(model: model)
+                }
             } else {
                 floatingIsland
             }
@@ -597,6 +621,152 @@ struct VoiceCaptureNotchIslandView: View {
     }
 }
 
+struct VoiceWideNotchShape: Shape {
+    let shoulderWidth: CGFloat
+    let shoulderDepth: CGFloat
+    let bottomCornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let shoulderWidth = min(
+            max(0, shoulderWidth),
+            rect.width / 4
+        )
+        let bottomRadius = min(
+            max(0, bottomCornerRadius),
+            rect.height,
+            (rect.width - (shoulderWidth * 2)) / 2
+        )
+        let shoulderDepth = min(
+            max(0, shoulderDepth),
+            rect.height - bottomRadius
+        )
+        let circleControlRatio: CGFloat = 0.552_284_75
+        let leftSide = rect.minX + shoulderWidth
+        let rightSide = rect.maxX - shoulderWidth
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addCurve(
+            to: CGPoint(x: rightSide, y: rect.minY + shoulderDepth),
+            control1: CGPoint(
+                x: rect.maxX - (shoulderWidth * circleControlRatio),
+                y: rect.minY
+            ),
+            control2: CGPoint(
+                x: rightSide,
+                y: rect.minY + (shoulderDepth * (1 - circleControlRatio))
+            )
+        )
+        path.addLine(
+            to: CGPoint(x: rightSide, y: rect.maxY - bottomRadius)
+        )
+        path.addCurve(
+            to: CGPoint(x: rightSide - bottomRadius, y: rect.maxY),
+            control1: CGPoint(
+                x: rightSide,
+                y: rect.maxY - (bottomRadius * (1 - circleControlRatio))
+            ),
+            control2: CGPoint(
+                x: rightSide - (bottomRadius * (1 - circleControlRatio)),
+                y: rect.maxY
+            )
+        )
+        path.addLine(
+            to: CGPoint(x: leftSide + bottomRadius, y: rect.maxY)
+        )
+        path.addCurve(
+            to: CGPoint(x: leftSide, y: rect.maxY - bottomRadius),
+            control1: CGPoint(
+                x: leftSide + (bottomRadius * (1 - circleControlRatio)),
+                y: rect.maxY
+            ),
+            control2: CGPoint(
+                x: leftSide,
+                y: rect.maxY - (bottomRadius * (1 - circleControlRatio))
+            )
+        )
+        path.addLine(
+            to: CGPoint(x: leftSide, y: rect.minY + shoulderDepth)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.minX, y: rect.minY),
+            control1: CGPoint(
+                x: leftSide,
+                y: rect.minY + (shoulderDepth * (1 - circleControlRatio))
+            ),
+            control2: CGPoint(
+                x: rect.minX + (shoulderWidth * circleControlRatio),
+                y: rect.minY
+            )
+        )
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct VoiceCaptureWideNotchView: View {
+    @ObservedObject var model: VoiceCaptureOverlayModel
+
+    var body: some View {
+        ZStack {
+            VoiceWideNotchShape(
+                shoulderWidth: 3,
+                shoulderDepth: 4,
+                bottomCornerRadius: 11
+            )
+                .fill(Color.black.opacity(0.985))
+
+            HStack(spacing: 0) {
+                leftContent
+                    .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+
+                Spacer(minLength: 0)
+
+                rightContent
+                    .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var leftContent: some View {
+        Group {
+            if model.state == .failed {
+                Image(systemName: "mic.slash.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red)
+            } else {
+                VoiceGradientOrb(
+                    level: model.level,
+                    state: model.state,
+                    stateChangedAt: model.stateChangedAt
+                )
+                .frame(width: 22, height: 22)
+            }
+        }
+    }
+
+    private var rightContent: some View {
+        Group {
+            if model.state == .failed {
+                Text("Mic")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            } else {
+                Text(formattedElapsed)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+        }
+    }
+
+    private var formattedElapsed: String {
+        let seconds = max(0, Int(model.elapsed))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
 struct VoiceGradientOrb: View {
     private enum Phase {
         case activating
@@ -638,8 +808,6 @@ struct VoiceGradientOrb: View {
                 let energy = phase == .listening
                     ? max(0, min(1, Double(level)))
                     : 0
-                let isSpeaking = energy > 0.11
-                let speed = isSpeaking ? 0.018 + (energy * 0.035) : 0.005
                 let phaseAge = max(0, timeline.date.timeIntervalSince(phaseStartedAt))
                 let activationProgress = phase == .activating
                     ? eased(min(1, phaseAge / 0.28))
@@ -648,14 +816,17 @@ struct VoiceGradientOrb: View {
                     ? eased(min(1, phaseAge / 0.38))
                     : 0
                 let shortestSide = min(geometry.size.width, geometry.size.height)
-                let driftX = sin(time * speed * 1.13) * geometry.size.width * 0.15
-                let driftY = cos(time * speed * 0.87) * geometry.size.height * 0.12
-                let cyanOpacity = phase == .listening
-                    ? 0.48 + (energy * 0.48)
-                    : 0.08
-                let amberOpacity = phase == .activating
-                    ? 0.9
-                    : max(0.08, 0.48 - (energy * 0.5))
+                let primaryPhase = time * 0.22
+                let secondaryPhase = time * 0.16
+                let driftX = sin(primaryPhase)
+                    * geometry.size.width * 0.035
+                let driftY = cos(primaryPhase * 0.73)
+                    * geometry.size.height * 0.025
+                let secondaryDriftX = cos(secondaryPhase)
+                    * geometry.size.width * 0.028
+                let secondaryDriftY = sin(secondaryPhase * 0.81)
+                    * geometry.size.height * 0.022
+                let voiceLift = energy * geometry.size.height * 0.025
 
                 ZStack {
                     Circle()
@@ -665,10 +836,10 @@ struct VoiceGradientOrb: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.black.opacity(0.92),
-                                    Color(red: 0.04, green: 0.20, blue: 0.21),
-                                    Color(red: 0.72, green: 0.94, blue: 0.96),
-                                    Color.white.opacity(0.98),
+                                    Color.white,
+                                    Color(red: 0.82, green: 0.97, blue: 1.0),
+                                    Color(red: 0.18, green: 0.76, blue: 0.96),
+                                    Color(red: 0.04, green: 0.28, blue: 0.88),
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -679,8 +850,9 @@ struct VoiceGradientOrb: View {
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(red: 0.98, green: 0.46, blue: 0.14),
-                                    Color(red: 1.0, green: 0.82, blue: 0.45).opacity(0.72),
+                                    .white,
+                                    Color(red: 0.87, green: 0.98, blue: 1.0)
+                                        .opacity(0.92),
                                     .clear,
                                 ],
                                 center: .center,
@@ -689,22 +861,23 @@ struct VoiceGradientOrb: View {
                             )
                         )
                         .frame(
-                            width: geometry.size.width * 1.18,
-                            height: geometry.size.height * 0.86
+                            width: geometry.size.width * 1.28,
+                            height: geometry.size.height * 0.92
                         )
                         .offset(
-                            x: (-geometry.size.width * 0.2) + driftX,
-                            y: -geometry.size.height * 0.27 + driftY
+                            x: (-geometry.size.width * 0.16) + driftX,
+                            y: -geometry.size.height * 0.24 + driftY - voiceLift
                         )
-                        .opacity(amberOpacity)
-                        .blur(radius: shortestSide * 0.13)
+                        .opacity(0.84 + (energy * 0.08))
+                        .blur(radius: shortestSide * 0.1)
 
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(red: 0.0, green: 0.77, blue: 0.66),
-                                    Color(red: 0.0, green: 0.45, blue: 0.50).opacity(0.82),
+                                    Color(red: 0.18, green: 0.92, blue: 1.0),
+                                    Color(red: 0.02, green: 0.58, blue: 0.94)
+                                        .opacity(0.86),
                                     .clear,
                                 ],
                                 center: .center,
@@ -713,24 +886,53 @@ struct VoiceGradientOrb: View {
                             )
                         )
                         .frame(
-                            width: geometry.size.width * 1.25,
-                            height: geometry.size.height * 0.9
+                            width: geometry.size.width * 1.34,
+                            height: geometry.size.height * 0.84
                         )
                         .offset(
-                            x: (geometry.size.width * 0.14) - driftX,
-                            y: -geometry.size.height * 0.22 - driftY
+                            x: (geometry.size.width * 0.18) + secondaryDriftX,
+                            y: -geometry.size.height * 0.02
+                                + secondaryDriftY
+                                - (voiceLift * 0.45)
                         )
-                        .opacity(cyanOpacity)
-                        .blur(radius: shortestSide * 0.12)
+                        .opacity(0.48 + (energy * 0.1))
+                        .blur(radius: shortestSide * 0.11)
+
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color(red: 0.02, green: 0.22, blue: 0.9),
+                                    Color(red: 0.0, green: 0.48, blue: 0.96)
+                                        .opacity(0.72),
+                                    .clear,
+                                ],
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: shortestSide * 0.72
+                            )
+                        )
+                        .frame(
+                            width: geometry.size.width * 1.4,
+                            height: geometry.size.height * 0.78
+                        )
+                        .offset(
+                            x: (-geometry.size.width * 0.08) - secondaryDriftX,
+                            y: geometry.size.height * 0.34
+                                - secondaryDriftY
+                                - (voiceLift * 0.3)
+                        )
+                        .opacity(0.62 + (energy * 0.06))
+                        .blur(radius: shortestSide * 0.1)
 
                     Circle()
                         .fill(
                             LinearGradient(
                                 colors: [
                                     .clear,
-                                    Color(red: 0.64, green: 0.93, blue: 1.0)
-                                        .opacity(0.32 + (energy * 0.28)),
-                                    .white.opacity(0.96),
+                                    Color(red: 0.7, green: 0.96, blue: 1.0)
+                                        .opacity(0.28 + (energy * 0.08)),
+                                    .white.opacity(0.84),
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -742,8 +944,10 @@ struct VoiceGradientOrb: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color(red: 0.97, green: 0.70, blue: 0.82).opacity(0.18),
-                                    Color(red: 0.93, green: 0.20, blue: 0.42).opacity(0.72),
+                                    Color(red: 0.86, green: 0.78, blue: 1.0)
+                                        .opacity(0.12),
+                                    Color(red: 0.36, green: 0.2, blue: 0.84)
+                                        .opacity(0.48),
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -784,14 +988,14 @@ struct VoiceGradientOrb: View {
                 }
                 .scaleEffect(
                     (0.78 + (activationProgress * 0.22))
-                        + (energy * 0.045)
+                        + (energy * 0.014)
                         - (finishProgress * 0.06)
                 )
                 .opacity(activationProgress * (1 - finishProgress))
                 .shadow(
                     color: Color(red: 0.38, green: 0.93, blue: 1.0)
-                        .opacity(0.18 + (energy * 0.32)),
-                    radius: 3 + (energy * 4)
+                        .opacity(0.16 + (energy * 0.1)),
+                    radius: 3 + (energy * 1.5)
                 )
             }
         }

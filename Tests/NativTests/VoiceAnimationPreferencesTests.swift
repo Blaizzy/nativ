@@ -26,4 +26,19 @@ final class VoiceAnimationPreferencesTests: XCTestCase {
         let restored = VoiceAnimationPreferences(defaults: defaults)
         XCTAssertEqual(restored.selectedStyle, .gradientIsland)
     }
+
+    func testPersistsNotchShelfSelection() throws {
+        let suiteName = "VoiceAnimationPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var preferences: VoiceAnimationPreferences? = VoiceAnimationPreferences(
+            defaults: defaults
+        )
+        preferences?.selectedStyle = .notchShelf
+        preferences = nil
+
+        let restored = VoiceAnimationPreferences(defaults: defaults)
+        XCTAssertEqual(restored.selectedStyle, .notchShelf)
+    }
 }
