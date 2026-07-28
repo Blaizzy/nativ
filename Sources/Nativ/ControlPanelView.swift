@@ -52,7 +52,9 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
 final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var requestedTab: ControlPanelTab?
     @Published private(set) var newChatRequest = 0
+    @Published private(set) var toggleSidebarRequest = 0
     private var consumedNewChatRequest = 0
+    private var consumedToggleSidebarRequest = 0
 
     func open(_ tab: ControlPanelTab) {
         requestedTab = tab
@@ -62,11 +64,23 @@ final class ControlPanelNavigation: ObservableObject {
         newChatRequest += 1
     }
 
+    func toggleSidebar() {
+        toggleSidebarRequest += 1
+    }
+
     func consumeNewChatRequest() -> Bool {
         guard consumedNewChatRequest < newChatRequest else {
             return false
         }
         consumedNewChatRequest = newChatRequest
+        return true
+    }
+
+    func consumeToggleSidebarRequest() -> Bool {
+        guard consumedToggleSidebarRequest < toggleSidebarRequest else {
+            return false
+        }
+        consumedToggleSidebarRequest = toggleSidebarRequest
         return true
     }
 }
@@ -290,6 +304,9 @@ struct ControlPanelView: View {
         }
         .onChange(of: navigation.newChatRequest) { _, _ in
             handleNewChatRequest()
+        }
+        .onChange(of: navigation.toggleSidebarRequest) { _, _ in
+            handleToggleSidebarRequest()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -839,6 +856,13 @@ struct ControlPanelView: View {
             return
         }
         createChatSession()
+    }
+
+    private func handleToggleSidebarRequest() {
+        guard navigation.consumeToggleSidebarRequest() else {
+            return
+        }
+        toggleSidebarVisibility()
     }
 
     private func canExportRecent(_ recent: ControlPanelRecentSession) -> Bool {

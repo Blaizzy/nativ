@@ -504,6 +504,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showMainWindow()
     }
 
+    func toggleSidebar() {
+        controlPanelNavigation.toggleSidebar()
+        showMainWindow()
+    }
+
     private func showMainWindow() {
         mainWindowOpener?()
         NSApplication.shared.activate(ignoringOtherApps: true)
