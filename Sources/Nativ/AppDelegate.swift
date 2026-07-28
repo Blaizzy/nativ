@@ -339,6 +339,7 @@ private final class ModelMenuSectionHeaderView: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
+    private let voiceCapture = VoiceCaptureCoordinator()
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
@@ -373,6 +374,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         configureStatusItem()
+        voiceCapture.transcriptionConfigurationProvider = { [weak self] in
+            guard let self else {
+                return nil
+            }
+            let settings = self.model.settings.normalized()
+            return VoiceTranscriptionConfiguration(
+                modelSearchPath: settings.modelSearchPath,
+                additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                preferredModelID: settings.speechToTextModelID,
+                serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
+                serverAPIKey: settings.serverAPIKey,
+                serverIsRunning: self.model.isRunning
+            )
+        }
+        voiceCapture.onOpenSpeechModels = { [weak self] in
+            guard let self else {
+                return
+            }
+            self.controlPanelNavigation.openSpeechModelDiscovery()
+            self.showMainWindow()
+        }
+        voiceCapture.start()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(localModelLibraryDidChange(_:)),
@@ -399,6 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
+        voiceCapture.stop()
         runtime.onUpdate = nil
         systemMenuBarPreferences.onChange = nil
         runtime.stop()
@@ -464,6 +488,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openModelsFromMenu(_ sender: Any?) {
         controlPanelNavigation.open(.models)
         showMainWindow()
+    }
+
+    @objc private func openVoiceRecordingsFromMenu(_ sender: Any?) {
+        voiceCapture.showRecordingsInFinder()
     }
 
     @objc private func openWelcomeFromMenu(_ sender: Any?) {
@@ -945,6 +973,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modelsMenuItem.keyEquivalentModifierMask = [.command]
         modelsMenuItem.image = menuIcon("cube.transparent", description: "Models")
         menu.addItem(modelsMenuItem)
+
+        let recordingsMenuItem = NSMenuItem(
+            title: "Show Voice Recordings",
+            action: #selector(openVoiceRecordingsFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        recordingsMenuItem.target = self
+        recordingsMenuItem.image = menuIcon("waveform", description: "Voice recordings")
+        menu.addItem(recordingsMenuItem)
+
+        menu.addItem(.separator())
 
         let quitMenuItem = NSMenuItem(
             title: "Quit", 

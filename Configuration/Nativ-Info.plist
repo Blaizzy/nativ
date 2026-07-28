@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025 Prince Canuma &amp; contributors</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Nativ records audio while you hold Fn and Control.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SUFeedURL</key>
