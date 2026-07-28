@@ -21,7 +21,7 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
         case .cursorWaveform:
             "A live waveform that follows your pointer."
         case .gradientIsland:
-            "One pill around the camera cutout, with a reactive orb and timer."
+            "A liquid-glass listening orb with start and finish cues."
         }
     }
 
