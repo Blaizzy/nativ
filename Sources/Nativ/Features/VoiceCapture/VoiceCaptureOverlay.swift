@@ -880,7 +880,7 @@ struct VoiceGradientOrb: View {
                                 ],
                                 center: .center,
                                 startRadius: 0,
-                                endRadius: shortestSide * 0.72
+                                endRadius: shortestSide * 0.31
                             )
                         )
                         .frame(
@@ -902,7 +902,7 @@ struct VoiceGradientOrb: View {
                             y: 1 - (leadFlowX * 0.032)
                         )
                         .opacity(0.78 + (energy * 0.16))
-                        .blur(radius: shortestSide * 0.055)
+                        .blur(radius: shortestSide * 0.095)
 
                     Circle()
                         .fill(
@@ -914,7 +914,7 @@ struct VoiceGradientOrb: View {
                                 ],
                                 center: .center,
                                 startRadius: 0,
-                                endRadius: shortestSide * 0.76
+                                endRadius: shortestSide * 0.265
                             )
                         )
                         .frame(
@@ -936,25 +936,25 @@ struct VoiceGradientOrb: View {
                             y: 1 - (middleFlowX * 0.042)
                         )
                         .opacity(0.52 + (energy * 0.2))
-                        .blur(radius: shortestSide * 0.05)
+                        .blur(radius: shortestSide * 0.09)
 
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(red: 0.92, green: 0.06, blue: 1.0),
-                                    Color(red: 0.18, green: 0.02, blue: 0.72)
-                                        .opacity(0.94),
+                                    Color(red: 0.86, green: 0.48, blue: 1.0),
+                                    Color(red: 0.5, green: 0.26, blue: 0.98)
+                                        .opacity(0.8),
                                     .clear,
                                 ],
                                 center: .center,
                                 startRadius: 0,
-                                endRadius: shortestSide * 0.72
+                                endRadius: shortestSide * 0.26
                             )
                         )
                         .frame(
-                            width: geometry.size.width * 0.9,
-                            height: geometry.size.height * 0.62
+                            width: geometry.size.width * 0.98,
+                            height: geometry.size.height * 0.68
                         )
                         .offset(
                             x: (
@@ -970,22 +970,22 @@ struct VoiceGradientOrb: View {
                             x: 1 + (tailFlowX * 0.052),
                             y: 1 - (tailFlowX * 0.058)
                         )
-                        .opacity(0.64 + (energy * 0.14))
-                        .blur(radius: shortestSide * 0.05)
+                        .opacity(0.5 + (energy * 0.14))
+                        .blur(radius: shortestSide * 0.095)
 
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(red: 0.01, green: 0.02, blue: 0.18)
-                                        .opacity(0.94),
-                                    Color(red: 0.12, green: 0.02, blue: 0.46)
+                                    Color(red: 0.62, green: 0.72, blue: 1.0)
                                         .opacity(0.72),
+                                    Color(red: 0.22, green: 0.58, blue: 1.0)
+                                        .opacity(0.48),
                                     .clear,
                                 ],
                                 center: .center,
                                 startRadius: 0,
-                                endRadius: shortestSide * 0.58
+                                endRadius: shortestSide * 0.21
                             )
                         )
                         .frame(
@@ -1006,9 +1006,9 @@ struct VoiceGradientOrb: View {
                             x: 1 + (shadowFlowX * 0.045),
                             y: 1 - (shadowFlowX * 0.034)
                         )
-                        .opacity(0.28 + (energy * 0.24))
-                        .blendMode(.multiply)
-                        .blur(radius: shortestSide * 0.035)
+                        .opacity(0.2 + (energy * 0.14))
+                        .blendMode(.screen)
+                        .blur(radius: shortestSide * 0.085)
 
                     Circle()
                         .fill(
