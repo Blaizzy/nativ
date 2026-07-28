@@ -80,7 +80,7 @@ Extensible on-machine AI agent.
 
 ## Crush
 
-Glamourous terminal coding agent.
+Glamorous terminal coding agent.
 
 - Config: a `crush.json` with an `openai-compat` provider `nativ`
   (`base_url: http://127.0.0.1:8080/v1`, `api_key: nativ`); large and small models set to `nativ`.
