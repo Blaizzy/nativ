@@ -220,6 +220,373 @@ private struct ChatImageToolExecutor {
     }
 }
 
+private enum ChatSystemMonitorToolRegistry {
+    static let toolName = "get_system_stats"
+
+    static func definitions() -> [MLXChatToolDefinition] {
+        [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: toolName,
+            description: "Get current CPU, GPU, memory, and disk usage on this Mac.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([:])
+            ])
+        ))]
+    }
+}
+
+private struct ChatSystemMonitorToolResultPayload: Encodable {
+    let ok: Bool
+    let cpuUsagePercent: Int?
+    let gpuUsagePercent: Int?
+    let memoryUsedGB: Double?
+    let memoryTotalGB: Double?
+    let diskUsedGB: Double?
+    let diskTotalGB: Double?
+    let uptimeSeconds: Int?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case cpuUsagePercent = "cpu_usage_percent"
+        case gpuUsagePercent = "gpu_usage_percent"
+        case memoryUsedGB = "memory_used_gb"
+        case memoryTotalGB = "memory_total_gb"
+        case diskUsedGB = "disk_used_gb"
+        case diskTotalGB = "disk_total_gb"
+        case uptimeSeconds = "uptime_seconds"
+        case error
+    }
+}
+
+private struct ChatSystemMonitorToolExecutor {
+    @MainActor
+    func execute(call: MLXChatToolCall) async throws -> String {
+        guard call.function?.name == ChatSystemMonitorToolRegistry.toolName else {
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        }
+
+        let store = SystemMonitorStore()
+        // First read only seeds the previous-tick baseline; second read
+        // after a delay gives a real CPU/disk delta.
+        _ = await store.collectSnapshot()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let snapshot = await store.collectSnapshot()
+
+        let payload = ChatSystemMonitorToolResultPayload(
+            ok: true,
+            cpuUsagePercent: percent(snapshot.cpu.totalUsage),
+            gpuUsagePercent: snapshot.gpu.deviceUsage.flatMap(percent),
+            memoryUsedGB: gigabytes(snapshot.memory.usedBytes),
+            memoryTotalGB: gigabytes(snapshot.memory.totalBytes),
+            diskUsedGB: gigabytes(snapshot.disk.usedBytes),
+            diskTotalGB: gigabytes(snapshot.disk.totalBytes),
+            uptimeSeconds: Int(snapshot.uptime),
+            error: nil
+        )
+        return try encodedPayload(payload)
+    }
+
+    func failurePayload(operation: String, error: Error) -> String {
+        let payload = ChatSystemMonitorToolResultPayload(
+            ok: false,
+            cpuUsagePercent: nil,
+            gpuUsagePercent: nil,
+            memoryUsedGB: nil,
+            memoryTotalGB: nil,
+            diskUsedGB: nil,
+            diskTotalGB: nil,
+            uptimeSeconds: nil,
+            error: error.localizedDescription
+        )
+        return (try? encodedPayload(payload))
+            ?? #"{"ok":false,"error":"System monitor tool failed."}"#
+    }
+
+    private func percent(_ usage: Double) -> Int {
+        Int((usage * 100).rounded())
+    }
+
+    private func gigabytes(_ bytes: UInt64) -> Double {
+        (Double(bytes) / 1_073_741_824 * 100).rounded() / 100
+    }
+
+    private func encodedPayload(_ payload: ChatSystemMonitorToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
+    }
+}
+
+private enum ChatModelLibraryToolRegistry {
+    static let toolName = "list_models"
+
+    static func definitions() -> [MLXChatToolDefinition] {
+        [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: toolName,
+            description: "List the MLX models already downloaded on this Mac, with size and quantization.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([:])
+            ])
+        ))]
+    }
+}
+
+private struct ChatModelLibraryToolResultPayload: Encodable {
+    struct Model: Encodable {
+        let repoID: String
+        let sizeGB: Double?
+        let parameterCount: Int64?
+        let quantizationBits: Int?
+        let capabilities: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case repoID = "repo_id"
+            case sizeGB = "size_gb"
+            case parameterCount = "parameter_count"
+            case quantizationBits = "quantization_bits"
+            case capabilities
+        }
+    }
+
+    let ok: Bool
+    let models: [Model]?
+    let error: String?
+}
+
+private struct ChatModelLibraryToolExecutor {
+    func execute(call: MLXChatToolCall, context: ChatToolExecutionContext) async throws -> String {
+        guard call.function?.name == ChatModelLibraryToolRegistry.toolName else {
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        }
+
+        let models = try await LocalModelDiscovery.scan(
+            path: context.modelSearchPath,
+            additionalPaths: context.additionalModelSearchPaths
+        )
+        let payload = ChatModelLibraryToolResultPayload(
+            ok: true,
+            models: models.map { model in
+                ChatModelLibraryToolResultPayload.Model(
+                    repoID: model.repoID,
+                    sizeGB: model.sizeBytes.map(gigabytes),
+                    parameterCount: model.parameterCount,
+                    quantizationBits: model.quantizationBits,
+                    capabilities: model.capabilities.map(\.rawValue).sorted()
+                )
+            },
+            error: nil
+        )
+        return try encodedPayload(payload)
+    }
+
+    func failurePayload(operation: String, error: Error) -> String {
+        let payload = ChatModelLibraryToolResultPayload(ok: false, models: nil, error: error.localizedDescription)
+        return (try? encodedPayload(payload))
+            ?? #"{"ok":false,"error":"Model library tool failed."}"#
+    }
+
+    private func gigabytes(_ bytes: Int64) -> Double {
+        (Double(bytes) / 1_073_741_824 * 100).rounded() / 100
+    }
+
+    private func encodedPayload(_ payload: ChatModelLibraryToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
+    }
+}
+
+private enum ChatServerStatsToolRegistry {
+    static let toolName = "get_server_stats"
+
+    static func definitions() -> [MLXChatToolDefinition] {
+        [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: toolName,
+            description: "Get this Mac's local model server performance stats: requests, tokens, speed, time to first token.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([:])
+            ])
+        ))]
+    }
+}
+
+private struct ChatServerStatsToolResultPayload: Encodable {
+    let ok: Bool
+    let requestsCompleted: Int?
+    let requestsFailed: Int?
+    let promptTokensTotal: Int?
+    let completionTokensTotal: Int?
+    let generatedTokensTotal: Int?
+    let avgDecodeTokensPerSecond: Double?
+    let avgRequestTokensPerSecond: Double?
+    let avgTimeToFirstTokenMs: Double?
+    let peakMemoryGB: Double?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case requestsCompleted = "requests_completed"
+        case requestsFailed = "requests_failed"
+        case promptTokensTotal = "prompt_tokens_total"
+        case completionTokensTotal = "completion_tokens_total"
+        case generatedTokensTotal = "generated_tokens_total"
+        case avgDecodeTokensPerSecond = "avg_decode_tokens_per_second"
+        case avgRequestTokensPerSecond = "avg_request_tokens_per_second"
+        case avgTimeToFirstTokenMs = "avg_time_to_first_token_ms"
+        case peakMemoryGB = "peak_memory_gb"
+        case error
+    }
+}
+
+private struct ChatServerStatsToolExecutor {
+    func execute(call: MLXChatToolCall) throws -> String {
+        guard call.function?.name == ChatServerStatsToolRegistry.toolName else {
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        }
+
+        let summary = NativAnalyticsStore().fetchSummary()
+        let payload = ChatServerStatsToolResultPayload(
+            ok: true,
+            requestsCompleted: summary.requestsCompleted,
+            requestsFailed: summary.requestsFailed,
+            promptTokensTotal: summary.promptTokensTotal,
+            completionTokensTotal: summary.completionTokensTotal,
+            generatedTokensTotal: summary.generatedTokensTotal,
+            avgDecodeTokensPerSecond: rounded(summary.averageDecodeTokensPerSecond),
+            avgRequestTokensPerSecond: rounded(summary.averageRequestTokensPerSecond),
+            avgTimeToFirstTokenMs: rounded(summary.averageTTFTMilliseconds),
+            peakMemoryGB: summary.peakMemoryBytesMax.map(gigabytes),
+            error: nil
+        )
+        return try encodedPayload(payload)
+    }
+
+    func failurePayload(operation: String, error: Error) -> String {
+        let payload = ChatServerStatsToolResultPayload(
+            ok: false,
+            requestsCompleted: nil,
+            requestsFailed: nil,
+            promptTokensTotal: nil,
+            completionTokensTotal: nil,
+            generatedTokensTotal: nil,
+            avgDecodeTokensPerSecond: nil,
+            avgRequestTokensPerSecond: nil,
+            avgTimeToFirstTokenMs: nil,
+            peakMemoryGB: nil,
+            error: error.localizedDescription
+        )
+        return (try? encodedPayload(payload))
+            ?? #"{"ok":false,"error":"Server stats tool failed."}"#
+    }
+
+    private func rounded(_ value: Double?) -> Double? {
+        value.map { ($0 * 100).rounded() / 100 }
+    }
+
+    private func gigabytes(_ bytes: Int64) -> Double {
+        (Double(bytes) / 1_073_741_824 * 100).rounded() / 100
+    }
+
+    private func encodedPayload(_ payload: ChatServerStatsToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
+    }
+}
+
+private struct ChatToolExecutionContext {
+    let imageGenerationModelID: String?
+    let baseURL: URL
+    let apiKey: String?
+    let imageReferences: [ChatImageAttachment]
+    let modelSearchPath: String
+    let additionalModelSearchPaths: [String]
+}
+
+private struct ChatToolExecutionOutcome {
+    let content: String
+    let attachments: [ChatImageAttachment]
+}
+
+private enum ChatToolRegistry {
+    static func definitions(
+        context: ChatToolExecutionContext,
+        canEditImage: Bool
+    ) -> [MLXChatToolDefinition] {
+        var tools: [MLXChatToolDefinition] = []
+        if context.imageGenerationModelID?.isEmpty == false {
+            tools.append(contentsOf: ChatImageToolRegistry.definitions(canEdit: canEditImage))
+        }
+        tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
+        tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
+        tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
+        return tools
+    }
+}
+
+private enum ChatToolDispatcher {
+    static func execute(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        switch call.function?.name {
+        case "generate_image", "edit_image":
+            guard let imageModelID = context.imageGenerationModelID else {
+                throw ChatImageToolError.unsupportedTool(call.function?.name ?? "image")
+            }
+            let result = try await ChatImageToolExecutor().execute(
+                call: call,
+                modelID: imageModelID,
+                baseURL: context.baseURL,
+                apiKey: context.apiKey,
+                references: context.imageReferences
+            )
+            return ChatToolExecutionOutcome(content: result.content, attachments: result.attachments)
+        case ChatSystemMonitorToolRegistry.toolName:
+            let content = try await ChatSystemMonitorToolExecutor().execute(call: call)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        case ChatModelLibraryToolRegistry.toolName:
+            let content = try await ChatModelLibraryToolExecutor().execute(call: call, context: context)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        case ChatServerStatsToolRegistry.toolName:
+            let content = try ChatServerStatsToolExecutor().execute(call: call)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        default:
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        }
+    }
+
+    static func failurePayload(toolName: String?, error: Error) -> String {
+        switch toolName {
+        case "generate_image", "edit_image":
+            return ChatImageToolExecutor().failurePayload(operation: toolName ?? "image", error: error)
+        case ChatSystemMonitorToolRegistry.toolName:
+            return ChatSystemMonitorToolExecutor().failurePayload(
+                operation: toolName ?? ChatSystemMonitorToolRegistry.toolName,
+                error: error
+            )
+        case ChatModelLibraryToolRegistry.toolName:
+            return ChatModelLibraryToolExecutor().failurePayload(
+                operation: toolName ?? ChatModelLibraryToolRegistry.toolName,
+                error: error
+            )
+        case ChatServerStatsToolRegistry.toolName:
+            return ChatServerStatsToolExecutor().failurePayload(
+                operation: toolName ?? ChatServerStatsToolRegistry.toolName,
+                error: error
+            )
+        default:
+            return ChatImageToolExecutor().failurePayload(operation: toolName ?? "tool", error: error)
+        }
+    }
+}
+
 struct ChatView: View {
     private enum Layout {
         static let conversationMaxWidth: CGFloat = 680
@@ -877,27 +1244,27 @@ final class ChatViewModel: ObservableObject {
                         beforeOrAt: toolMessageID,
                         in: queuedRequest.sessionID
                     )
-                    guard let imageModelID = queuedRequest.settings.imageGenerationModelID else {
-                        throw ChatImageToolError.unsupportedTool(toolCall.function?.name ?? "image")
-                    }
-                    let result = try await ChatImageToolExecutor().execute(
-                        call: toolCall,
-                        modelID: imageModelID,
+                    let context = ChatToolExecutionContext(
+                        imageGenerationModelID: queuedRequest.settings.imageGenerationModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
                         apiKey: queuedRequest.settings.serverAPIKey,
-                        references: references
+                        imageReferences: references,
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths
                     )
+                    let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
                         status: .succeeded,
-                        content: result.content,
-                        attachments: result.attachments
+                        content: outcome.content,
+                        attachments: outcome.attachments
                     )
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
                     cancelToolMessages(
                         currentID: toolMessageID,
+                        currentCall: toolCall,
                         remainingCalls: Array(toolCalls.dropFirst(index + 1)),
                         after: insertionAnchor,
                         in: queuedRequest.sessionID
@@ -906,19 +1273,19 @@ final class ChatViewModel: ObservableObject {
                 } catch let error as URLError where error.code == .cancelled {
                     cancelToolMessages(
                         currentID: toolMessageID,
+                        currentCall: toolCall,
                         remainingCalls: Array(toolCalls.dropFirst(index + 1)),
                         after: insertionAnchor,
                         in: queuedRequest.sessionID
                     )
                     throw CancellationError()
                 } catch {
-                    let operation = toolCall.function?.name ?? "image"
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
                         status: .failed,
-                        content: ChatImageToolExecutor().failurePayload(
-                            operation: operation,
+                        content: ChatToolDispatcher.failurePayload(
+                            toolName: toolCall.function?.name,
                             error: error
                         ),
                         attachments: []
@@ -962,14 +1329,21 @@ final class ChatViewModel: ObservableObject {
         }
 
         let settings = queuedRequest.settings
-        let canUseImageTools = advertisesTools
-            && queuedRequest.languageModelSupportsTools
-            && settings.imageGenerationModelID?.isEmpty == false
-        let tools = canUseImageTools
-            ? ChatImageToolRegistry.definitions(
-                canEdit: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+        let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
+        let toolDefinitions = advertisesToolsForModel
+            ? ChatToolRegistry.definitions(
+                context: ChatToolExecutionContext(
+                    imageGenerationModelID: settings.imageGenerationModelID,
+                    baseURL: settings.serverBaseURL,
+                    apiKey: settings.serverAPIKey,
+                    imageReferences: [],
+                    modelSearchPath: settings.expandedModelSearchPath,
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths
+                ),
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
-            : nil
+            : []
+        let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -1035,7 +1409,8 @@ final class ChatViewModel: ObservableObject {
                 isStreaming: true,
                 toolCallID: call.id,
                 toolName: call.function?.name,
-                toolStatus: .running
+                toolStatus: .running,
+                toolArguments: call.function?.arguments
             ),
             after: messageID,
             in: sessionID
@@ -1116,17 +1491,20 @@ final class ChatViewModel: ObservableObject {
 
     private func cancelToolMessages(
         currentID: UUID,
+        currentCall: MLXChatToolCall,
         remainingCalls: [MLXChatToolCall],
         after anchorID: UUID,
         in sessionID: UUID
     ) {
         let cancellation = CancellationError()
-        let executor = ChatImageToolExecutor()
         updateToolMessage(
             currentID,
             in: sessionID,
             status: .cancelled,
-            content: executor.failurePayload(operation: "image", error: cancellation),
+            content: ChatToolDispatcher.failurePayload(
+                toolName: currentCall.function?.name,
+                error: cancellation
+            ),
             attachments: []
         )
 
@@ -1140,8 +1518,8 @@ final class ChatViewModel: ObservableObject {
                 id,
                 in: sessionID,
                 status: .cancelled,
-                content: executor.failurePayload(
-                    operation: call.function?.name ?? "image",
+                content: ChatToolDispatcher.failurePayload(
+                    toolName: call.function?.name,
                     error: cancellation
                 ),
                 attachments: []
@@ -1505,7 +1883,7 @@ private struct ChatMessageRow: View {
             }
 
             if message.role == .tool {
-                toolStatusView
+                ChatAgentStepCell(message: message)
             }
 
             VStack(alignment: contentStackAlignment, spacing: 6) {
@@ -1722,83 +2100,6 @@ private struct ChatMessageRow: View {
             && !message.content.isEmpty
     }
 
-    private var toolStatusView: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 7) {
-                if message.toolStatus == .running {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: toolStatusSymbol)
-                        .foregroundStyle(toolStatusColor)
-                }
-
-                Text(toolStatusTitle)
-                    .font(.callout.weight(.medium))
-                if message.toolStatus == .failed || message.toolStatus == .cancelled {
-                    Text(message.toolStatus == .cancelled ? "Cancelled" : "Failed")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if message.toolStatus == .failed, let toolErrorMessage {
-                Text(toolErrorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        }
-    }
-
-    private var toolStatusTitle: String {
-        let isEdit = message.toolName == "edit_image"
-        switch message.toolStatus {
-        case .running:
-            return isEdit ? "Editing image…" : "Generating image…"
-        case .succeeded:
-            return isEdit ? "Edited image" : "Generated image"
-        case .failed:
-            return isEdit ? "Image edit" : "Image generation"
-        case .cancelled:
-            return isEdit ? "Image edit" : "Image generation"
-        case nil:
-            return "Image tool"
-        }
-    }
-
-    private var toolStatusSymbol: String {
-        switch message.toolStatus {
-        case .succeeded:
-            return "photo"
-        case .failed:
-            return "exclamationmark.triangle.fill"
-        case .cancelled:
-            return "xmark.circle"
-        case .running, nil:
-            return "photo"
-        }
-    }
-
-    private var toolStatusColor: Color {
-        message.toolStatus == .failed ? .red : .secondary
-    }
-
-    private var toolErrorMessage: String? {
-        guard let data = message.content.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object["error"] as? String
-    }
-
     private func copyResponse() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -1813,6 +2114,252 @@ private struct ChatMessageRow: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 didCopyResponse = false
             }
+        }
+    }
+}
+
+private struct ChatAgentStepCell: View {
+    let message: ChatTranscriptMessage
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                header
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Hide call details" : "Show call details")
+
+            if isExpanded {
+                Divider()
+                    .padding(.top, 7)
+                details
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title), \(accessibilityStatus)")
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                if message.toolStatus == .running {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: symbolName)
+                        .foregroundStyle(tintColor)
+                }
+
+                Text(title)
+                    .font(.callout.weight(.medium))
+                if message.toolStatus == .failed || message.toolStatus == .cancelled {
+                    Text(message.toolStatus == .cancelled ? "Cancelled" : "Failed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            if message.toolStatus == .failed, let toolErrorMessage {
+                Text(toolErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .contentShape(.rect)
+    }
+
+    @ViewBuilder
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Arguments")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(formattedArguments)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if !message.content.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Result")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(message.content)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(6)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 7)
+    }
+
+    private var formattedArguments: String {
+        guard let toolArguments = message.toolArguments, !toolArguments.isEmpty else {
+            return "{}"
+        }
+        return toolArguments
+    }
+
+    private var title: String {
+        ChatToolPresentation.title(toolName: message.toolName, status: message.toolStatus)
+    }
+
+    private var symbolName: String {
+        ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
+    }
+
+    private var tintColor: Color {
+        message.toolStatus == .failed ? .red : .secondary
+    }
+
+    private var accessibilityStatus: String {
+        switch message.toolStatus {
+        case .running:
+            "running"
+        case .succeeded:
+            "succeeded"
+        case .failed:
+            "failed"
+        case .cancelled:
+            "cancelled"
+        case nil:
+            "unknown"
+        }
+    }
+
+    private var toolErrorMessage: String? {
+        guard let data = message.content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object["error"] as? String
+    }
+}
+
+private enum ChatToolPresentation {
+    static func title(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch toolName {
+        case "generate_image":
+            return imageTitle(isEdit: false, status: status)
+        case "edit_image":
+            return imageTitle(isEdit: true, status: status)
+        case ChatSystemMonitorToolRegistry.toolName:
+            return systemMonitorTitle(status: status)
+        case ChatModelLibraryToolRegistry.toolName:
+            return modelLibraryTitle(status: status)
+        case ChatServerStatsToolRegistry.toolName:
+            return serverStatsTitle(status: status)
+        default:
+            return genericTitle(toolName: toolName, status: status)
+        }
+    }
+
+    static func symbolName(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        case .cancelled:
+            return "xmark.circle"
+        case .succeeded, .running, nil:
+            switch toolName {
+            case "generate_image", "edit_image":
+                return "photo"
+            case ChatSystemMonitorToolRegistry.toolName:
+                return "cpu"
+            case ChatModelLibraryToolRegistry.toolName:
+                return "shippingbox"
+            case ChatServerStatsToolRegistry.toolName:
+                return "chart.line.uptrend.xyaxis"
+            default:
+                return "wrench.and.screwdriver"
+            }
+        }
+    }
+
+    private static func imageTitle(isEdit: Bool, status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .running:
+            return isEdit ? "Editing image…" : "Generating image…"
+        case .succeeded:
+            return isEdit ? "Edited image" : "Generated image"
+        case .failed, .cancelled:
+            return isEdit ? "Image edit" : "Image generation"
+        case nil:
+            return "Image tool"
+        }
+    }
+
+    private static func systemMonitorTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .running:
+            return "Checking system stats…"
+        case .succeeded:
+            return "Checked system stats"
+        case .failed, .cancelled:
+            return "System stats"
+        case nil:
+            return "System tool"
+        }
+    }
+
+    private static func modelLibraryTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .running:
+            return "Listing downloaded models…"
+        case .succeeded:
+            return "Listed downloaded models"
+        case .failed, .cancelled:
+            return "Model library"
+        case nil:
+            return "Model library tool"
+        }
+    }
+
+    private static func serverStatsTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .running:
+            return "Checking server stats…"
+        case .succeeded:
+            return "Checked server stats"
+        case .failed, .cancelled:
+            return "Server stats"
+        case nil:
+            return "Server stats tool"
+        }
+    }
+
+    private static func genericTitle(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
+        let name = toolName ?? "tool"
+        switch status {
+        case .running:
+            return "Running \(name)…"
+        case .succeeded:
+            return "Ran \(name)"
+        case .failed, .cancelled, nil:
+            return name
         }
     }
 }
