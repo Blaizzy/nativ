@@ -80,6 +80,7 @@ targets:
         ARCHS: arm64
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
+        CODE_SIGN_ENTITLEMENTS: Configuration/Nativ.entitlements
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/Nativ-Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
