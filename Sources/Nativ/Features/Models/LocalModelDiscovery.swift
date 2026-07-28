@@ -316,7 +316,7 @@ enum LocalModelDiscovery {
             }
 
             guard let snapshotURL = preferredSnapshotURL(for: repoURL, fileManager: fileManager),
-                  isLikelyMLXModelSnapshot(snapshotURL, fileManager: fileManager)
+                  isLikelyMLXModelSnapshot(snapshotURL, model: repoID, fileManager: fileManager)
             else {
                 return nil
             }
@@ -550,7 +550,7 @@ enum LocalModelDiscovery {
         return ref.isEmpty ? nil : ref
     }
 
-    private static func isLikelyMLXModelSnapshot(_ snapshotURL: URL, fileManager: FileManager) -> Bool {
+    private static func isLikelyMLXModelSnapshot(_ snapshotURL: URL, model: String = "", fileManager: FileManager) -> Bool {
         let configURL = snapshotURL.appendingPathComponent("config.json")
         let tokenizerConfigURL = snapshotURL.appendingPathComponent("tokenizer_config.json")
         let modelIndexURL = snapshotURL.appendingPathComponent("model_index.json")
@@ -580,7 +580,7 @@ enum LocalModelDiscovery {
         // backend manifest and its family-specific layout checks decide
         // whether such a snapshot is complete and loadable.
         return MLXImageModelResolver.shared.isSupportedImageModel(
-            model: "",
+            model: model,
             at: snapshotURL,
             fileManager: fileManager
         )
