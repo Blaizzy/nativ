@@ -115,7 +115,12 @@ private struct NativApplication: App {
                 .keyboardShortcut("n")
             }
 
-            SidebarCommands()
+            CommandGroup(replacing: .sidebar) {
+                Button("Toggle Sidebar") {
+                    appDelegate.toggleSidebar()
+                }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+            }
 
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
