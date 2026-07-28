@@ -575,10 +575,10 @@ struct NativSettings: Codable, Equatable {
         let settings = normalized()
         do {
             try credentialStore.save(settings.serverAPIKey)
-            try settings.writePropertyList(to: url)
         } catch {
             // Do not replace the last recoverable credential on failure.
         }
+        try? settings.writePropertyList(to: url)
     }
 
     private func writePropertyList(to url: URL) throws {
