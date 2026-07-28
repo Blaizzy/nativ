@@ -115,6 +115,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case succeeded
         case failed
         case cancelled
+        case awaitingConsent
+        case declined
     }
 
     let id: UUID
@@ -132,6 +134,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var toolCallID: String?
     var toolName: String?
     var toolStatus: ToolStatus?
+    var toolArguments: String?
 
     init(
         id: UUID = UUID(),
@@ -148,7 +151,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolCalls: [MLXChatToolCall] = [],
         toolCallID: String? = nil,
         toolName: String? = nil,
-        toolStatus: ToolStatus? = nil
+        toolStatus: ToolStatus? = nil,
+        toolArguments: String? = nil
     ) {
         self.id = id
         self.role = role
@@ -165,6 +169,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         self.toolCallID = toolCallID
         self.toolName = toolName
         self.toolStatus = toolStatus
+        self.toolArguments = toolArguments
     }
 
     enum CodingKeys: String, CodingKey {
@@ -183,6 +188,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case toolCallID
         case toolName
         case toolStatus
+        case toolArguments
     }
 
     init(from decoder: Decoder) throws {
@@ -202,6 +208,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
+        toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
 
         if role == .error,
            content == NativChatError.missingAssistantContent.localizedDescription,
@@ -228,6 +235,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
+        try container.encodeIfPresent(toolArguments, forKey: .toolArguments)
     }
 
     var apiMessage: MLXChatMessage? {
@@ -512,5 +520,11 @@ struct ChatSessionStore {
 
     private var legacyTranscriptURL: URL {
         chatDirectory.appendingPathComponent("current.json")
+    }
+}
+
+enum ChatSessionLoadPolicy {
+    static func shouldNormalizeOnApply(sessionID: UUID, activeRequestSessionID: UUID?) -> Bool {
+        sessionID != activeRequestSessionID
     }
 }

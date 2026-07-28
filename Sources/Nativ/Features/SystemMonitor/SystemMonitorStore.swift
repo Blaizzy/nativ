@@ -189,6 +189,10 @@ final class SystemMonitorStore: ObservableObject {
         }
     }
 
+    func collectSnapshot() async -> SystemMonitorSnapshot {
+        await collector.collect()
+    }
+
     private func apply(_ nextSnapshot: SystemMonitorSnapshot) {
         snapshot = nextSnapshot
         append(nextSnapshot.cpu.totalUsage, at: nextSnapshot.recordedAt, to: &cpuHistory)

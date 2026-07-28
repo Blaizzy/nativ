@@ -12,214 +12,6 @@ struct ChatQueuedPrompt: Identifiable, Equatable {
     let position: Int
 }
 
-private enum ChatImageToolRegistry {
-    static func definitions(canEdit: Bool) -> [MLXChatToolDefinition] {
-        var tools = [tool(
-            name: "generate_image",
-            description: "Create one or more new images from a detailed text prompt."
-        )]
-        if canEdit {
-            tools.append(tool(
-                name: "edit_image",
-                description: "Edit the most recently attached or generated image using a text instruction."
-            ))
-        }
-        return tools
-    }
-
-    private static func tool(name: String, description: String) -> MLXChatToolDefinition {
-        MLXChatToolDefinition(function: MLXChatFunctionDefinition(
-            name: name,
-            description: description,
-            parameters: .object([
-                "type": .string("object"),
-                "additionalProperties": .bool(false),
-                "properties": .object([
-                    "prompt": .object([
-                        "type": .string("string"),
-                        "description": .string("A specific visual description or edit instruction.")
-                    ]),
-                    "width": .object([
-                        "type": .string("integer"),
-                        "minimum": .number(64),
-                        "maximum": .number(2048)
-                    ]),
-                    "height": .object([
-                        "type": .string("integer"),
-                        "minimum": .number(64),
-                        "maximum": .number(2048)
-                    ]),
-                    "count": .object([
-                        "type": .string("integer"),
-                        "minimum": .number(1),
-                        "maximum": .number(4)
-                    ]),
-                    "seed": .object([
-                        "type": .array([.string("integer"), .string("null")])
-                    ])
-                ]),
-                "required": .array([.string("prompt")])
-            ])
-        ))
-    }
-}
-
-private struct ChatImageToolArguments: Decodable {
-    let prompt: String
-    let width: Int?
-    let height: Int?
-    let count: Int?
-    let seed: Int?
-}
-
-private struct ChatImageToolResultPayload: Encodable {
-    struct Image: Encodable {
-        let attachmentID: String
-        let width: Int
-        let height: Int
-        let seed: Int
-
-        enum CodingKeys: String, CodingKey {
-            case attachmentID = "attachment_id"
-            case width
-            case height
-            case seed
-        }
-    }
-
-    let ok: Bool
-    let operation: String
-    let images: [Image]?
-    let error: String?
-}
-
-private struct ChatImageToolExecution {
-    let content: String
-    let attachments: [ChatImageAttachment]
-}
-
-private enum ChatImageToolError: LocalizedError {
-    case unsupportedTool(String)
-    case invalidArguments
-    case emptyPrompt
-    case missingReference
-
-    var errorDescription: String? {
-        switch self {
-        case .unsupportedTool(let name):
-            "Unsupported image tool: \(name)"
-        case .invalidArguments:
-            "The image tool arguments were not valid JSON."
-        case .emptyPrompt:
-            "The image prompt cannot be empty."
-        case .missingReference:
-            "No earlier image is available to edit."
-        }
-    }
-}
-
-private struct ChatImageToolExecutor {
-    func execute(
-        call: MLXChatToolCall,
-        modelID: String,
-        baseURL: URL,
-        apiKey: String?,
-        references: [ChatImageAttachment]
-    ) async throws -> ChatImageToolExecution {
-        guard let name = call.function?.name else {
-            throw ChatImageToolError.unsupportedTool("unknown")
-        }
-        guard name == "generate_image" || name == "edit_image" else {
-            throw ChatImageToolError.unsupportedTool(name)
-        }
-        guard let arguments = call.function?.arguments?.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(ChatImageToolArguments.self, from: arguments)
-        else {
-            throw ChatImageToolError.invalidArguments
-        }
-
-        let prompt = decoded.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else {
-            throw ChatImageToolError.emptyPrompt
-        }
-        if name == "edit_image", references.isEmpty {
-            throw ChatImageToolError.missingReference
-        }
-
-        let sourceSize = name == "edit_image" ? imageSize(for: references.first) : nil
-        let settings = ImageRequestSettings(
-            count: min(max(decoded.count ?? 1, 1), 4),
-            width: boundedDimension(decoded.width ?? sourceSize?.width ?? 512),
-            height: boundedDimension(decoded.height ?? sourceSize?.height ?? 512),
-            steps: 4,
-            guidance: 1,
-            seedText: decoded.seed.map(String.init) ?? ""
-        )
-        let outputs = try await ImageGenerationExecutor().run(
-            baseURL: baseURL,
-            apiKey: apiKey,
-            modelID: modelID,
-            prompt: prompt,
-            references: name == "edit_image" ? references : [],
-            settings: settings,
-            seed: decoded.seed
-        )
-        let attachments = outputs.map(\.attachment)
-        let payload = ChatImageToolResultPayload(
-            ok: true,
-            operation: name == "edit_image" ? "edit" : "generate",
-            images: outputs.map {
-                ChatImageToolResultPayload.Image(
-                    attachmentID: $0.id.uuidString,
-                    width: $0.width,
-                    height: $0.height,
-                    seed: $0.seed
-                )
-            },
-            error: nil
-        )
-        return ChatImageToolExecution(
-            content: try encodedPayload(payload),
-            attachments: attachments
-        )
-    }
-
-    func failurePayload(operation: String, error: Error) -> String {
-        let payload = ChatImageToolResultPayload(
-            ok: false,
-            operation: operation,
-            images: nil,
-            error: error.localizedDescription
-        )
-        return (try? encodedPayload(payload))
-            ?? #"{"ok":false,"error":"Image tool failed."}"#
-    }
-
-    private func boundedDimension(_ value: Int) -> Int {
-        min(max((value / 16) * 16, 64), 2_048)
-    }
-
-    private func imageSize(for attachment: ChatImageAttachment?) -> ImageGenerationPixelSize? {
-        guard let data = attachment?.imageData,
-              let image = NSImage(data: data),
-              image.size.width > 0,
-              image.size.height > 0
-        else {
-            return nil
-        }
-        return ImageGenerationPixelSize(
-            width: Int(image.size.width.rounded()),
-            height: Int(image.size.height.rounded())
-        )
-    }
-
-    private func encodedPayload(_ payload: ChatImageToolResultPayload) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return String(decoding: try encoder.encode(payload), as: UTF8.self)
-    }
-}
-
 struct ChatView: View {
     private enum Layout {
         static let conversationMaxWidth: CGFloat = 680
@@ -318,8 +110,12 @@ struct ChatView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
-                        ChatMessageRow(message: message)
-                            .id(message.id)
+                        ChatMessageRow(
+                            message: message,
+                            onConfirmToolConsent: chat.confirmToolConsent,
+                            onDenyToolConsent: chat.denyToolConsent
+                        )
+                        .id(message.id)
                     }
                 }
             }
@@ -409,6 +205,7 @@ final class ChatViewModel: ObservableObject {
     private var streamFlushDates: [UUID: Date] = [:]
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
+    private let toolConsentGate = ChatToolConsentGate()
 
     init() {
         storedSessions = sessionStore.loadSessions()
@@ -647,6 +444,18 @@ final class ChatViewModel: ObservableObject {
         startNextRequestIfNeeded()
     }
 
+    func confirmToolConsent(_ toolMessageID: UUID) {
+        toolConsentGate.confirm(toolMessageID)
+    }
+
+    func denyToolConsent(_ toolMessageID: UUID) {
+        toolConsentGate.deny(toolMessageID)
+    }
+
+    private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
+        await toolConsentGate.awaitDecision(for: toolMessageID)
+    }
+
     func cancel() {
         activeTask?.cancel()
     }
@@ -821,15 +630,16 @@ final class ChatViewModel: ObservableObject {
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
-        let maximumToolRounds = 4
+        var activeSettings = queuedRequest.settings
 
         while true {
             try Task.checkCancellation()
-            let advertisesTools = toolRounds < maximumToolRounds
+            let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
             guard let request = makeCompletionRequest(
                 for: queuedRequest,
                 before: assistantMessageID,
-                advertisesTools: advertisesTools
+                advertisesTools: advertisesTools,
+                settings: activeSettings
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -872,32 +682,108 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
+                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatSwitchModelToolExecutor().declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                    guard let appModel else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatSwitchModelToolExecutor().failurePayload(
+                                operation: ChatSwitchModelToolRegistry.toolName,
+                                error: ChatSwitchModelToolError.appModelUnavailable
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    do {
+                        let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
+                        activeSettings.languageModelID = appModel.settings.normalized().languageModelID
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: content,
+                            attachments: []
+                        )
+                        appModel.refreshMetricsIfRunning(force: true)
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatSwitchModelToolExecutor().failurePayload(
+                                operation: ChatSwitchModelToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
+
                 do {
                     let references = latestImageReferences(
                         beforeOrAt: toolMessageID,
                         in: queuedRequest.sessionID
                     )
-                    guard let imageModelID = queuedRequest.settings.imageGenerationModelID else {
-                        throw ChatImageToolError.unsupportedTool(toolCall.function?.name ?? "image")
-                    }
-                    let result = try await ChatImageToolExecutor().execute(
-                        call: toolCall,
-                        modelID: imageModelID,
+                    let context = ChatToolExecutionContext(
+                        imageGenerationModelID: queuedRequest.settings.imageGenerationModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
                         apiKey: queuedRequest.settings.serverAPIKey,
-                        references: references
+                        imageReferences: references,
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths
                     )
+                    let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
                         status: .succeeded,
-                        content: result.content,
-                        attachments: result.attachments
+                        content: outcome.content,
+                        attachments: outcome.attachments
                     )
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
                     cancelToolMessages(
                         currentID: toolMessageID,
+                        currentCall: toolCall,
                         remainingCalls: Array(toolCalls.dropFirst(index + 1)),
                         after: insertionAnchor,
                         in: queuedRequest.sessionID
@@ -906,19 +792,19 @@ final class ChatViewModel: ObservableObject {
                 } catch let error as URLError where error.code == .cancelled {
                     cancelToolMessages(
                         currentID: toolMessageID,
+                        currentCall: toolCall,
                         remainingCalls: Array(toolCalls.dropFirst(index + 1)),
                         after: insertionAnchor,
                         in: queuedRequest.sessionID
                     )
                     throw CancellationError()
                 } catch {
-                    let operation = toolCall.function?.name ?? "image"
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
                         status: .failed,
-                        content: ChatImageToolExecutor().failurePayload(
-                            operation: operation,
+                        content: ChatToolDispatcher.failurePayload(
+                            toolName: toolCall.function?.name,
                             error: error
                         ),
                         attachments: []
@@ -933,7 +819,7 @@ final class ChatViewModel: ObservableObject {
                 id: assistantMessageID,
                 after: insertionAnchor,
                 in: queuedRequest.sessionID,
-                settings: queuedRequest.settings
+                settings: activeSettings
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -943,9 +829,10 @@ final class ChatViewModel: ObservableObject {
     private func makeCompletionRequest(
         for queuedRequest: QueuedChatRequest,
         before assistantMessageID: UUID,
-        advertisesTools: Bool
+        advertisesTools: Bool,
+        settings: NativSettings
     ) -> MLXChatCompletionRequest? {
-        guard let modelID = queuedRequest.settings.languageModelID,
+        guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
               let assistantIndex = sessionMessages.firstIndex(where: { $0.id == assistantMessageID })
         else {
@@ -954,22 +841,28 @@ final class ChatViewModel: ObservableObject {
 
         let precedingMessages = sessionMessages[..<assistantIndex]
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !queuedRequest.settings.systemPrompt.isEmpty {
+        if !settings.systemPrompt.isEmpty {
             requestMessages.insert(
-                MLXChatMessage(role: "system", content: queuedRequest.settings.systemPrompt),
+                MLXChatMessage(role: "system", content: settings.systemPrompt),
                 at: 0
             )
         }
 
-        let settings = queuedRequest.settings
-        let canUseImageTools = advertisesTools
-            && queuedRequest.languageModelSupportsTools
-            && settings.imageGenerationModelID?.isEmpty == false
-        let tools = canUseImageTools
-            ? ChatImageToolRegistry.definitions(
-                canEdit: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+        let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
+        let toolDefinitions = advertisesToolsForModel
+            ? ChatToolRegistry.definitions(
+                context: ChatToolExecutionContext(
+                    imageGenerationModelID: settings.imageGenerationModelID,
+                    baseURL: settings.serverBaseURL,
+                    apiKey: settings.serverAPIKey,
+                    imageReferences: [],
+                    modelSearchPath: settings.expandedModelSearchPath,
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths
+                ),
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
-            : nil
+            : []
+        let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -1035,7 +928,8 @@ final class ChatViewModel: ObservableObject {
                 isStreaming: true,
                 toolCallID: call.id,
                 toolName: call.function?.name,
-                toolStatus: .running
+                toolStatus: .running,
+                toolArguments: call.function?.arguments
             ),
             after: messageID,
             in: sessionID
@@ -1116,17 +1010,20 @@ final class ChatViewModel: ObservableObject {
 
     private func cancelToolMessages(
         currentID: UUID,
+        currentCall: MLXChatToolCall,
         remainingCalls: [MLXChatToolCall],
         after anchorID: UUID,
         in sessionID: UUID
     ) {
         let cancellation = CancellationError()
-        let executor = ChatImageToolExecutor()
         updateToolMessage(
             currentID,
             in: sessionID,
             status: .cancelled,
-            content: executor.failurePayload(operation: "image", error: cancellation),
+            content: ChatToolDispatcher.failurePayload(
+                toolName: currentCall.function?.name,
+                error: cancellation
+            ),
             attachments: []
         )
 
@@ -1140,8 +1037,8 @@ final class ChatViewModel: ObservableObject {
                 id,
                 in: sessionID,
                 status: .cancelled,
-                content: executor.failurePayload(
-                    operation: call.function?.name ?? "image",
+                content: ChatToolDispatcher.failurePayload(
+                    toolName: call.function?.name,
                     error: cancellation
                 ),
                 attachments: []
@@ -1391,9 +1288,27 @@ final class ChatViewModel: ObservableObject {
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
-        messages = session.messages
+        messages = ChatSessionLoadPolicy.shouldNormalizeOnApply(
+            sessionID: session.id,
+            activeRequestSessionID: activeRequestSessionID
+        ) ? normalizedForLoad(session.messages) : session.messages
         refreshSessionList()
         bumpScroll()
+    }
+
+    private func normalizedForLoad(_ messages: [ChatTranscriptMessage]) -> [ChatTranscriptMessage] {
+        messages.map { message in
+            var message = message
+            if message.toolStatus == .awaitingConsent || message.toolStatus == .running {
+                message.toolStatus = .cancelled
+                message.content = ChatToolDispatcher.failurePayload(
+                    toolName: message.toolName,
+                    error: CancellationError()
+                )
+                message.isStreaming = false
+            }
+            return message
+        }
     }
 
     private func persistCurrentSession(updateTimestamp: Bool) {
@@ -1493,6 +1408,8 @@ private struct ChatMessageRow: View {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
+    let onConfirmToolConsent: (UUID) -> Void
+    let onDenyToolConsent: (UUID) -> Void
     @State private var didCopyResponse = false
     @State private var isHoveringMessage = false
 
@@ -1505,7 +1422,11 @@ private struct ChatMessageRow: View {
             }
 
             if message.role == .tool {
-                toolStatusView
+                ChatAgentStepCell(
+                    message: message,
+                    onConfirm: onConfirmToolConsent,
+                    onDeny: onDenyToolConsent
+                )
             }
 
             VStack(alignment: contentStackAlignment, spacing: 6) {
@@ -1722,83 +1643,6 @@ private struct ChatMessageRow: View {
             && !message.content.isEmpty
     }
 
-    private var toolStatusView: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 7) {
-                if message.toolStatus == .running {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: toolStatusSymbol)
-                        .foregroundStyle(toolStatusColor)
-                }
-
-                Text(toolStatusTitle)
-                    .font(.callout.weight(.medium))
-                if message.toolStatus == .failed || message.toolStatus == .cancelled {
-                    Text(message.toolStatus == .cancelled ? "Cancelled" : "Failed")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if message.toolStatus == .failed, let toolErrorMessage {
-                Text(toolErrorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        }
-    }
-
-    private var toolStatusTitle: String {
-        let isEdit = message.toolName == "edit_image"
-        switch message.toolStatus {
-        case .running:
-            return isEdit ? "Editing image…" : "Generating image…"
-        case .succeeded:
-            return isEdit ? "Edited image" : "Generated image"
-        case .failed:
-            return isEdit ? "Image edit" : "Image generation"
-        case .cancelled:
-            return isEdit ? "Image edit" : "Image generation"
-        case nil:
-            return "Image tool"
-        }
-    }
-
-    private var toolStatusSymbol: String {
-        switch message.toolStatus {
-        case .succeeded:
-            return "photo"
-        case .failed:
-            return "exclamationmark.triangle.fill"
-        case .cancelled:
-            return "xmark.circle"
-        case .running, nil:
-            return "photo"
-        }
-    }
-
-    private var toolStatusColor: Color {
-        message.toolStatus == .failed ? .red : .secondary
-    }
-
-    private var toolErrorMessage: String? {
-        guard let data = message.content.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object["error"] as? String
-    }
-
     private func copyResponse() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -1814,6 +1658,211 @@ private struct ChatMessageRow: View {
                 didCopyResponse = false
             }
         }
+    }
+}
+
+private struct ChatAgentStepCell: View {
+    let message: ChatTranscriptMessage
+    let onConfirm: (UUID) -> Void
+    let onDeny: (UUID) -> Void
+    @State private var isExpanded = false
+
+    private var isAwaitingConsent: Bool {
+        message.toolStatus == .awaitingConsent
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                header
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Hide call details" : "Show call details")
+            .disabled(isAwaitingConsent)
+
+            if isAwaitingConsent {
+                Divider()
+                    .padding(.top, 7)
+                consentPrompt
+            } else if isExpanded {
+                Divider()
+                    .padding(.top, 7)
+                details
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title), \(accessibilityStatus)")
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                if message.toolStatus == .running {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: symbolName)
+                        .foregroundStyle(tintColor)
+                }
+
+                Text(title)
+                    .font(.callout.weight(.medium))
+                if let statusCaption {
+                    Text(statusCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                if !isAwaitingConsent {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+            }
+            if message.toolStatus == .failed, let toolErrorMessage {
+                Text(toolErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .contentShape(.rect)
+    }
+
+    private var statusCaption: String? {
+        switch message.toolStatus {
+        case .cancelled:
+            "Cancelled"
+        case .failed:
+            "Failed"
+        case .declined:
+            "Declined"
+        case .running, .succeeded, .awaitingConsent, nil:
+            nil
+        }
+    }
+
+    private var consentPrompt: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            (Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept."))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Deny") {
+                    onDeny(message.id)
+                }
+                .buttonStyle(.bordered)
+
+                Button("Confirm") {
+                    onConfirm(message.id)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 7)
+    }
+
+    private var requestedModelID: String {
+        guard let data = message.toolArguments?.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelID = object["model_id"] as? String
+        else {
+            return "a different model"
+        }
+        return modelID
+    }
+
+    @ViewBuilder
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Arguments")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(formattedArguments)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if !message.content.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Result")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(message.content)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(6)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 7)
+    }
+
+    private var formattedArguments: String {
+        guard let toolArguments = message.toolArguments, !toolArguments.isEmpty else {
+            return "{}"
+        }
+        return toolArguments
+    }
+
+    private var title: String {
+        ChatToolPresentation.title(toolName: message.toolName, status: message.toolStatus)
+    }
+
+    private var symbolName: String {
+        ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
+    }
+
+    private var tintColor: Color {
+        message.toolStatus == .failed ? .red : .secondary
+    }
+
+    private var accessibilityStatus: String {
+        switch message.toolStatus {
+        case .running:
+            "running"
+        case .succeeded:
+            "succeeded"
+        case .failed:
+            "failed"
+        case .cancelled:
+            "cancelled"
+        case .awaitingConsent:
+            "awaiting your confirmation"
+        case .declined:
+            "declined"
+        case nil:
+            "unknown"
+        }
+    }
+
+    private var toolErrorMessage: String? {
+        guard let data = message.content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object["error"] as? String
     }
 }
 
