@@ -31,6 +31,9 @@ final class VoiceCaptureCoordinator {
         shortcutMonitor.onChange = { [weak self] isHeld in
             self?.handleShortcutChange(isHeld)
         }
+        shortcutMonitor.onRetry = { [weak self] in
+            self?.retryLastTranscription()
+        }
         recorder.onMeterUpdate = { [weak self] level, elapsed in
             self?.overlay.update(level: level, elapsed: elapsed)
         }
@@ -113,6 +116,26 @@ final class VoiceCaptureCoordinator {
         overlay.hide()
     }
 
+    private func retryLastTranscription() {
+        guard !recorder.isRecording else {
+            return
+        }
+        guard let directory = try? VoiceAudioRecorder.recordingsDirectory else {
+            showRecentRecordingUnavailable()
+            return
+        }
+
+        VoiceAudioRetention.removeExpiredAudioFiles(in: directory)
+        guard let recordingURL = VoiceAudioRetention.latestAudioFile(in: directory) else {
+            showRecentRecordingUnavailable()
+            return
+        }
+
+        let target = VoiceTranscriptInserter.captureTarget()
+        NSLog("Nativ retrying voice transcription from %@", recordingURL.path)
+        transcribe(recordingURL, target: target)
+    }
+
     private func scheduleExistingAudioDeletion() {
         guard let directory = try? VoiceAudioRecorder.recordingsDirectory else {
             return
@@ -152,6 +175,14 @@ final class VoiceCaptureCoordinator {
         _ recordingURL: URL,
         target: VoiceTranscriptInsertionTarget?
     ) {
+        let audioData: Data
+        do {
+            audioData = try Data(contentsOf: recordingURL)
+        } catch {
+            showRecentRecordingUnavailable()
+            return
+        }
+
         let taskID = UUID()
         let task = Task { [weak self] in
             guard let self else {
@@ -205,7 +236,8 @@ final class VoiceCaptureCoordinator {
                     apiKey: requestConfiguration.serverAPIKey
                 )
                 let result = try await client.transcribe(
-                    fileURL: recordingURL,
+                    audioData: audioData,
+                    fileName: recordingURL.lastPathComponent,
                     model: modelID
                 )
                 guard !Task.isCancelled else {
@@ -244,6 +276,16 @@ final class VoiceCaptureCoordinator {
             }
         }
         transcriptionTasks[taskID] = task
+    }
+
+    private func showRecentRecordingUnavailable() {
+        showTranscriptionError(
+            title: "No Recent Recording",
+            message: """
+            Audio is available for five minutes after recording. Hold Fn + Control \
+            to record again, then press Fn + R before the audio expires.
+            """
+        )
     }
 
     private func showMissingSpeechModelAlert() {

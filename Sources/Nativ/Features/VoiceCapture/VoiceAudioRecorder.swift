@@ -52,6 +52,15 @@ enum VoiceAudioRetention {
         return max(0, recordedAt.addingTimeInterval(duration).timeIntervalSince(now))
     }
 
+    static func latestAudioFile(
+        in directory: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        audioFiles(in: directory, fileManager: fileManager).max { lhs, rhs in
+            recordingDate(for: lhs) < recordingDate(for: rhs)
+        }
+    }
+
     @discardableResult
     static func removeAudioFile(
         at audioURL: URL,
@@ -96,6 +105,13 @@ enum VoiceAudioRetention {
         for audioURL in audioFiles(in: directory, fileManager: fileManager) {
             removeAudioFile(at: audioURL, fileManager: fileManager)
         }
+    }
+
+    private static func recordingDate(for audioURL: URL) -> Date {
+        let values = try? audioURL.resourceValues(
+            forKeys: [.contentModificationDateKey, .creationDateKey]
+        )
+        return values?.contentModificationDate ?? values?.creationDate ?? .distantPast
     }
 }
 
