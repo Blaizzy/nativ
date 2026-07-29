@@ -28,12 +28,16 @@ final class NativSettingsTests: XCTestCase {
                 "org/stt"
             )
         )
-        XCTAssertTrue(
-            settings.launchArguments.containsAdjacent(
-                "--embedding-model",
-                "org/embed"
+        if NativSettings.serverSupportsEmbeddingModelArgument {
+            XCTAssertTrue(
+                settings.launchArguments.containsAdjacent(
+                    "--embedding-model",
+                    "org/embed"
+                )
             )
-        )
+        } else {
+            XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
+        }
     }
 
     func testEmptyPreloadSelectionsAreOmitted() {

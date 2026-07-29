@@ -279,6 +279,8 @@ struct NativSettings: Codable, Equatable {
 
     static let defaultServerHost = "127.0.0.1"
 
+    static let serverSupportsEmbeddingModelArgument = false
+
     var modelSearchPath: String
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
@@ -726,7 +728,7 @@ struct NativSettings: Codable, Equatable {
         if let speechToTextModelID = settings.speechToTextModelID {
             arguments.append(contentsOf: ["--stt-model", speechToTextModelID])
         }
-        if let embeddingModelID = settings.embeddingModelID {
+        if Self.serverSupportsEmbeddingModelArgument, let embeddingModelID = settings.embeddingModelID {
             arguments.append(contentsOf: ["--embedding-model", embeddingModelID])
         }
 
