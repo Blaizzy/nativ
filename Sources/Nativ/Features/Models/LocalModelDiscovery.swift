@@ -1040,8 +1040,22 @@ enum LocalModelDiscovery {
             capabilities.insert(.textToSpeech)
         }
 
-        if fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
-            || descriptors.contains("embedding") {
+        let embeddingModelType = ((config["model_type"] as? String) ?? "")
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+        let textEmbeddingModelTypes: Set<String> = [
+            "bert", "modernbert", "xlm_roberta", "roberta",
+            "qwen3", "gemma3_text", "lfm2", "llama_bidirec"
+        ]
+        let hasSentenceTransformerLayout =
+            fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
+            || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("1_Pooling/config.json").path)
+            || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("sentence_bert_config.json").path)
+        if !generativeArchitectures.contains(where: descriptors.contains)
+            && !capabilities.contains(.vision)
+            && (hasSentenceTransformerLayout
+                || textEmbeddingModelTypes.contains(embeddingModelType)
+                || descriptors.contains("embedding")) {
             capabilities.insert(.embeddings)
         }
 
