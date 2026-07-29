@@ -787,10 +787,6 @@ private struct VoiceCaptureOverlayView: View {
                 Capsule()
                     .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
             }
-            .scaleEffect(
-                x: 1 - (finishProgress * 0.76),
-                y: 1 - (finishProgress * 0.08)
-            )
             .opacity(1 - finishProgress)
         }
         .padding(.vertical, 3)
