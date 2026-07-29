@@ -21,6 +21,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
     case language = "Language"
     case image = "Image"
     case speech = "Speech"
+    case embeddings = "Embeddings"
 
     var id: String { rawValue }
 
@@ -34,6 +35,8 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
             !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing])
         case .speech:
             !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
+        case .embeddings:
+            capabilities.contains(.embeddings)
         }
     }
 
@@ -441,6 +444,9 @@ struct ModelsView: View {
         if localModel.capabilities.contains(.speechToText) {
             slots.append(.speechToText)
         }
+        if localModel.capabilities.contains(.embeddings) {
+            slots.append(.embeddings)
+        }
         return slots
     }
 
@@ -467,6 +473,8 @@ struct ModelsView: View {
                 .imageGeneration
             case .speech:
                 nil
+            case .embeddings:
+                .embeddings
             }
         if let preferredSlot, slots.contains(preferredSlot) {
             return preferredSlot
