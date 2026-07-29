@@ -84,6 +84,11 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
         keyDisplay: "R",
         modifiers: [.function]
     )
+    static let handsFreeDefault = VoiceShortcut(
+        keyCode: nil,
+        keyDisplay: nil,
+        modifiers: [.option]
+    )
 
     var displayName: String {
         let parts = modifiers.displayParts + (keyDisplay.map { [$0] } ?? [])
@@ -147,10 +152,14 @@ final class VoiceShortcutPreferences: ObservableObject {
     @Published var retryShortcut: VoiceShortcut {
         didSet { preferencesDidChange() }
     }
+    @Published var handsFreeShortcut: VoiceShortcut {
+        didSet { preferencesDidChange() }
+    }
 
     private struct Payload: Codable {
         let recordShortcut: VoiceShortcut
         let retryShortcut: VoiceShortcut
+        let handsFreeShortcut: VoiceShortcut?
     }
 
     private let defaults: UserDefaults
@@ -169,9 +178,13 @@ final class VoiceShortcutPreferences: ObservableObject {
         {
             recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
+            handsFreeShortcut = payload.handsFreeShortcut.flatMap {
+                $0.isValid ? $0 : nil
+            } ?? .handsFreeDefault
         } else {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault
+            handsFreeShortcut = .handsFreeDefault
         }
     }
 
@@ -183,10 +196,15 @@ final class VoiceShortcutPreferences: ObservableObject {
         retryShortcut = .retryDefault
     }
 
+    func resetHandsFreeShortcut() {
+        handsFreeShortcut = .handsFreeDefault
+    }
+
     private func preferencesDidChange() {
         let payload = Payload(
             recordShortcut: recordShortcut,
-            retryShortcut: retryShortcut
+            retryShortcut: retryShortcut,
+            handsFreeShortcut: handsFreeShortcut
         )
         if let data = try? JSONEncoder().encode(payload) {
             defaults.set(data, forKey: storageKey)

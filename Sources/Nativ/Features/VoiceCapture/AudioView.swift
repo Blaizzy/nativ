@@ -599,6 +599,12 @@ struct AudioView: View {
                     kind: .record
                 )
                 shortcutRow(
+                    title: "Hands-free toggle",
+                    subtitle: "Press once to start; press again to transcribe.",
+                    shortcut: shortcuts.handsFreeShortcut,
+                    kind: .handsFree
+                )
+                shortcutRow(
                     title: "Retry recent audio",
                     shortcut: shortcuts.retryShortcut,
                     kind: .retry
@@ -662,6 +668,7 @@ struct AudioView: View {
 
     private func shortcutRow(
         title: String,
+        subtitle: String? = nil,
         shortcut: VoiceShortcut,
         kind: AudioShortcutKind
     ) -> some View {
@@ -670,6 +677,12 @@ struct AudioView: View {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
                 Text(shortcut.displayName)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
@@ -687,6 +700,8 @@ struct AudioView: View {
                     switch kind {
                     case .record:
                         shortcuts.resetRecordShortcut()
+                    case .handsFree:
+                        shortcuts.resetHandsFreeShortcut()
                     case .retry:
                         shortcuts.resetRetryShortcut()
                     }
@@ -802,17 +817,24 @@ struct AudioView: View {
     }
 
     private func apply(_ shortcut: VoiceShortcut, to kind: AudioShortcutKind) {
-        let otherShortcut =
-            kind == .record ? shortcuts.retryShortcut : shortcuts.recordShortcut
-        guard shortcut != otherShortcut else {
+        let assignments: [(AudioShortcutKind, VoiceShortcut)] = [
+            (.record, shortcuts.recordShortcut),
+            (.handsFree, shortcuts.handsFreeShortcut),
+            (.retry, shortcuts.retryShortcut),
+        ]
+        guard !assignments.contains(where: {
+            $0.0 != kind && $0.1 == shortcut
+        }) else {
             NSSound.beep()
-            shortcutConflict = "That shortcut is already assigned to the other action."
+            shortcutConflict = "That shortcut is already assigned to another action."
             return
         }
 
         switch kind {
         case .record:
             shortcuts.recordShortcut = shortcut
+        case .handsFree:
+            shortcuts.handsFreeShortcut = shortcut
         case .retry:
             shortcuts.retryShortcut = shortcut
         }
@@ -823,6 +845,7 @@ struct AudioView: View {
 
 private enum AudioShortcutKind: String, Identifiable {
     case record
+    case handsFree
     case retry
 
     var id: String { rawValue }
@@ -830,6 +853,7 @@ private enum AudioShortcutKind: String, Identifiable {
     var title: String {
         switch self {
         case .record: "Record shortcut"
+        case .handsFree: "Hands-free shortcut"
         case .retry: "Retry shortcut"
         }
     }
