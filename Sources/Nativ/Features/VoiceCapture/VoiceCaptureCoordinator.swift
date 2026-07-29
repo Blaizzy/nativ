@@ -24,6 +24,7 @@ final class VoiceCaptureCoordinator {
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
     private var insertionTarget: VoiceTranscriptInsertionTarget?
+    private var activeOverlayTranscriptionID: UUID?
     private var isShortcutHeld = false
     private var isPresentingAlert = false
     private var hasShownInsertionPermissionAlert = false
@@ -61,6 +62,7 @@ final class VoiceCaptureCoordinator {
             VoiceAudioRetention.removeAllAudioFiles(in: directory)
         }
         overlay.hide()
+        activeOverlayTranscriptionID = nil
         insertionTarget = nil
         isShortcutHeld = false
     }
@@ -83,6 +85,7 @@ final class VoiceCaptureCoordinator {
 
     private func beginCapture() {
         permissionTask?.cancel()
+        activeOverlayTranscriptionID = nil
         insertionTarget = VoiceTranscriptInserter.captureTarget()
         overlay.show(at: NSEvent.mouseLocation)
         permissionTask = Task { [weak self] in
@@ -116,12 +119,18 @@ final class VoiceCaptureCoordinator {
         if let recordingURL = recorder.stop() {
             NSLog("Nativ saved voice recording to %@", recordingURL.path)
             scheduleAudioDeletion(recordingURL)
+            let overlayTranscriptionID = UUID()
+            activeOverlayTranscriptionID = overlayTranscriptionID
+            overlay.waitForTranscription()
             transcribe(
                 recordingURL,
                 target: target,
-                durationSeconds: recorder.lastRecordingDuration
+                durationSeconds: recorder.lastRecordingDuration,
+                overlayTranscriptionID: overlayTranscriptionID
             )
+            return
         }
+        activeOverlayTranscriptionID = nil
         overlay.hide()
     }
 
@@ -183,12 +192,14 @@ final class VoiceCaptureCoordinator {
     private func transcribe(
         _ recordingURL: URL,
         target: VoiceTranscriptInsertionTarget?,
-        durationSeconds: TimeInterval?
+        durationSeconds: TimeInterval?,
+        overlayTranscriptionID: UUID? = nil
     ) {
         let audioData: Data
         do {
             audioData = try Data(contentsOf: recordingURL)
         } catch {
+            finishOverlayTranscription(overlayTranscriptionID)
             showRecentRecordingUnavailable()
             return
         }
@@ -202,6 +213,7 @@ final class VoiceCaptureCoordinator {
                 self.transcriptionTasks[taskID] = nil
             }
             guard let configuration = self.transcriptionConfigurationProvider?() else {
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 return
             }
 
@@ -215,6 +227,7 @@ final class VoiceCaptureCoordinator {
                 guard !Task.isCancelled else {
                     return
                 }
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 self.showMissingSpeechModelAlert()
                 return
             }
@@ -223,16 +236,19 @@ final class VoiceCaptureCoordinator {
                 return
             }
             guard let requestConfiguration = self.transcriptionConfigurationProvider?() else {
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 return
             }
             guard let modelID = LocalModelDiscovery.speechToTextModelID(
                 in: installedModels,
                 selectedModelID: requestConfiguration.selectedModelID
             ) else {
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 self.showMissingSpeechModelAlert()
                 return
             }
             guard requestConfiguration.serverIsRunning else {
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 self.showTranscriptionError(
                     title: "Nativ Server Is Not Running",
                     message: "Start the Nativ server, then record again to transcribe the audio."
@@ -256,7 +272,10 @@ final class VoiceCaptureCoordinator {
 
                 let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !transcript.isEmpty else {
-                    self.handleEmptyTranscription(recordingURL)
+                    self.handleEmptyTranscription(
+                        recordingURL,
+                        overlayTranscriptionID: overlayTranscriptionID
+                    )
                     return
                 }
                 let transcriptURL = recordingURL
@@ -283,6 +302,7 @@ final class VoiceCaptureCoordinator {
                     transcriptURL.path,
                     modelID
                 )
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 if !insertedAtCursor {
                     self.showInsertionPermissionAlertIfNeeded()
                 }
@@ -291,9 +311,13 @@ final class VoiceCaptureCoordinator {
                     return
                 }
                 if Self.isEmptyTranscriptionError(error) {
-                    self.handleEmptyTranscription(recordingURL)
+                    self.handleEmptyTranscription(
+                        recordingURL,
+                        overlayTranscriptionID: overlayTranscriptionID
+                    )
                     return
                 }
+                self.finishOverlayTranscription(overlayTranscriptionID)
                 self.showTranscriptionError(
                     title: "Transcription Failed",
                     message: error.localizedDescription
@@ -303,7 +327,10 @@ final class VoiceCaptureCoordinator {
         transcriptionTasks[taskID] = task
     }
 
-    private func handleEmptyTranscription(_ recordingURL: URL) {
+    private func handleEmptyTranscription(
+        _ recordingURL: URL,
+        overlayTranscriptionID: UUID?
+    ) {
         NSLog(
             "Nativ transcription produced no text for %@",
             recordingURL.lastPathComponent
@@ -311,7 +338,23 @@ final class VoiceCaptureCoordinator {
         guard !isShortcutHeld, !recorder.isRecording else {
             return
         }
+        guard let overlayTranscriptionID,
+              activeOverlayTranscriptionID == overlayTranscriptionID
+        else {
+            return
+        }
+        activeOverlayTranscriptionID = nil
         overlay.showNoSpeechFeedback()
+    }
+
+    private func finishOverlayTranscription(_ overlayTranscriptionID: UUID?) {
+        guard let overlayTranscriptionID,
+              activeOverlayTranscriptionID == overlayTranscriptionID
+        else {
+            return
+        }
+        activeOverlayTranscriptionID = nil
+        overlay.hide()
     }
 
     private static func isEmptyTranscriptionError(_ error: Error) -> Bool {
