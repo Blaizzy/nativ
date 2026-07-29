@@ -8,6 +8,7 @@ private enum VoiceIslandLayoutMetrics {
 }
 
 private let voiceCaptureDismissalDuration: TimeInterval = 0.38
+private let voiceCaptureMinimumLoadingDuration: TimeInterval = 0.65
 
 private func voiceCaptureFinishProgress(
     state: VoiceCaptureOverlayModel.State,
@@ -31,6 +32,7 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     enum State: Equatable {
         case preparing
         case recording
+        case transcribing
         case finishing
         case failed
         case noSpeech
@@ -44,6 +46,7 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     @Published var elapsed: TimeInterval = 0
     @Published var islandUsesCameraCutout = false
     @Published var islandStyle: VoiceCaptureAnimationStyle = .gradientIsland
+    @Published var showsNoSpeechFeedback = false
 
     func beginActivation() {
         let now = Date()
@@ -130,6 +133,7 @@ final class VoiceCaptureOverlayController {
         model.level = 0
         model.closingLevel = 0
         model.elapsed = 0
+        model.showsNoSpeechFeedback = false
         activeStyle = animationPreferences.selectedStyle
         model.islandStyle = activeStyle
         waveformPanel.orderOut(nil)
@@ -182,8 +186,26 @@ final class VoiceCaptureOverlayController {
         model.level = 0
     }
 
+    func waitForTranscription() {
+        guard isOverlayVisible else {
+            return
+        }
+
+        startCueTask?.cancel()
+        startCueTask = nil
+        activationID = UUID()
+        dismissalTask?.cancel()
+        dismissalTask = nil
+        model.level = 0
+        model.transition(to: .transcribing)
+        if didPlayStartCue {
+            soundPlayer.playEnd()
+        }
+        didPlayStartCue = false
+    }
+
     func showNoSpeechFeedback() {
-        guard !isOverlayVisible || model.state == .finishing else {
+        guard isOverlayVisible, model.state == .transcribing else {
             return
         }
 
@@ -193,30 +215,40 @@ final class VoiceCaptureOverlayController {
         startCueTask = nil
         activationID = UUID()
         didPlayStartCue = false
-        activeStyle = animationPreferences.selectedStyle
-        model.islandStyle = activeStyle
         model.level = 0
-        model.transition(to: .noSpeech)
-
-        waveformPanel.orderOut(nil)
-        islandPanel.orderOut(nil)
-        let cursorPosition = NSEvent.mouseLocation
-        switch activeStyle {
-        case .cursorWaveform:
-            positionWaveformPanel(near: cursorPosition)
-            waveformPanel.orderFrontRegardless()
-        case .gradientIsland, .notchShelf:
-            positionIslandPanel(on: screen(containing: cursorPosition))
-            islandPanel.orderFrontRegardless()
-        }
+        let loadingAge = Date().timeIntervalSince(model.stateChangedAt)
+        let remainingLoadingDuration = max(
+            0,
+            voiceCaptureMinimumLoadingDuration - loadingAge
+        )
+        let remainingLoadingMilliseconds = Int64(
+            (remainingLoadingDuration * 1_000).rounded(.up)
+        )
 
         dismissalTask = Task { [weak self] in
+            if remainingLoadingMilliseconds > 0 {
+                do {
+                    try await Task.sleep(
+                        for: .milliseconds(remainingLoadingMilliseconds)
+                    )
+                } catch {
+                    return
+                }
+            }
+            guard let self, self.model.state == .transcribing else {
+                return
+            }
+            withAnimation(.easeOut(duration: 0.18)) {
+                self.model.showsNoSpeechFeedback = true
+                self.model.transition(to: .noSpeech)
+            }
+
             do {
                 try await Task.sleep(for: .milliseconds(1_050))
             } catch {
                 return
             }
-            guard let self, self.model.state == .noSpeech else {
+            guard self.model.state == .noSpeech else {
                 return
             }
             self.model.transition(to: .finishing)
@@ -228,6 +260,7 @@ final class VoiceCaptureOverlayController {
             self.waveformPanel.orderOut(nil)
             self.islandPanel.orderOut(nil)
             self.model.elapsed = 0
+            self.model.showsNoSpeechFeedback = false
             self.dismissalTask = nil
         }
     }
@@ -243,6 +276,7 @@ final class VoiceCaptureOverlayController {
             waveformPanel.orderOut(nil)
             islandPanel.orderOut(nil)
             model.elapsed = 0
+            model.showsNoSpeechFeedback = false
             didPlayStartCue = false
             return
         }
@@ -265,6 +299,7 @@ final class VoiceCaptureOverlayController {
             self.waveformPanel.orderOut(nil)
             self.islandPanel.orderOut(nil)
             self.model.elapsed = 0
+            self.model.showsNoSpeechFeedback = false
             self.dismissalTask = nil
         }
     }
@@ -694,31 +729,52 @@ private struct VoiceCaptureOverlayView: View {
             )
 
             HStack(spacing: 9) {
-                recordingIndicator
-
-                if model.state == .failed {
-                    Label("Mic unavailable", systemImage: "mic.slash.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                } else if model.state == .noSpeech {
-                    Label("No speech detected", systemImage: "waveform.slash")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(1)
+                if model.showsNoSpeechFeedback {
+                    Image(systemName: "waveform.slash")
+                        .font(.system(size: 17, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Color.orange)
+                        .shadow(color: Color.orange.opacity(0.3), radius: 4)
+                        .frame(maxWidth: .infinity)
+                        .transition(
+                            .opacity.combined(with: .scale(scale: 0.84))
+                        )
                 } else {
-                    VoiceLiveWaveform(
-                        level: model.state == .finishing
-                            ? model.closingLevel
-                            : model.level,
-                        isRecording: model.state == .recording
-                            || model.state == .finishing
-                    )
-                    .frame(width: 90, height: 32)
+                    recordingIndicator
 
-                    Text(formattedElapsed)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.68))
-                        .frame(width: 32, alignment: .trailing)
+                    if model.state == .failed {
+                        Label("Mic unavailable", systemImage: "mic.slash.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                    } else {
+                        ZStack {
+                            VoiceLiveWaveform(
+                                level: model.state == .finishing
+                                    ? model.closingLevel
+                                    : model.level,
+                                isRecording: model.state == .recording
+                                    || model.state == .finishing
+                            )
+                            .opacity(model.state == .transcribing ? 0.26 : 1)
+
+                            if model.state == .transcribing {
+                                VoiceTranscriptionWaveLoader()
+                                    .transition(.opacity)
+                            }
+                        }
+                        .frame(width: 90, height: 32)
+
+                        Text(formattedElapsed)
+                            .font(
+                                .system(
+                                    size: 11,
+                                    weight: .semibold,
+                                    design: .monospaced
+                                )
+                            )
+                            .foregroundStyle(.white.opacity(0.68))
+                            .frame(width: 32, alignment: .trailing)
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -744,26 +800,53 @@ private struct VoiceCaptureOverlayView: View {
 
     private var recordingIndicator: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let pulse = model.state == .recording
-                ? (sin(timeline.date.timeIntervalSinceReferenceDate * 4.8) + 1) / 2
-                : 0
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            let pulse = indicatorPulse(at: time)
+
             Circle()
-                .fill(
-                    model.state == .failed
-                        ? Color.secondary
-                        : model.state == .noSpeech
-                            ? Color.orange
-                            : Color.red
-                )
+                .fill(indicatorColor)
                 .frame(width: 9, height: 9)
                 .shadow(
-                    color: model.state == .recording
-                        ? Color.red.opacity(0.25 + (pulse * 0.3))
-                        : .clear,
+                    color: indicatorShadowColor(pulse: pulse),
                     radius: 3 + (pulse * 3)
                 )
         }
         .frame(width: 10, height: 16)
+    }
+
+    private var indicatorColor: Color {
+        if model.state == .failed {
+            return .secondary
+        }
+        if model.showsNoSpeechFeedback {
+            return .gray
+        }
+        if model.state == .transcribing {
+            return Color(red: 0.48, green: 0.9, blue: 1)
+        }
+        return .red
+    }
+
+    private func indicatorPulse(at time: TimeInterval) -> Double {
+        switch model.state {
+        case .recording:
+            return (sin(time * 4.8) + 1) / 2
+        case .transcribing:
+            return (sin(time * 3.2) + 1) / 2
+        default:
+            return 0
+        }
+    }
+
+    private func indicatorShadowColor(pulse: Double) -> Color {
+        switch model.state {
+        case .recording:
+            return Color.red.opacity(0.25 + (pulse * 0.3))
+        case .transcribing:
+            return Color.cyan.opacity(0.18 + (pulse * 0.28))
+        default:
+            return .clear
+        }
     }
 
     private var formattedElapsed: String {
@@ -772,17 +855,115 @@ private struct VoiceCaptureOverlayView: View {
     }
 
     private var accessibilityLabel: String {
-        switch model.state {
+        if model.showsNoSpeechFeedback {
+            return "No speech detected"
+        }
+        return switch model.state {
         case .preparing:
             "Preparing microphone"
         case .recording:
             "Recording audio, \(formattedElapsed)"
+        case .transcribing:
+            "Transcribing audio"
         case .finishing:
             "Finished recording audio"
         case .failed:
             "Microphone unavailable"
         case .noSpeech:
             "No speech detected"
+        }
+    }
+}
+
+private struct VoiceTranscriptionWaveLoader: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+
+            HStack(spacing: 4) {
+                ForEach(0..<7, id: \.self) { index in
+                    let wave = (
+                        sin((time * 4.6) - (Double(index) * 0.72)) + 1
+                    ) / 2
+
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(0.92),
+                                    Color(red: 0.38, green: 0.86, blue: 1)
+                                        .opacity(0.72),
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(
+                            width: 4,
+                            height: 5 + (CGFloat(wave) * 12)
+                        )
+                        .shadow(
+                            color: Color.cyan.opacity(0.16 + (wave * 0.18)),
+                            radius: 2
+                        )
+                }
+            }
+        }
+        .frame(width: 90, height: 32)
+    }
+}
+
+private struct VoiceOrbLoadingLayer: View {
+    let shortestSide: CGFloat
+    let time: TimeInterval
+
+    var body: some View {
+        let orbit = time * 2.55
+        let pulse = (sin(time * 3.15) + 1) / 2
+        let highlightCenter = UnitPoint(
+            x: 0.5 + (CGFloat(cos(orbit)) * 0.24),
+            y: 0.5 + (CGFloat(sin(orbit)) * 0.24)
+        )
+
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            .white.opacity(0.34),
+                            Color(red: 0.34, green: 0.88, blue: 1)
+                                .opacity(0.2),
+                            .clear,
+                        ],
+                        center: highlightCenter,
+                        startRadius: 0,
+                        endRadius: shortestSide * 0.48
+                    )
+                )
+                .blendMode(.screen)
+
+            Circle()
+                .trim(from: 0.04, to: 0.48)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            Color(red: 0.48, green: 0.92, blue: 1)
+                                .opacity(0.72),
+                            .white.opacity(0.92),
+                            .clear,
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    style: StrokeStyle(
+                        lineWidth: max(0.75, shortestSide * 0.045),
+                        lineCap: .round
+                    )
+                )
+                .rotationEffect(.radians(orbit))
+                .opacity(0.58 + (pulse * 0.24))
+                .blendMode(.screen)
         }
     }
 }
@@ -820,17 +1001,13 @@ private struct VoiceCaptureIslandView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.red)
                         .frame(width: 30, height: 30)
-                } else if model.state == .noSpeech {
-                    Image(systemName: "waveform.slash")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.orange)
-                        .frame(width: 30, height: 30)
                 } else {
                     VoiceGradientOrb(
                         level: model.level,
                         state: model.state,
                         stateChangedAt: model.stateChangedAt,
-                        activationStartedAt: model.activationStartedAt
+                        activationStartedAt: model.activationStartedAt,
+                        showsNoSpeechFeedback: model.showsNoSpeechFeedback
                     )
                     .frame(width: 26, height: 26)
                 }
@@ -838,16 +1015,13 @@ private struct VoiceCaptureIslandView: View {
                 Text(feedbackText)
                     .font(
                         .system(
-                            size: model.state == .noSpeech ? 9 : 11,
+                            size: 11,
                             weight: .semibold,
-                            design: model.state == .noSpeech ? .default : .monospaced
+                            design: .monospaced
                         )
                     )
                     .foregroundStyle(.white.opacity(0.76))
-                    .frame(
-                        width: model.state == .noSpeech ? 48 : 38,
-                        alignment: .trailing
-                    )
+                    .frame(width: 38, alignment: .trailing)
             }
             .padding(.horizontal, 15)
             .frame(width: 128, height: 46)
@@ -874,22 +1048,25 @@ private struct VoiceCaptureIslandView: View {
     }
 
     private var feedbackText: String {
-        switch model.state {
+        return switch model.state {
         case .failed:
             "Mic"
-        case .noSpeech:
-            "No speech"
-        case .preparing, .recording, .finishing:
+        case .preparing, .recording, .transcribing, .finishing, .noSpeech:
             formattedElapsed
         }
     }
 
     private var accessibilityLabel: String {
-        switch model.state {
+        if model.showsNoSpeechFeedback {
+            return "No speech detected"
+        }
+        return switch model.state {
         case .preparing:
             "Preparing microphone in Dynamic Island"
         case .recording:
             "Recording audio in Dynamic Island, \(formattedElapsed)"
+        case .transcribing:
+            "Transcribing audio in Dynamic Island"
         case .finishing:
             "Finished recording audio in Dynamic Island"
         case .failed:
@@ -948,10 +1125,6 @@ struct VoiceCaptureNotchIslandView: View {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
-            } else if model.state == .noSpeech {
-                Image(systemName: "waveform.slash")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.orange)
             } else {
                 orb
             }
@@ -963,10 +1136,6 @@ struct VoiceCaptureNotchIslandView: View {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.78))
-            } else if model.state == .noSpeech {
-                Text("No speech")
-                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.78))
             } else {
                 Text(formattedElapsed)
@@ -981,7 +1150,8 @@ struct VoiceCaptureNotchIslandView: View {
             level: model.level,
             state: model.state,
             stateChangedAt: model.stateChangedAt,
-            activationStartedAt: model.activationStartedAt
+            activationStartedAt: model.activationStartedAt,
+            showsNoSpeechFeedback: model.showsNoSpeechFeedback
         )
         .frame(width: 22, height: 22)
     }
@@ -1128,16 +1298,13 @@ private struct VoiceCaptureWideNotchView: View {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
-            } else if model.state == .noSpeech {
-                Image(systemName: "waveform.slash")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.orange)
             } else {
                 VoiceGradientOrb(
                     level: model.level,
                     state: model.state,
                     stateChangedAt: model.stateChangedAt,
-                    activationStartedAt: model.activationStartedAt
+                    activationStartedAt: model.activationStartedAt,
+                    showsNoSpeechFeedback: model.showsNoSpeechFeedback
                 )
                 .frame(width: 22, height: 22)
             }
@@ -1149,10 +1316,6 @@ private struct VoiceCaptureWideNotchView: View {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.78))
-            } else if model.state == .noSpeech {
-                Text("No speech")
-                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.78))
             } else {
                 Text(formattedElapsed)
@@ -1172,6 +1335,7 @@ struct VoiceGradientOrb: View {
     private enum Phase {
         case activating
         case listening
+        case transcribing
         case finishing
     }
 
@@ -1179,29 +1343,35 @@ struct VoiceGradientOrb: View {
     private let phase: Phase
     private let phaseStartedAt: Date
     private let activationStartedAt: Date
+    private let showsNoSpeechFeedback: Bool
 
     init(level: Float, isRecording: Bool) {
         self.level = level
         phase = isRecording ? .listening : .activating
         phaseStartedAt = .distantPast
         activationStartedAt = .distantPast
+        showsNoSpeechFeedback = false
     }
 
     fileprivate init(
         level: Float,
         state: VoiceCaptureOverlayModel.State,
         stateChangedAt: Date,
-        activationStartedAt: Date
+        activationStartedAt: Date,
+        showsNoSpeechFeedback: Bool
     ) {
         self.level = level
         phaseStartedAt = stateChangedAt
         self.activationStartedAt = activationStartedAt
+        self.showsNoSpeechFeedback = showsNoSpeechFeedback
         switch state {
         case .preparing:
             phase = .activating
         case .recording:
             phase = .listening
-        case .finishing, .failed, .noSpeech:
+        case .transcribing, .noSpeech:
+            phase = .transcribing
+        case .finishing, .failed:
             phase = .finishing
         }
     }
@@ -1228,6 +1398,24 @@ struct VoiceGradientOrb: View {
                     ? eased(min(1, phaseAge / 0.38))
                     : 0
                 let shortestSide = min(geometry.size.width, geometry.size.height)
+                let isLoading = phase == .transcribing
+                    && !showsNoSpeechFeedback
+                let loadingPulse = isLoading
+                    ? (sin(time * 3.15) + 1) / 2
+                    : 0
+                let loadingGlow = isLoading
+                    ? 0.1 + (loadingPulse * 0.08)
+                    : 0
+                let orbScale = (0.78 + (activationProgress * 0.22))
+                    + (motionEnergy * 0.055)
+                    + (loadingPulse * 0.018)
+                    - (finishProgress * 0.06)
+                let orbShadowOpacity = showsNoSpeechFeedback
+                    ? 0
+                    : 0.16 + (energy * 0.18) + loadingGlow
+                let orbShadowRadius = 3
+                    + (energy * 2.5)
+                    + (isLoading ? loadingPulse * 1.5 : 0)
                 let primaryPhase = time * 0.48
                 let secondaryPhase = time * 0.34
                 let driftX = sin(primaryPhase)
@@ -1476,6 +1664,75 @@ struct VoiceGradientOrb: View {
                             )
                         )
                         .blendMode(.screen)
+
+                    if isLoading {
+                        VoiceOrbLoadingLayer(
+                            shortestSide: shortestSide,
+                            time: time
+                        )
+                    }
+
+                    if showsNoSpeechFeedback {
+                        Circle()
+                            .fill(Color(white: 0.5).opacity(0.52))
+                            .blendMode(.saturation)
+
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.78, green: 0.84, blue: 0.92)
+                                            .opacity(0.18),
+                                        Color(red: 0.12, green: 0.14, blue: 0.2)
+                                            .opacity(0.42),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+
+                        Circle()
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        .white.opacity(0.16),
+                                        .clear,
+                                    ],
+                                    center: .topLeading,
+                                    startRadius: 0,
+                                    endRadius: shortestSide * 0.62
+                                )
+                            )
+                            .blendMode(.screen)
+
+                        Capsule()
+                            .fill(Color.black.opacity(0.32))
+                            .frame(
+                                width: shortestSide * 0.7,
+                                height: max(2, shortestSide * 0.1)
+                            )
+                            .rotationEffect(.degrees(-38))
+                            .blur(radius: max(0.5, shortestSide * 0.015))
+
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 1.0, green: 0.48, blue: 0.48),
+                                        Color(red: 0.87, green: 0.15, blue: 0.2),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(
+                                width: shortestSide * 0.66,
+                                height: max(1.4, shortestSide * 0.065)
+                            )
+                            .rotationEffect(.degrees(-38))
+                            .shadow(color: .red.opacity(0.22), radius: 1.5)
+                            .transition(.opacity.combined(with: .scale(scale: 0.72)))
+                    }
                 }
                 .clipShape(Circle())
                 .overlay {
@@ -1493,16 +1750,16 @@ struct VoiceGradientOrb: View {
                             lineWidth: max(0.7, shortestSide * 0.035)
                         )
                 }
-                .scaleEffect(
-                    (0.78 + (activationProgress * 0.22))
-                        + (motionEnergy * 0.055)
-                        - (finishProgress * 0.06)
-                )
+                .scaleEffect(orbScale)
                 .opacity(activationProgress * (1 - finishProgress))
                 .shadow(
                     color: Color(red: 0.38, green: 0.93, blue: 1.0)
-                        .opacity(0.16 + (energy * 0.18)),
-                    radius: 3 + (energy * 2.5)
+                        .opacity(orbShadowOpacity),
+                    radius: orbShadowRadius
+                )
+                .animation(
+                    .easeOut(duration: 0.18),
+                    value: showsNoSpeechFeedback
                 )
             }
         }
