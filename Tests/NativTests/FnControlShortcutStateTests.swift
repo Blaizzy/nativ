@@ -42,3 +42,95 @@ final class FnRetryShortcutStateTests: XCTestCase {
         XCTAssertTrue(state.update(isPressed: true))
     }
 }
+
+final class VoiceModifierToggleShortcutStateTests: XCTestCase {
+    func testTogglesAfterModifierIsPressedAndReleasedAlone() {
+        var state = VoiceModifierToggleShortcutState()
+
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.option],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertTrue(state.isHeld)
+        XCTAssertTrue(
+            state.update(
+                activeModifiers: [],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertFalse(state.isHeld)
+    }
+
+    func testDoesNotToggleWhenModifierBecomesPartOfChord() {
+        var state = VoiceModifierToggleShortcutState()
+
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.option],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.option, .shift],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [],
+                shortcutModifiers: [.option]
+            )
+        )
+    }
+
+    func testDoesNotToggleWhenARegularKeyIsPressed() {
+        var state = VoiceModifierToggleShortcutState()
+
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.option],
+                shortcutModifiers: [.option]
+            )
+        )
+        state.noteKeyDown()
+        XCTAssertTrue(state.wasUsedAsChord)
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [],
+                shortcutModifiers: [.option]
+            )
+        )
+    }
+
+    func testCanToggleAgainAfterCompletingGesture() {
+        var state = VoiceModifierToggleShortcutState()
+
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.option],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertTrue(
+            state.update(
+                activeModifiers: [],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.option],
+                shortcutModifiers: [.option]
+            )
+        )
+        XCTAssertTrue(
+            state.update(
+                activeModifiers: [],
+                shortcutModifiers: [.option]
+            )
+        )
+    }
+}

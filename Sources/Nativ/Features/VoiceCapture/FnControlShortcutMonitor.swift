@@ -26,6 +26,52 @@ struct FnRetryShortcutState {
     }
 }
 
+struct VoiceModifierToggleShortcutState {
+    private(set) var isHeld = false
+    private(set) var wasUsedAsChord = false
+
+    mutating func update(
+        activeModifiers: VoiceShortcutModifiers,
+        shortcutModifiers: VoiceShortcutModifiers
+    ) -> Bool {
+        guard !shortcutModifiers.isEmpty else {
+            reset()
+            return false
+        }
+
+        let containsShortcut =
+            activeModifiers.intersection(shortcutModifiers) == shortcutModifiers
+        if isHeld {
+            guard containsShortcut else {
+                let shouldToggle = !wasUsedAsChord
+                reset()
+                return shouldToggle
+            }
+            if activeModifiers != shortcutModifiers {
+                wasUsedAsChord = true
+            }
+            return false
+        }
+
+        if activeModifiers == shortcutModifiers {
+            isHeld = true
+            wasUsedAsChord = false
+        }
+        return false
+    }
+
+    mutating func noteKeyDown() {
+        if isHeld {
+            wasUsedAsChord = true
+        }
+    }
+
+    mutating func reset() {
+        isHeld = false
+        wasUsedAsChord = false
+    }
+}
+
 private let voiceHotKeyHandler: EventHandlerUPP = { _, event, userData in
     guard let event, let userData else {
         return OSStatus(eventNotHandledErr)
@@ -58,6 +104,7 @@ private let voiceHotKeyHandler: EventHandlerUPP = { _, event, userData in
 final class FnControlShortcutMonitor {
     var onChange: ((Bool) -> Void)?
     var onRetry: (() -> Void)?
+    var onHandsFreeToggle: (() -> Void)?
 
     private var localMonitor: Any?
     private var globalMonitor: Any?
@@ -66,12 +113,15 @@ final class FnControlShortcutMonitor {
     private var recordIsHeld = false
     private var retryModifierIsHeld = false
     private var retryState = FnRetryShortcutState()
+    private var handsFreeModifierState = VoiceModifierToggleShortcutState()
+    private var handsFreeKeyState = FnRetryShortcutState()
     private var hotKeys: [UInt32: EventHotKeyRef] = [:]
     private var hotKeyEventHandler: EventHandlerRef?
     private let preferences: VoiceShortcutPreferences
     private let hotKeySignature = OSType(0x4E_41_54_56)
     private let recordHotKeyID: UInt32 = 1
     private let retryHotKeyID: UInt32 = 2
+    private let handsFreeHotKeyID: UInt32 = 3
 
     init(preferences: VoiceShortcutPreferences? = nil) {
         self.preferences = preferences ?? .shared
@@ -84,15 +134,19 @@ final class FnControlShortcutMonitor {
 
         requestAccessibilityAccessIfNeeded()
 
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
+        localMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.flagsChanged, .keyDown]
+        ) {
             [weak self] event in
-            self?.consume(event.modifierFlags)
+            self?.consume(event)
             return event
         }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.flagsChanged, .keyDown]
+        ) {
             [weak self] event in
             Task { @MainActor in
-                self?.consume(event.modifierFlags)
+                self?.consume(event)
             }
         }
         startModifierPolling()
@@ -130,6 +184,8 @@ final class FnControlShortcutMonitor {
         retryModifierIsHeld = false
         uninstallHotKeys()
         retryState = FnRetryShortcutState()
+        handsFreeModifierState.reset()
+        handsFreeKeyState = FnRetryShortcutState()
     }
 
     func resynchronizeAfterModalInteraction() {
@@ -137,6 +193,8 @@ final class FnControlShortcutMonitor {
         recordIsHeld = false
         retryModifierIsHeld = false
         retryState = FnRetryShortcutState()
+        handsFreeModifierState.reset()
+        handsFreeKeyState = FnRetryShortcutState()
 
         if recordWasHeld {
             onChange?(false)
@@ -165,12 +223,21 @@ final class FnControlShortcutMonitor {
         )
     }
 
-    private func consume(_ modifierFlags: NSEvent.ModifierFlags) {
-        consume(
-            VoiceShortcutModifiers(
-                eventFlags: modifierFlags.intersection(.deviceIndependentFlagsMask)
+    private func consume(_ event: NSEvent) {
+        switch event.type {
+        case .flagsChanged:
+            consume(
+                VoiceShortcutModifiers(
+                    eventFlags: event.modifierFlags.intersection(
+                        .deviceIndependentFlagsMask
+                    )
+                )
             )
-        )
+        case .keyDown:
+            handsFreeModifierState.noteKeyDown()
+        default:
+            break
+        }
     }
 
     private func consume(_ activeModifiers: VoiceShortcutModifiers) {
@@ -189,6 +256,15 @@ final class FnControlShortcutMonitor {
                 onRetry?()
             }
             retryModifierIsHeld = isHeld
+        }
+
+        if preferences.handsFreeShortcut.keyCode == nil,
+           handsFreeModifierState.update(
+               activeModifiers: activeModifiers,
+               shortcutModifiers: preferences.handsFreeShortcut.modifiers
+           )
+        {
+            onHandsFreeToggle?()
         }
     }
 
@@ -210,6 +286,10 @@ final class FnControlShortcutMonitor {
             if retryState.update(isPressed: isPressed) {
                 onRetry?()
             }
+        case handsFreeHotKeyID:
+            if handsFreeKeyState.update(isPressed: isPressed) {
+                onHandsFreeToggle?()
+            }
         default:
             break
         }
@@ -229,6 +309,8 @@ final class FnControlShortcutMonitor {
         }
         retryModifierIsHeld = false
         retryState = FnRetryShortcutState()
+        handsFreeModifierState.reset()
+        handsFreeKeyState = FnRetryShortcutState()
         uninstallHotKeys()
         installHotKeys()
         consumeCurrentModifierFlags()
@@ -242,6 +324,7 @@ final class FnControlShortcutMonitor {
         let keyedShortcuts = [
             (recordHotKeyID, preferences.recordShortcut),
             (retryHotKeyID, preferences.retryShortcut),
+            (handsFreeHotKeyID, preferences.handsFreeShortcut),
         ].filter { $0.1.keyCode != nil }
         guard !keyedShortcuts.isEmpty else {
             return

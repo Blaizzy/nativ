@@ -26,6 +26,7 @@ final class VoiceCaptureCoordinator {
     private var insertionTarget: VoiceTranscriptInsertionTarget?
     private var activeOverlayTranscriptionID: UUID?
     private var isShortcutHeld = false
+    private var isHandsFreeMode = false
     private var isPresentingAlert = false
     private var hasShownInsertionPermissionAlert = false
 
@@ -35,6 +36,9 @@ final class VoiceCaptureCoordinator {
         }
         shortcutMonitor.onRetry = { [weak self] in
             self?.retryLastTranscription()
+        }
+        shortcutMonitor.onHandsFreeToggle = { [weak self] in
+            self?.toggleHandsFreeCapture()
         }
         recorder.onMeterUpdate = { [weak self] level, elapsed in
             self?.overlay.update(level: level, elapsed: elapsed)
@@ -65,6 +69,7 @@ final class VoiceCaptureCoordinator {
         activeOverlayTranscriptionID = nil
         insertionTarget = nil
         isShortcutHeld = false
+        isHandsFreeMode = false
     }
 
     func showRecordingsInFinder() {
@@ -75,12 +80,31 @@ final class VoiceCaptureCoordinator {
     }
 
     private func handleShortcutChange(_ isHeld: Bool) {
+        guard !isHandsFreeMode else {
+            return
+        }
         isShortcutHeld = isHeld
         if isHeld {
             beginCapture()
         } else {
             endCapture()
         }
+    }
+
+    private func toggleHandsFreeCapture() {
+        if isHandsFreeMode {
+            isHandsFreeMode = false
+            isShortcutHeld = false
+            endCapture()
+            return
+        }
+
+        guard !isShortcutHeld, !recorder.isRecording else {
+            return
+        }
+        isHandsFreeMode = true
+        isShortcutHeld = true
+        beginCapture()
     }
 
     private func beginCapture() {
