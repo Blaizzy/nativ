@@ -350,37 +350,33 @@ struct ControlPanelView: View {
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
 
-            sidebarRecentsHeader
-                .padding(.leading, 17)
-                .padding(.trailing, 10)
-                .padding(.bottom, 4)
-
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(recentSessions) { recent in
-                        ControlPanelRecentSessionRow(
-                            recent: recent,
-                            isSelected: sidebarSelection == recent.selection,
-                            isCurrent: isCurrentRecent(recent),
-                            isSelectionDisabled: isRecentSelectionDisabled(recent),
-                            isDeleteDisabled: isRecentDeleteDisabled(recent),
-                            canExport: canExportRecent(recent),
-                            onSelect: {
-                                applySidebarSelection(recent.selection)
-                            },
-                            onDelete: {
-                                deleteRecentSession(recent)
-                            },
-                            onCopyConversation: {
-                                copyRecentConversation(recent)
-                            },
-                            onExportFile: {
-                                exportRecentConversation(recent)
-                            },
-                            onRevealInFinder: {
-                                revealRecentSession(recent)
-                            }
-                        )
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    sidebarPinnedHeader
+                        .padding(.leading, 17)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 4)
+
+                    if pinnedSessions.isEmpty {
+                        Label("Shift-click a chat to pin", systemImage: "pin")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary.opacity(0.6))
+                            .padding(.horizontal, 17)
+                            .padding(.vertical, 6)
+                    } else {
+                        ForEach(pinnedSessions) { recent in
+                            recentSessionRow(recent)
+                        }
+                    }
+
+                    sidebarRecentsHeader
+                        .padding(.leading, 17)
+                        .padding(.trailing, 10)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
+
+                    ForEach(unpinnedSessions) { recent in
+                        recentSessionRow(recent)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -507,9 +503,19 @@ struct ControlPanelView: View {
         }
     }
 
+    private var sidebarPinnedHeader: some View {
+        HStack(spacing: 8) {
+            Text("Pinned")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(.secondary.opacity(0.7))
+
+            Spacer(minLength: 0)
+        }
+    }
+
     private var sidebarRecentsHeader: some View {
         HStack(spacing: 8) {
-            Text("Recents")
+            Text("Sessions")
                 .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(.secondary.opacity(0.7))
 
@@ -710,6 +716,66 @@ struct ControlPanelView: View {
                 + imageGeneration.sessions.map(ControlPanelRecentSession.init(imageGeneration:))
         )
             .sorted(by: ControlPanelRecentSession.recencySort)
+    }
+
+    private var pinnedSessions: [ControlPanelRecentSession] {
+        recentSessions.filter(\.pinned)
+    }
+
+    private var unpinnedSessions: [ControlPanelRecentSession] {
+        recentSessions.filter { !$0.pinned }
+    }
+
+    @ViewBuilder
+    private func recentSessionRow(_ recent: ControlPanelRecentSession) -> some View {
+        ControlPanelRecentSessionRow(
+            recent: recent,
+            isSelected: sidebarSelection == recent.selection,
+            isCurrent: isCurrentRecent(recent),
+            isSelectionDisabled: isRecentSelectionDisabled(recent),
+            isDeleteDisabled: isRecentDeleteDisabled(recent),
+            canExport: canExportRecent(recent),
+            onSelect: {
+                applySidebarSelection(recent.selection)
+            },
+            onDelete: {
+                deleteRecentSession(recent)
+            },
+            onCopyConversation: {
+                copyRecentConversation(recent)
+            },
+            onExportFile: {
+                exportRecentConversation(recent)
+            },
+            onRevealInFinder: {
+                revealRecentSession(recent)
+            },
+            onRename: { newTitle in
+                renameRecentSession(recent, to: newTitle)
+            },
+            onNewChat: {
+                createChatSession()
+            },
+            onTogglePin: {
+                togglePinRecent(recent)
+            }
+        )
+    }
+
+    private func togglePinRecent(_ recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            chat.setPinned(sessionID, pinned: !recent.pinned)
+        }
+    }
+
+    private func renameRecentSession(_ recent: ControlPanelRecentSession, to newTitle: String) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        chat.renameSession(sessionID, to: newTitle)
     }
 
     private var detail: some View {
@@ -2255,12 +2321,14 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let title: String
     let createdAt: Date
     let updatedAt: Date
+    let pinned: Bool
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
         title = session.title
         createdAt = session.createdAt
         updatedAt = session.updatedAt
+        pinned = session.isPinned
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -2268,6 +2336,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         title = session.title
         createdAt = session.createdAt
         updatedAt = session.updatedAt
+        pinned = false
     }
 
     var selection: ControlPanelSidebarSelection {
@@ -2277,6 +2346,13 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         case .imageGeneration(let sessionID):
             return .imageGeneration(sessionID)
         }
+    }
+
+    var isChat: Bool {
+        if case .chat = id {
+            return true
+        }
+        return false
     }
 
     var badgeSystemImage: String? {
@@ -2308,43 +2384,75 @@ private struct ControlPanelRecentSessionRow: View {
     let onCopyConversation: () -> Void
     let onExportFile: () -> Void
     let onRevealInFinder: () -> Void
+    let onRename: (String) -> Void
+    let onNewChat: () -> Void
+    let onTogglePin: () -> Void
     @State private var isHovering = false
     @State private var isDeleteHovering = false
+    @State private var isRenaming = false
+    @State private var renameDraft = ""
+    @FocusState private var renameFieldFocused: Bool
 
     var body: some View {
         HStack(spacing: 2) {
-            Button(action: onSelect) {
+            if isRenaming {
                 HStack(spacing: 7) {
                     Circle()
                         .fill(isCurrent ? Color.accentColor : Color.clear)
                         .frame(width: 5, height: 5)
                         .accessibilityHidden(true)
 
-                    if let badgeSystemImage = recent.badgeSystemImage {
-                        Image(systemName: badgeSystemImage)
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 18, height: 16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(Color.secondary.opacity(0.1))
-                            )
-                            .help("Image session")
-                            .accessibilityLabel("Image session")
-                    }
-
-                    Text(recent.title)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Spacer(minLength: 0)
+                    TextField("Name", text: $renameDraft)
+                        .textFieldStyle(.plain)
+                        .focused($renameFieldFocused)
+                        .onSubmit {
+                            commitRename()
+                        }
+                        .onExitCommand {
+                            isRenaming = false
+                        }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(.rect)
+            } else {
+                Button {
+                    if NSEvent.modifierFlags.contains(.shift), recent.isChat {
+                        onTogglePin()
+                    } else {
+                        onSelect()
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(isCurrent ? Color.accentColor : Color.clear)
+                            .frame(width: 5, height: 5)
+                            .accessibilityHidden(true)
+
+                        if let badgeSystemImage = recent.badgeSystemImage {
+                            Image(systemName: badgeSystemImage)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 18, height: 16)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(Color.secondary.opacity(0.1))
+                                )
+                                .help("Image session")
+                                .accessibilityLabel("Image session")
+                        }
+
+                        Text(recent.title)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(isSelectionDisabled)
+                .help(recent.title)
             }
-            .buttonStyle(.plain)
-            .disabled(isSelectionDisabled)
-            .help(recent.title)
 
             if isHovering {
                 Button(role: .destructive, action: onDelete) {
@@ -2369,30 +2477,46 @@ private struct ControlPanelRecentSessionRow: View {
         .opacity(isSelectionDisabled && !isCurrent ? 0.55 : 1)
         .onHover { isHovering = $0 }
         .animation(.easeInOut, value: isHovering)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                if recent.isChat {
+                    beginRename()
+                }
+            }
+        )
         .contextMenu {
             Button {
-                onSelect()
+                onNewChat()
             } label: {
-                Label("Open", systemImage: "arrow.up.right.square")
+                Label("New", systemImage: "square.and.pencil")
             }
-            .disabled(isSelectionDisabled)
 
-            Button {
-                onRevealInFinder()
-            } label: {
-                Label("Reveal in Finder", systemImage: "folder")
+            if recent.isChat {
+                Divider()
+
+                Button {
+                    beginRename()
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+
+                Button {
+                    onTogglePin()
+                } label: {
+                    Label(
+                        recent.pinned ? "Unpin" : "Pin",
+                        systemImage: recent.pinned ? "pin.slash" : "pin"
+                    )
+                }
             }
+
+            Divider()
 
             if canExport {
                 Button {
-                    onCopyConversation()
-                } label: {
-                    Label("Copy Conversation", systemImage: "doc.on.doc")
-                }
-                Button {
                     onExportFile()
                 } label: {
-                    Label("Export as Text\u{2026}", systemImage: "square.and.arrow.up")
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
             }
 
@@ -2403,6 +2527,17 @@ private struct ControlPanelRecentSessionRow: View {
             }
             .disabled(isDeleteDisabled)
         }
+    }
+
+    private func beginRename() {
+        renameDraft = recent.title
+        isRenaming = true
+        renameFieldFocused = true
+    }
+
+    private func commitRename() {
+        isRenaming = false
+        onRename(renameDraft)
     }
 }
 

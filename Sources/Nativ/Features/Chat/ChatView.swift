@@ -336,6 +336,31 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func renameSession(_ sessionID: UUID, to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+            return
+        }
+        storedSessions[index].customTitle = trimmed.isEmpty ? nil : trimmed
+        if currentSession?.id == sessionID {
+            currentSession?.customTitle = trimmed.isEmpty ? nil : trimmed
+        }
+        sessionStore.saveSession(storedSessions[index])
+        refreshSessionList()
+    }
+
+    func setPinned(_ sessionID: UUID, pinned: Bool) {
+        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+            return
+        }
+        storedSessions[index].pinned = pinned
+        if currentSession?.id == sessionID {
+            currentSession?.pinned = pinned
+        }
+        sessionStore.saveSession(storedSessions[index])
+        refreshSessionList()
+    }
+
     func deleteSession(_ sessionID: UUID) {
         guard !isSessionBusy(sessionID) else {
             return

@@ -6,9 +6,11 @@ import UniformTypeIdentifiers
 struct ChatSession: Identifiable, Equatable, Codable {
     var id: UUID
     var title: String
+    var customTitle: String?
     var createdAt: Date
     var updatedAt: Date
     var messages: [ChatTranscriptMessage]
+    var pinned: Bool?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -16,12 +18,16 @@ struct ChatSession: Identifiable, Equatable, Codable {
             title: displayTitle,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            messageCount: messages.count
+            messageCount: messages.count,
+            isPinned: pinned ?? false
         )
     }
 
     var displayTitle: String {
-        Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
+        if let customTitle, !customTitle.isEmpty {
+            return customTitle
+        }
+        return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
     }
 
     static func recencySort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
@@ -93,6 +99,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let createdAt: Date
     let updatedAt: Date
     let messageCount: Int
+    let isPinned: Bool
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
