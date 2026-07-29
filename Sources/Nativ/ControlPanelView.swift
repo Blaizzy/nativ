@@ -2417,6 +2417,8 @@ private struct ControlPanelRecentSessionRow: View {
                 Button {
                     if NSEvent.modifierFlags.contains(.shift), recent.isChat {
                         onTogglePin()
+                    } else if isSelected, recent.isChat {
+                        beginRename()
                     } else {
                         onSelect()
                     }
@@ -2477,13 +2479,6 @@ private struct ControlPanelRecentSessionRow: View {
         .opacity(isSelectionDisabled && !isCurrent ? 0.55 : 1)
         .onHover { isHovering = $0 }
         .animation(.easeInOut, value: isHovering)
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded {
-                if recent.isChat {
-                    beginRename()
-                }
-            }
-        )
         .contextMenu {
             Button {
                 onNewChat()
