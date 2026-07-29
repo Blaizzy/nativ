@@ -90,6 +90,20 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
 
+    func testClassifiesStampedModelAsEmbeddingModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/stamped-embedding",
+            modelType: "qwen3",
+            architectures: ["Qwen3ForCausalLM"],
+            sentenceTransformer: false,
+            stamp: ["kind": "embedding", "modality": "text"]
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertTrue(model.capabilities.contains(.embeddings))
+    }
+
     private func makeMageFlowSnapshot(repoID: String) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
@@ -144,7 +158,8 @@ final class LocalModelDiscoveryTests: XCTestCase {
         repoID: String,
         modelType: String,
         architectures: [String],
-        sentenceTransformer: Bool
+        sentenceTransformer: Bool,
+        stamp: [String: String]? = nil
     ) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
@@ -157,10 +172,13 @@ final class LocalModelDiscoveryTests: XCTestCase {
             .appendingPathComponent(revision, isDirectory: true)
 
         try write(revision, to: repository.appendingPathComponent("refs/main"))
-        try writeJSON(
-            ["model_type": modelType, "architectures": architectures],
-            to: snapshot.appendingPathComponent("config.json")
-        )
+        var config: [String: Any] = [
+            "model_type": modelType, "architectures": architectures,
+        ]
+        if let stamp {
+            config["mlx_embeddings"] = stamp
+        }
+        try writeJSON(config, to: snapshot.appendingPathComponent("config.json"))
         try write("", to: snapshot.appendingPathComponent("model.safetensors"))
         if sentenceTransformer {
             try writeJSON(

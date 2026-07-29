@@ -1040,24 +1040,30 @@ enum LocalModelDiscovery {
             capabilities.insert(.textToSpeech)
         }
 
-        let embeddingModelType = ((config["model_type"] as? String) ?? "")
-            .lowercased()
-            .replacingOccurrences(of: "-", with: "_")
-        let textEmbeddingModelTypes: Set<String> = [
-            "bert", "modernbert", "xlm_roberta", "roberta",
-            "qwen3", "gemma3_text", "lfm2", "llama_bidirec"
-        ]
-        let hasSentenceTransformerLayout =
-            fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
-            || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("1_Pooling/config.json").path)
-            || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("sentence_bert_config.json").path)
-        let isEmbeddingModel =
-            hasSentenceTransformerLayout
-            || (!generativeArchitectures.contains(where: descriptors.contains)
-                && (textEmbeddingModelTypes.contains(embeddingModelType)
-                    || descriptors.contains("embedding")))
-        if isEmbeddingModel && !capabilities.contains(.vision) {
-            capabilities.insert(.embeddings)
+        if let embeddingStamp = config["mlx_embeddings"] as? [String: Any],
+            (embeddingStamp["kind"] as? String) == "embedding" {
+            if (embeddingStamp["modality"] as? String) != "vision" {
+                capabilities.insert(.embeddings)
+            }
+        } else {
+            let embeddingModelType = ((config["model_type"] as? String) ?? "")
+                .lowercased()
+                .replacingOccurrences(of: "-", with: "_")
+            let textEmbeddingModelTypes: Set<String> = [
+                "bert", "modernbert", "xlm_roberta", "llama_bidirec"
+            ]
+            let hasSentenceTransformerLayout =
+                fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
+                || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("1_Pooling/config.json").path)
+                || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("sentence_bert_config.json").path)
+            let isEmbeddingModel =
+                hasSentenceTransformerLayout
+                || (!generativeArchitectures.contains(where: descriptors.contains)
+                    && (textEmbeddingModelTypes.contains(embeddingModelType)
+                        || descriptors.contains("embedding")))
+            if isEmbeddingModel && !capabilities.contains(.vision) {
+                capabilities.insert(.embeddings)
+            }
         }
 
         if capabilities.contains(.text)
