@@ -77,6 +77,19 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.text))
     }
 
+    func testClassifiesLLMBasedEmbedderWithPoolingAsEmbeddingModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/qwen3-embedding",
+            modelType: "qwen3",
+            architectures: ["Qwen3ForCausalLM"],
+            sentenceTransformer: true
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertTrue(model.capabilities.contains(.embeddings))
+    }
+
     private func makeMageFlowSnapshot(repoID: String) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),

@@ -1051,11 +1051,12 @@ enum LocalModelDiscovery {
             fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
             || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("1_Pooling/config.json").path)
             || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("sentence_bert_config.json").path)
-        if !generativeArchitectures.contains(where: descriptors.contains)
-            && !capabilities.contains(.vision)
-            && (hasSentenceTransformerLayout
-                || textEmbeddingModelTypes.contains(embeddingModelType)
-                || descriptors.contains("embedding")) {
+        let isEmbeddingModel =
+            hasSentenceTransformerLayout
+            || (!generativeArchitectures.contains(where: descriptors.contains)
+                && (textEmbeddingModelTypes.contains(embeddingModelType)
+                    || descriptors.contains("embedding")))
+        if isEmbeddingModel && !capabilities.contains(.vision) {
             capabilities.insert(.embeddings)
         }
 
