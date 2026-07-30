@@ -19,9 +19,18 @@ public struct MCPToolInfo: Sendable, Equatable {
     }
 }
 
-public enum MCPClientError: Error {
+public enum MCPClientError: LocalizedError {
     case notConnected
     case toolFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            return "The MCP server is not connected."
+        case .toolFailed(let message):
+            return message
+        }
+    }
 }
 
 public actor MCPClient {

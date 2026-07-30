@@ -106,7 +106,7 @@ final class MCPHostManager: ObservableObject {
             } catch {
                 await client.disconnect()
                 guard generation == reloadGeneration else { return }
-                states[config.id] = .failed(Self.message(for: error))
+                states[config.id] = .failed(error.localizedDescription)
             }
         }
     }
@@ -170,17 +170,5 @@ final class MCPHostManager: ObservableObject {
         }
         let joined = String(characters)
         return joined.isEmpty ? "server" : joined
-    }
-
-    private static func message(for error: Error) -> String {
-        if let error = error as? MCPClientError {
-            switch error {
-            case .notConnected:
-                return "Couldn’t connect"
-            case .toolFailed(let text):
-                return text
-            }
-        }
-        return error.localizedDescription
     }
 }

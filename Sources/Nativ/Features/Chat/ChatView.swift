@@ -783,6 +783,81 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
 
+                if let mcpHost = appModel?.mcpHost,
+                   let toolName = toolCall.function?.name,
+                   mcpHost.handlesTool(named: toolName) {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(
+                        approved: approved,
+                        isCancelled: Task.isCancelled
+                    ) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: "The user declined to run this tool.",
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                    do {
+                        let content = try await mcpHost.callTool(
+                            named: toolName,
+                            argumentsJSON: toolCall.function?.arguments
+                        )
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: content,
+                            attachments: []
+                        )
+                    } catch is CancellationError {
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: "The tool call failed: \(error.localizedDescription)",
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
+
                 do {
                     let references = latestImageReferences(
                         beforeOrAt: toolMessageID,
@@ -874,7 +949,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        let toolDefinitions = advertisesToolsForModel
+        var toolDefinitions = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
                 context: ChatToolExecutionContext(
                     imageGenerationModelID: settings.imageGenerationModelID,
@@ -887,6 +962,9 @@ final class ChatViewModel: ObservableObject {
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
+        if advertisesToolsForModel {
+            toolDefinitions.append(contentsOf: appModel?.mcpHost.toolDefinitions() ?? [])
+        }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
         return MLXChatCompletionRequest(
             model: modelID,
