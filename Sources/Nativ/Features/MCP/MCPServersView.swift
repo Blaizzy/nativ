@@ -65,7 +65,11 @@ private struct MCPServerRow: View {
             }
             TextField("Command (for example, npx)", text: $server.command)
                 .textFieldStyle(.roundedBorder)
-            TextField("Arguments", text: argumentsText)
+            TextField("Arguments (one per line)", text: argumentsText, axis: .vertical)
+                .lineLimit(1...5)
+                .textFieldStyle(.roundedBorder)
+            TextField("Environment (KEY=VALUE per line)", text: environmentText, axis: .vertical)
+                .lineLimit(1...4)
                 .textFieldStyle(.roundedBorder)
         }
         .padding(10)
@@ -74,8 +78,29 @@ private struct MCPServerRow: View {
 
     private var argumentsText: Binding<String> {
         Binding(
-            get: { server.arguments.joined(separator: " ") },
-            set: { server.arguments = $0.split(separator: " ").map(String.init) }
+            get: { server.arguments.joined(separator: "\n") },
+            set: { server.arguments = $0.split(whereSeparator: \.isNewline).map(String.init) }
+        )
+    }
+
+    private var environmentText: Binding<String> {
+        Binding(
+            get: {
+                server.environment
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key)=\($0.value)" }
+                    .joined(separator: "\n")
+            },
+            set: { text in
+                var parsed: [String: String] = [:]
+                for line in text.split(whereSeparator: \.isNewline) {
+                    guard let separator = line.firstIndex(of: "=") else { continue }
+                    let key = line[..<separator].trimmingCharacters(in: .whitespaces)
+                    guard !key.isEmpty else { continue }
+                    parsed[key] = String(line[line.index(after: separator)...])
+                }
+                server.environment = parsed
+            }
         )
     }
 

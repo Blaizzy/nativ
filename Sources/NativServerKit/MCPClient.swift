@@ -21,12 +21,15 @@ public struct MCPToolInfo: Sendable, Equatable {
 
 public enum MCPClientError: LocalizedError {
     case notConnected
+    case timedOut
     case toolFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .notConnected:
             return "The MCP server is not connected."
+        case .timedOut:
+            return "The tool call timed out."
         case .toolFailed(let message):
             return message
         }
@@ -122,16 +125,22 @@ public actor MCPClient {
         return infos
     }
 
-    public func callTool(name: String, argumentsJSON: String?) async throws -> String {
+    public func callTool(
+        name: String,
+        argumentsJSON: String?,
+        timeout: TimeInterval = 120
+    ) async throws -> String {
         guard let client else { throw MCPClientError.notConnected }
 
         let arguments = try Self.arguments(from: argumentsJSON)
-        let (content, isError) = try await client.callTool(name: name, arguments: arguments)
-        let rendered = Self.render(content)
-        if isError == true {
-            throw MCPClientError.toolFailed(rendered)
+        return try await Self.withTimeout(timeout) {
+            let (content, isError) = try await client.callTool(name: name, arguments: arguments)
+            let rendered = Self.render(content)
+            if isError == true {
+                throw MCPClientError.toolFailed(rendered)
+            }
+            return rendered
         }
-        return rendered
     }
 
     public func disconnect() async {
@@ -146,6 +155,24 @@ public actor MCPClient {
         process = nil
         inputPipe = nil
         outputPipe = nil
+    }
+
+    private static func withTimeout<T: Sendable>(
+        _ seconds: TimeInterval,
+        _ operation: @Sendable @escaping () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw MCPClientError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw MCPClientError.timedOut
+            }
+            return result
+        }
     }
 
     private static func schema(from value: Value?) throws -> MLXJSONValue {

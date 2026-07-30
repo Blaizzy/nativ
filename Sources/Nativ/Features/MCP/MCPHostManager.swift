@@ -80,6 +80,7 @@ final class MCPHostManager: ObservableObject {
         let enabled = servers.filter(\.isEnabled)
         guard !enabled.isEmpty else { return }
 
+        var usedSlugs: Set<String> = []
         let searchPath = await Task.detached(priority: .utility) {
             ShellEnvironment.resolveFromLoginShell(names: ["PATH"])["PATH"]
         }.value
@@ -102,7 +103,8 @@ final class MCPHostManager: ObservableObject {
                     await client.disconnect()
                     return
                 }
-                register(tools: tools, client: client, server: config)
+                let slug = Self.uniqueSlug(for: config, used: &usedSlugs)
+                register(tools: tools, client: client, slug: slug)
                 clients[config.id] = client
                 states[config.id] = .connected(toolCount: tools.count)
             } catch {
@@ -113,8 +115,7 @@ final class MCPHostManager: ObservableObject {
         }
     }
 
-    private func register(tools: [MCPToolInfo], client: MCPClient, server: MCPServerConfig) {
-        let slug = Self.slug(server.name.isEmpty ? server.command : server.name)
+    private func register(tools: [MCPToolInfo], client: MCPClient, slug: String) {
         for tool in tools {
             let name = "mcp__\(slug)__\(tool.name)"
             guard routes[name] == nil else { continue }
@@ -172,5 +173,17 @@ final class MCPHostManager: ObservableObject {
         }
         let joined = String(characters)
         return joined.isEmpty ? "server" : joined
+    }
+
+    private static func uniqueSlug(for config: MCPServerConfig, used: inout Set<String>) -> String {
+        let base = slug(config.name.isEmpty ? config.command : config.name)
+        var candidate = base
+        var suffix = 2
+        while used.contains(candidate) {
+            candidate = "\(base)_\(suffix)"
+            suffix += 1
+        }
+        used.insert(candidate)
+        return candidate
     }
 }
