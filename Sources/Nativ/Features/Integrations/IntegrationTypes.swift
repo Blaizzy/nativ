@@ -18,6 +18,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
     case cursor
     case jetbrains
     case buzz
+    case openInterpreter
 
     var id: String { rawValue }
 
@@ -40,6 +41,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cursor: "Cursor"
         case .jetbrains: "JetBrains"
         case .buzz: "Buzz"
+        case .openInterpreter: "Open Interpreter"
         }
     }
 
@@ -62,6 +64,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cursor: "cursor"
         case .jetbrains: "jetbrains"
         case .buzz: "buzz"
+        case .openInterpreter: "interpreter"
         }
     }
 
@@ -86,6 +89,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cursor: "OpenAI-compatible endpoint in Cursor's AI panel"
         case .jetbrains: "OpenAI-compatible endpoint in JetBrains AI Assistant"
         case .buzz: "Self-hostable workspace for people and AI agents"
+        case .openInterpreter: "Codex-compatible terminal coding agent"
         }
     }
 
@@ -108,6 +112,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cursor: URL(string: "https://docs.cursor.com/settings/models")!
         case .jetbrains: URL(string: "https://www.jetbrains.com/help/ai-assistant/configure-openai-compatible-models.html")!
         case .buzz: URL(string: "https://github.com/block/buzz")!
+        case .openInterpreter: URL(string: "https://www.openinterpreter.com/docs/terminal/install")!
         }
     }
 

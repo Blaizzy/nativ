@@ -18,7 +18,8 @@ final class IntegrationServicesTests: XCTestCase {
         .cline,
         .cursor,
         .jetbrains,
-        .buzz
+        .buzz,
+        .openInterpreter
     ]
 
     private var temporaryRoot: URL!
@@ -399,6 +400,24 @@ final class IntegrationServicesTests: XCTestCase {
         try configure(.buzz)
         XCTAssertFalse(FileManager.default.fileExists(atPath: manager.configurationURL(for: .buzz).path))
         XCTAssertEqual(launchCommand(for: .buzz), "cd '/tmp/Nativ Project'\n'/tools/buzz'")
+    }
+
+    func testOpenInterpreterConfigurationAndLaunchCommand() throws {
+        try configure(.openInterpreter)
+
+        let configurationURL = manager.configurationURL(for: .openInterpreter)
+        let contents = try String(contentsOf: configurationURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("model_provider = \"nativ\""))
+        XCTAssertTrue(contents.contains("model = \"org/local-model\""))
+        XCTAssertTrue(contents.contains("base_url = \"http://nativ.test:49152/v1\""))
+        XCTAssertTrue(contents.contains("env_key = \"NATIV_API_KEY\""))
+        XCTAssertTrue(contents.contains("wire_api = \"chat\""))
+
+        let home = configurationURL.deletingLastPathComponent().path
+        XCTAssertEqual(
+            launchCommand(for: .openInterpreter),
+            "cd '/tmp/Nativ Project'\nexport CODEX_HOME='\(home)'\nexport NATIV_API_KEY='nativ'\n'/tools/interpreter' '--provider' 'nativ' '--model' 'org/local-model'"
+        )
     }
 
     private func configure(_ tool: IntegrationTool) throws {
