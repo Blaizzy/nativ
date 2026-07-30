@@ -17,6 +17,9 @@ packages:
   textual:
     url: https://github.com/gonzalezreal/textual.git
     exactVersion: 0.5.0
+  mcp-swift-sdk:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    exactVersion: 0.9.0
 schemes:
   Nativ:
     build:
@@ -49,6 +52,9 @@ targets:
         script: |
           set -euo pipefail
           python3 "$SRCROOT/PythonDistribution/Scripts/build_xcode_framework_resource.py"
+    dependencies:
+      - package: mcp-swift-sdk
+        product: MCP
     settings:
       base:
         ARCHS: arm64
