@@ -13,8 +13,6 @@ certifi==2026.4.22
 cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.3.3
-datasets==4.8.5
-dill==0.4.1
 fastapi==0.136.1
 filelock==3.29.0
 frozenlist==1.8.0
@@ -35,15 +33,12 @@ mlx-metal>=0.32.0
 mlx-vlm>=0.6.8
 mlx>=0.32.0
 multidict==6.7.1
-multiprocess==0.70.19
 numpy==2.4.4
 opencv-python==4.13.0.92
 packaging==26.2
-pandas==3.0.2
 pillow==12.2.0
 propcache==0.4.1
 protobuf==7.34.1
-pyarrow==24.0.0
 pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
@@ -67,5 +62,4 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.7.0
 uvicorn==0.46.0
-xxhash==3.7.0
 yarl==1.23.0
