@@ -221,6 +221,9 @@ enum ChatToolPresentation {
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
             default:
+                if let toolName, toolName.hasPrefix("mcp__") {
+                    return "puzzlepiece.extension"
+                }
                 return "wrench.and.screwdriver"
             }
         }
@@ -295,8 +298,15 @@ enum ChatToolPresentation {
         }
     }
 
+    private static func mcpLabel(_ toolName: String) -> String? {
+        guard toolName.hasPrefix("mcp__") else { return nil }
+        let components = toolName.dropFirst(5).components(separatedBy: "__")
+        guard components.count >= 2 else { return String(toolName.dropFirst(5)) }
+        return "\(components.dropFirst().joined(separator: "__")) · \(components[0])"
+    }
+
     private static func genericTitle(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
-        let name = toolName ?? "tool"
+        let name = toolName.flatMap(mcpLabel) ?? toolName ?? "tool"
         switch status {
         case .running:
             return "Running \(name)…"
