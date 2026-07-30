@@ -53,6 +53,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published var settings = NativSettings.load() {
         didSet {
             settings.save()
+            if settings.mcpServers != oldValue.mcpServers {
+                mcpHost.reload(servers: settings.mcpServers)
+            }
         }
     }
 
@@ -60,6 +63,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     var onMenuStateChanged: (() -> Void)?
 
     private let server = NativProcessController()
+    let mcpHost = MCPHostManager()
     private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
     private var metricsTimer: Timer?
@@ -87,6 +91,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         isRunning = server.isRunning
         resolveHuggingFaceEnvironmentFromLoginShell()
         migrateCustomHuggingFaceCredentialIfNeeded()
+        mcpHost.reload(servers: settings.mcpServers)
     }
 
     /// GUI apps inherit launchd's environment, which excludes exports from
@@ -679,6 +684,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         if server.isRunning {
             try? server.stop(timeout: 2)
         }
+        mcpHost.shutdown()
         isRunning = false
         settingsAppliedAtServerStart = nil
         huggingFaceTokenAppliedAtServerStart = nil
