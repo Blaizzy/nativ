@@ -202,7 +202,14 @@ struct AudioView: View {
 
     private var metricGrid: some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 220), spacing: 14)],
+            columns: Array(
+                repeating: GridItem(
+                    .flexible(minimum: 170),
+                    spacing: 14,
+                    alignment: .top
+                ),
+                count: 4
+            ),
             alignment: .leading,
             spacing: 14
         ) {
@@ -294,68 +301,183 @@ struct AudioView: View {
     }
 
     private var modelConfigurationPanel: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label("Speech-to-text model", systemImage: "cpu")
-                    .font(.headline)
-                Text("The selected model applies to dictation in every app.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Color.accentColor.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Transcription model")
+                        .font(.headline)
+                    Text("This model handles voice dictation everywhere you use Nativ.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
+            Divider()
+                .padding(.vertical, 18)
+
             VStack(alignment: .leading, spacing: 8) {
+                Text("Model selection")
+                    .font(.subheadline.weight(.semibold))
+                Text("Choose a specific installed model, or let Nativ pick the first compatible one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if localLibrary.isScanning && speechModels.isEmpty {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
                         Text("Scanning installed models…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .frame(height: 30)
+                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                 } else {
-                    Picker("Speech-to-text model", selection: speechModelSelection) {
-                        Text("Automatic").tag("")
-                        if let selectedModelID,
-                           !speechModels.contains(where: { $0.repoID == selectedModelID })
-                        {
-                            Text(selectedModelID).tag(selectedModelID)
-                        }
-                        ForEach(speechModels) { localModel in
-                            Text(localModel.displayName).tag(localModel.repoID)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                    .disabled(model.modelSwitchInProgress)
-                }
-
-                if speechModels.isEmpty && !localLibrary.isScanning {
-                    Button("Find speech models", action: onOpenSpeechModels)
-                        .buttonStyle(.link)
-                } else if let effectiveSpeechModel {
-                    Text("Using \(effectiveSpeechModel.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                if model.modelSwitchInProgress {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.small)
-                        Text("Switching model and restarting the server…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    speechModelMenu
                 }
             }
 
-            Text("Automatic uses the first compatible speech-to-text model found in your configured local model paths.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+                .padding(.vertical, 18)
+
+            speechModelStatus
         }
-        .padding(18)
+        .padding(20)
         .audioPanelStyle()
+    }
+
+    private var speechModelMenu: some View {
+        Menu {
+            speechModelMenuButton(title: "Automatic", modelID: "")
+
+            if let selectedModelID,
+               !speechModels.contains(where: { $0.repoID == selectedModelID })
+            {
+                speechModelMenuButton(title: selectedModelID, modelID: selectedModelID)
+            }
+
+            if !speechModels.isEmpty {
+                Divider()
+            }
+
+            ForEach(speechModels) { localModel in
+                speechModelMenuButton(
+                    title: localModel.displayName,
+                    modelID: localModel.repoID
+                )
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selectedModelID == nil ? "wand.and.stars" : "cpu")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+
+                Text(speechModelSelectionTitle)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 12)
+
+                if model.modelSwitchInProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, minHeight: 28)
+        }
+        .menuStyle(.button)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(model.modelSwitchInProgress)
+    }
+
+    @ViewBuilder
+    private var speechModelStatus: some View {
+        if speechModels.isEmpty && !localLibrary.isScanning {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("No speech model found")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Download or add a compatible model to a configured local model path.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                Button("Find models", action: onOpenSpeechModels)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color.orange.opacity(0.07),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+        } else if let effectiveSpeechModel {
+            HStack(alignment: .top, spacing: 12) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: Color.green.opacity(0.35), radius: 4)
+                    .padding(.top, 5)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.modelSwitchInProgress ? "Switching model…" : "Active model")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(effectiveSpeechModel.displayName)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    Text(
+                        selectedModelID == nil
+                            ? "Selected automatically from your local model library."
+                            : "Selected manually for all voice dictation."
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color.primary.opacity(0.025),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+        }
+    }
+
+    private func speechModelMenuButton(
+        title: String,
+        modelID: String
+    ) -> some View {
+        Button {
+            speechModelSelection.wrappedValue = modelID
+        } label: {
+            HStack {
+                Text(title)
+                if (selectedModelID ?? "") == modelID {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
     }
 
     private var animationPicker: some View {
@@ -759,6 +881,14 @@ struct AudioView: View {
             selectedModelID: selectedModelID
         )
         return speechModels.first { $0.repoID == resolvedID }
+    }
+
+    private var speechModelSelectionTitle: String {
+        guard let selectedModelID else {
+            return "Automatic"
+        }
+        return speechModels.first { $0.repoID == selectedModelID }?.displayName
+            ?? selectedModelID
     }
 
     private var speechModelSelection: Binding<String> {

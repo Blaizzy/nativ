@@ -246,6 +246,15 @@ def validate_mlx_vlm_source(path: Path) -> Path:
     return source
 
 
+def validate_mlx_audio_source(path: Path) -> Path:
+    source = path.resolve()
+    if not (source / "pyproject.toml").exists():
+        raise SystemExit(f"Missing pyproject.toml in local mlx-audio source: {source}")
+    if not (source / "mlx_audio").exists():
+        raise SystemExit(f"Missing mlx_audio package in local mlx-audio source: {source}")
+    return source
+
+
 def build_signature(
     *,
     asset: Asset,
@@ -254,10 +263,11 @@ def build_signature(
     target: str,
     requirements: Path | None,
     mlx_vlm_source: Path | None,
+    mlx_audio_source: Path | None,
     skip_install: bool,
 ) -> dict[str, object]:
     return {
-        "version": 4,
+        "version": 6,
         "asset": asset.name,
         "python_version": python_version,
         "pbs_release": pbs_release,
@@ -278,6 +288,24 @@ def build_signature(
         "mlx_vlm_source_status": (
             git_output(mlx_vlm_source, ["status", "--short", "--untracked-files=no"])
             if mlx_vlm_source
+            else None
+        ),
+        "mlx_audio_source": (
+            relative_or_absolute(mlx_audio_source) if mlx_audio_source else None
+        ),
+        "mlx_audio_source_branch": (
+            git_output(mlx_audio_source, ["branch", "--show-current"])
+            if mlx_audio_source
+            else None
+        ),
+        "mlx_audio_source_head": (
+            git_output(mlx_audio_source, ["rev-parse", "HEAD"])
+            if mlx_audio_source
+            else None
+        ),
+        "mlx_audio_source_status": (
+            git_output(mlx_audio_source, ["status", "--short", "--untracked-files=no"])
+            if mlx_audio_source
             else None
         ),
         "launcher_sha256": file_sha256(LAUNCHER_SOURCE),
@@ -476,6 +504,7 @@ def install_requirements(
     python: Path,
     *,
     requirements: Path,
+    mlx_audio_source: Path | None,
     extra_pip_args: list[str],
 ) -> None:
     if not requirements.exists():
@@ -484,19 +513,19 @@ def install_requirements(
     env = os.environ.copy()
     env["PYTHONNOUSERSITE"] = "1"
 
-    run(
-        [
-            str(python),
-            "-m",
-            "pip",
-            "install",
-            "--only-binary=:all:",
-            "-r",
-            str(requirements),
-            *extra_pip_args,
-        ],
-        env=env,
-    )
+    command = [
+        str(python),
+        "-m",
+        "pip",
+        "install",
+        "--only-binary=:all:",
+        "-r",
+        str(requirements),
+    ]
+    if mlx_audio_source:
+        log(f"Resolving requirements with local mlx-audio source {mlx_audio_source}")
+        command.append(str(mlx_audio_source))
+    run([*command, *extra_pip_args], env=env)
 
 
 def install_local_mlx_vlm(
@@ -509,6 +538,45 @@ def install_local_mlx_vlm(
     env["PYTHONNOUSERSITE"] = "1"
 
     log(f"Installing mlx-vlm from local source {source}")
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+            "setuptools",
+            "wheel",
+        ],
+        env=env,
+    )
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--force-reinstall",
+            "--no-build-isolation",
+            str(source),
+            *extra_pip_args,
+        ],
+        env=env,
+    )
+
+
+def install_local_mlx_audio(
+    python: Path,
+    *,
+    source: Path,
+    extra_pip_args: list[str],
+) -> None:
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+
+    log(f"Installing mlx-audio from local source {source}")
     run(
         [
             str(python),
@@ -602,6 +670,7 @@ def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     default_mlx_vlm_source = os.environ.get("MLX_VLM_SOURCE_PATH")
+    default_mlx_audio_source = os.environ.get("MLX_AUDIO_SOURCE_PATH")
     parser = argparse.ArgumentParser(
         description="Build a relocatable mlx-vlm server distribution with python-build-standalone."
     )
@@ -660,6 +729,12 @@ def parse_args() -> argparse.Namespace:
         help="Install mlx-vlm from a local source checkout after installing dependencies",
     )
     parser.add_argument(
+        "--mlx-audio-source",
+        type=Path,
+        default=Path(default_mlx_audio_source) if default_mlx_audio_source else None,
+        help="Resolve and install mlx-audio from a local source checkout",
+    )
+    parser.add_argument(
         "--pip-arg",
         action="append",
         default=[],
@@ -711,6 +786,11 @@ def main() -> None:
         if args.mlx_vlm_source and not args.skip_install
         else None
     )
+    mlx_audio_source = (
+        validate_mlx_audio_source(args.mlx_audio_source)
+        if args.mlx_audio_source and not args.skip_install
+        else None
+    )
     signature = build_signature(
         asset=asset,
         python_version=args.python_version,
@@ -718,6 +798,7 @@ def main() -> None:
         target=target,
         requirements=requirements,
         mlx_vlm_source=mlx_vlm_source,
+        mlx_audio_source=mlx_audio_source,
         skip_install=args.skip_install,
     )
 
@@ -736,13 +817,24 @@ def main() -> None:
 
     if not args.skip_install:
         if requirements:
-            install_requirements(python, requirements=requirements, extra_pip_args=args.pip_arg)
+            install_requirements(
+                python,
+                requirements=requirements,
+                mlx_audio_source=mlx_audio_source,
+                extra_pip_args=args.pip_arg,
+            )
         else:
             install_mlx_vlm(
                 python,
                 mlx_vlm_version=args.mlx_vlm_version,
                 extra_pip_args=args.pip_arg,
             )
+            if mlx_audio_source:
+                install_local_mlx_audio(
+                    python,
+                    source=mlx_audio_source,
+                    extra_pip_args=args.pip_arg,
+                )
         if mlx_vlm_source:
             install_local_mlx_vlm(
                 python,

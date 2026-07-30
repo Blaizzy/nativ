@@ -109,6 +109,16 @@ open build/XcodeDerivedData/Build/Products/Debug/Nativ.app
 
 The first build can take a while because `NativServerKit` creates a relocatable Python runtime and installs the pinned `mlx-vlm` server dependencies into the framework resources. Later builds reuse the bundle until an input changes.
 
+To test an unreleased `mlx-audio` checkout, point the build at its local path:
+
+```sh
+MLX_AUDIO_SOURCE_PATH=/path/to/mlx-audio make xcode-build
+```
+
+The local package participates in dependency resolution, so its `pyproject.toml` metadata
+replaces the published package metadata. A sibling `../mlx-audio` checkout on the `main`
+branch is detected automatically, matching the existing local `mlx-vlm` behavior.
+
 ## Use Nativ as a local API server
 
 By default, the app exposes its server at `http://127.0.0.1:8080`. You can change the host and port in the Developer page, which also lists every available endpoint and lets you copy URLs directly.
