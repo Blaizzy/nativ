@@ -1391,6 +1391,14 @@ private final class ChatComposerNSTextView: NSTextView {
     var onPasteImage: ((NSPasteboard) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
+        // Return confirms a marked composition in input methods such as Japanese
+        // and Chinese. Let NSTextView route those events through the input method
+        // before applying the composer send/newline behavior.
+        if hasMarkedText() {
+            super.keyDown(with: event)
+            return
+        }
+
         switch ComposerReturnBehavior.resolve(for: event) {
         case .submit:
             onSubmit?()
