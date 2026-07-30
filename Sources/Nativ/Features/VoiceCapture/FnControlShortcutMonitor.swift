@@ -132,8 +132,6 @@ final class FnControlShortcutMonitor {
             return
         }
 
-        requestAccessibilityAccessIfNeeded()
-
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.flagsChanged, .keyDown]
         ) {
@@ -398,13 +396,4 @@ final class FnControlShortcutMonitor {
         hotKeyEventHandler = nil
     }
 
-    private func requestAccessibilityAccessIfNeeded() {
-        guard !AXIsProcessTrusted() else {
-            return
-        }
-        let options = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-        ] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
-    }
 }

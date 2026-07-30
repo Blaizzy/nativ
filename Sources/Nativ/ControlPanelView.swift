@@ -1,15 +1,16 @@
 import AppKit
+import NativExtensionSDK
 import SwiftUI
 import UniformTypeIdentifiers
 
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
     case imageGeneration = "Images"
-    case audio = "Audio"
     case dashboard = "Dashboard"
     case system = "System"
     case models = "Models"
     case integrations = "Integrations"
+    case extensions = "Extensions"
     case developer = "Developer"
     case settings = "Settings"
 
@@ -17,11 +18,11 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         [
             .chat,
             .imageGeneration,
-            .audio,
             .dashboard,
             .system,
             .models,
             .integrations,
+            .extensions,
             .developer,
         ]
     }
@@ -34,8 +35,6 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "bubble.left.and.bubble.right"
         case .imageGeneration:
             "photo.on.rectangle"
-        case .audio:
-            "waveform.badge.mic"
         case .dashboard:
             "chart.bar.xaxis"
         case .system:
@@ -44,6 +43,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "cube.transparent"
         case .integrations:
             "puzzlepiece.extension"
+        case .extensions:
+            "shippingbox"
         case .developer:
             "hammer"
         case .settings:
@@ -55,6 +56,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
 @MainActor
 final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var requestedTab: ControlPanelTab?
+    @Published private(set) var requestedExtensionPageID: String?
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
@@ -62,7 +64,13 @@ final class ControlPanelNavigation: ObservableObject {
     private var consumedToggleSidebarRequest = 0
 
     func open(_ tab: ControlPanelTab) {
+        requestedExtensionPageID = nil
         requestedTab = tab
+    }
+
+    func openExtensionPage(_ pageID: String) {
+        requestedTab = nil
+        requestedExtensionPageID = pageID
     }
 
     func openSpeechModelDiscovery() {
@@ -218,6 +226,7 @@ struct ControlPanelView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
+    @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
@@ -319,6 +328,19 @@ struct ControlPanelView: View {
         .onReceive(navigation.$requestedTab) { tab in
             guard let tab else { return }
             applySidebarSelection(.tab(tab))
+        }
+        .onReceive(navigation.$requestedExtensionPageID) { pageID in
+            guard let pageID else { return }
+            applySidebarSelection(.extensionPage(pageID))
+        }
+        .onChange(of: extensionManager.records) { _, _ in
+            guard case .extensionPage(let pageID) = sidebarSelection,
+                  !extensionManager.enabledSidebarContributions.contains(
+                    where: { $0.id == pageID }
+                  ) else {
+                return
+            }
+            applySidebarSelection(.tab(.extensions))
         }
         .onChange(of: navigation.newChatRequest) { _, _ in
             handleNewChatRequest()
@@ -501,35 +523,60 @@ struct ControlPanelView: View {
     private var sidebarNavigation: some View {
         VStack(spacing: 0) {
             ForEach(ControlPanelTab.allCases) { tab in
-                let selection = ControlPanelSidebarSelection.tab(tab)
-                Button {
-                    applySidebarSelection(selection)
-                } label: {
-                    HStack(spacing: 8) {
-                        Label(tab.rawValue, systemImage: tab.systemImage)
-                        Spacer(minLength: 0)
-                        if tab == .models {
-                            HStack(spacing: 6) {
-                                if model.isModelLoading,
-                                   let percentage = model.modelLoadingPercentageText {
-                                    Text(percentage)
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 34, alignment: .trailing)
-                                }
-                                if downloads.activeCount > 0 {
-                                    ModelsDownloadArrow(count: downloads.activeCount)
-                                }
-                            }
-                        }
+                sidebarTabButton(tab)
+
+                if tab == .imageGeneration {
+                    ForEach(extensionManager.enabledSidebarContributions) { contribution in
+                        extensionSidebarButton(contribution)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(.rect)
                 }
-                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    private func sidebarTabButton(_ tab: ControlPanelTab) -> some View {
+        let selection = ControlPanelSidebarSelection.tab(tab)
+        return Button {
+            applySidebarSelection(selection)
+        } label: {
+            HStack(spacing: 8) {
+                Label(tab.rawValue, systemImage: tab.systemImage)
+                Spacer(minLength: 0)
+                if tab == .models {
+                    HStack(spacing: 6) {
+                        if model.isModelLoading,
+                           let percentage = model.modelLoadingPercentageText {
+                            Text(percentage)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                        if downloads.activeCount > 0 {
+                            ModelsDownloadArrow(count: downloads.activeCount)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+        .buttonStyle(.plain)
+    }
+
+    private func extensionSidebarButton(
+        _ contribution: NativSidebarContribution
+    ) -> some View {
+        let selection = ControlPanelSidebarSelection.extensionPage(contribution.id)
+        return Button {
+            applySidebarSelection(selection)
+        } label: {
+            Label(contribution.title, systemImage: contribution.systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+        .buttonStyle(.plain)
     }
 
     private var pinnedSection: some View {
@@ -757,8 +804,6 @@ struct ControlPanelView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))
         )
-    }
-
     private var sidebarPinnedHeader: some View {
         HStack(spacing: 8) {
             Text("Pinned")
@@ -849,7 +894,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .audio, .dashboard, .system, .integrations, .settings:
+        case .imageGeneration, .dashboard, .system, .integrations, .extensions, .settings:
             false
         }
     }
@@ -1204,62 +1249,10 @@ struct ControlPanelView: View {
     private var detail: some View {
         VStack(spacing: 0) {
             Group {
-                switch selectedTab {
-                case .chat:
-                    ChatView(
-                        model: model,
-                        chat: chat,
-                        showsConfiguration: $isModelConfigurationVisible,
-                        conversationWidthReduction: isFullScreen
-                            ? 0
-                            : ControlPanelLayout.titlebarHeight
-                    )
-                case .imageGeneration:
-                    ImageGenerationView(model: model, viewModel: imageGeneration)
-                case .audio:
-                    AudioView(
-                        model: model,
-                        titleLeadingInset: detailTitleLeadingInset,
-                        onOpenSpeechModels: {
-                            navigation.openSpeechModelDiscovery()
-                        }
-                    )
-                case .dashboard:
-                    StatsView(
-                        model: model,
-                        dashboard: dashboard,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .system:
-                    SystemMonitorView(
-                        store: systemMonitor,
-                        menuBarPreferences: .shared,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .models:
-                    ModelsView(
-                        model: model,
-                        showsConfiguration: $isModelConfigurationVisible,
-                        titleLeadingInset: detailTitleLeadingInset,
-                        speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
-                    )
-                case .integrations:
-                    IntegrationsView(
-                        model: model,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .developer:
-                    DeveloperView(
-                        model: model,
-                        runtime: runtime,
-                        showsConfiguration: $isModelConfigurationVisible,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .settings:
-                    SettingsView(
-                        softwareUpdater: softwareUpdater,
-                        launchAtLogin: launchAtLogin
-                    )
+                if case .extensionPage(let pageID) = sidebarSelection {
+                    extensionPage(pageID)
+                } else {
+                    corePage
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1294,6 +1287,90 @@ struct ControlPanelView: View {
         }
     }
 
+    @ViewBuilder
+    private var corePage: some View {
+        switch selectedTab {
+        case .chat:
+            ChatView(
+                model: model,
+                chat: chat,
+                showsConfiguration: $isModelConfigurationVisible,
+                conversationWidthReduction: isFullScreen
+                    ? 0
+                    : ControlPanelLayout.titlebarHeight
+            )
+        case .imageGeneration:
+            ImageGenerationView(model: model, viewModel: imageGeneration)
+        case .dashboard:
+            StatsView(
+                model: model,
+                dashboard: dashboard,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .system:
+            SystemMonitorView(
+                store: systemMonitor,
+                menuBarPreferences: .shared,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .models:
+            ModelsView(
+                model: model,
+                showsConfiguration: $isModelConfigurationVisible,
+                titleLeadingInset: detailTitleLeadingInset,
+                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
+            )
+        case .integrations:
+            IntegrationsView(
+                model: model,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .extensions:
+            ExtensionsView(
+                manager: extensionManager,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .developer:
+            DeveloperView(
+                model: model,
+                runtime: runtime,
+                showsConfiguration: $isModelConfigurationVisible,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .settings:
+            SettingsView(
+                softwareUpdater: softwareUpdater,
+                launchAtLogin: launchAtLogin
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func extensionPage(_ pageID: String) -> some View {
+        if let page = extensionManager.makePage(
+            id: pageID,
+            context: NativExtensionPageContext(
+                model: model,
+                titleLeadingInset: detailTitleLeadingInset,
+                openSpeechModels: {
+                    navigation.openSpeechModelDiscovery()
+                }
+            )
+        ) {
+            page
+        } else {
+            ContentUnavailableView {
+                Label("Extension Unavailable", systemImage: "puzzlepiece.extension")
+            } description: {
+                Text("Enable or restore this extension from the Extensions page.")
+            } actions: {
+                Button("Open Extensions") {
+                    applySidebarSelection(.tab(.extensions))
+                }
+            }
+        }
+    }
+
     private func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
         switch selection {
         case .tab(let tab):
@@ -1305,6 +1382,16 @@ struct ControlPanelView: View {
             }
             sidebarSelection = selection
             selectedTab = tab
+        case .extensionPage(let pageID):
+            guard extensionManager.enabledSidebarContributions.contains(
+                where: { $0.id == pageID }
+            ) else {
+                sidebarSelection = .tab(.extensions)
+                selectedTab = .extensions
+                return
+            }
+            sidebarSelection = selection
+            selectedTab = .extensions
         case .chat(let sessionID):
             if chat.sessions.contains(where: { $0.id == sessionID }) {
                 chat.selectSession(sessionID)
@@ -1331,11 +1418,14 @@ struct ControlPanelView: View {
     }
 
     private var detailExtendsIntoTitlebar: Bool {
+        if case .extensionPage = sidebarSelection {
+            return true
+        }
         switch selectedTab {
-        case .audio, .dashboard, .system, .models, .integrations, .developer:
-            true
+        case .dashboard, .system, .models, .integrations, .extensions, .developer:
+            return true
         case .chat, .imageGeneration, .settings:
-            false
+            return false
         }
     }
 
@@ -1404,7 +1494,7 @@ struct ControlPanelView: View {
             fileURL = chat.sessionDataFileURL(for: sessionID)
         case .imageGeneration(let sessionID):
             fileURL = imageGeneration.sessionDataFileURL(for: sessionID)
-        case .tab:
+        case .tab, .extensionPage:
             fileURL = nil
         }
         guard let fileURL else {
@@ -1424,7 +1514,7 @@ struct ControlPanelView: View {
             chat.deleteSession(sessionID)
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
-        case .tab:
+        case .tab, .extensionPage:
             break
         }
 
@@ -1477,6 +1567,8 @@ struct ControlPanelView: View {
             .tab(.imageGeneration)
         case .tab(let tab):
             .tab(tab)
+        case .extensionPage(let pageID):
+            .extensionPage(pageID)
         }
     }
 
@@ -1486,7 +1578,7 @@ struct ControlPanelView: View {
             return sessionID == chat.currentSessionID
         case .imageGeneration(let sessionID):
             return sessionID == imageGeneration.currentSessionID
-        case .tab:
+        case .tab, .extensionPage:
             return false
         }
     }
@@ -1497,7 +1589,7 @@ struct ControlPanelView: View {
             return chat.isSessionBusy(sessionID)
         case .imageGeneration:
             return imageGeneration.isGenerating
-        case .tab:
+        case .tab, .extensionPage:
             return false
         }
     }
@@ -1508,7 +1600,7 @@ struct ControlPanelView: View {
             return false
         case .imageGeneration:
             return imageGeneration.isGenerating
-        case .tab:
+        case .tab, .extensionPage:
             return false
         }
     }
@@ -2739,6 +2831,7 @@ private struct ControlPanelDetailSafeArea: ViewModifier {
 
 private enum ControlPanelSidebarSelection: Hashable {
     case tab(ControlPanelTab)
+    case extensionPage(String)
     case chat(UUID)
     case imageGeneration(UUID)
 }
@@ -3124,6 +3217,7 @@ private extension View {
         model: .init(),
         navigation: .init(),
         runtime: .init(),
+        extensionManager: .init(builtInExtensions: []),
         softwareUpdater: .init()
     )
 }

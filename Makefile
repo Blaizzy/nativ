@@ -1,5 +1,5 @@
 .PHONY: build verify clean
-.PHONY: xcode-generate xcode-build xcode-smoke xcode-lifecycle-smoke
+.PHONY: xcode-generate xcode-build xcode-run xcode-smoke xcode-lifecycle-smoke
 
 XCODE_DERIVED_DATA ?= build/XcodeDerivedData
 
@@ -20,6 +20,10 @@ xcode-generate:
 
 xcode-build: xcode-generate
 	xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug -derivedDataPath $(XCODE_DERIVED_DATA) CODE_SIGNING_ALLOWED=NO build
+	./scripts/sign_macos_debug.sh $(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app
+
+xcode-run: xcode-build
+	open -na $(abspath $(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app)
 
 xcode-smoke: xcode-build
 	$(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app/Contents/MacOS/Nativ --smoke-test

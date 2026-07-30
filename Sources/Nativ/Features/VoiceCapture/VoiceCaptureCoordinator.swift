@@ -459,14 +459,29 @@ final class VoiceCaptureCoordinator {
             return
         }
         hasShownInsertionPermissionAlert = true
-        showTranscriptionError(
-            title: "Transcript Copied, but Not Inserted",
-            message: """
-            The transcript is on the clipboard. Allow Nativ to control your Mac \
-            in System Settings → Privacy & Security → Accessibility to insert it \
-            at the cursor automatically.
-            """
-        )
+        guard !isPresentingAlert else {
+            return
+        }
+        isPresentingAlert = true
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Allow Nativ to Insert Text"
+        alert.informativeText = """
+        The transcript is on the clipboard. Nativ needs Accessibility permission \
+        to insert future transcripts at the cursor in other apps.
+        """
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Not Now")
+        let response = alert.runModal()
+        isPresentingAlert = false
+        shortcutMonitor.resynchronizeAfterModalInteraction()
+
+        if response == .alertFirstButtonReturn {
+            _ = NativSystemPermissionController.requestAccessibility()
+            NativSystemPermissionController.openAccessibilitySettings()
+        }
     }
 
     private static func requestMicrophoneAccess() async -> Bool {
