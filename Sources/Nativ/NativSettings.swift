@@ -313,6 +313,7 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    var mcpServers: [MCPServerConfig]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
@@ -353,7 +354,8 @@ struct NativSettings: Codable, Equatable {
         structuredOutputSchema: String = Self.defaultStructuredOutputSchema,
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
-        prefixCacheBlockSize: Int = 16
+        prefixCacheBlockSize: Int = 16,
+        mcpServers: [MCPServerConfig] = []
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
@@ -394,6 +396,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.mcpServers = mcpServers
     }
 
     enum CodingKeys: String, CodingKey {
@@ -437,6 +440,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case mcpServers
     }
 
     init(from decoder: Decoder) throws {
@@ -483,6 +487,7 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixCachingEnabled) ?? defaults.prefixCachingEnabled
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
+        mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
     }
 
     func encode(to encoder: Encoder) throws {
@@ -525,6 +530,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(mcpServers, forKey: .mcpServers)
     }
 
     static func load(
