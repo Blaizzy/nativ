@@ -1861,12 +1861,25 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
+            consentMessage
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !isModelSwitchTool {
+                Text(formattedArguments)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(
+                        Color(nsColor: .textBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+            }
+
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -1881,6 +1894,23 @@ private struct ChatAgentStepCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 7)
+    }
+
+    private var isModelSwitchTool: Bool {
+        message.toolName == ChatSwitchModelToolRegistry.toolName
+    }
+
+    @ViewBuilder
+    private var consentMessage: some View {
+        if isModelSwitchTool {
+            Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept.")
+        } else {
+            Text("The model wants to run ")
+                + Text(verbatim: title).bold()
+                + Text(".")
+        }
     }
 
     private var requestedModelID: String {
