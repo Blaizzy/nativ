@@ -339,7 +339,10 @@ private final class ModelMenuSectionHeaderView: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
-    private let voiceCapture = VoiceCaptureCoordinator()
+    private let voiceDictationExtension = VoiceDictationExtension()
+    private lazy var extensionManager = NativExtensionManager(
+        builtInExtensions: [voiceDictationExtension]
+    )
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
@@ -373,29 +376,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
+        extensionManager.onRecordsChanged = { [weak self] in
+            self?.rebuildMenu()
+        }
         configureStatusItem()
-        voiceCapture.transcriptionConfigurationProvider = { [weak self] in
-            guard let self else {
-                return nil
-            }
-            let settings = self.model.settings.normalized()
-            return VoiceTranscriptionConfiguration(
-                modelSearchPath: settings.modelSearchPath,
-                additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                selectedModelID: settings.speechToTextModelID,
-                serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
-                serverAPIKey: settings.serverAPIKey,
-                serverIsRunning: self.model.isRunning
+        extensionManager.launch(
+            context: NativExtensionHostContext(
+                transcriptionConfiguration: { [weak self] in
+                    guard let self else {
+                        return nil
+                    }
+                    let settings = self.model.settings.normalized()
+                    return VoiceTranscriptionConfiguration(
+                        modelSearchPath: settings.modelSearchPath,
+                        additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                        selectedModelID: settings.speechToTextModelID,
+                        serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
+                        serverAPIKey: settings.serverAPIKey,
+                        serverIsRunning: self.model.isRunning
+                    )
+                },
+                openSpeechModels: { [weak self] in
+                    self?.controlPanelNavigation.openSpeechModelDiscovery()
+                },
+                showMainWindow: { [weak self] in
+                    self?.showMainWindow()
+                }
             )
-        }
-        voiceCapture.onOpenSpeechModels = { [weak self] in
-            guard let self else {
-                return
-            }
-            self.controlPanelNavigation.openSpeechModelDiscovery()
-            self.showMainWindow()
-        }
-        voiceCapture.start()
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(localModelLibraryDidChange(_:)),
@@ -422,7 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
-        voiceCapture.stop()
+        extensionManager.shutdown()
         runtime.onUpdate = nil
         systemMenuBarPreferences.onChange = nil
         runtime.stop()
@@ -481,7 +489,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openAudioFromMenu(_ sender: Any?) {
-        controlPanelNavigation.open(.audio)
+        if extensionManager.isEnabled(
+            extensionID: NativExtensionManager.voiceDictationID
+        ) {
+            controlPanelNavigation.openExtensionPage(
+                NativExtensionManager.voiceAudioPageID
+            )
+        } else {
+            controlPanelNavigation.open(.extensions)
+        }
         showMainWindow()
     }
 
@@ -496,7 +512,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openVoiceRecordingsFromMenu(_ sender: Any?) {
-        voiceCapture.showRecordingsInFinder()
+        extensionManager.performCommand(
+            id: VoiceDictationExtension.showRecordingsCommandID
+        )
     }
 
     @objc private func openWelcomeFromMenu(_ sender: Any?) {
@@ -516,6 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             model: model,
             navigation: controlPanelNavigation,
             runtime: runtime,
+            extensionManager: extensionManager,
             softwareUpdater: softwareUpdater,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)
@@ -957,14 +976,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dashboardMenuItem.image = menuIcon("chart.xyaxis.line", description: "Dashboard")
         menu.addItem(dashboardMenuItem)
 
-        let audioMenuItem = NSMenuItem(
-            title: "Audio…",
-            action: #selector(openAudioFromMenu(_:)),
-            keyEquivalent: ""
-        )
-        audioMenuItem.target = self
-        audioMenuItem.image = menuIcon("waveform.badge.mic", description: "Audio")
-        menu.addItem(audioMenuItem)
+        if extensionManager.isEnabled(
+            extensionID: NativExtensionManager.voiceDictationID
+        ) {
+            let audioMenuItem = NSMenuItem(
+                title: "Audio…",
+                action: #selector(openAudioFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            audioMenuItem.target = self
+            audioMenuItem.image = menuIcon("waveform.badge.mic", description: "Audio")
+            menu.addItem(audioMenuItem)
+        }
 
         let systemMenuItem = NSMenuItem(
             title: "System…",
@@ -988,14 +1011,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modelsMenuItem.image = menuIcon("cube.transparent", description: "Models")
         menu.addItem(modelsMenuItem)
 
-        let recordingsMenuItem = NSMenuItem(
-            title: "Show Voice Recordings",
-            action: #selector(openVoiceRecordingsFromMenu(_:)),
-            keyEquivalent: ""
-        )
-        recordingsMenuItem.target = self
-        recordingsMenuItem.image = menuIcon("waveform", description: "Voice recordings")
-        menu.addItem(recordingsMenuItem)
+        if extensionManager.isEnabled(
+            extensionID: NativExtensionManager.voiceDictationID
+        ) {
+            let recordingsMenuItem = NSMenuItem(
+                title: "Show Voice Recordings",
+                action: #selector(openVoiceRecordingsFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            recordingsMenuItem.target = self
+            recordingsMenuItem.image = menuIcon("waveform", description: "Voice recordings")
+            menu.addItem(recordingsMenuItem)
+        }
 
         menu.addItem(.separator())
 

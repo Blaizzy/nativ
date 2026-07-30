@@ -159,6 +159,17 @@ sign_target() {
         "$target"
 }
 
+sign_app() {
+    local target="$1"
+    codesign \
+        --force \
+        --sign "$identity" \
+        --options runtime \
+        --entitlements "$repository_root/Configuration/Nativ-ManualSigning.entitlements" \
+        "${timestamp_arguments[@]}" \
+        "$target"
+}
+
 if [[ "$is_disk_image" == true ]]; then
     echo "Signing disk image with: $identity"
     codesign \
@@ -204,9 +215,9 @@ done < <(
         -print0
 )
 
-# Signing without an entitlements file intentionally removes development-only
-# entitlements such as com.apple.security.get-task-allow.
-sign_target "$app_path"
+# Preserve the production audio-input entitlement while intentionally omitting
+# development-only entitlements such as com.apple.security.get-task-allow.
+sign_app "$app_path"
 
 for native_file in "${native_files[@]}"; do
     codesign --verify --strict "$native_file"
@@ -216,6 +227,9 @@ codesign --verify --deep --strict --verbose=2 "$app_path"
 app_entitlements="$(codesign -d --entitlements :- "$app_path" 2>/dev/null || true)"
 if [[ "$app_entitlements" == *"com.apple.security.get-task-allow"* ]]; then
     fail "the signed app still contains the development-only get-task-allow entitlement"
+fi
+if [[ "$app_entitlements" != *"com.apple.security.device.audio-input"* ]]; then
+    fail "the signed app is missing the audio-input entitlement"
 fi
 
 echo "Signed and verified: $app_path"
