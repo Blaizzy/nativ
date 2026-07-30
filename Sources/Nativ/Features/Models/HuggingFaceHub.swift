@@ -43,6 +43,10 @@ enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendabl
 
     /// Whether results are re-sorted client-side by model size.
     var sortsBySize: Bool { self == .size }
+
+    var apiSortValue: String {
+        self == .size ? "downloads" : rawValue
+    }
 }
 
 struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
@@ -329,7 +333,7 @@ private struct HuggingFaceHubClient: Sendable {
 
         var queryItems = [
             URLQueryItem(name: "filter", value: "safetensors"),
-            URLQueryItem(name: "sort", value: sort.rawValue),
+            URLQueryItem(name: "sort", value: sort.apiSortValue),
             URLQueryItem(name: "direction", value: "-1"),
             URLQueryItem(name: "limit", value: "50")
         ]
