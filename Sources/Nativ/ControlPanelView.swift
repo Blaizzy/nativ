@@ -233,6 +233,9 @@ struct ControlPanelView: View {
     @State private var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
     @State private var isPinnedDropTargeted = false
     @State private var isSessionsDropTargeted = false
+    @State private var reorderTargetID: ControlPanelRecentSession.ID?
+    @State private var pendingDeleteRecent: ControlPanelRecentSession?
+    @State private var isConfirmingBulkDelete = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -390,6 +393,35 @@ struct ControlPanelView: View {
                 isFullScreen: isFullScreen
             )
         )
+        .alert(
+            "Delete chat?",
+            isPresented: Binding(
+                get: { pendingDeleteRecent != nil },
+                set: { if !$0 { pendingDeleteRecent = nil } }
+            ),
+            presenting: pendingDeleteRecent
+        ) { recent in
+            Button("Delete", role: .destructive) {
+                deleteRecentSession(recent)
+                pendingDeleteRecent = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteRecent = nil
+            }
+        } message: { recent in
+            Text("“\(recent.title)” will be permanently deleted.")
+        }
+        .alert(
+            "Delete \(selectedRecentIDs.count) chats?",
+            isPresented: $isConfirmingBulkDelete
+        ) {
+            Button("Delete", role: .destructive) {
+                bulkDeleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The selected chats will be permanently deleted.")
+        }
     }
 
     private var resizableSidebar: some View {
@@ -500,7 +532,10 @@ struct ControlPanelView: View {
                 emptyPinnedHint
             } else {
                 ForEach(pinnedSessions) { recent in
-                    draggableRow(recent, isPinnedRow: true)
+                    VStack(alignment: .leading, spacing: 0) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id)
+                        draggableRow(recent, isPinnedRow: true)
+                    }
                 }
             }
         }
@@ -555,7 +590,15 @@ struct ControlPanelView: View {
                 recentSessionRow(recent)
                     .draggable(payload)
                     .dropDestination(for: String.self) { items, _ in
-                        handlePinnedRowDrop(items, target: recent)
+                        let handled = handlePinnedRowDrop(items, target: recent)
+                        reorderTargetID = nil
+                        return handled
+                    } isTargeted: { targeted in
+                        if targeted {
+                            reorderTargetID = recent.id
+                        } else if reorderTargetID == recent.id {
+                            reorderTargetID = nil
+                        }
                     }
             } else {
                 recentSessionRow(recent)
@@ -564,6 +607,15 @@ struct ControlPanelView: View {
         } else {
             recentSessionRow(recent)
         }
+    }
+
+    private func pinnedInsertionLine(visible: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(Color.accentColor)
+            .frame(height: 2)
+            .padding(.horizontal, 8)
+            .opacity(visible ? 1 : 0)
+            .animation(.easeOut(duration: 0.12), value: visible)
     }
 
     private var bulkSelectionBar: some View {
@@ -593,7 +645,7 @@ struct ControlPanelView: View {
             .disabled(!hasSelectedChats)
 
             Button(role: .destructive) {
-                bulkDeleteSelected()
+                isConfirmingBulkDelete = true
             } label: {
                 Image(systemName: "trash")
                     .frame(width: 24, height: 22)
@@ -876,7 +928,7 @@ struct ControlPanelView: View {
                 applySidebarSelection(recent.selection)
             },
             onDelete: {
-                deleteRecentSession(recent)
+                pendingDeleteRecent = recent
             },
             onCopyConversation: {
                 copyRecentConversation(recent)
