@@ -104,7 +104,7 @@ struct IntegrationProfileManager {
                 let openAICompatible = languageModels["openai_compatible"] as? [String: Any]
             else { return false }
             return openAICompatible[Self.providerID] != nil
-        case .codex, .hermes, .aider, .qwenCode, .continueDev:
+        case .codex, .hermes, .aider, .qwenCode, .continueDev, .openInterpreter:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
         case .vscode, .cursor, .jetbrains, .buzz:
@@ -157,6 +157,8 @@ struct IntegrationProfileManager {
             try configureZed(models: models)
         case .continueDev:
             try configureContinue(selectedModelID: selectedModelID, models: models)
+        case .openInterpreter:
+            try configureOpenInterpreter(selectedModelID: selectedModelID)
         case .vscode, .cursor, .jetbrains, .buzz:
             break
         case .cline:
@@ -250,6 +252,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("jetbrains-guided.json")
         case .buzz:
             return integrationsSupportURL.appendingPathComponent("buzz-guided.json")
+        case .openInterpreter:
+            return integrationsSupportURL.appendingPathComponent("openinterpreter/config.toml")
         }
     }
 
@@ -531,6 +535,20 @@ struct IntegrationProfileManager {
         try writeText(contents, to: configurationURL(for: .qwenCode))
     }
 
+    private func configureOpenInterpreter(selectedModelID: String) throws {
+        let contents = """
+        model_provider = \(tomlString(Self.providerID))
+        model = \(tomlString(selectedModelID))
+
+        [model_providers.\(Self.providerID)]
+        name = "Nativ"
+        base_url = \(tomlString(openAIBaseURL))
+        env_key = "NATIV_API_KEY"
+        wire_api = "chat"
+        """
+        try writeText(contents + "\n", to: configurationURL(for: .openInterpreter))
+    }
+
     private func configureOpenClaw(models: [IntegrationModelDescriptor]) throws {
         let url = configurationURL(for: .openClaw)
         var root: [String: Any] = [:]
@@ -663,6 +681,14 @@ struct IntegrationProfileManager {
             return (["."], ["NATIV_API_KEY": apiKey])
         case .continueDev:
             return (["--config", configurationURL(for: tool).path], [:])
+        case .openInterpreter:
+            return (
+                ["--provider", Self.providerID, "--model", selectedModelID],
+                [
+                    "CODEX_HOME": configurationURL(for: tool).deletingLastPathComponent().path,
+                    "NATIV_API_KEY": apiKey
+                ]
+            )
         case .vscode, .cursor, .jetbrains, .buzz:
             return ([], [:])
         case .cline:
