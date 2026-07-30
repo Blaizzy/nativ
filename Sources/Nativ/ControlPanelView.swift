@@ -229,6 +229,10 @@ struct ControlPanelView: View {
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
+    @State private var isSelectingRecents = false
+    @State private var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
+    @State private var isPinnedDropTargeted = false
+    @State private var isSessionsDropTargeted = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -350,34 +354,16 @@ struct ControlPanelView: View {
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
 
+            if isSelectingRecents {
+                bulkSelectionBar
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+            }
+
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    sidebarPinnedHeader
-                        .padding(.leading, 17)
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 4)
-
-                    if pinnedSessions.isEmpty {
-                        Label("Shift-click a chat to pin", systemImage: "pin")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary.opacity(0.6))
-                            .padding(.horizontal, 17)
-                            .padding(.vertical, 6)
-                    } else {
-                        ForEach(pinnedSessions) { recent in
-                            recentSessionRow(recent)
-                        }
-                    }
-
-                    sidebarRecentsHeader
-                        .padding(.leading, 17)
-                        .padding(.trailing, 10)
-                        .padding(.top, 12)
-                        .padding(.bottom, 4)
-
-                    ForEach(unpinnedSessions) { recent in
-                        recentSessionRow(recent)
-                    }
+                    pinnedSection
+                    sessionsSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
@@ -503,6 +489,135 @@ struct ControlPanelView: View {
         }
     }
 
+    private var pinnedSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarPinnedHeader
+                .padding(.leading, 17)
+                .padding(.trailing, 10)
+                .padding(.bottom, 4)
+
+            if pinnedSessions.isEmpty {
+                emptyPinnedHint
+            } else {
+                ForEach(pinnedSessions) { recent in
+                    draggableRow(recent, isPinnedRow: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dropHighlight(isTargeted: isPinnedDropTargeted))
+        .dropDestination(for: String.self) { items, _ in
+            handlePinDrop(items)
+        } isTargeted: { isPinnedDropTargeted = $0 }
+    }
+
+    private var sessionsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarRecentsHeader
+                .padding(.leading, 17)
+                .padding(.trailing, 10)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+
+            ForEach(unpinnedSessions) { recent in
+                draggableRow(recent, isPinnedRow: false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dropHighlight(isTargeted: isSessionsDropTargeted))
+        .dropDestination(for: String.self) { items, _ in
+            handleUnpinDrop(items)
+        } isTargeted: { isSessionsDropTargeted = $0 }
+    }
+
+    private var emptyPinnedHint: some View {
+        Label("Drag a chat here to pin", systemImage: "pin")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary.opacity(0.6))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 17)
+            .padding(.vertical, 10)
+            .contentShape(.rect)
+    }
+
+    private func dropHighlight(isTargeted: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.accentColor.opacity(isTargeted ? 0.08 : 0))
+    }
+
+    @ViewBuilder
+    private func draggableRow(
+        _ recent: ControlPanelRecentSession,
+        isPinnedRow: Bool
+    ) -> some View {
+        if let payload = recent.dragPayload, !isSelectingRecents {
+            if isPinnedRow {
+                recentSessionRow(recent)
+                    .draggable(payload)
+                    .dropDestination(for: String.self) { items, _ in
+                        handlePinnedRowDrop(items, target: recent)
+                    }
+            } else {
+                recentSessionRow(recent)
+                    .draggable(payload)
+            }
+        } else {
+            recentSessionRow(recent)
+        }
+    }
+
+    private var bulkSelectionBar: some View {
+        HStack(spacing: 6) {
+            Text(bulkSelectionTitle)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+
+            Button {
+                bulkTogglePinSelected()
+            } label: {
+                Image(systemName: allSelectedChatsPinned ? "pin.slash" : "pin")
+                    .frame(width: 24, height: 22)
+            }
+            .help(allSelectedChatsPinned ? "Unpin selected" : "Pin selected")
+            .disabled(!hasSelectedChats)
+
+            Button {
+                bulkExportSelected()
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .frame(width: 24, height: 22)
+            }
+            .help("Export selected")
+            .disabled(!hasSelectedChats)
+
+            Button(role: .destructive) {
+                bulkDeleteSelected()
+            } label: {
+                Image(systemName: "trash")
+                    .frame(width: 24, height: 22)
+            }
+            .help("Delete selected")
+            .disabled(selectedRecentIDs.isEmpty)
+
+            Button("Done") {
+                withAnimation(.snappy(duration: 0.2)) {
+                    exitSelectMode()
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
     private var sidebarPinnedHeader: some View {
         HStack(spacing: 8) {
             Text("Pinned")
@@ -520,6 +635,21 @@ struct ControlPanelView: View {
                 .foregroundStyle(.secondary.opacity(0.7))
 
             Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    enterSelectMode()
+                }
+            } label: {
+                Image(systemName: "checklist")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 26, height: 28)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSelectingRecents || recentSessions.isEmpty)
+            .help("Select multiple")
+            .opacity(isSelectingRecents ? 0 : 1)
 
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
@@ -719,7 +849,9 @@ struct ControlPanelView: View {
     }
 
     private var pinnedSessions: [ControlPanelRecentSession] {
-        recentSessions.filter(\.pinned)
+        recentSessions
+            .filter(\.pinned)
+            .sorted(by: ControlPanelRecentSession.pinnedSort)
     }
 
     private var unpinnedSessions: [ControlPanelRecentSession] {
@@ -735,6 +867,11 @@ struct ControlPanelView: View {
             isSelectionDisabled: isRecentSelectionDisabled(recent),
             isDeleteDisabled: isRecentDeleteDisabled(recent),
             canExport: canExportRecent(recent),
+            isSelecting: isSelectingRecents,
+            isChecked: selectedRecentIDs.contains(recent.id),
+            onToggleSelect: {
+                toggleRecentSelection(recent)
+            },
             onSelect: {
                 applySidebarSelection(recent.selection)
             },
@@ -769,6 +906,177 @@ struct ControlPanelView: View {
         withAnimation(.snappy(duration: 0.2)) {
             chat.setPinned(sessionID, pinned: !recent.pinned)
         }
+    }
+
+    private func draggedChatID(from items: [String]) -> UUID? {
+        for item in items {
+            if let id = UUID(uuidString: item),
+               chat.sessions.contains(where: { $0.id == id }) {
+                return id
+            }
+        }
+        return nil
+    }
+
+    private func handlePinDrop(_ items: [String]) -> Bool {
+        guard let draggedID = draggedChatID(from: items) else {
+            return false
+        }
+        var order = pinnedSessions.compactMap(\.chatID)
+        guard !order.contains(draggedID) else {
+            return false
+        }
+        order.append(draggedID)
+        withAnimation(.snappy(duration: 0.2)) {
+            chat.applyPinnedOrder(order)
+        }
+        return true
+    }
+
+    private func handlePinnedRowDrop(
+        _ items: [String],
+        target: ControlPanelRecentSession
+    ) -> Bool {
+        guard let draggedID = draggedChatID(from: items),
+              let targetID = target.chatID,
+              draggedID != targetID else {
+            return false
+        }
+        var order = pinnedSessions.compactMap(\.chatID)
+        order.removeAll { $0 == draggedID }
+        if let targetIndex = order.firstIndex(of: targetID) {
+            order.insert(draggedID, at: targetIndex)
+        } else {
+            order.append(draggedID)
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            chat.applyPinnedOrder(order)
+        }
+        return true
+    }
+
+    private func handleUnpinDrop(_ items: [String]) -> Bool {
+        guard let draggedID = draggedChatID(from: items),
+              pinnedSessions.contains(where: { $0.chatID == draggedID }) else {
+            return false
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            chat.setPinned(draggedID, pinned: false)
+        }
+        return true
+    }
+
+    private func enterSelectMode() {
+        selectedRecentIDs = []
+        isSelectingRecents = true
+    }
+
+    private func exitSelectMode() {
+        isSelectingRecents = false
+        selectedRecentIDs = []
+    }
+
+    private func toggleRecentSelection(_ recent: ControlPanelRecentSession) {
+        if selectedRecentIDs.contains(recent.id) {
+            selectedRecentIDs.remove(recent.id)
+        } else {
+            selectedRecentIDs.insert(recent.id)
+        }
+    }
+
+    private var selectedChats: [ControlPanelRecentSession] {
+        recentSessions.filter { $0.isChat && selectedRecentIDs.contains($0.id) }
+    }
+
+    private var hasSelectedChats: Bool {
+        !selectedChats.isEmpty
+    }
+
+    private var allSelectedChatsPinned: Bool {
+        hasSelectedChats && selectedChats.allSatisfy(\.pinned)
+    }
+
+    private var bulkSelectionTitle: String {
+        let count = selectedRecentIDs.count
+        return count == 0 ? "Select chats" : "\(count) selected"
+    }
+
+    private func bulkTogglePinSelected() {
+        let shouldPin = !allSelectedChatsPinned
+        let ids = selectedChats.compactMap(\.chatID)
+        guard !ids.isEmpty else {
+            return
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            for id in ids {
+                chat.setPinned(id, pinned: shouldPin)
+            }
+            exitSelectMode()
+        }
+    }
+
+    private func bulkExportSelected() {
+        let chats = selectedChats
+        guard !chats.isEmpty else {
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let directory = panel.url else {
+            return
+        }
+        for recent in chats {
+            guard case .chat(let sessionID) = recent.selection,
+                  let text = chat.conversationText(for: sessionID) else {
+                continue
+            }
+            let url = uniqueExportURL(in: directory, title: recent.title)
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        exitSelectMode()
+    }
+
+    private func uniqueExportURL(in directory: URL, title: String) -> URL {
+        let separators = CharacterSet(charactersIn: "/:")
+        let sanitized = title.components(separatedBy: separators).joined(separator: "-")
+        let base = sanitized.isEmpty ? "Chat" : sanitized
+        var candidate = directory.appendingPathComponent("\(base).txt")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = directory.appendingPathComponent("\(base) \(counter).txt")
+            counter += 1
+        }
+        return candidate
+    }
+
+    private func bulkDeleteSelected() {
+        let targets = recentSessions.filter { selectedRecentIDs.contains($0.id) }
+        guard !targets.isEmpty else {
+            return
+        }
+        let affectsDisplayed = targets.contains { isDisplayedRecent($0) }
+        let removedIDs = selectedRecentIDs
+        withAnimation(.snappy(duration: 0.2)) {
+            for recent in targets {
+                switch recent.selection {
+                case .chat(let sessionID):
+                    chat.deleteSession(sessionID)
+                case .imageGeneration(let sessionID):
+                    imageGeneration.deleteSession(sessionID)
+                case .tab:
+                    break
+                }
+            }
+            exitSelectMode()
+        }
+        guard affectsDisplayed else {
+            return
+        }
+        let survivor = recentSessions.first { !removedIDs.contains($0.id) }
+        applySidebarSelection(survivor?.selection ?? .tab(selectedTab))
     }
 
     private func renameRecentSession(_ recent: ControlPanelRecentSession, to newTitle: String) {
@@ -2322,6 +2630,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let createdAt: Date
     let updatedAt: Date
     let pinned: Bool
+    let pinnedOrder: Int?
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
@@ -2329,6 +2638,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         createdAt = session.createdAt
         updatedAt = session.updatedAt
         pinned = session.isPinned
+        pinnedOrder = session.pinnedOrder
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -2337,6 +2647,18 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         createdAt = session.createdAt
         updatedAt = session.updatedAt
         pinned = false
+        pinnedOrder = nil
+    }
+
+    var chatID: UUID? {
+        if case .chat(let sessionID) = id {
+            return sessionID
+        }
+        return nil
+    }
+
+    var dragPayload: String? {
+        chatID?.uuidString
     }
 
     var selection: ControlPanelSidebarSelection {
@@ -2370,6 +2692,19 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         }
         return lhs.updatedAt > rhs.updatedAt
     }
+
+    static func pinnedSort(_ lhs: ControlPanelRecentSession, _ rhs: ControlPanelRecentSession) -> Bool {
+        switch (lhs.pinnedOrder, rhs.pinnedOrder) {
+        case let (left?, right?):
+            return left == right ? recencySort(lhs, rhs) : left < right
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return recencySort(lhs, rhs)
+        }
+    }
 }
 
 private struct ControlPanelRecentSessionRow: View {
@@ -2379,6 +2714,9 @@ private struct ControlPanelRecentSessionRow: View {
     let isSelectionDisabled: Bool
     let isDeleteDisabled: Bool
     let canExport: Bool
+    let isSelecting: Bool
+    let isChecked: Bool
+    let onToggleSelect: () -> Void
     let onSelect: () -> Void
     let onDelete: () -> Void
     let onCopyConversation: () -> Void
@@ -2415,8 +2753,8 @@ private struct ControlPanelRecentSessionRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Button {
-                    if NSEvent.modifierFlags.contains(.shift), recent.isChat {
-                        onTogglePin()
+                    if isSelecting {
+                        onToggleSelect()
                     } else if isSelected, recent.isChat {
                         beginRename()
                     } else {
@@ -2424,10 +2762,17 @@ private struct ControlPanelRecentSessionRow: View {
                     }
                 } label: {
                     HStack(spacing: 7) {
-                        Circle()
-                            .fill(isCurrent ? Color.accentColor : Color.clear)
-                            .frame(width: 5, height: 5)
-                            .accessibilityHidden(true)
+                        if isSelecting {
+                            Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 13))
+                                .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
+                                .accessibilityLabel(isChecked ? "Selected" : "Not selected")
+                        } else {
+                            Circle()
+                                .fill(isCurrent ? Color.accentColor : Color.clear)
+                                .frame(width: 5, height: 5)
+                                .accessibilityHidden(true)
+                        }
 
                         if let badgeSystemImage = recent.badgeSystemImage {
                             Image(systemName: badgeSystemImage)
@@ -2452,11 +2797,25 @@ private struct ControlPanelRecentSessionRow: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .disabled(isSelectionDisabled)
+                .disabled(isSelectionDisabled && !isSelecting)
                 .help(recent.title)
             }
 
-            if isHovering {
+            if isHovering, !isSelecting {
+                Menu {
+                    rowMenuContents
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.caption)
+                        .frame(width: 24, height: 20)
+                        .contentShape(.rect)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .help("Actions")
+
                 Button(role: .destructive, action: onDelete) {
                     Image(systemName: "trash")
                         .font(.caption)
@@ -2475,53 +2834,58 @@ private struct ControlPanelRecentSessionRow: View {
                 .onHover { isDeleteHovering = $0 }
             }
         }
-        .sidebarRowSelectionStyle(isSelected: isSelected)
-        .opacity(isSelectionDisabled && !isCurrent ? 0.55 : 1)
+        .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
+        .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
         .onHover { isHovering = $0 }
         .animation(.easeInOut, value: isHovering)
         .contextMenu {
-            Button {
-                onNewChat()
-            } label: {
-                Label("New", systemImage: "square.and.pencil")
-            }
+            rowMenuContents
+        }
+    }
 
-            if recent.isChat {
-                Divider()
+    @ViewBuilder
+    private var rowMenuContents: some View {
+        Button {
+            onNewChat()
+        } label: {
+            Label("New", systemImage: "square.and.pencil")
+        }
 
-                Button {
-                    beginRename()
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-
-                Button {
-                    onTogglePin()
-                } label: {
-                    Label(
-                        recent.pinned ? "Unpin" : "Pin",
-                        systemImage: recent.pinned ? "pin.slash" : "pin"
-                    )
-                }
-            }
-
+        if recent.isChat {
             Divider()
 
-            if canExport {
-                Button {
-                    onExportFile()
-                } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                }
+            Button {
+                beginRename()
+            } label: {
+                Label("Rename", systemImage: "pencil")
             }
 
-            Button(role: .destructive) {
-                onDelete()
+            Button {
+                onTogglePin()
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label(
+                    recent.pinned ? "Unpin" : "Pin",
+                    systemImage: recent.pinned ? "pin.slash" : "pin"
+                )
             }
-            .disabled(isDeleteDisabled)
         }
+
+        Divider()
+
+        if canExport {
+            Button {
+                onExportFile()
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+        }
+
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .disabled(isDeleteDisabled)
     }
 
     private func beginRename() {

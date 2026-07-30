@@ -353,12 +353,35 @@ final class ChatViewModel: ObservableObject {
         guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
             return
         }
+        let order = pinned ? nextPinnedOrder() : nil
         storedSessions[index].pinned = pinned
+        storedSessions[index].pinnedOrder = order
         if currentSession?.id == sessionID {
             currentSession?.pinned = pinned
+            currentSession?.pinnedOrder = order
         }
         sessionStore.saveSession(storedSessions[index])
         refreshSessionList()
+    }
+
+    func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
+        for (order, sessionID) in orderedSessionIDs.enumerated() {
+            guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+                continue
+            }
+            storedSessions[index].pinned = true
+            storedSessions[index].pinnedOrder = order
+            if currentSession?.id == sessionID {
+                currentSession?.pinned = true
+                currentSession?.pinnedOrder = order
+            }
+            sessionStore.saveSession(storedSessions[index])
+        }
+        refreshSessionList()
+    }
+
+    private func nextPinnedOrder() -> Int {
+        (storedSessions.compactMap(\.pinnedOrder).max() ?? -1) + 1
     }
 
     func deleteSession(_ sessionID: UUID) {
