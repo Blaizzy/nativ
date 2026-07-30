@@ -42,6 +42,8 @@ final class MCPHostManager: ObservableObject {
         let generation = reloadGeneration
         reloadTask?.cancel()
         reloadTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            if Task.isCancelled { return }
             await self?.applyReload(servers: servers, generation: generation)
         }
     }
