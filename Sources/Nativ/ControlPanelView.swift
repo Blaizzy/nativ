@@ -234,6 +234,7 @@ struct ControlPanelView: View {
     @State private var isPinnedDropTargeted = false
     @State private var isSessionsDropTargeted = false
     @State private var reorderTargetID: ControlPanelRecentSession.ID?
+    @State private var reorderInsertAfter = false
     @State private var pendingDeleteRecent: ControlPanelRecentSession?
     @State private var isConfirmingBulkDelete = false
 
@@ -533,17 +534,18 @@ struct ControlPanelView: View {
             } else {
                 ForEach(pinnedSessions) { recent in
                     VStack(alignment: .leading, spacing: 0) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id)
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
                         draggableRow(recent, isPinnedRow: true)
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isPinnedDropTargeted))
-        .dropDestination(for: String.self) { items, _ in
-            handlePinDrop(items)
-        } isTargeted: { isPinnedDropTargeted = $0 }
+        .onDrop(of: [.text], isTargeted: $isPinnedDropTargeted) { providers in
+            loadDropString(providers) { _ = handlePinDrop([$0]) }
+        }
     }
 
     private var sessionsSection: some View {
@@ -555,14 +557,18 @@ struct ControlPanelView: View {
                 .padding(.bottom, 4)
 
             ForEach(unpinnedSessions) { recent in
-                draggableRow(recent, isPinnedRow: false)
+                VStack(alignment: .leading, spacing: 0) {
+                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
+                    draggableRow(recent, isPinnedRow: false)
+                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isSessionsDropTargeted))
-        .dropDestination(for: String.self) { items, _ in
-            handleUnpinDrop(items)
-        } isTargeted: { isSessionsDropTargeted = $0 }
+        .onDrop(of: [.text], isTargeted: $isSessionsDropTargeted) { providers in
+            loadDropString(providers) { _ = handleUnpinDrop([$0]) }
+        }
     }
 
     private var emptyPinnedHint: some View {
@@ -586,27 +592,75 @@ struct ControlPanelView: View {
         isPinnedRow: Bool
     ) -> some View {
         if let payload = recent.dragPayload, !isSelectingRecents {
-            if isPinnedRow {
-                recentSessionRow(recent)
-                    .draggable(payload) { dragPreview(recent) }
-                    .dropDestination(for: String.self) { items, _ in
-                        let handled = handlePinnedRowDrop(items, target: recent)
-                        reorderTargetID = nil
-                        return handled
-                    } isTargeted: { targeted in
-                        if targeted {
-                            reorderTargetID = recent.id
-                        } else if reorderTargetID == recent.id {
-                            reorderTargetID = nil
-                        }
+            recentSessionRow(recent)
+                .onDrag {
+                    NSItemProvider(object: payload as NSString)
+                } preview: {
+                    dragPreview(recent)
+                }
+                .onDrop(of: [.text], delegate: RowReorderDropDelegate(
+                    targetID: recent.id,
+                    setTarget: { id, after in
+                        reorderTargetID = id
+                        reorderInsertAfter = after
+                    },
+                    onDrop: { draggedPayload, after in
+                        handleRowDrop(
+                            draggedPayload: draggedPayload,
+                            target: recent,
+                            insertAfter: after,
+                            isPinnedRow: isPinnedRow
+                        )
                     }
-            } else {
-                recentSessionRow(recent)
-                    .draggable(payload) { dragPreview(recent) }
-            }
+                ))
         } else {
             recentSessionRow(recent)
         }
+    }
+
+    private func handleRowDrop(
+        draggedPayload: String,
+        target: ControlPanelRecentSession,
+        insertAfter: Bool,
+        isPinnedRow: Bool
+    ) {
+        guard let draggedID = UUID(uuidString: draggedPayload),
+              chat.sessions.contains(where: { $0.id == draggedID }),
+              let targetID = target.chatID,
+              draggedID != targetID
+        else {
+            return
+        }
+        var order = (isPinnedRow ? pinnedSessions : unpinnedSessions).compactMap(\.chatID)
+        order.removeAll { $0 == draggedID }
+        if let index = order.firstIndex(of: targetID) {
+            order.insert(draggedID, at: insertAfter ? index + 1 : index)
+        } else {
+            order.append(draggedID)
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            if isPinnedRow {
+                chat.applyPinnedOrder(order)
+            } else {
+                chat.applySessionOrder(order)
+            }
+        }
+    }
+
+    @discardableResult
+    private func loadDropString(
+        _ providers: [NSItemProvider],
+        _ handler: @escaping (String) -> Void
+    ) -> Bool {
+        guard let provider = providers.first else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            if let string = object as? String, !string.isEmpty {
+                DispatchQueue.main.async { handler(string) }
+            }
+        }
+        return true
     }
 
     private func pinnedInsertionLine(visible: Bool) -> some View {
@@ -927,7 +981,7 @@ struct ControlPanelView: View {
     }
 
     private var unpinnedSessions: [ControlPanelRecentSession] {
-        recentSessions.filter { !$0.pinned }
+        recentSessions.filter { !$0.pinned }.sorted(by: ControlPanelRecentSession.sessionSort)
     }
 
     @ViewBuilder
@@ -999,28 +1053,6 @@ struct ControlPanelView: View {
             return false
         }
         order.append(draggedID)
-        withAnimation(.snappy(duration: 0.2)) {
-            chat.applyPinnedOrder(order)
-        }
-        return true
-    }
-
-    private func handlePinnedRowDrop(
-        _ items: [String],
-        target: ControlPanelRecentSession
-    ) -> Bool {
-        guard let draggedID = draggedChatID(from: items),
-              let targetID = target.chatID,
-              draggedID != targetID else {
-            return false
-        }
-        var order = pinnedSessions.compactMap(\.chatID)
-        order.removeAll { $0 == draggedID }
-        if let targetIndex = order.firstIndex(of: targetID) {
-            order.insert(draggedID, at: targetIndex)
-        } else {
-            order.append(draggedID)
-        }
         withAnimation(.snappy(duration: 0.2)) {
             chat.applyPinnedOrder(order)
         }
@@ -2691,6 +2723,42 @@ private enum ControlPanelSidebarSelection: Hashable {
     case imageGeneration(UUID)
 }
 
+private struct RowReorderDropDelegate: DropDelegate {
+    let targetID: ControlPanelRecentSession.ID
+    let setTarget: (ControlPanelRecentSession.ID?, Bool) -> Void
+    let onDrop: (String, Bool) -> Void
+    private let rowHeight: CGFloat = 30
+
+    func dropEntered(info: DropInfo) {
+        setTarget(targetID, info.location.y > rowHeight / 2)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        setTarget(targetID, info.location.y > rowHeight / 2)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        setTarget(nil, false)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let insertAfter = info.location.y > rowHeight / 2
+        setTarget(nil, false)
+        guard let provider = info.itemProviders(for: [.text]).first else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            if let string = object as? String, !string.isEmpty {
+                DispatchQueue.main.async {
+                    onDrop(string, insertAfter)
+                }
+            }
+        }
+        return true
+    }
+}
+
 private struct ControlPanelRecentSession: Identifiable, Equatable {
     enum ID: Hashable {
         case chat(UUID)
@@ -2703,6 +2771,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let updatedAt: Date
     let pinned: Bool
     let pinnedOrder: Int?
+    let sessionOrder: Int?
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
@@ -2711,6 +2780,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         updatedAt = session.updatedAt
         pinned = session.isPinned
         pinnedOrder = session.pinnedOrder
+        sessionOrder = session.sessionOrder
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -2720,6 +2790,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         updatedAt = session.updatedAt
         pinned = false
         pinnedOrder = nil
+        sessionOrder = nil
     }
 
     var chatID: UUID? {
@@ -2772,6 +2843,19 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         case (_?, nil):
             return true
         case (nil, _?):
+            return false
+        case (nil, nil):
+            return recencySort(lhs, rhs)
+        }
+    }
+
+    static func sessionSort(_ lhs: ControlPanelRecentSession, _ rhs: ControlPanelRecentSession) -> Bool {
+        switch (lhs.sessionOrder, rhs.sessionOrder) {
+        case let (left?, right?):
+            return left == right ? recencySort(lhs, rhs) : left < right
+        case (nil, _?):
+            return true
+        case (_?, nil):
             return false
         case (nil, nil):
             return recencySort(lhs, rhs)
