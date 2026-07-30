@@ -588,7 +588,7 @@ struct ControlPanelView: View {
         if let payload = recent.dragPayload, !isSelectingRecents {
             if isPinnedRow {
                 recentSessionRow(recent)
-                    .draggable(payload)
+                    .draggable(payload) { dragPreview(recent) }
                     .dropDestination(for: String.self) { items, _ in
                         let handled = handlePinnedRowDrop(items, target: recent)
                         reorderTargetID = nil
@@ -602,7 +602,7 @@ struct ControlPanelView: View {
                     }
             } else {
                 recentSessionRow(recent)
-                    .draggable(payload)
+                    .draggable(payload) { dragPreview(recent) }
             }
         } else {
             recentSessionRow(recent)
@@ -616,6 +616,26 @@ struct ControlPanelView: View {
             .padding(.horizontal, 8)
             .opacity(visible ? 1 : 0)
             .animation(.easeOut(duration: 0.12), value: visible)
+    }
+
+    private func dragPreview(_ recent: ControlPanelRecentSession) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left")
+                .font(.system(size: 11))
+            Text(recent.title)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+        )
     }
 
     private var bulkSelectionBar: some View {
