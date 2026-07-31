@@ -7,7 +7,6 @@
     "icon": "globe",
     "command": "uvx",
     "args": ["--with", "mcp==1.12.0", "mcp-server-fetch"],
-    "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
   },
   {
@@ -18,7 +17,6 @@
     "icon": "brain",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-    "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking"
   },
   {
@@ -29,7 +27,6 @@
     "icon": "externaldrive",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-memory"],
-    "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
   },
   {
@@ -40,7 +37,6 @@
     "icon": "clock",
     "command": "uvx",
     "args": ["--with", "mcp==1.12.0", "mcp-server-time"],
-    "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
   },
   {
@@ -52,7 +48,6 @@
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem"],
     "requiresFolder": true,
-    "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
   },
   {
@@ -64,7 +59,6 @@
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-github"],
     "requiredEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-    "official": true,
     "sourceURL": "https://github.com/github/github-mcp-server"
   }
 ]

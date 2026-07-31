@@ -2,7 +2,7 @@
 
 ## Adding an MCP server to the Tools catalog
 
-Nativ's **Tools** page lets people connect [Model Context Protocol](https://modelcontextprotocol.io) servers so their local models can call external tools. The **Catalog** is a curated list of servers anyone can one-click enable — and you can add to it with a small pull request.
+Nativ's **Tools** page lets people connect [Model Context Protocol](https://modelcontextprotocol.io) servers so their local models can call external tools. The **Catalog** is a community list of servers anyone can one-click enable — and you can add to it with a small pull request. (Nativ's own first-party tools live in the separate **Built-in** section and are not part of this catalog.)
 
 ### How to contribute
 
@@ -42,7 +42,6 @@ No Swift and no build changes are needed — the icon folder ships with the app 
 | `requiredEnv` | no | Environment variables the user must supply (tokens, keys). Nativ prompts for these when the server is added and stores them locally — **never commit secrets**. |
 | `requiresFolder` | no | If `true`, Nativ shows a folder picker and appends the chosen path to `args` (e.g. a filesystem root). |
 | `sourceURL` | no | Link to the server's homepage or repository. |
-| `official` | no | Leave this off. It's a maintainer curation flag — contributed entries appear under **Community** in the catalog; the Nativ team marks its own as **Official**. |
 
 ### Rules
 

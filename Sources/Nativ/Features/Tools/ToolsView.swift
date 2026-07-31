@@ -88,11 +88,7 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             requiredEnv: ["GITHUB_PERSONAL_ACCESS_TOKEN"],
             sourceURL: "https://github.com/github/github-mcp-server"
         ),
-    ].map { entry in
-        var updated = entry
-        updated.official = true
-        return updated
-    }
+    ]
 }
 
 extension MCPCatalogEntry: Decodable {
@@ -149,11 +145,15 @@ struct ToolsView: View {
 
             HStack(spacing: 0) {
                 ScrollView {
-                    MCPServersPanel(
-                        host: model.mcpHost,
-                        servers: $model.settings.mcpServers,
-                        disabledToolNames: $model.settings.disabledToolNames
-                    )
+                    VStack(spacing: 16) {
+                        BuiltInToolsPanel(disabledToolNames: $model.settings.disabledToolNames)
+
+                        MCPServersPanel(
+                            host: model.mcpHost,
+                            servers: $model.settings.mcpServers,
+                            disabledToolNames: $model.settings.disabledToolNames
+                        )
+                    }
                     .padding(20)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -194,6 +194,106 @@ struct ToolsView: View {
                 environment: environment,
                 isEnabled: true
             )
+        )
+    }
+}
+
+private struct BuiltInToolsPanel: View {
+    @Binding var disabledToolNames: [String]
+
+    private struct Item: Identifiable {
+        let id: String
+        let title: String
+        let description: String
+        let icon: String
+    }
+
+    private let items: [Item] = [
+        Item(
+            id: "get_system_stats",
+            title: "System stats",
+            description: "CPU, GPU, memory, and disk usage on this Mac.",
+            icon: "cpu"
+        ),
+        Item(
+            id: "get_server_stats",
+            title: "Server stats",
+            description: "Requests, tokens, speed, and time to first token.",
+            icon: "chart.line.uptrend.xyaxis"
+        ),
+        Item(
+            id: "list_models",
+            title: "List models",
+            description: "Downloaded MLX models with size and quantization.",
+            icon: "shippingbox"
+        ),
+        Item(
+            id: "generate_image",
+            title: "Generate image",
+            description: "Create images from a prompt (needs an image model).",
+            icon: "photo"
+        ),
+        Item(
+            id: "edit_image",
+            title: "Edit image",
+            description: "Edit an attached or generated image (needs an image model).",
+            icon: "photo.badge.plus"
+        )
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Built-in")
+                    .font(.headline)
+                Text("Nativ's own tools — always available, no setup.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(items) { item in
+                HStack(spacing: 10) {
+                    Image(systemName: item.icon)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 30, height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.12))
+                        )
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title)
+                            .font(.callout.weight(.medium))
+                        Text(item.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: binding(for: item.id))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+
+    private func binding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { !disabledToolNames.contains(id) },
+            set: { enabled in
+                if enabled {
+                    disabledToolNames.removeAll { $0 == id }
+                } else if !disabledToolNames.contains(id) {
+                    disabledToolNames.append(id)
+                }
+            }
         )
     }
 }
