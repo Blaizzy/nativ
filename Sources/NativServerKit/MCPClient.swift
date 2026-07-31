@@ -114,7 +114,7 @@ public actor MCPClient {
                 infos.append(
                     MCPToolInfo(
                         name: tool.name,
-                        description: tool.description,
+                        description: tool.description ?? "",
                         parameters: try Self.schema(from: tool.inputSchema)
                     )
                 )
@@ -191,14 +191,14 @@ public actor MCPClient {
     private static func render(_ content: [Tool.Content]) -> String {
         content.map { item in
             switch item {
-            case .text(let text):
+            case .text(let text, _, _):
                 return text
-            case .image(_, let mimeType, _):
+            case .image(_, let mimeType, _, _):
                 return "[image: \(mimeType)]"
-            case .audio(_, let mimeType):
+            case .audio(_, let mimeType, _, _):
                 return "[audio: \(mimeType)]"
-            case .resource(let uri, _, let text):
-                return text ?? "[resource: \(uri)]"
+            default:
+                return "[unsupported content]"
             }
         }
         .joined(separator: "\n")
