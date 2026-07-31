@@ -1111,12 +1111,12 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             menu.minimumWidth = 190
 
             let imageItem = NSMenuItem(
-                title: "Upload Image…",
+                title: "Upload File…",
                 action: #selector(attachImages(_:)),
                 keyEquivalent: ""
             )
             imageItem.target = self
-            imageItem.image = menuImage("photo.badge.plus", description: "Upload Image")
+            imageItem.image = menuImage("doc.badge.plus", description: "Upload File")
             imageItem.isEnabled = true
             menu.addItem(imageItem)
 
