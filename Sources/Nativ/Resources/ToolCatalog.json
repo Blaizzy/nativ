@@ -6,7 +6,7 @@
     "category": "Web",
     "icon": "globe",
     "command": "uvx",
-    "args": ["mcp-server-fetch"],
+    "args": ["--with", "mcp==1.12.0", "mcp-server-fetch"],
     "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
   },
@@ -39,7 +39,7 @@
     "category": "Utilities",
     "icon": "clock",
     "command": "uvx",
-    "args": ["mcp-server-time"],
+    "args": ["--with", "mcp==1.12.0", "mcp-server-time"],
     "official": true,
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
   },

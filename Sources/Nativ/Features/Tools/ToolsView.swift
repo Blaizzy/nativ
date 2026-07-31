@@ -33,7 +33,7 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             category: "Web",
             icon: "globe",
             command: "uvx",
-            args: ["mcp-server-fetch"],
+            args: ["--with", "mcp==1.12.0", "mcp-server-fetch"],
             sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
         ),
         MCPCatalogEntry(
@@ -63,7 +63,7 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             category: "Utilities",
             icon: "clock",
             command: "uvx",
-            args: ["mcp-server-time"],
+            args: ["--with", "mcp==1.12.0", "mcp-server-time"],
             sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
         ),
         MCPCatalogEntry(
