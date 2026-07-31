@@ -113,7 +113,6 @@ struct ArtifactsView: View {
     }
 
     @ViewBuilder
-    @ViewBuilder
     private var semanticBanner: some View {
         if let config = semanticSearch, !config.isModelInstalled, !config.isDownloading,
            config.canInstall, !semanticSearchOffered, !store.artifacts.isEmpty {
