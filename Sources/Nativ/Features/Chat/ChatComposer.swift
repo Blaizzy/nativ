@@ -1054,7 +1054,7 @@ struct ChatComposerActionMenu: NSViewRepresentable {
     let isEnabled: Bool
     let canPasteImage: Bool
     let onAttachImages: () -> Void
-    let onAddFolder: () -> Void
+    var onAddFolder: (() -> Void)? = nil
     let onPasteImage: () -> Void
     let onCaptureScreenshot: () -> Void
 
@@ -1120,15 +1120,17 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             imageItem.isEnabled = true
             menu.addItem(imageItem)
 
-            let folderItem = NSMenuItem(
-                title: "Upload Folder…",
-                action: #selector(addFolder(_:)),
-                keyEquivalent: ""
-            )
-            folderItem.target = self
-            folderItem.image = menuImage("folder.badge.plus", description: "Upload Folder")
-            folderItem.isEnabled = true
-            menu.addItem(folderItem)
+            if parent.onAddFolder != nil {
+                let folderItem = NSMenuItem(
+                    title: "Upload Folder…",
+                    action: #selector(addFolder(_:)),
+                    keyEquivalent: ""
+                )
+                folderItem.target = self
+                folderItem.image = menuImage("folder.badge.plus", description: "Upload Folder")
+                folderItem.isEnabled = true
+                menu.addItem(folderItem)
+            }
 
             let pasteItem = NSMenuItem(
                 title: "Paste Image",
@@ -1158,7 +1160,7 @@ struct ChatComposerActionMenu: NSViewRepresentable {
         }
 
         @objc private func addFolder(_ sender: NSMenuItem) {
-            parent.onAddFolder()
+            parent.onAddFolder?()
         }
 
         @objc private func pasteImage(_ sender: NSMenuItem) {
