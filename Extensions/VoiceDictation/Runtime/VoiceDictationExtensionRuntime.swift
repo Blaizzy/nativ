@@ -47,7 +47,7 @@ private final class VoiceDictationRuntimeService:
             activationContext != nil
         }
         guard isActive else {
-            reply(nil, "Voice Dictation is not active.")
+            reply(nil, "Audio is not active.")
             return
         }
         reply(nil, nil)

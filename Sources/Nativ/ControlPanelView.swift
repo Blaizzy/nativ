@@ -804,6 +804,8 @@ struct ControlPanelView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))
         )
+    }
+
     private var sidebarPinnedHeader: some View {
         HStack(spacing: 8) {
             Text("Pinned")
@@ -1226,7 +1228,7 @@ struct ControlPanelView: View {
                     chat.deleteSession(sessionID)
                 case .imageGeneration(let sessionID):
                     imageGeneration.deleteSession(sessionID)
-                case .tab:
+                case .tab, .extensionPage:
                     break
                 }
             }
