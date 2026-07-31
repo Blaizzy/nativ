@@ -695,14 +695,23 @@ private struct ArtifactThumbnail: View {
     private var placeholder: some View {
         ZStack {
             Color(nsColor: .controlBackgroundColor)
-            VStack(spacing: 6) {
-                Image(systemName: artifact.kind == .video ? "play.circle.fill" : artifact.kind.systemImage)
-                    .font(.system(size: 26))
-                    .foregroundStyle(.secondary)
-                if !artifact.fileExtension.isEmpty {
-                    Text(artifact.fileExtension)
+            if artifact.kind == .document {
+                VStack(spacing: 8) {
+                    FileTypeIcon(fileExtension: artifact.fileExtension, size: min(size.width, size.height) * 0.42)
+                    Text(FileTypeStyle.resolve(fileExtension: artifact.fileExtension).label)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: artifact.kind == .video ? "play.circle.fill" : artifact.kind.systemImage)
+                        .font(.system(size: 26))
+                        .foregroundStyle(.secondary)
+                    if !artifact.fileExtension.isEmpty {
+                        Text(artifact.fileExtension)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }

@@ -50,8 +50,12 @@ struct ArtifactPreview: View {
 
     private func header(_ artifact: Artifact) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: artifact.kind.systemImage)
-                .foregroundStyle(.white.opacity(0.7))
+            if artifact.kind == .document {
+                FileTypeIcon(fileExtension: artifact.fileExtension, size: 22)
+            } else {
+                Image(systemName: artifact.kind.systemImage)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(artifact.filename)
                     .font(.system(size: 14, weight: .semibold))
