@@ -96,6 +96,7 @@ struct Artifact: Identifiable, Codable, Equatable {
     let byteSize: Int
     let createdAt: Date
     let prompt: String?
+    let sessionTitle: String
 
     var fileExtension: String {
         (filename as NSString).pathExtension.uppercased()

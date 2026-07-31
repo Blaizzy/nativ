@@ -1065,6 +1065,7 @@ struct GeneratedArtifactRecord: Sendable {
     let imageData: Data
     let mimeType: String
     let createdAt: Date
+    let sessionTitle: String
 }
 
 enum ImageGenerationArtifactCatalog {
@@ -1083,7 +1084,8 @@ enum ImageGenerationArtifactCatalog {
                         prompt: output.revisedPrompt ?? (turn.prompt.isEmpty ? nil : turn.prompt),
                         imageData: output.imageData,
                         mimeType: output.mimeType,
-                        createdAt: turn.createdAt
+                        createdAt: turn.createdAt,
+                        sessionTitle: session.displayTitle
                     )
                 }
             }

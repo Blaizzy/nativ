@@ -58,6 +58,8 @@ struct ArtifactsView: View {
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var inspectorArtifact: Artifact?
+    @State private var groupByChat = false
+    @State private var albumSessionID: UUID?
 
     private var filtered: [Artifact] {
         let query = search.lowercased()
@@ -115,6 +117,24 @@ struct ArtifactsView: View {
                 )
             }
         }
+        .overlay {
+            if let albumSessionID {
+                ArtifactAlbum(
+                    title: filtered.first { $0.sessionID == albumSessionID }?.sessionTitle ?? "Chat",
+                    artifacts: filtered.filter { $0.sessionID == albumSessionID },
+                    store: store,
+                    onOpen: { artifact in
+                        self.albumSessionID = nil
+                        previewID = artifact.id
+                    },
+                    onGoToChat: { artifact in
+                        self.albumSessionID = nil
+                        onOpenChat(artifact)
+                    },
+                    onClose: { self.albumSessionID = nil }
+                )
+            }
+        }
         .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
                 store.delete(pendingDelete)
@@ -154,6 +174,8 @@ struct ArtifactsView: View {
             )
         } else if filtered.isEmpty {
             emptyState(title: "Nothing matches", message: "Try a different filter or search term.")
+        } else if groupByChat {
+            deckGrid
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20, pinnedViews: [.sectionHeaders]) {
@@ -173,6 +195,37 @@ struct ArtifactsView: View {
                 }
                 .padding(24)
             }
+        }
+    }
+
+    private var chatGroups: [ArtifactGroup] {
+        var order: [UUID] = []
+        var buckets: [UUID: [Artifact]] = [:]
+        for artifact in filtered {
+            if buckets[artifact.sessionID] == nil {
+                order.append(artifact.sessionID)
+            }
+            buckets[artifact.sessionID, default: []].append(artifact)
+        }
+        return order.map { id in
+            let items = buckets[id] ?? []
+            return ArtifactGroup(id: id.uuidString, title: items.first?.sessionTitle ?? "Chat", items: items)
+        }
+    }
+
+    private var deckGrid: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 24)],
+                spacing: 28
+            ) {
+                ForEach(chatGroups) { group in
+                    ChatDeck(group: group, store: store) {
+                        albumSessionID = UUID(uuidString: group.id)
+                    }
+                }
+            }
+            .padding(28)
         }
     }
 
@@ -248,6 +301,13 @@ struct ArtifactsView: View {
                 }
             }
 
+            Picker("", selection: $groupByChat) {
+                Text("By Date").tag(false)
+                Text("By Chat").tag(true)
+            }
+            .labelsHidden()
+            .frame(width: 108)
+
             Picker("", selection: $sort) {
                 ForEach(ArtifactSort.allCases) { option in
                     Text(option.rawValue).tag(option)
@@ -255,6 +315,7 @@ struct ArtifactsView: View {
             }
             .labelsHidden()
             .frame(width: 120)
+            .disabled(groupByChat)
 
             Picker("", selection: $layout) {
                 Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
@@ -726,5 +787,133 @@ struct ArtifactInspector: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.bordered)
+    }
+}
+
+struct ChatDeck: View {
+    let group: ArtifactGroup
+    let store: ArtifactStore
+    let onOpen: () -> Void
+
+    @State private var frontIndex = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { geo in
+                ZStack {
+                    if group.items.count > 2 {
+                        deckCard(group.items[2], offset: 12, rotation: 6, opacity: 0.45)
+                    }
+                    if group.items.count > 1 {
+                        deckCard(group.items[1], offset: 6, rotation: 3, opacity: 0.7)
+                    }
+                    deckCard(group.items[min(frontIndex, group.items.count - 1)], offset: 0, rotation: 0, opacity: 1)
+                        .overlay(alignment: .topTrailing) { countBadge }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    guard case .active(let location) = phase, group.items.count > 1 else {
+                        return
+                    }
+                    let ratio = max(0, min(1, location.x / geo.size.width))
+                    frontIndex = min(group.items.count - 1, Int(ratio * CGFloat(group.items.count)))
+                }
+                .onTapGesture(perform: onOpen)
+            }
+            .frame(height: 190)
+
+            Text(group.title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            Text("\(group.items.count) \(group.items.count == 1 ? "item" : "items")")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func deckCard(_ artifact: Artifact, offset: CGFloat, rotation: Double, opacity: Double) -> some View {
+        ArtifactThumbnail(artifact: artifact, store: store, size: CGSize(width: 220, height: 190))
+            .frame(width: 168, height: 190)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(.white.opacity(0.75), lineWidth: 2)
+            )
+            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+            .rotationEffect(.degrees(rotation))
+            .offset(x: offset, y: -offset / 2)
+            .opacity(opacity)
+    }
+
+    private var countBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "square.on.square")
+            Text("\(group.items.count)")
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.accentColor, in: Capsule())
+        .padding(8)
+    }
+}
+
+struct ArtifactAlbum: View {
+    let title: String
+    let artifacts: [Artifact]
+    let store: ArtifactStore
+    let onOpen: (Artifact) -> Void
+    let onGoToChat: (Artifact) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onClose)
+
+            VStack(spacing: 0) {
+                HStack {
+                    Button(action: onClose) {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    Spacer()
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    if let first = artifacts.first {
+                        Button("Go to Chat") { onGoToChat(first) }
+                    }
+                }
+                .padding()
+                Divider()
+
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 14)],
+                        spacing: 14
+                    ) {
+                        ForEach(artifacts) { artifact in
+                            ArtifactThumbnail(artifact: artifact, store: store, size: CGSize(width: 190, height: 140))
+                                .frame(height: 140)
+                                .frame(maxWidth: .infinity)
+                                .background(Color(nsColor: .textBackgroundColor))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .contentShape(Rectangle())
+                                .onTapGesture { onOpen(artifact) }
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .frame(width: 720, height: 560)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(radius: 30)
+        }
     }
 }

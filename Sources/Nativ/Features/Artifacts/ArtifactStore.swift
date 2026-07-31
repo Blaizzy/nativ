@@ -259,7 +259,8 @@ final class ArtifactStore: ObservableObject {
             relativePath: relativePath,
             byteSize: data.count,
             createdAt: message.createdAt,
-            prompt: prompt
+            prompt: prompt,
+            sessionTitle: session.displayTitle
         )
     }
 
@@ -298,7 +299,8 @@ final class ArtifactStore: ObservableObject {
             relativePath: relativePath,
             byteSize: record.imageData.count,
             createdAt: record.createdAt,
-            prompt: record.prompt
+            prompt: record.prompt,
+            sessionTitle: record.sessionTitle
         )
     }
 
