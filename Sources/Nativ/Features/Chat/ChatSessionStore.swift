@@ -109,6 +109,31 @@ struct ChatSessionSummary: Identifiable, Equatable {
     }
 }
 
+struct ChatFolderAttachment: Identifiable, Equatable, Codable {
+    let id: UUID
+    var folderName: String
+    var includedFileCount: Int
+    var totalFileCount: Int
+    var approxTokens: Int
+    var text: String
+
+    init(
+        id: UUID = UUID(),
+        folderName: String,
+        includedFileCount: Int,
+        totalFileCount: Int,
+        approxTokens: Int,
+        text: String
+    ) {
+        self.id = id
+        self.folderName = folderName
+        self.includedFileCount = includedFileCount
+        self.totalFileCount = totalFileCount
+        self.approxTokens = approxTokens
+        self.text = text
+    }
+}
+
 struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     enum Role: String, Equatable, Codable {
         case user
@@ -136,6 +161,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var isThinkingEnabled: Bool
     var thinkingDuration: TimeInterval?
     var imageAttachments: [ChatImageAttachment]
+    var folderAttachments: [ChatFolderAttachment]
     var responseMetrics: ChatResponseMetrics?
     var toolCalls: [MLXChatToolCall]
     var toolCallID: String?
@@ -154,6 +180,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         isThinkingEnabled: Bool = false,
         thinkingDuration: TimeInterval? = nil,
         imageAttachments: [ChatImageAttachment] = [],
+        folderAttachments: [ChatFolderAttachment] = [],
         responseMetrics: ChatResponseMetrics? = nil,
         toolCalls: [MLXChatToolCall] = [],
         toolCallID: String? = nil,
@@ -171,6 +198,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         self.isThinkingEnabled = isThinkingEnabled
         self.thinkingDuration = thinkingDuration
         self.imageAttachments = imageAttachments
+        self.folderAttachments = folderAttachments
         self.responseMetrics = responseMetrics
         self.toolCalls = toolCalls
         self.toolCallID = toolCallID
@@ -190,6 +218,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case isThinkingEnabled
         case thinkingDuration
         case imageAttachments
+        case folderAttachments
         case responseMetrics
         case toolCalls
         case toolCallID
@@ -210,6 +239,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         isThinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isThinkingEnabled) ?? false
         thinkingDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .thinkingDuration)
         imageAttachments = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) ?? []
+        folderAttachments = try container.decodeIfPresent([ChatFolderAttachment].self, forKey: .folderAttachments) ?? []
         responseMetrics = try container.decodeIfPresent(ChatResponseMetrics.self, forKey: .responseMetrics)
         toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls) ?? []
         toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
@@ -237,6 +267,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encode(isThinkingEnabled, forKey: .isThinkingEnabled)
         try container.encodeIfPresent(thinkingDuration, forKey: .thinkingDuration)
         try container.encode(imageAttachments, forKey: .imageAttachments)
+        try container.encode(folderAttachments, forKey: .folderAttachments)
         try container.encodeIfPresent(responseMetrics, forKey: .responseMetrics)
         try container.encode(toolCalls, forKey: .toolCalls)
         try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
@@ -248,16 +279,18 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var apiMessage: MLXChatMessage? {
         switch role {
         case .user:
+            let folderText = folderAttachments.map(\.text).joined(separator: "\n\n")
+            let combined = [folderText, content].filter { !$0.isEmpty }.joined(separator: "\n\n")
             if !imageAttachments.isEmpty {
                 var parts: [MLXChatContentPart] = []
-                if !content.isEmpty {
-                    parts.append(MLXChatContentPart(text: content))
+                if !combined.isEmpty {
+                    parts.append(MLXChatContentPart(text: combined))
                 }
                 parts.append(contentsOf: imageAttachments.map { MLXChatContentPart(imageURL: $0.dataURL) })
                 return MLXChatMessage(role: "user", content: .parts(parts))
             }
 
-            return MLXChatMessage(role: "user", content: content)
+            return MLXChatMessage(role: "user", content: combined)
         case .assistant:
             guard !content.isEmpty || !reasoningContent.isEmpty || !toolCalls.isEmpty else {
                 return nil

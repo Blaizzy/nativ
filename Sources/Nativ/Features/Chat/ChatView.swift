@@ -186,6 +186,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
+    @Published private(set) var pendingFolderAttachments: [ChatFolderAttachment] = []
     @Published var draft = ""
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
@@ -311,6 +312,7 @@ final class ChatViewModel: ObservableObject {
         sessionStore.saveSession(session)
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
         applyCurrentSession(session)
     }
 
@@ -323,6 +325,7 @@ final class ChatViewModel: ObservableObject {
             persistCurrentSession(updateTimestamp: false)
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingFolderAttachments.removeAll()
             applyCurrentSession(session)
             return
         }
@@ -332,6 +335,7 @@ final class ChatViewModel: ObservableObject {
             upsertStoredSession(session)
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingFolderAttachments.removeAll()
             applyCurrentSession(session)
         }
     }
@@ -377,6 +381,7 @@ final class ChatViewModel: ObservableObject {
 
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
 
         if let nextSession = storedSessions.sorted(by: ChatSession.recencySort).first {
             applyCurrentSession(nextSession)
@@ -445,14 +450,17 @@ final class ChatViewModel: ObservableObject {
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
+        let folderAttachments = pendingFolderAttachments
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
 
         let userMessage = ChatTranscriptMessage(
             role: .user,
             content: prompt,
             modelID: modelID,
-            imageAttachments: imageAttachments
+            imageAttachments: imageAttachments,
+            folderAttachments: folderAttachments
         )
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
@@ -534,6 +542,148 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.append(contentsOf: attachments)
     }
 
+    func chooseFolderAttachment(contextLimit: Int?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Upload"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        if let attachment = Self.folderAttachment(at: url, contextLimit: contextLimit) {
+            pendingFolderAttachments.append(attachment)
+        }
+    }
+
+    func removePendingFolderAttachment(_ id: UUID) {
+        pendingFolderAttachments.removeAll { $0.id == id }
+    }
+
+    private static let folderSkipDirectories: Set<String> = [
+        ".git", "node_modules", ".build", "DerivedData", ".venv", "venv",
+        "dist", "build", ".next", "target", "Pods", ".idea", "__pycache__"
+    ]
+
+    private static let folderTextExtensions: Set<String> = [
+        "swift", "py", "js", "jsx", "ts", "tsx", "md", "markdown", "txt", "json",
+        "yaml", "yml", "toml", "sh", "bash", "zsh", "rb", "go", "rs", "java", "kt",
+        "c", "h", "cpp", "hpp", "cc", "cs", "php", "html", "css", "scss", "xml",
+        "sql", "gradle", "cmake", "ini", "cfg", "conf", "lua", "r", "pl", "scala"
+    ]
+
+    private static func looksLikeSecretFile(_ name: String) -> Bool {
+        if name.hasPrefix(".env") {
+            return true
+        }
+        let secretNames: Set<String> = [
+            ".npmrc", ".netrc", ".pgpass", ".git-credentials",
+            "credentials", "credentials.json", "secrets",
+            "secrets.json", "secrets.yaml", "secrets.yml"
+        ]
+        if secretNames.contains(name) {
+            return true
+        }
+        let secretSuffixes = [".pem", ".key", ".p12", ".pfx", ".keystore", ".crt", ".cer"]
+        return secretSuffixes.contains { name.hasSuffix($0) }
+    }
+
+    private static func looksLikeLowSignalFile(_ name: String) -> Bool {
+        let lockfiles: Set<String> = [
+            "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json",
+            "cargo.lock", "poetry.lock", "gemfile.lock", "composer.lock",
+            "podfile.lock", "package.resolved"
+        ]
+        if lockfiles.contains(name) {
+            return true
+        }
+        let suffixes = [".min.js", ".min.css", ".map"]
+        return suffixes.contains { name.hasSuffix($0) }
+    }
+
+    private static func folderAttachment(at root: URL, contextLimit: Int?) -> ChatFolderAttachment? {
+        let tokenBudget = max(1024, (contextLimit ?? 8192) / 2)
+        let charBudget = tokenBudget * 4
+        let perFileMaxBytes = 64 * 1024
+        let fileManager = FileManager.default
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey]
+
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        var files: [URL] = []
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: keys)
+            if values?.isDirectory == true {
+                if folderSkipDirectories.contains(fileURL.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard values?.isRegularFile == true else {
+                continue
+            }
+            let ext = fileURL.pathExtension.lowercased()
+            let name = fileURL.lastPathComponent.lowercased()
+            let allowed = folderTextExtensions.contains(ext)
+                || name == "readme"
+                || name == "makefile"
+                || name == "dockerfile"
+            guard allowed else {
+                continue
+            }
+            guard !Self.looksLikeSecretFile(name) else {
+                continue
+            }
+            guard !Self.looksLikeLowSignalFile(name) else {
+                continue
+            }
+            if let size = values?.fileSize, size > perFileMaxBytes {
+                continue
+            }
+            files.append(fileURL)
+        }
+        files.sort { $0.path < $1.path }
+
+        let rootPrefix = root.path + "/"
+        var body = ""
+        var included = 0
+        for fileURL in files {
+            guard body.count < charBudget else {
+                break
+            }
+            guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                continue
+            }
+            let relative = fileURL.path.hasPrefix(rootPrefix)
+                ? String(fileURL.path.dropFirst(rootPrefix.count))
+                : fileURL.lastPathComponent
+            let remaining = charBudget - body.count
+            let clipped = contents.count > remaining ? String(contents.prefix(remaining)) : contents
+            body += "--- \(relative) ---\n\(clipped)\n\n"
+            included += 1
+        }
+
+        guard included > 0 else {
+            return nil
+        }
+        let name = root.lastPathComponent
+        let text = "<folder name=\"\(name)\">\n\(body)</folder>"
+        return ChatFolderAttachment(
+            folderName: name,
+            includedFileCount: included,
+            totalFileCount: files.count,
+            approxTokens: text.count / 4,
+            text: text
+        )
+    }
+
     var canPasteImage: Bool {
         ChatImageAttachment.canReadImages(from: .general)
     }
@@ -580,6 +730,7 @@ final class ChatViewModel: ObservableObject {
         sendingStartedAt = nil
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
