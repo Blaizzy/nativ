@@ -58,7 +58,7 @@ struct ArtifactsView: View {
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var inspectorArtifact: Artifact?
-    @State private var groupByChat = false
+    @State private var groupByChat = true
     @State private var albumSessionID: UUID?
 
     private var filtered: [Artifact] {
@@ -130,6 +130,10 @@ struct ArtifactsView: View {
                     onGoToChat: { artifact in
                         self.albumSessionID = nil
                         onOpenChat(artifact)
+                    },
+                    onInspect: { artifact in
+                        self.albumSessionID = nil
+                        inspectorArtifact = artifact
                     },
                     onClose: { self.albumSessionID = nil }
                 )
@@ -809,6 +813,7 @@ struct ChatDeck: View {
                     }
                     deckCard(group.items[min(frontIndex, group.items.count - 1)], offset: 0, rotation: 0, opacity: 1)
                         .overlay(alignment: .topTrailing) { countBadge }
+                        .onDrag { store.dragProvider(for: group.items[min(frontIndex, group.items.count - 1)]) }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
@@ -867,6 +872,7 @@ struct ArtifactAlbum: View {
     let store: ArtifactStore
     let onOpen: (Artifact) -> Void
     let onGoToChat: (Artifact) -> Void
+    let onInspect: (Artifact) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -903,8 +909,21 @@ struct ArtifactAlbum: View {
                                 .frame(maxWidth: .infinity)
                                 .background(Color(nsColor: .textBackgroundColor))
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(alignment: .topTrailing) {
+                                    Button {
+                                        onInspect(artifact)
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle.fill")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(.white, .black.opacity(0.4))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Details")
+                                    .padding(6)
+                                }
                                 .contentShape(Rectangle())
                                 .onTapGesture { onOpen(artifact) }
+                                .onDrag { store.dragProvider(for: artifact) }
                         }
                     }
                     .padding(20)
