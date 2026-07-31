@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ImageIO
 import QuickLookThumbnailing
 import UniformTypeIdentifiers
 
@@ -29,6 +30,7 @@ final class ArtifactStore: ObservableObject {
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("Artifacts", isDirectory: true)
 
+        thumbnailCache.countLimit = 150
         artifacts = Self.loadIndex(indexURL)
         refresh()
     }
@@ -132,7 +134,7 @@ final class ArtifactStore: ObservableObject {
         }
         let url = fileURL(for: artifact)
         let image = artifact.kind == .image
-            ? await Self.loadImage(url)
+            ? await Self.downsampledImage(url, size: size)
             : await Self.generateThumbnail(url, size: size)
         if let image {
             thumbnailCache.setObject(image, forKey: key)
@@ -154,7 +156,10 @@ final class ArtifactStore: ObservableObject {
         let fingerprintFile = fingerprintURL(indexURL: indexURL)
         if !known.isEmpty,
            let previous = try? String(contentsOf: fingerprintFile, encoding: .utf8),
-           previous == fingerprint {
+           previous == fingerprint,
+           FileManager.default.fileExists(
+               atPath: cacheDirectory.appendingPathComponent(known[0].relativePath).path
+           ) {
             return known
         }
 
@@ -314,11 +319,27 @@ final class ArtifactStore: ObservableObject {
 
     // MARK: - Thumbnails
 
-    private nonisolated static func loadImage(_ url: URL) async -> NSImage? {
-        let data = await Task.detached(priority: .utility) {
-            try? Data(contentsOf: url)
+    private nonisolated static func downsampledImage(_ url: URL, size: CGSize) async -> NSImage? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        let scale = await MainActor.run { NSScreen.main?.backingScaleFactor ?? 2 }
+        return await Task.detached(priority: .utility) {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+                return nil
+            }
+            let maxPixel = Int(max(size.width, size.height) * scale)
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                return nil
+            }
+            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         }.value
-        return data.flatMap(NSImage.init(data:))
     }
 
     private nonisolated static func generateThumbnail(_ url: URL, size: CGSize) async -> NSImage? {
