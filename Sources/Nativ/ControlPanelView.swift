@@ -368,8 +368,8 @@ struct ControlPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     pinnedSection
-                    foldersSection
                     sessionsSection
+                    foldersSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
@@ -599,6 +599,12 @@ struct ControlPanelView: View {
     private var foldersSection: some View {
         if !chat.folders.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
+                sidebarFoldersHeader
+                    .padding(.leading, 17)
+                    .padding(.trailing, 10)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
+
                 ForEach(orderedFolders) { folder in
                     ControlPanelFolderHeaderView(
                         folder: folder,
@@ -635,7 +641,13 @@ struct ControlPanelView: View {
 
                     if !folder.isCollapsed {
                         ForEach(sessions(inFolder: folder.id)) { recent in
-                            folderChatRow(recent)
+                            folderChatRow(recent, folderID: folder.id)
+                                .overlay(alignment: .top) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
+                                }
+                                .overlay(alignment: .bottom) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
+                                }
                                 .padding(.leading, 12)
                         }
                     }
@@ -646,7 +658,7 @@ struct ControlPanelView: View {
     }
 
     @ViewBuilder
-    private func folderChatRow(_ recent: ControlPanelRecentSession) -> some View {
+    private func folderChatRow(_ recent: ControlPanelRecentSession, folderID: UUID) -> some View {
         if let payload = recent.dragPayload, !isSelectingRecents {
             recentSessionRow(recent)
                 .onDrag {
@@ -654,6 +666,23 @@ struct ControlPanelView: View {
                 } preview: {
                     dragPreview(recent)
                 }
+                .onDrop(of: [.text], delegate: RowReorderDropDelegate(
+                    targetID: recent.id,
+                    setTarget: { id, after in
+                        if reorderTargetID != id || reorderInsertAfter != after {
+                            reorderTargetID = id
+                            reorderInsertAfter = after
+                        }
+                    },
+                    onDrop: { draggedPayload, after in
+                        handleFolderRowDrop(
+                            draggedPayload: draggedPayload,
+                            target: recent,
+                            insertAfter: after,
+                            folderID: folderID
+                        )
+                    }
+                ))
         } else {
             recentSessionRow(recent)
         }
@@ -735,6 +764,32 @@ struct ControlPanelView: View {
         } else {
             chat.applySessionOrder(order)
         }
+    }
+
+    private func handleFolderRowDrop(
+        draggedPayload: String,
+        target: ControlPanelRecentSession,
+        insertAfter: Bool,
+        folderID: UUID
+    ) {
+        reorderTargetID = nil
+        reorderInsertAfter = false
+        guard let draggedID = UUID(uuidString: draggedPayload),
+              chat.sessions.contains(where: { $0.id == draggedID }),
+              let targetID = target.chatID,
+              draggedID != targetID
+        else {
+            return
+        }
+        var order = sessions(inFolder: folderID).compactMap(\.chatID)
+        order.removeAll { $0 == draggedID }
+        if let index = order.firstIndex(of: targetID) {
+            order.insert(draggedID, at: insertAfter ? index + 1 : index)
+        } else {
+            order.append(draggedID)
+        }
+        chat.moveSession(draggedID, toFolder: folderID)
+        chat.applySessionOrder(order)
     }
 
     @discardableResult
@@ -836,6 +891,16 @@ struct ControlPanelView: View {
     private var sidebarPinnedHeader: some View {
         HStack(spacing: 8) {
             Text("Pinned")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(.secondary.opacity(0.7))
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var sidebarFoldersHeader: some View {
+        HStack(spacing: 8) {
+            Text("Folders")
                 .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(.secondary.opacity(0.7))
 
