@@ -44,6 +44,19 @@ struct WelcomeGateView: View {
     }
 }
 
+enum WelcomeModelCatalog {
+    static let curatedModelIDs: [String] = [
+        "mlx-community/LFM2.5-VL-450M-6bit",
+        "lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit",
+        "mlx-community/LFM2.5-VL-1.6B-4bit",
+        "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",
+        "lmstudio-community/Qwen3.5-9B-MLX-4bit",
+        "lmstudio-community/GLM-4.7-Flash-MLX-4bit",
+        "mlx-community/Qwen3-VL-32B-Instruct-4bit",
+        "mlx-community/gpt-oss-120b-MXFP4-Q4"
+    ]
+}
+
 private struct WelcomeView: View {
     private enum Step: Equatable {
         case model
@@ -56,7 +69,6 @@ private struct WelcomeView: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
     @State private var step = Step.model
     @State private var selectedModelID: String?
-    @State private var downloadedRecommendedModelID: String?
     @State private var didRequestRecommendedModels = false
     @State private var showsAPIKeyEditor = false
     @State private var serverAPIKey: String
@@ -279,7 +291,7 @@ private struct WelcomeView: View {
                 ForEach(recommendedModels) { hubModel in
                     WelcomeDownloadModelRow(
                         model: hubModel,
-                        isDownloaded: downloadedRecommendedModelID == hubModel.id,
+                        isDownloaded: isInstalled(hubModel.id),
                         isSelected: selectedModelID == hubModel.id,
                         isDownloading: downloadManager.isDownloading(hubModel.id),
                         downloadProgress: downloadManager.progress(for: hubModel.id),
@@ -438,26 +450,15 @@ private struct WelcomeView: View {
     }
 
     private var shouldShowRecommendedModels: Bool {
-        !modelLibrary.isScanning && pickerModels.isEmpty
+        !modelLibrary.isScanning
     }
 
     private var recommendedModels: [HuggingFaceModel] {
-        let candidates = hubLibrary.models.filter { hubModel in
-            !hubModel.isPrivate
-                && !hubModel.isGated
-                && hubModel.capabilities.contains(.text)
-                && (hubModel.libraryName?.localizedCaseInsensitiveContains("mlx") == true
-                    || hubModel.tags.contains(where: { $0.localizedCaseInsensitiveContains("mlx") })
-                    || hubModel.id.lowercased().hasPrefix("mlx-community/"))
-        }
-        return Array(candidates.sorted { lhs, rhs in
-            let lhsFits = lhs.memoryEstimate?.isUsable != false
-            let rhsFits = rhs.memoryEstimate?.isUsable != false
-            if lhsFits != rhsFits {
-                return lhsFits
-            }
-            return lhs.downloads > rhs.downloads
-        }.prefix(6))
+        hubLibrary.models.filter { !$0.isPrivate && !$0.isGated }
+    }
+
+    private func isInstalled(_ repoID: String) -> Bool {
+        modelLibrary.models.contains { $0.repoID == repoID }
     }
 
     private var modelSearchPath: String {
@@ -494,36 +495,33 @@ private struct WelcomeView: View {
 
     private func refreshModelChoices() {
         modelLibrary.scan(path: model.settings.modelSearchPath)
-        if pickerModels.isEmpty {
-            requestRecommendedModels()
-        }
+        requestRecommendedModels()
     }
 
     private func loadRecommendedModelsIfNeeded() {
-        guard pickerModels.isEmpty, !didRequestRecommendedModels else { return }
+        guard !didRequestRecommendedModels else { return }
         requestRecommendedModels()
     }
 
     private func requestRecommendedModels() {
         didRequestRecommendedModels = true
-        hubLibrary.search(
-            query: "mlx-community",
-            sort: .downloads,
+        hubLibrary.loadCurated(
+            ids: WelcomeModelCatalog.curatedModelIDs,
             token: model.effectiveHuggingFaceToken
         )
     }
 
     private func downloadRecommendedModel(_ hubModel: HuggingFaceModel) {
-        selectedModelID = nil
         downloadManager.download(
             repoID: hubModel.id,
             sizeBytes: hubModel.sizeBytes,
             cachePath: model.settings.modelSearchPath,
             token: model.effectiveHuggingFaceToken
         ) {
-            downloadedRecommendedModelID = hubModel.id
-            selectedModelID = hubModel.id
             modelLibrary.scan(path: model.settings.modelSearchPath)
+            if selectedModelID == nil {
+                selectedModelID = hubModel.id
+            }
         }
     }
 }
