@@ -581,7 +581,7 @@ struct ControlPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isPinnedDropTargeted))
         .onDrop(of: [.text], isTargeted: $isPinnedDropTargeted) { providers in
-            loadDropString(providers) { _ = handlePinDrop([$0]) }
+            loadDropString(providers) { handlePinnedDrop($0) }
         }
     }
 
@@ -622,11 +622,24 @@ struct ControlPanelView: View {
 
             headerDivider
 
-            ForEach(unpinnedFolders) { folder in
-                folderView(folder)
+            if chat.folders.isEmpty {
+                emptyFoldersHint
+            } else {
+                ForEach(unpinnedFolders) { folder in
+                    folderView(folder)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var emptyFoldersHint: some View {
+        Label("No folders yet — tap + to add one", systemImage: "folder")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary.opacity(0.6))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 17)
+            .padding(.vertical, 10)
     }
 
     @ViewBuilder
@@ -671,15 +684,24 @@ struct ControlPanelView: View {
         ))
 
         if !folder.isCollapsed {
-            ForEach(sessions(inFolder: folder.id)) { recent in
-                folderChatRow(recent, folderID: folder.id)
-                    .overlay(alignment: .top) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
-                    }
-                    .overlay(alignment: .bottom) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
-                    }
-                    .padding(.leading, 12)
+            if sessions(inFolder: folder.id).isEmpty {
+                Text("Drop a chat here")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary.opacity(0.6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 28)
+                    .padding(.vertical, 6)
+            } else {
+                ForEach(sessions(inFolder: folder.id)) { recent in
+                    folderChatRow(recent, folderID: folder.id)
+                        .overlay(alignment: .top) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
+                        }
+                        .overlay(alignment: .bottom) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
+                        }
+                        .padding(.leading, 12)
+                }
             }
         }
     }
@@ -1327,6 +1349,16 @@ struct ControlPanelView: View {
             }
         }
         return nil
+    }
+
+    private func handlePinnedDrop(_ item: String) {
+        if item.hasPrefix("folder:") {
+            if let id = UUID(uuidString: String(item.dropFirst("folder:".count))) {
+                chat.setFolderPinned(id, pinned: true)
+            }
+            return
+        }
+        _ = handlePinDrop([item])
     }
 
     private func handlePinDrop(_ items: [String]) -> Bool {
@@ -3330,6 +3362,11 @@ private struct ControlPanelRecentSessionRow: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
                                 .accessibilityLabel(isChecked ? "Selected" : "Not selected")
+                        } else if isPinning, recent.isChat {
+                            Image(systemName: recent.pinned ? "pin.fill" : "pin")
+                                .font(.system(size: 11))
+                                .foregroundStyle(recent.pinned ? Color.accentColor : Color.secondary)
+                                .accessibilityLabel(recent.pinned ? "Pinned" : "Not pinned")
                         } else {
                             Circle()
                                 .fill(isCurrent ? Color.accentColor : Color.clear)
@@ -3534,10 +3571,10 @@ private struct ControlPanelFolderHeaderView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            if folder.isPinned {
-                Image(systemName: "pin.fill")
+            if folder.isPinned || isPinning {
+                Image(systemName: folder.isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(folder.isPinned ? Color.accentColor : Color.secondary)
             }
 
             if isRenaming {
