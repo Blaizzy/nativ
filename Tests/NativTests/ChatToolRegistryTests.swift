@@ -12,28 +12,6 @@ private struct FakeToolError: Error, LocalizedError {
 }
 
 @MainActor
-private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
-    var settings: NativSettings
-    var isRunning: Bool
-    var modelSwitchInProgress = false
-    private(set) var switchCallCount = 0
-    var onSwitch: ((String?) -> Void)?
-
-    init(languageModelID: String?, isRunning: Bool = true) {
-        settings = NativSettings(languageModelID: languageModelID)
-        self.isRunning = isRunning
-    }
-
-    func switchLanguageModel(to modelID: String?) {
-        switchCallCount += 1
-        if let onSwitch {
-            onSwitch(modelID)
-        } else {
-            settings.languageModelID = modelID
-        }
-    }
-}
-
 private func makeContext(imageModelID: String? = nil) -> ChatToolExecutionContext {
     ChatToolExecutionContext(
         imageGenerationModelID: imageModelID,
@@ -136,16 +114,6 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertFalse(ChatToolRoundGate.advertisesTools(atRound: ChatToolRoundGate.maximumRounds + 3))
     }
 
-    func testSwitchModelIsUnreachableThroughGenericDispatcherExecute() async {
-        do {
-            _ = try await ChatToolDispatcher.execute(
-                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/model"}"#),
-                context: makeContext()
-            )
-            XCTFail("switch_model must never execute through the generic dispatcher without the consent gate")
-        } catch {}
-    }
-
     func testConsentRouterTreatsCancellationAsHigherPriorityThanApproval() {
         XCTAssertEqual(ChatToolConsentRouter.outcome(approved: true, isCancelled: true), .cancelled)
         XCTAssertEqual(ChatToolConsentRouter.outcome(approved: false, isCancelled: true), .cancelled)
@@ -188,22 +156,6 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "fake failure")
         XCTAssertNil(object["requests_completed"])
-    }
-
-    func testSwitchModelFailurePayloadShape() throws {
-        let payload = ChatSwitchModelToolExecutor().failurePayload(operation: "x", error: FakeToolError())
-        let object = try decode(payload)
-        XCTAssertEqual(object["ok"] as? Bool, false)
-        XCTAssertEqual(object["declined"] as? Bool, false)
-        XCTAssertEqual(object["error"] as? String, "fake failure")
-    }
-
-    func testSwitchModelDeclinedPayloadShape() throws {
-        let payload = ChatSwitchModelToolExecutor().declinedPayload()
-        let object = try decode(payload)
-        XCTAssertEqual(object["ok"] as? Bool, false)
-        XCTAssertEqual(object["declined"] as? Bool, true)
-        XCTAssertNotNil(object["error"])
     }
 
     private func decode(_ json: String) throws -> [String: Any] {
@@ -352,11 +304,6 @@ final class ChatToolPresentationTests: XCTestCase {
                 .failed: "Server stats", .cancelled: "Server stats",
                 .awaitingConsent: "Server stats", .declined: "Server stats",
             ],
-            ChatSwitchModelToolRegistry.toolName: [
-                nil: "Model switch tool", .running: "Switching model…", .succeeded: "Switched model",
-                .failed: "Model switch", .cancelled: "Model switch",
-                .awaitingConsent: "Switch model?", .declined: "Model switch declined",
-            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
                 .failed: "some_unknown_tool", .cancelled: "some_unknown_tool",
@@ -384,7 +331,7 @@ final class ChatToolPresentationTests: XCTestCase {
         let toolNames = [
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
-            ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatServerStatsToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -393,7 +340,6 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatSystemMonitorToolRegistry.toolName: "cpu",
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
-            ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -409,120 +355,6 @@ final class ChatToolPresentationTests: XCTestCase {
             XCTAssertEqual(ChatToolPresentation.symbolName(toolName: toolName, status: .running), successLikeSymbol[toolName])
             XCTAssertEqual(ChatToolPresentation.symbolName(toolName: toolName, status: nil), successLikeSymbol[toolName])
         }
-    }
-}
-
-@MainActor
-final class ChatSwitchModelToolExecutorTests: XCTestCase {
-    func testInvalidJSONArgumentsThrowsInvalidArguments() async {
-        let fake = FakeModelSwitchingSurface(languageModelID: "org/current")
-        do {
-            _ = try await ChatSwitchModelToolExecutor().execute(
-                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: "not json"),
-                appModel: fake
-            )
-            XCTFail("malformed JSON arguments must throw")
-        } catch let error as ChatSwitchModelToolError {
-            guard case .invalidArguments = error else {
-                return XCTFail("expected .invalidArguments, got \(error)")
-            }
-        } catch {
-            XCTFail("expected ChatSwitchModelToolError, got \(error)")
-        }
-        XCTAssertEqual(fake.switchCallCount, 0)
-    }
-
-    func testMissingModelIDThrowsInvalidArguments() async {
-        let fake = FakeModelSwitchingSurface(languageModelID: "org/current")
-        do {
-            _ = try await ChatSwitchModelToolExecutor().execute(
-                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: "{}"),
-                appModel: fake
-            )
-            XCTFail("missing required model_id must throw")
-        } catch let error as ChatSwitchModelToolError {
-            guard case .invalidArguments = error else {
-                return XCTFail("expected .invalidArguments, got \(error)")
-            }
-        } catch {
-            XCTFail("expected ChatSwitchModelToolError, got \(error)")
-        }
-        XCTAssertEqual(fake.switchCallCount, 0)
-    }
-
-    func testSameModelRequestNoOpsWithoutCallingSwitch() async throws {
-        let fake = FakeModelSwitchingSurface(languageModelID: "org/current")
-        let content = try await ChatSwitchModelToolExecutor().execute(
-            call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/current"}"#),
-            appModel: fake
-        )
-        let object = try decode(content)
-        XCTAssertEqual(object["ok"] as? Bool, true)
-        XCTAssertEqual(object["changed"] as? Bool, false)
-        XCTAssertEqual(fake.switchCallCount, 0, "a same-model request must not trigger a real switch/restart")
-    }
-
-    func testSuccessfulSwitchReportsChangedTrueWithBothModelIDs() async throws {
-        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
-        let content = try await ChatSwitchModelToolExecutor().execute(
-            call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
-            appModel: fake
-        )
-        let object = try decode(content)
-        XCTAssertEqual(object["ok"] as? Bool, true)
-        XCTAssertEqual(object["changed"] as? Bool, true)
-        XCTAssertEqual(object["previous_model_id"] as? String, "org/old")
-        XCTAssertEqual(object["new_model_id"] as? String, "org/new")
-        XCTAssertEqual(fake.switchCallCount, 1)
-    }
-
-    func testServerNotRunningAfterSwitchThrowsSwitchFailed() async {
-        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
-        fake.onSwitch = { [weak fake] modelID in
-            fake?.settings.languageModelID = modelID
-            fake?.isRunning = false
-        }
-        do {
-            _ = try await ChatSwitchModelToolExecutor().execute(
-                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
-                appModel: fake
-            )
-            XCTFail("a server that isn't running after the switch must throw")
-        } catch let error as ChatSwitchModelToolError {
-            guard case .switchFailed = error else {
-                return XCTFail("expected .switchFailed, got \(error)")
-            }
-        } catch {
-            XCTFail("expected ChatSwitchModelToolError, got \(error)")
-        }
-    }
-
-    func testActiveModelStillMismatchedAfterSwitchThrowsMismatchedModel() async {
-        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
-        // Simulate the server coming back up with a different model than requested.
-        fake.onSwitch = { [weak fake] _ in
-            fake?.settings.languageModelID = "org/unexpected"
-        }
-        do {
-            _ = try await ChatSwitchModelToolExecutor().execute(
-                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
-                appModel: fake
-            )
-            XCTFail("an active model that doesn't match the request must throw")
-        } catch let error as ChatSwitchModelToolError {
-            guard case .mismatchedModel(let requested, let active) = error else {
-                return XCTFail("expected .mismatchedModel, got \(error)")
-            }
-            XCTAssertEqual(requested, "org/new")
-            XCTAssertEqual(active, "org/unexpected")
-        } catch {
-            XCTFail("expected ChatSwitchModelToolError, got \(error)")
-        }
-    }
-
-    private func decode(_ json: String) throws -> [String: Any] {
-        let data = try XCTUnwrap(json.data(using: .utf8))
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
 
@@ -606,9 +438,9 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
                 role: .tool,
                 content: "",
                 toolCallID: "call_1",
-                toolName: ChatSwitchModelToolRegistry.toolName,
+                toolName: "mcp__example__run",
                 toolStatus: status,
-                toolArguments: #"{"model_id":"org/model"}"#
+                toolArguments: #"{"path":"/tmp"}"#
             )
             let data = try JSONEncoder().encode(original)
             let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)

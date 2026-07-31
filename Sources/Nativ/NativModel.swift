@@ -33,7 +33,7 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
 }
 
 @MainActor
-final class NativModel: ObservableObject, ChatModelSwitchingSurface {
+final class NativModel: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var logText = ""
     @Published private(set) var metrics: NativMetrics?

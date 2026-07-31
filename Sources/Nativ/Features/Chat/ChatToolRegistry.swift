@@ -64,9 +64,6 @@ enum ChatToolDispatcher {
         ChatServerStatsToolRegistry.toolName: { name, error in
             ChatServerStatsToolExecutor().failurePayload(operation: name, error: error)
         },
-        ChatSwitchModelToolRegistry.toolName: { name, error in
-            ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
-        },
     ]
 
     static func execute(
@@ -192,8 +189,6 @@ enum ChatToolPresentation {
             return modelLibraryTitle(status: status)
         case ChatServerStatsToolRegistry.toolName:
             return serverStatsTitle(status: status)
-        case ChatSwitchModelToolRegistry.toolName:
-            return switchModelTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -217,8 +212,6 @@ enum ChatToolPresentation {
                 return "shippingbox"
             case ChatServerStatsToolRegistry.toolName:
                 return "chart.line.uptrend.xyaxis"
-            case ChatSwitchModelToolRegistry.toolName:
-                return "arrow.triangle.2.circlepath"
             default:
                 if let toolName, toolName.hasPrefix("mcp__") {
                     return "puzzlepiece.extension"
@@ -277,23 +270,6 @@ enum ChatToolPresentation {
             return "Server stats"
         case nil:
             return "Server stats tool"
-        }
-    }
-
-    private static func switchModelTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
-        switch status {
-        case .awaitingConsent:
-            return "Switch model?"
-        case .running:
-            return "Switching model…"
-        case .succeeded:
-            return "Switched model"
-        case .declined:
-            return "Model switch declined"
-        case .failed, .cancelled:
-            return "Model switch"
-        case nil:
-            return "Model switch tool"
         }
     }
 

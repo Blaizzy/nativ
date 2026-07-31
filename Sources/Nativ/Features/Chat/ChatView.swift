@@ -707,82 +707,6 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: ChatSwitchModelToolExecutor().declinedPayload(),
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
-                    }
-                    guard let appModel else {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: ChatSwitchModelToolError.appModelUnavailable
-                            ),
-                            attachments: []
-                        )
-                        continue
-                    }
-                    do {
-                        let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
-                        activeSettings.languageModelID = appModel.settings.normalized().languageModelID
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .succeeded,
-                            content: content,
-                            attachments: []
-                        )
-                        appModel.refreshMetricsIfRunning(force: true)
-                    } catch {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: error
-                            ),
-                            attachments: []
-                        )
-                    }
-                    continue
-                }
-
                 if let mcpHost = appModel?.mcpHost,
                    let toolName = toolCall.function?.name,
                    mcpHost.handlesTool(named: toolName) {
@@ -1867,19 +1791,17 @@ private struct ChatAgentStepCell: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !isModelSwitchTool {
-                Text(formattedArguments)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(
-                        Color(nsColor: .textBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-            }
+            Text(formattedArguments)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(
+                    Color(nsColor: .textBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 6)
+                )
 
             HStack(spacing: 8) {
                 Button("Deny") {
@@ -1897,31 +1819,10 @@ private struct ChatAgentStepCell: View {
         .padding(.top, 7)
     }
 
-    private var isModelSwitchTool: Bool {
-        message.toolName == ChatSwitchModelToolRegistry.toolName
-    }
-
-    @ViewBuilder
     private var consentMessage: some View {
-        if isModelSwitchTool {
-            Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept.")
-        } else {
-            Text("The model wants to run ")
-                + Text(verbatim: title).bold()
-                + Text(".")
-        }
-    }
-
-    private var requestedModelID: String {
-        guard let data = message.toolArguments?.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let modelID = object["model_id"] as? String
-        else {
-            return "a different model"
-        }
-        return modelID
+        Text("The model wants to run ")
+            + Text(verbatim: title).bold()
+            + Text(".")
     }
 
     @ViewBuilder
