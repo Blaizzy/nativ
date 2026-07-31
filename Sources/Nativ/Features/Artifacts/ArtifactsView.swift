@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import PDFKit
 import SwiftUI
 
 enum ArtifactLayout {
@@ -43,9 +45,15 @@ struct ArtifactGroup: Identifiable {
 
 struct ArtifactsView: View {
     @ObservedObject var store: ArtifactStore
+    let semanticSearch: ArtifactSemanticSearchConfig?
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
     let onUseAsReference: (Artifact) -> Void
+
+    @StateObject private var searchIndex = ArtifactSearchIndex()
+    @State private var semanticMatches: [UUID]?
+    @State private var searchDebounce: Task<Void, Never>?
+    @State private var isSemanticDismissed = false
 
     @State private var search = ""
     @State private var kindFilter: ArtifactKind?
@@ -62,7 +70,6 @@ struct ArtifactsView: View {
     @State private var albumSessionID: UUID?
 
     private var filtered: [Artifact] {
-        let query = search.lowercased()
         var result = store.artifacts
         if let kindFilter {
             result = result.filter { $0.kind == kindFilter }
@@ -70,10 +77,21 @@ struct ArtifactsView: View {
         if let sourceFilter {
             result = result.filter { $0.source == sourceFilter }
         }
-        if !query.isEmpty {
-            result = result.filter { $0.searchText.contains(query) }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            return result.sorted(by: sort.comparator)
         }
-        return result.sorted(by: sort.comparator)
+        if let semanticMatches {
+            var rank: [UUID: Int] = [:]
+            for (position, id) in semanticMatches.enumerated() {
+                rank[id] = position
+            }
+            return result
+                .filter { rank[$0.id] != nil }
+                .sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
+        }
+        let lowered = query.lowercased()
+        return result.filter { $0.searchText.contains(lowered) }.sorted(by: sort.comparator)
     }
 
     private var groups: [ArtifactGroup] {
@@ -93,15 +111,185 @@ struct ArtifactsView: View {
         return order.map { ArtifactGroup(id: $0, title: $0, items: buckets[$0] ?? []) }
     }
 
+    @ViewBuilder
+    private var semanticBanner: some View {
+        if let config = semanticSearch, !config.isModelInstalled, !store.artifacts.isEmpty,
+           config.isDownloading || !isSemanticDismissed {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Search by what's inside")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(config.isDownloading
+                        ? "Downloading search model… \(Int((config.downloadProgress * 100).rounded()))%"
+                        : "Find artifacts by their contents, not just names. Downloads a \(config.sizeLabel) model you can reuse.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                if config.isDownloading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Enable") { config.onEnable() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    Button {
+                        isSemanticDismissed = true
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(nsColor: .windowBackgroundColor))
+            Divider()
+        }
+    }
+
+    private func scheduleSemanticSearch() {
+        searchDebounce?.cancel()
+        guard let config = semanticSearch, config.isModelInstalled else {
+            semanticMatches = nil
+            return
+        }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            semanticMatches = nil
+            return
+        }
+        searchDebounce = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if Task.isCancelled {
+                return
+            }
+            await searchIndex.index(
+                artifacts: store.artifacts,
+                model: config.modelID,
+                client: config.client,
+                visualURLs: visualDataURLs(for:),
+                textChunks: documentTextChunks(for:)
+            )
+            if Task.isCancelled {
+                return
+            }
+            let matches = await searchIndex.search(query: query, model: config.modelID, client: config.client)
+            if Task.isCancelled {
+                return
+            }
+            semanticMatches = matches
+        }
+    }
+
+    private func documentTextChunks(for artifact: Artifact) async -> [String] {
+        guard artifact.kind == .document else {
+            return []
+        }
+        let url = store.fileURL(for: artifact)
+        let ext = artifact.fileExtension.lowercased()
+        return await Task.detached(priority: .utility) {
+            let raw: String
+            if ext == "pdf" {
+                guard let document = PDFDocument(url: url), let string = document.string else {
+                    return []
+                }
+                raw = string
+            } else {
+                guard let string = try? String(contentsOf: url, encoding: .utf8) else {
+                    return []
+                }
+                raw = string
+            }
+            return Self.chunkedText(raw, maxChunks: 8, chunkSize: 1200)
+        }.value
+    }
+
+    private static func chunkedText(_ text: String, maxChunks: Int, chunkSize: Int) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return []
+        }
+        var chunks: [String] = []
+        var start = trimmed.startIndex
+        while start < trimmed.endIndex, chunks.count < maxChunks {
+            let end = trimmed.index(start, offsetBy: chunkSize, limitedBy: trimmed.endIndex) ?? trimmed.endIndex
+            let piece = trimmed[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !piece.isEmpty {
+                chunks.append(piece)
+            }
+            start = end
+        }
+        return chunks
+    }
+
+    private func visualDataURLs(for artifact: Artifact) async -> [String] {
+        let url = store.fileURL(for: artifact)
+        switch artifact.kind {
+        case .image:
+            let mimeType = artifact.mimeType
+            return await Task.detached(priority: .utility) {
+                guard let data = try? Data(contentsOf: url) else {
+                    return []
+                }
+                return ["data:\(mimeType);base64,\(data.base64EncodedString())"]
+            }.value
+        case .video:
+            return await Self.videoFrameDataURLs(url: url, count: 4)
+        case .document:
+            return []
+        }
+    }
+
+    private static func videoFrameDataURLs(url: URL, count: Int) async -> [String] {
+        await Task.detached(priority: .utility) {
+            let asset = AVURLAsset(url: url)
+            guard let duration = try? await asset.load(.duration) else {
+                return []
+            }
+            let seconds = CMTimeGetSeconds(duration)
+            guard seconds.isFinite, seconds > 0 else {
+                return []
+            }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 512, height: 512)
+            generator.requestedTimeToleranceBefore = .positiveInfinity
+            generator.requestedTimeToleranceAfter = .positiveInfinity
+
+            var urls: [String] = []
+            for index in 0..<count {
+                let fraction = (Double(index) + 0.5) / Double(count)
+                let time = CMTime(seconds: seconds * fraction, preferredTimescale: 600)
+                guard let cgImage = try? await generator.image(at: time).image else {
+                    continue
+                }
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                    urls.append("data:image/jpeg;base64,\(data.base64EncodedString())")
+                }
+            }
+            return urls
+        }.value
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
+            semanticBanner
             if isSelecting {
                 selectionBar
             }
             filterBar
             Divider()
             contentView
+        }
+        .onChange(of: search) { _, _ in
+            scheduleSemanticSearch()
         }
         .overlay {
             if previewID != nil {
@@ -116,6 +304,19 @@ struct ArtifactsView: View {
                     }
                 )
             }
+        }
+        .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
+            Button("Delete", role: .destructive) {
+                store.delete(pendingDelete)
+                selection.subtract(pendingDelete.map(\.id))
+                pendingDelete = []
+                if selection.isEmpty {
+                    isSelecting = false
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = [] }
+        } message: {
+            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
         }
         .overlay {
             if let albumSessionID {
@@ -138,19 +339,6 @@ struct ArtifactsView: View {
                     onClose: { self.albumSessionID = nil }
                 )
             }
-        }
-        .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
-            Button("Delete", role: .destructive) {
-                store.delete(pendingDelete)
-                selection.subtract(pendingDelete.map(\.id))
-                pendingDelete = []
-                if selection.isEmpty {
-                    isSelecting = false
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingDelete = [] }
-        } message: {
-            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
         }
         .sheet(item: $inspectorArtifact) { artifact in
             ArtifactInspector(
@@ -761,7 +949,7 @@ struct ArtifactInspector: View {
 
                     VStack(spacing: 8) {
                         action("Open Preview", "arrow.up.left.and.arrow.down.right", onOpenPreview)
-                        action(artifact.source == .generated ? "Go to Image Session" : "Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
+                        action("Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
                         action("Reveal in Finder", "folder", { store.revealInFinder(artifact) })
                         action("Export…", "square.and.arrow.down", { store.export(artifact) })
                         action("Copy", "doc.on.doc", { store.copyToPasteboard(artifact) })

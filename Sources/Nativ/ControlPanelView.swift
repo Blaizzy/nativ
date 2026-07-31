@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -220,6 +221,40 @@ struct ControlPanelView: View {
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @StateObject private var embeddingLibrary = LocalModelLibrary()
+
+    private static let embeddingModelID = "arthurcollet/Qwen3-VL-Embedding-2B-mlx-4bit"
+    private static let embeddingModelSize: Int64 = 1_800_000_000
+
+    private var artifactSemanticSearch: ArtifactSemanticSearchConfig {
+        let settings = model.settings.normalized()
+        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
+            ?? URL(string: "http://127.0.0.1:8080")!
+        let modelID = Self.embeddingModelID
+        return ArtifactSemanticSearchConfig(
+            modelID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
+            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
+            isDownloading: downloads.isDownloading(modelID),
+            downloadProgress: downloads.progress(for: modelID),
+            onEnable: {
+                downloads.download(
+                    repoID: modelID,
+                    sizeBytes: Self.embeddingModelSize,
+                    cachePath: settings.modelSearchPath,
+                    token: model.effectiveHuggingFaceToken
+                ) {
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+                navigation.open(.models)
+            }
+        )
+    }
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
@@ -302,6 +337,10 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
+            embeddingLibrary.scan(
+                path: model.settings.modelSearchPath,
+                additionalPaths: model.settings.normalized().additionalModelSearchPaths
+            )
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -817,6 +856,7 @@ struct ControlPanelView: View {
                 case .artifacts:
                     ArtifactsView(
                         store: artifacts,
+                        semanticSearch: artifactSemanticSearch,
                         onOpenChat: { artifact in
                             switch artifact.source {
                             case .uploaded:
