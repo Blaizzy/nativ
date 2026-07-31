@@ -45,6 +45,7 @@ struct ArtifactsView: View {
     @ObservedObject var store: ArtifactStore
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
+    let onUseAsReference: (Artifact) -> Void
 
     @State private var search = ""
     @State private var kindFilter: ArtifactKind?
@@ -350,6 +351,7 @@ struct ArtifactsView: View {
         Divider()
         if artifact.kind == .image {
             Button("Use in Chat") { onUseInChat(artifact) }
+            Button("Use as Image Reference") { onUseAsReference(artifact) }
         }
         Button("Go to Chat") { onOpenChat(artifact) }
         Divider()
