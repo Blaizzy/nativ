@@ -533,11 +533,13 @@ struct ControlPanelView: View {
                 emptyPinnedHint
             } else {
                 ForEach(pinnedSessions) { recent in
-                    VStack(alignment: .leading, spacing: 0) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
-                        draggableRow(recent, isPinnedRow: true)
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
-                    }
+                    draggableRow(recent, isPinnedRow: true)
+                        .overlay(alignment: .top) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                        }
+                        .overlay(alignment: .bottom) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                        }
                 }
             }
         }
@@ -557,11 +559,13 @@ struct ControlPanelView: View {
                 .padding(.bottom, 4)
 
             ForEach(unpinnedSessions) { recent in
-                VStack(alignment: .leading, spacing: 0) {
-                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
-                    draggableRow(recent, isPinnedRow: false)
-                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
-                }
+                draggableRow(recent, isPinnedRow: false)
+                    .overlay(alignment: .top) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
+                    }
+                    .overlay(alignment: .bottom) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isSessionsDropTargeted)
+                    }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -601,8 +605,10 @@ struct ControlPanelView: View {
                 .onDrop(of: [.text], delegate: RowReorderDropDelegate(
                     targetID: recent.id,
                     setTarget: { id, after in
-                        reorderTargetID = id
-                        reorderInsertAfter = after
+                        if reorderTargetID != id || reorderInsertAfter != after {
+                            reorderTargetID = id
+                            reorderInsertAfter = after
+                        }
                     },
                     onDrop: { draggedPayload, after in
                         handleRowDrop(
