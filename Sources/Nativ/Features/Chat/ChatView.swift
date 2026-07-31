@@ -183,6 +183,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     @Published private(set) var sessions: [ChatSessionSummary] = []
+    @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
@@ -209,6 +210,7 @@ final class ChatViewModel: ObservableObject {
 
     init() {
         storedSessions = sessionStore.loadSessions()
+        folders = sessionStore.loadFolders()
         pruneRedundantEmptySessions()
         if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
             applyCurrentSession(latestSession)
@@ -359,6 +361,60 @@ final class ChatViewModel: ObservableObject {
         if currentSession?.id == sessionID {
             currentSession?.pinned = pinned
             currentSession?.pinnedOrder = order
+        }
+        sessionStore.saveSession(storedSessions[index])
+        refreshSessionList()
+    }
+
+    @discardableResult
+    func createFolder(name: String) -> UUID {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed)
+        folders.append(folder)
+        sessionStore.saveFolders(folders)
+        return folder.id
+    }
+
+    func renameFolder(_ folderID: UUID, to newName: String) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
+            return
+        }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        folders[index].name = trimmed
+        sessionStore.saveFolders(folders)
+    }
+
+    func deleteFolder(_ folderID: UUID) {
+        folders.removeAll { $0.id == folderID }
+        sessionStore.saveFolders(folders)
+        for index in storedSessions.indices where storedSessions[index].folderID == folderID {
+            storedSessions[index].folderID = nil
+            sessionStore.saveSession(storedSessions[index])
+        }
+        if currentSession?.folderID == folderID {
+            currentSession?.folderID = nil
+        }
+        refreshSessionList()
+    }
+
+    func setFolderCollapsed(_ folderID: UUID, collapsed: Bool) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
+            return
+        }
+        folders[index].isCollapsed = collapsed
+        sessionStore.saveFolders(folders)
+    }
+
+    func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
+        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+            return
+        }
+        storedSessions[index].folderID = folderID
+        if currentSession?.id == sessionID {
+            currentSession?.folderID = folderID
         }
         sessionStore.saveSession(storedSessions[index])
         refreshSessionList()

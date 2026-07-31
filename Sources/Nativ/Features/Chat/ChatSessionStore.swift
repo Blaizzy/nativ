@@ -13,6 +13,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var pinned: Bool?
     var pinnedOrder: Int?
     var sessionOrder: Int?
+    var folderID: UUID?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -23,7 +24,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
             messageCount: messages.count,
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
-            sessionOrder: sessionOrder
+            sessionOrder: sessionOrder,
+            folderID: folderID
         )
     }
 
@@ -106,12 +108,25 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let isPinned: Bool
     let pinnedOrder: Int?
     let sessionOrder: Int?
+    let folderID: UUID?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
             return lhs.createdAt > rhs.createdAt
         }
         return lhs.updatedAt > rhs.updatedAt
+    }
+}
+
+struct ChatFolder: Identifiable, Equatable, Codable {
+    let id: UUID
+    var name: String
+    var isCollapsed: Bool
+
+    init(id: UUID = UUID(), name: String, isCollapsed: Bool = false) {
+        self.id = id
+        self.name = name
+        self.isCollapsed = isCollapsed
     }
 }
 
@@ -460,6 +475,28 @@ struct ChatSessionStore {
         try? fileManager.removeItem(at: sessionURL(for: id))
     }
 
+    func loadFolders() -> [ChatFolder] {
+        guard let data = try? Data(contentsOf: foldersURL) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([ChatFolder].self, from: data)) ?? []
+    }
+
+    func saveFolders(_ folders: [ChatFolder]) {
+        do {
+            try fileManager.createDirectory(
+                at: chatDirectory,
+                withIntermediateDirectories: true
+            )
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(folders)
+            try data.write(to: foldersURL, options: .atomic)
+        } catch {
+        }
+    }
+
     private func loadSession(from url: URL) -> ChatSession? {
         guard let data = try? Data(contentsOf: url) else {
             return nil
@@ -529,6 +566,10 @@ struct ChatSessionStore {
 
     private var sessionsDirectory: URL {
         chatDirectory.appendingPathComponent("Sessions", isDirectory: true)
+    }
+
+    private var foldersURL: URL {
+        chatDirectory.appendingPathComponent("folders.json")
     }
 
     private var legacyTranscriptURL: URL {

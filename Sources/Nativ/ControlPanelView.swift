@@ -367,6 +367,7 @@ struct ControlPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     pinnedSection
+                    foldersSection
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
@@ -558,7 +559,7 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            ForEach(unpinnedSessions) { recent in
+            ForEach(ungroupedSessions) { recent in
                 draggableRow(recent, isPinnedRow: false)
                     .overlay(alignment: .top) {
                         pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
@@ -572,6 +573,37 @@ struct ControlPanelView: View {
         .background(dropHighlight(isTargeted: isSessionsDropTargeted))
         .onDrop(of: [.text], isTargeted: $isSessionsDropTargeted) { providers in
             loadDropString(providers) { _ = handleUnpinDrop([$0]) }
+        }
+    }
+
+    @ViewBuilder
+    private var foldersSection: some View {
+        if !chat.folders.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(chat.folders) { folder in
+                    ControlPanelFolderHeaderView(
+                        folder: folder,
+                        count: sessions(inFolder: folder.id).count,
+                        onToggleCollapse: {
+                            chat.setFolderCollapsed(folder.id, collapsed: !folder.isCollapsed)
+                        },
+                        onRename: { chat.renameFolder(folder.id, to: $0) },
+                        onDelete: { chat.deleteFolder(folder.id) }
+                    )
+                    .padding(.leading, 9)
+                    .padding(.trailing, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+
+                    if !folder.isCollapsed {
+                        ForEach(sessions(inFolder: folder.id)) { recent in
+                            recentSessionRow(recent)
+                                .padding(.leading, 12)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -766,6 +798,21 @@ struct ControlPanelView: View {
                 .foregroundStyle(.secondary.opacity(0.7))
 
             Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    chat.createFolder(name: "New Folder")
+                }
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 26, height: 28)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSelectingRecents)
+            .help("New folder")
+            .opacity(isSelectingRecents ? 0 : 1)
 
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
@@ -989,6 +1036,16 @@ struct ControlPanelView: View {
         recentSessions.filter { !$0.pinned }.sorted(by: ControlPanelRecentSession.sessionSort)
     }
 
+    private var ungroupedSessions: [ControlPanelRecentSession] {
+        unpinnedSessions.filter { $0.folderID == nil }
+    }
+
+    private func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
+        recentSessions
+            .filter { !$0.pinned && $0.folderID == folderID }
+            .sorted(by: ControlPanelRecentSession.sessionSort)
+    }
+
     @ViewBuilder
     private func recentSessionRow(_ recent: ControlPanelRecentSession) -> some View {
         ControlPanelRecentSessionRow(
@@ -1026,6 +1083,13 @@ struct ControlPanelView: View {
             },
             onTogglePin: {
                 togglePinRecent(recent)
+            },
+            folders: chat.folders,
+            onMoveToFolder: { folderID in
+                moveRecentToFolder(recent, folderID: folderID)
+            },
+            onCreateFolderForSession: {
+                createFolderForRecent(recent)
             }
         )
     }
@@ -1035,6 +1099,21 @@ struct ControlPanelView: View {
             return
         }
         chat.setPinned(sessionID, pinned: !recent.pinned)
+    }
+
+    private func moveRecentToFolder(_ recent: ControlPanelRecentSession, folderID: UUID?) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        chat.moveSession(sessionID, toFolder: folderID)
+    }
+
+    private func createFolderForRecent(_ recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        let folderID = chat.createFolder(name: "New Folder")
+        chat.moveSession(sessionID, toFolder: folderID)
     }
 
     private func draggedChatID(from items: [String]) -> UUID? {
@@ -2773,6 +2852,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let pinned: Bool
     let pinnedOrder: Int?
     let sessionOrder: Int?
+    let folderID: UUID?
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
@@ -2782,6 +2862,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         pinned = session.isPinned
         pinnedOrder = session.pinnedOrder
         sessionOrder = session.sessionOrder
+        folderID = session.folderID
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -2792,6 +2873,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         pinned = false
         pinnedOrder = nil
         sessionOrder = nil
+        folderID = nil
     }
 
     var chatID: UUID? {
@@ -2882,6 +2964,9 @@ private struct ControlPanelRecentSessionRow: View {
     let onRename: (String) -> Void
     let onNewChat: () -> Void
     let onTogglePin: () -> Void
+    let folders: [ChatFolder]
+    let onMoveToFolder: (UUID?) -> Void
+    let onCreateFolderForSession: () -> Void
     @State private var isHovering = false
     @State private var isDeleteHovering = false
     @State private var isRenaming = false
@@ -3025,6 +3110,38 @@ private struct ControlPanelRecentSessionRow: View {
                     systemImage: recent.pinned ? "pin.slash" : "pin"
                 )
             }
+
+            Menu {
+                if recent.folderID != nil {
+                    Button {
+                        onMoveToFolder(nil)
+                    } label: {
+                        Label("Remove from Folder", systemImage: "folder.badge.minus")
+                    }
+                    Divider()
+                }
+                ForEach(folders) { folder in
+                    Button {
+                        onMoveToFolder(folder.id)
+                    } label: {
+                        if folder.id == recent.folderID {
+                            Label(folder.name, systemImage: "checkmark")
+                        } else {
+                            Text(folder.name)
+                        }
+                    }
+                }
+                if !folders.isEmpty {
+                    Divider()
+                }
+                Button {
+                    onCreateFolderForSession()
+                } label: {
+                    Label("New Folder", systemImage: "folder.badge.plus")
+                }
+            } label: {
+                Label("Move to Folder", systemImage: "folder")
+            }
         }
 
         Divider()
@@ -3047,6 +3164,87 @@ private struct ControlPanelRecentSessionRow: View {
 
     private func beginRename() {
         renameDraft = recent.title
+        isRenaming = true
+        renameFieldFocused = true
+    }
+
+    private func commitRename() {
+        isRenaming = false
+        onRename(renameDraft)
+    }
+}
+
+private struct ControlPanelFolderHeaderView: View {
+    let folder: ChatFolder
+    let count: Int
+    let onToggleCollapse: () -> Void
+    let onRename: (String) -> Void
+    let onDelete: () -> Void
+    @State private var isRenaming = false
+    @State private var renameDraft = ""
+    @FocusState private var renameFieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Button(action: onToggleCollapse) {
+                Image(systemName: folder.isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12)
+            }
+            .buttonStyle(.plain)
+
+            Image(systemName: "folder")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            if isRenaming {
+                TextField("Name", text: $renameDraft)
+                    .textFieldStyle(.plain)
+                    .focused($renameFieldFocused)
+                    .onSubmit {
+                        commitRename()
+                    }
+                    .onExitCommand {
+                        isRenaming = false
+                    }
+            } else {
+                Text(folder.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary.opacity(0.7))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .contentShape(.rect)
+        .onTapGesture(count: 2) {
+            beginRename()
+        }
+        .contextMenu {
+            Button {
+                beginRename()
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete Folder", systemImage: "trash")
+            }
+        }
+    }
+
+    private func beginRename() {
+        renameDraft = folder.name
         isRenaming = true
         renameFieldFocused = true
     }
