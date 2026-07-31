@@ -14,8 +14,16 @@ struct MCPCatalogEntry: Identifiable, Hashable {
     var requiresFolder: Bool = false
     var sourceURL: String?
     var official: Bool = false
+    var logo: String?
 
     var needsSetup: Bool { !requiredEnv.isEmpty || requiresFolder }
+
+    var logoImage: NSImage? {
+        guard let logo, !logo.isEmpty, let base = Bundle.main.resourceURL else {
+            return nil
+        }
+        return NSImage(contentsOf: base.appendingPathComponent("ToolCatalogIcons/\(logo)"))
+    }
 
     static let seed: [MCPCatalogEntry] = [
         MCPCatalogEntry(
@@ -90,7 +98,7 @@ struct MCPCatalogEntry: Identifiable, Hashable {
 extension MCPCatalogEntry: Decodable {
     enum CodingKeys: String, CodingKey {
         case id, name, description, category, icon, command, args
-        case requiredEnv, requiresFolder, sourceURL, official
+        case requiredEnv, requiresFolder, sourceURL, official, logo
     }
 
     init(from decoder: Decoder) throws {
@@ -106,6 +114,7 @@ extension MCPCatalogEntry: Decodable {
         requiresFolder = try container.decodeIfPresent(Bool.self, forKey: .requiresFolder) ?? false
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
         official = try container.decodeIfPresent(Bool.self, forKey: .official) ?? false
+        logo = try container.decodeIfPresent(String.self, forKey: .logo)
     }
 }
 
@@ -294,14 +303,23 @@ private struct CatalogCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: entry.icon)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 38, height: 38)
-                    .background(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.12))
-                    )
+                Group {
+                    if let image = entry.logoImage {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 22, height: 22)
+                    } else {
+                        Image(systemName: entry.icon)
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+                .frame(width: 38, height: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.12))
+                )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.name)
                         .font(.callout.weight(.semibold))

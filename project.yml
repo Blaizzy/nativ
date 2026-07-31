@@ -72,7 +72,11 @@ targets:
       - path: Sources/Nativ
         excludes:
           - ModelProviderIcons
+          - ToolCatalogIcons
       - path: Sources/Nativ/ModelProviderIcons
+        type: folder
+        buildPhase: resources
+      - path: Sources/Nativ/ToolCatalogIcons
         type: folder
         buildPhase: resources
     dependencies:
