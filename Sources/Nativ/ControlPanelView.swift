@@ -231,6 +231,8 @@ struct ControlPanelView: View {
     @State private var isNewChatHovering = false
     @State private var isSelectingRecents = false
     @State private var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
+    @State private var selectedFolderIDs: Set<UUID> = []
+    @State private var isPinningRecents = false
     @State private var isPinnedDropTargeted = false
     @State private var isSessionsDropTargeted = false
     @State private var reorderTargetID: ControlPanelRecentSession.ID?
@@ -363,13 +365,21 @@ struct ControlPanelView: View {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
+            } else if isPinningRecents {
+                pinModeBar
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+            } else {
+                sidebarActionBar
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
             }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     pinnedSection
-                    sessionsSection
                     foldersSection
+                    sessionsSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
@@ -433,7 +443,7 @@ struct ControlPanelView: View {
             Text("“\(folder.name)” will be removed. Its chats will be moved out, not deleted.")
         }
         .alert(
-            "Delete \(selectedRecentIDs.count) chats?",
+            "Delete \(selectedRecentIDs.count + selectedFolderIDs.count) items?",
             isPresented: $isConfirmingBulkDelete
         ) {
             Button("Delete", role: .destructive) {
@@ -441,7 +451,7 @@ struct ControlPanelView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The selected chats will be permanently deleted.")
+            Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
         }
     }
 
@@ -549,9 +559,12 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            if pinnedSessions.isEmpty {
+            if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
                 emptyPinnedHint
             } else {
+                ForEach(pinnedFolders) { folder in
+                    folderView(folder)
+                }
                 ForEach(pinnedSessions) { recent in
                     draggableRow(recent, isPinnedRow: true)
                         .overlay(alignment: .top) {
@@ -595,65 +608,73 @@ struct ControlPanelView: View {
         }
     }
 
-    @ViewBuilder
     private var foldersSection: some View {
-        if !chat.folders.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                sidebarFoldersHeader
-                    .padding(.leading, 17)
-                    .padding(.trailing, 10)
-                    .padding(.top, 12)
-                    .padding(.bottom, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarFoldersHeader
+                .padding(.leading, 17)
+                .padding(.trailing, 10)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
 
-                ForEach(orderedFolders) { folder in
-                    ControlPanelFolderHeaderView(
-                        folder: folder,
-                        count: sessions(inFolder: folder.id).count,
-                        onToggleCollapse: {
-                            chat.setFolderCollapsed(folder.id, collapsed: !folder.isCollapsed)
-                        },
-                        onRename: { chat.renameFolder(folder.id, to: $0) },
-                        onTogglePin: {
-                            chat.setFolderPinned(folder.id, pinned: !folder.isPinned)
-                        },
-                        onExport: {
-                            exportFolder(folder)
-                        },
-                        onDelete: {
-                            pendingDeleteFolder = folder
-                        }
-                    )
-                    .padding(.leading, 9)
-                    .padding(.trailing, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 2)
-                    .onDrag {
-                        NSItemProvider(object: "folder:\(folder.id.uuidString)" as NSString)
-                    }
-                    .onDrop(of: [.text], delegate: FolderDropDelegate(
-                        onChatDrop: { chatID in
-                            chat.moveSession(chatID, toFolder: folder.id)
-                        },
-                        onFolderDrop: { draggedFolderID in
-                            handleFolderReorder(dragged: draggedFolderID, target: folder.id)
-                        }
-                    ))
-
-                    if !folder.isCollapsed {
-                        ForEach(sessions(inFolder: folder.id)) { recent in
-                            folderChatRow(recent, folderID: folder.id)
-                                .overlay(alignment: .top) {
-                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
-                                }
-                                .overlay(alignment: .bottom) {
-                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
-                                }
-                                .padding(.leading, 12)
-                        }
-                    }
-                }
+            ForEach(unpinnedFolders) { folder in
+                folderView(folder)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func folderView(_ folder: ChatFolder) -> some View {
+        ControlPanelFolderHeaderView(
+            folder: folder,
+            count: sessions(inFolder: folder.id).count,
+            isPinning: isPinningRecents,
+            isSelecting: isSelectingRecents,
+            isChecked: selectedFolderIDs.contains(folder.id),
+            onToggleCollapse: {
+                chat.setFolderCollapsed(folder.id, collapsed: !folder.isCollapsed)
+            },
+            onRename: { chat.renameFolder(folder.id, to: $0) },
+            onTogglePin: {
+                chat.setFolderPinned(folder.id, pinned: !folder.isPinned)
+            },
+            onToggleSelect: {
+                toggleFolderSelection(folder.id)
+            },
+            onExport: {
+                exportFolder(folder)
+            },
+            onDelete: {
+                pendingDeleteFolder = folder
+            }
+        )
+        .padding(.leading, 9)
+        .padding(.trailing, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+        .onDrag {
+            NSItemProvider(object: "folder:\(folder.id.uuidString)" as NSString)
+        }
+        .onDrop(of: [.text], delegate: FolderDropDelegate(
+            onChatDrop: { chatID in
+                chat.moveSession(chatID, toFolder: folder.id)
+            },
+            onFolderDrop: { draggedFolderID in
+                handleFolderReorder(dragged: draggedFolderID, target: folder.id)
+            }
+        ))
+
+        if !folder.isCollapsed {
+            ForEach(sessions(inFolder: folder.id)) { recent in
+                folderChatRow(recent, folderID: folder.id)
+                    .overlay(alignment: .top) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
+                    }
+                    .overlay(alignment: .bottom) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
+                    }
+                    .padding(.leading, 12)
+            }
         }
     }
 
@@ -836,6 +857,80 @@ struct ControlPanelView: View {
         )
     }
 
+    private var sidebarActionBar: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    enterPinMode()
+                }
+            } label: {
+                Image(systemName: "pin")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 26, height: 28)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
+            .help("Pin chats or folders")
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    enterSelectMode()
+                }
+            } label: {
+                Image(systemName: "checklist")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 26, height: 28)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
+            .help("Select multiple")
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    createRecentSession()
+                }
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
+            .help(newRecentHelp)
+            .onHover { isNewChatHovering = $0 }
+        }
+    }
+
+    private var pinModeBar: some View {
+        HStack(spacing: 6) {
+            Text("Tap chats or folders to pin")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+
+            Button("Done") {
+                withAnimation(.snappy(duration: 0.2)) {
+                    exitPinMode()
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
     private var bulkSelectionBar: some View {
         HStack(spacing: 6) {
             Text(bulkSelectionTitle)
@@ -869,7 +964,7 @@ struct ControlPanelView: View {
                     .frame(width: 24, height: 22)
             }
             .help("Delete selected")
-            .disabled(selectedRecentIDs.isEmpty)
+            .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
 
             Button("Done") {
                 withAnimation(.snappy(duration: 0.2)) {
@@ -905,6 +1000,19 @@ struct ControlPanelView: View {
                 .foregroundStyle(.secondary.opacity(0.7))
 
             Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    _ = chat.createFolder(name: "New Folder")
+                }
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 24, height: 24)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help("New folder")
         }
     }
 
@@ -915,56 +1023,6 @@ struct ControlPanelView: View {
                 .foregroundStyle(.secondary.opacity(0.7))
 
             Spacer(minLength: 0)
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    _ = chat.createFolder(name: "New Folder")
-                }
-            } label: {
-                Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(isSelectingRecents)
-            .help("New folder")
-            .opacity(isSelectingRecents ? 0 : 1)
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    enterSelectMode()
-                }
-            } label: {
-                Image(systemName: "checklist")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(isSelectingRecents || recentSessions.isEmpty)
-            .help("Select multiple")
-            .opacity(isSelectingRecents ? 0 : 1)
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    createRecentSession()
-                }
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(
-                        isNewChatHovering
-                            ? Color.primary
-                            : Color.secondary.opacity(0.7)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
-            .help(newRecentHelp)
-            .padding(.trailing, 4)
-            .onHover { isNewChatHovering = $0 }
         }
     }
 
@@ -1163,8 +1221,12 @@ struct ControlPanelView: View {
         }
     }
 
-    private var orderedFolders: [ChatFolder] {
-        chat.folders.filter(\.isPinned) + chat.folders.filter { !$0.isPinned }
+    private var pinnedFolders: [ChatFolder] {
+        chat.folders.filter(\.isPinned)
+    }
+
+    private var unpinnedFolders: [ChatFolder] {
+        chat.folders.filter { !$0.isPinned }
     }
 
     private func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
@@ -1183,6 +1245,7 @@ struct ControlPanelView: View {
             isDeleteDisabled: isRecentDeleteDisabled(recent),
             canExport: canExportRecent(recent),
             isSelecting: isSelectingRecents,
+            isPinning: isPinningRecents,
             isChecked: selectedRecentIDs.contains(recent.id),
             onToggleSelect: {
                 toggleRecentSelection(recent)
@@ -1296,13 +1359,27 @@ struct ControlPanelView: View {
     }
 
     private func enterSelectMode() {
+        isPinningRecents = false
         selectedRecentIDs = []
+        selectedFolderIDs = []
         isSelectingRecents = true
     }
 
     private func exitSelectMode() {
         isSelectingRecents = false
         selectedRecentIDs = []
+        selectedFolderIDs = []
+    }
+
+    private func enterPinMode() {
+        isSelectingRecents = false
+        selectedRecentIDs = []
+        selectedFolderIDs = []
+        isPinningRecents = true
+    }
+
+    private func exitPinMode() {
+        isPinningRecents = false
     }
 
     private func toggleRecentSelection(_ recent: ControlPanelRecentSession) {
@@ -1310,6 +1387,14 @@ struct ControlPanelView: View {
             selectedRecentIDs.remove(recent.id)
         } else {
             selectedRecentIDs.insert(recent.id)
+        }
+    }
+
+    private func toggleFolderSelection(_ folderID: UUID) {
+        if selectedFolderIDs.contains(folderID) {
+            selectedFolderIDs.remove(folderID)
+        } else {
+            selectedFolderIDs.insert(folderID)
         }
     }
 
@@ -1326,8 +1411,8 @@ struct ControlPanelView: View {
     }
 
     private var bulkSelectionTitle: String {
-        let count = selectedRecentIDs.count
-        return count == 0 ? "Select chats" : "\(count) selected"
+        let count = selectedRecentIDs.count + selectedFolderIDs.count
+        return count == 0 ? "Select items" : "\(count) selected"
     }
 
     private func bulkTogglePinSelected() {
@@ -1381,7 +1466,8 @@ struct ControlPanelView: View {
 
     private func bulkDeleteSelected() {
         let targets = recentSessions.filter { selectedRecentIDs.contains($0.id) }
-        guard !targets.isEmpty else {
+        let folderTargets = selectedFolderIDs
+        guard !targets.isEmpty || !folderTargets.isEmpty else {
             return
         }
         let affectsDisplayed = targets.contains { isDisplayedRecent($0) }
@@ -1396,6 +1482,9 @@ struct ControlPanelView: View {
                 case .tab:
                     break
                 }
+            }
+            for folderID in folderTargets {
+                chat.deleteFolder(folderID)
             }
             exitSelectMode()
         }
@@ -3170,6 +3259,7 @@ private struct ControlPanelRecentSessionRow: View {
     let isDeleteDisabled: Bool
     let canExport: Bool
     let isSelecting: Bool
+    let isPinning: Bool
     let isChecked: Bool
     let onToggleSelect: () -> Void
     let onSelect: () -> Void
@@ -3213,6 +3303,8 @@ private struct ControlPanelRecentSessionRow: View {
                 Button {
                     if isSelecting {
                         onToggleSelect()
+                    } else if isPinning, recent.isChat {
+                        onTogglePin()
                     } else if isSelected, recent.isChat {
                         beginRename()
                     } else {
@@ -3381,7 +3473,9 @@ private struct ControlPanelRecentSessionRow: View {
     private func beginRename() {
         renameDraft = recent.title
         isRenaming = true
-        renameFieldFocused = true
+        DispatchQueue.main.async {
+            renameFieldFocused = true
+        }
     }
 
     private func commitRename() {
@@ -3393,9 +3487,13 @@ private struct ControlPanelRecentSessionRow: View {
 private struct ControlPanelFolderHeaderView: View {
     let folder: ChatFolder
     let count: Int
+    let isPinning: Bool
+    let isSelecting: Bool
+    let isChecked: Bool
     let onToggleCollapse: () -> Void
     let onRename: (String) -> Void
     let onTogglePin: () -> Void
+    let onToggleSelect: () -> Void
     let onExport: () -> Void
     let onDelete: () -> Void
     @State private var isRenaming = false
@@ -3404,13 +3502,20 @@ private struct ControlPanelFolderHeaderView: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Button(action: onToggleCollapse) {
-                Image(systemName: folder.isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            if isSelecting {
+                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
                     .frame(width: 12)
+            } else {
+                Button(action: onToggleCollapse) {
+                    Image(systemName: folder.isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             Image(systemName: "folder")
                 .font(.system(size: 11))
@@ -3448,7 +3553,16 @@ private struct ControlPanelFolderHeaderView: View {
         .padding(.vertical, 5)
         .contentShape(.rect)
         .onTapGesture(count: 2) {
-            beginRename()
+            if !isSelecting && !isPinning {
+                beginRename()
+            }
+        }
+        .onTapGesture {
+            if isSelecting {
+                onToggleSelect()
+            } else if isPinning {
+                onTogglePin()
+            }
         }
         .contextMenu {
             Button {
@@ -3485,7 +3599,9 @@ private struct ControlPanelFolderHeaderView: View {
     private func beginRename() {
         renameDraft = folder.name
         isRenaming = true
-        renameFieldFocused = true
+        DispatchQueue.main.async {
+            renameFieldFocused = true
+        }
     }
 
     private func commitRename() {
