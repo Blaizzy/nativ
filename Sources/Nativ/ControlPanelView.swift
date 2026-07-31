@@ -236,6 +236,7 @@ struct ControlPanelView: View {
     @State private var reorderTargetID: ControlPanelRecentSession.ID?
     @State private var reorderInsertAfter = false
     @State private var pendingDeleteRecent: ControlPanelRecentSession?
+    @State private var pendingDeleteFolder: ChatFolder?
     @State private var isConfirmingBulkDelete = false
 
     var body: some View {
@@ -414,6 +415,24 @@ struct ControlPanelView: View {
             Text("“\(recent.title)” will be permanently deleted.")
         }
         .alert(
+            "Delete folder?",
+            isPresented: Binding(
+                get: { pendingDeleteFolder != nil },
+                set: { if !$0 { pendingDeleteFolder = nil } }
+            ),
+            presenting: pendingDeleteFolder
+        ) { folder in
+            Button("Delete", role: .destructive) {
+                chat.deleteFolder(folder.id)
+                pendingDeleteFolder = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteFolder = nil
+            }
+        } message: { folder in
+            Text("“\(folder.name)” will be removed. Its chats will be moved out, not deleted.")
+        }
+        .alert(
             "Delete \(selectedRecentIDs.count) chats?",
             isPresented: $isConfirmingBulkDelete
         ) {
@@ -572,7 +591,7 @@ struct ControlPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isSessionsDropTargeted))
         .onDrop(of: [.text], isTargeted: $isSessionsDropTargeted) { providers in
-            loadDropString(providers) { _ = handleUnpinDrop([$0]) }
+            loadDropString(providers) { _ = handleSessionsDrop([$0]) }
         }
     }
 
@@ -580,7 +599,7 @@ struct ControlPanelView: View {
     private var foldersSection: some View {
         if !chat.folders.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(chat.folders) { folder in
+                ForEach(orderedFolders) { folder in
                     ControlPanelFolderHeaderView(
                         folder: folder,
                         count: sessions(inFolder: folder.id).count,
@@ -588,22 +607,55 @@ struct ControlPanelView: View {
                             chat.setFolderCollapsed(folder.id, collapsed: !folder.isCollapsed)
                         },
                         onRename: { chat.renameFolder(folder.id, to: $0) },
-                        onDelete: { chat.deleteFolder(folder.id) }
+                        onTogglePin: {
+                            chat.setFolderPinned(folder.id, pinned: !folder.isPinned)
+                        },
+                        onExport: {
+                            exportFolder(folder)
+                        },
+                        onDelete: {
+                            pendingDeleteFolder = folder
+                        }
                     )
                     .padding(.leading, 9)
                     .padding(.trailing, 10)
                     .padding(.top, 8)
                     .padding(.bottom, 2)
+                    .onDrag {
+                        NSItemProvider(object: "folder:\(folder.id.uuidString)" as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: FolderDropDelegate(
+                        onChatDrop: { chatID in
+                            chat.moveSession(chatID, toFolder: folder.id)
+                        },
+                        onFolderDrop: { draggedFolderID in
+                            handleFolderReorder(dragged: draggedFolderID, target: folder.id)
+                        }
+                    ))
 
                     if !folder.isCollapsed {
                         ForEach(sessions(inFolder: folder.id)) { recent in
-                            recentSessionRow(recent)
+                            folderChatRow(recent)
                                 .padding(.leading, 12)
                         }
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func folderChatRow(_ recent: ControlPanelRecentSession) -> some View {
+        if let payload = recent.dragPayload, !isSelectingRecents {
+            recentSessionRow(recent)
+                .onDrag {
+                    NSItemProvider(object: payload as NSString)
+                } preview: {
+                    dragPreview(recent)
+                }
+        } else {
+            recentSessionRow(recent)
         }
     }
 
@@ -1037,7 +1089,17 @@ struct ControlPanelView: View {
     }
 
     private var ungroupedSessions: [ControlPanelRecentSession] {
-        unpinnedSessions.filter { $0.folderID == nil }
+        let folderIDs = Set(chat.folders.map(\.id))
+        return unpinnedSessions.filter { recent in
+            guard let folderID = recent.folderID else {
+                return true
+            }
+            return !folderIDs.contains(folderID)
+        }
+    }
+
+    private var orderedFolders: [ChatFolder] {
+        chat.folders.filter(\.isPinned) + chat.folders.filter { !$0.isPinned }
     }
 
     private func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
@@ -1141,15 +1203,31 @@ struct ControlPanelView: View {
         return true
     }
 
-    private func handleUnpinDrop(_ items: [String]) -> Bool {
-        guard let draggedID = draggedChatID(from: items),
-              pinnedSessions.contains(where: { $0.chatID == draggedID }) else {
+    private func handleSessionsDrop(_ items: [String]) -> Bool {
+        guard let draggedID = draggedChatID(from: items) else {
             return false
         }
         reorderTargetID = nil
         reorderInsertAfter = false
-        chat.setPinned(draggedID, pinned: false)
+        if pinnedSessions.contains(where: { $0.chatID == draggedID }) {
+            chat.setPinned(draggedID, pinned: false)
+        }
+        chat.moveSession(draggedID, toFolder: nil)
         return true
+    }
+
+    private func handleFolderReorder(dragged: UUID, target: UUID) {
+        guard dragged != target else {
+            return
+        }
+        var order = chat.folders.map(\.id)
+        order.removeAll { $0 == dragged }
+        if let index = order.firstIndex(of: target) {
+            order.insert(dragged, at: index)
+        } else {
+            order.append(dragged)
+        }
+        chat.applyFolderOrder(order)
     }
 
     private func enterSelectMode() {
@@ -1455,6 +1533,49 @@ struct ControlPanelView: View {
             return
         }
         try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func exportFolder(_ folder: ChatFolder) {
+        let chatIDs = sessions(inFolder: folder.id).compactMap(\.chatID)
+        guard !chatIDs.isEmpty else {
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let directory = panel.url else {
+            return
+        }
+        let root = directory.appendingPathComponent(sanitizedFileName(folder.name), isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        var usedNames: Set<String> = []
+        for sessionID in chatIDs {
+            guard let text = chat.conversationText(for: sessionID) else {
+                continue
+            }
+            let title = chat.sessions.first { $0.id == sessionID }?.title ?? sessionID.uuidString
+            let base = sanitizedFileName(title)
+            var candidate = base
+            var suffix = 2
+            while usedNames.contains(candidate.lowercased()) {
+                candidate = "\(base) \(suffix)"
+                suffix += 1
+            }
+            usedNames.insert(candidate.lowercased())
+            let fileURL = root.appendingPathComponent("\(candidate).txt")
+            try? text.write(to: fileURL, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([root])
+    }
+
+    private func sanitizedFileName(_ name: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled" : trimmed
     }
 
     private func revealRecentSession(_ recent: ControlPanelRecentSession) {
@@ -2839,6 +2960,36 @@ private struct RowReorderDropDelegate: DropDelegate {
     }
 }
 
+private struct FolderDropDelegate: DropDelegate {
+    let onChatDrop: (UUID) -> Void
+    let onFolderDrop: (UUID) -> Void
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.text]).first else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let string = object as? String, !string.isEmpty else {
+                return
+            }
+            DispatchQueue.main.async {
+                if string.hasPrefix("folder:") {
+                    if let id = UUID(uuidString: String(string.dropFirst("folder:".count))) {
+                        onFolderDrop(id)
+                    }
+                } else if let id = UUID(uuidString: string) {
+                    onChatDrop(id)
+                }
+            }
+        }
+        return true
+    }
+}
+
 private struct ControlPanelRecentSession: Identifiable, Equatable {
     enum ID: Hashable {
         case chat(UUID)
@@ -3179,6 +3330,8 @@ private struct ControlPanelFolderHeaderView: View {
     let count: Int
     let onToggleCollapse: () -> Void
     let onRename: (String) -> Void
+    let onTogglePin: () -> Void
+    let onExport: () -> Void
     let onDelete: () -> Void
     @State private var isRenaming = false
     @State private var renameDraft = ""
@@ -3197,6 +3350,12 @@ private struct ControlPanelFolderHeaderView: View {
             Image(systemName: "folder")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+
+            if folder.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.accentColor)
+            }
 
             if isRenaming {
                 TextField("Name", text: $renameDraft)
@@ -3231,6 +3390,21 @@ private struct ControlPanelFolderHeaderView: View {
                 beginRename()
             } label: {
                 Label("Rename", systemImage: "pencil")
+            }
+
+            Button {
+                onTogglePin()
+            } label: {
+                Label(
+                    folder.isPinned ? "Unpin" : "Pin",
+                    systemImage: folder.isPinned ? "pin.slash" : "pin"
+                )
+            }
+
+            Button {
+                onExport()
+            } label: {
+                Label("Export Folder", systemImage: "square.and.arrow.up")
             }
 
             Divider()

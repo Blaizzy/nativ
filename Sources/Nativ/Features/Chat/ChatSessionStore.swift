@@ -122,11 +122,25 @@ struct ChatFolder: Identifiable, Equatable, Codable {
     let id: UUID
     var name: String
     var isCollapsed: Bool
+    var isPinned: Bool
 
-    init(id: UUID = UUID(), name: String, isCollapsed: Bool = false) {
+    init(id: UUID = UUID(), name: String, isCollapsed: Bool = false, isPinned: Bool = false) {
         self.id = id
         self.name = name
         self.isCollapsed = isCollapsed
+        self.isPinned = isPinned
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, isCollapsed, isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        isCollapsed = try container.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 

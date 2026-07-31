@@ -420,6 +420,34 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
+    func setFolderPinned(_ folderID: UUID, pinned: Bool) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
+            return
+        }
+        if pinned {
+            for other in folders.indices {
+                folders[other].isPinned = (other == index)
+            }
+        } else {
+            folders[index].isPinned = false
+        }
+        sessionStore.saveFolders(folders)
+    }
+
+    func applyFolderOrder(_ orderedFolderIDs: [UUID]) {
+        var reordered: [ChatFolder] = []
+        for id in orderedFolderIDs {
+            if let folder = folders.first(where: { $0.id == id }) {
+                reordered.append(folder)
+            }
+        }
+        for folder in folders where !orderedFolderIDs.contains(folder.id) {
+            reordered.append(folder)
+        }
+        folders = reordered
+        sessionStore.saveFolders(folders)
+    }
+
     func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
         for (order, sessionID) in orderedSessionIDs.enumerated() {
             guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
