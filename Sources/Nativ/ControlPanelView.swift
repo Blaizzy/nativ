@@ -582,7 +582,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .dashboard, .system, .integrations, .settings:
+        case .imageGeneration, .dashboard, .system, .integrations, .tools, .settings:
             false
         }
     }
@@ -909,7 +909,7 @@ struct ControlPanelView: View {
 
     private var detailExtendsIntoTitlebar: Bool {
         switch selectedTab {
-        case .dashboard, .system, .models, .integrations, .developer:
+        case .dashboard, .system, .models, .tools, .integrations, .developer:
             true
         case .chat, .imageGeneration, .settings:
             false
