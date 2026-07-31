@@ -1,5 +1,6 @@
 import AVKit
 import AppKit
+import Quartz
 import SwiftUI
 
 struct ArtifactPreview: View {
@@ -94,35 +95,9 @@ struct ArtifactPreview: View {
             VideoPlayer(player: AVPlayer(url: url))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         case .document:
-            documentCard(artifact, url: url)
+            QuickLookPreview(url: url)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
         }
-    }
-
-    private func documentCard(_ artifact: Artifact, url: URL) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: artifact.kind.systemImage)
-                .font(.system(size: 60))
-                .foregroundStyle(.white.opacity(0.85))
-            VStack(spacing: 4) {
-                Text(artifact.filename)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                Text(artifact.typeLabel)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            Button {
-                NSWorkspace.shared.open(url)
-            } label: {
-                Label("Open", systemImage: "arrow.up.forward.app")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding(40)
-        .frame(maxWidth: 420)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func footer(_ artifact: Artifact) -> some View {
@@ -217,5 +192,20 @@ private struct ZoomableImage: View {
                     scale = scale > 1 ? 1 : 2
                 }
             }
+    }
+}
+
+private struct QuickLookPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
+        view.autostarts = true
+        view.previewItem = url as NSURL
+        return view
+    }
+
+    func updateNSView(_ nsView: QLPreviewView, context: Context) {
+        nsView.previewItem = url as NSURL
     }
 }

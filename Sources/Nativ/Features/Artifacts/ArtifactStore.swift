@@ -12,6 +12,7 @@ final class ArtifactStore: ObservableObject {
 
     private let indexURL: URL
     private let cacheDirectory: URL
+    private let thumbnailCache = NSCache<NSString, NSImage>()
 
     init() {
         let support = FileManager.default
@@ -125,17 +126,37 @@ final class ArtifactStore: ObservableObject {
     }
 
     func thumbnail(for artifact: Artifact, size: CGSize) async -> NSImage? {
-        let url = fileURL(for: artifact)
-        if artifact.kind == .image {
-            return await Self.loadImage(url)
+        let key = "\(artifact.id.uuidString)-\(Int(size.width))x\(Int(size.height))" as NSString
+        if let cached = thumbnailCache.object(forKey: key) {
+            return cached
         }
-        return await Self.generateThumbnail(url, size: size)
+        let url = fileURL(for: artifact)
+        let image = artifact.kind == .image
+            ? await Self.loadImage(url)
+            : await Self.generateThumbnail(url, size: size)
+        if let image {
+            thumbnailCache.setObject(image, forKey: key)
+        }
+        return image
     }
 
     // MARK: - Scanning
 
+    private nonisolated static func fingerprintURL(indexURL: URL) -> URL {
+        indexURL.deletingLastPathComponent().appendingPathComponent("Artifacts Fingerprint.txt")
+    }
+
     private nonisolated static func rebuild(cacheDirectory: URL, indexURL: URL, known: [Artifact]) -> [Artifact] {
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+
+        let fingerprint = ChatSessionStore().sessionsFingerprint()
+            + "#" + ImageGenerationArtifactCatalog.fingerprint()
+        let fingerprintFile = fingerprintURL(indexURL: indexURL)
+        if !known.isEmpty,
+           let previous = try? String(contentsOf: fingerprintFile, encoding: .utf8),
+           previous == fingerprint {
+            return known
+        }
 
         var byID = Dictionary(known.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result: [Artifact] = []
@@ -172,7 +193,29 @@ final class ArtifactStore: ObservableObject {
 
         let sorted = result.sorted { $0.createdAt > $1.createdAt }
         writeIndex(sorted, to: indexURL)
+        pruneOrphans(cacheDirectory: cacheDirectory, keep: Set(sorted.map(\.relativePath)))
+        try? fingerprint.write(to: fingerprintFile, atomically: true, encoding: .utf8)
         return sorted
+    }
+
+    private nonisolated static func pruneOrphans(cacheDirectory: URL, keep: Set<String>) {
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: cacheDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else {
+            return
+        }
+        let base = cacheDirectory.path.hasSuffix("/") ? cacheDirectory.path : cacheDirectory.path + "/"
+        for case let url as URL in enumerator {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
+                continue
+            }
+            let relative = url.path.hasPrefix(base) ? String(url.path.dropFirst(base.count)) : url.lastPathComponent
+            if !keep.contains(relative) {
+                try? fileManager.removeItem(at: url)
+            }
+        }
     }
 
     private nonisolated static func materialize(
