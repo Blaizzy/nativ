@@ -853,7 +853,7 @@ struct ControlPanelView: View {
 
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
-                    chat.createFolder(name: "New Folder")
+                    _ = chat.createFolder(name: "New Folder")
                 }
             } label: {
                 Image(systemName: "folder.badge.plus")
