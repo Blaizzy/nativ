@@ -134,8 +134,12 @@ struct ToolsView: View {
 
             HStack(spacing: 0) {
                 ScrollView {
-                    MCPServersPanel(host: model.mcpHost, servers: $model.settings.mcpServers)
-                        .padding(20)
+                    MCPServersPanel(
+                        host: model.mcpHost,
+                        servers: $model.settings.mcpServers,
+                        disabledToolNames: $model.settings.disabledToolNames
+                    )
+                    .padding(20)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -183,6 +187,17 @@ private struct CatalogColumn: View {
     let entries: [MCPCatalogEntry]
     let addedNames: Set<String>
     let onAdd: (MCPCatalogEntry, [String: String], [String]) -> Void
+    @State private var query = ""
+
+    private var filtered: [MCPCatalogEntry] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !trimmed.isEmpty else { return entries }
+        return entries.filter {
+            $0.name.lowercased().contains(trimmed)
+                || $0.description.lowercased().contains(trimmed)
+                || $0.category.lowercased().contains(trimmed)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -195,11 +210,24 @@ private struct CatalogColumn: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, 10)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Search", text: $query)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.secondary.opacity(0.1)))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
 
             ScrollView {
                 VStack(spacing: 12) {
-                    ForEach(entries) { entry in
+                    ForEach(filtered) { entry in
                         CatalogCard(
                             entry: entry,
                             isAdded: addedNames.contains(entry.name),

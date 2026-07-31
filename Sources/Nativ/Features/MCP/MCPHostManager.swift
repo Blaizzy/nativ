@@ -13,23 +13,45 @@ enum MCPServerConnectionState: Equatable {
 final class MCPHostManager: ObservableObject {
     @Published private(set) var states: [UUID: MCPServerConnectionState] = [:]
 
-    private var clients: [UUID: MCPClient] = [:]
-    private var routes: [String: (client: MCPClient, toolName: String)] = [:]
-    private var definitions: [MLXChatToolDefinition] = []
+    private struct Connection {
+        let config: MCPServerConfig
+        let client: MCPClient
+        let slug: String
+        let tools: [MCPToolInfo]
+    }
+
+    private var connections: [UUID: Connection] = [:]
     private var appliedServers: [MCPServerConfig] = []
     private var reloadTask: Task<Void, Never>?
     private var reloadGeneration = 0
 
     func toolDefinitions() -> [MLXChatToolDefinition] {
-        definitions
+        connections.values.flatMap { connection in
+            connection.tools.map { tool in
+                MLXChatToolDefinition(
+                    function: MLXChatFunctionDefinition(
+                        name: Self.toolName(slug: connection.slug, tool: tool.name),
+                        description: tool.description,
+                        parameters: tool.parameters
+                    )
+                )
+            }
+        }
+    }
+
+    func tools(forServer id: UUID) -> [(name: String, displayName: String)] {
+        guard let connection = connections[id] else { return [] }
+        return connection.tools.map {
+            (name: Self.toolName(slug: connection.slug, tool: $0.name), displayName: $0.name)
+        }
     }
 
     func handlesTool(named name: String) -> Bool {
-        routes[name] != nil
+        route(for: name) != nil
     }
 
     func callTool(named name: String, argumentsJSON: String?) async throws -> String {
-        guard let route = routes[name] else {
+        guard let route = route(for: name) else {
             throw MCPClientError.notConnected
         }
         return try await route.client.callTool(name: route.toolName, argumentsJSON: argumentsJSON)
@@ -38,55 +60,75 @@ final class MCPHostManager: ObservableObject {
     func reload(servers: [MCPServerConfig]) {
         guard servers != appliedServers else { return }
         appliedServers = servers
-        reloadGeneration += 1
-        let generation = reloadGeneration
-        reloadTask?.cancel()
-        reloadTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
-            if Task.isCancelled { return }
-            await self?.applyReload(servers: servers, generation: generation)
+        scheduleReload(servers: servers, debounce: true)
+    }
+
+    func reconnect(_ serverID: UUID) {
+        if let connection = connections.removeValue(forKey: serverID) {
+            states[serverID] = .connecting
+            let client = connection.client
+            Task { await client.disconnect() }
         }
+        scheduleReload(servers: appliedServers, debounce: false)
     }
 
     func shutdown() {
         reloadTask?.cancel()
-        let previous = clients
-        clients = [:]
-        routes = [:]
-        definitions = []
+        let previous = connections
+        connections = [:]
         states = [:]
         Task {
-            for client in previous.values {
-                await client.disconnect()
+            for connection in previous.values {
+                await connection.client.disconnect()
             }
         }
     }
 
-    private func applyReload(servers: [MCPServerConfig], generation: Int) async {
-        let previous = clients
-        clients = [:]
-        routes = [:]
-        definitions = []
-        for server in servers {
-            states[server.id] = server.isEnabled ? .connecting : .disabled
+    private func scheduleReload(servers: [MCPServerConfig], debounce: Bool) {
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        reloadTask?.cancel()
+        reloadTask = Task { [weak self] in
+            if debounce {
+                try? await Task.sleep(for: .milliseconds(400))
+                if Task.isCancelled { return }
+            }
+            await self?.applyReload(servers: servers, generation: generation)
         }
-        pruneStates(keeping: servers)
+    }
 
-        for client in previous.values {
-            await client.disconnect()
+    private func applyReload(servers: [MCPServerConfig], generation: Int) async {
+        let enabled = servers.filter(\.isEnabled)
+        let enabledByID = Dictionary(enabled.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for (id, connection) in connections {
+            let reusable = enabledByID[id].map { Self.launchEquivalent($0, connection.config) } ?? false
+            if !reusable {
+                connections[id] = nil
+                await connection.client.disconnect()
+            }
         }
         guard generation == reloadGeneration else { return }
 
-        let enabled = servers.filter(\.isEnabled)
-        guard !enabled.isEmpty else { return }
+        for server in servers where !server.isEnabled {
+            states[server.id] = .disabled
+        }
+        pruneStates(keeping: servers)
 
-        var usedSlugs: Set<String> = []
+        let toConnect = enabled.filter { connections[$0.id] == nil }
+        guard !toConnect.isEmpty else { return }
+
+        for config in toConnect {
+            states[config.id] = .connecting
+        }
         let searchPath = await Task.detached(priority: .utility) {
             ShellEnvironment.resolveFromLoginShell(names: ["PATH"])["PATH"]
         }.value
         guard generation == reloadGeneration else { return }
 
-        for config in enabled {
+        var usedSlugs = Set(connections.values.map(\.slug))
+        for config in toConnect {
+            guard connections[config.id] == nil else { continue }
             guard let executable = Self.resolveExecutable(config.command, searchPath: searchPath) else {
                 states[config.id] = .failed("Couldn’t find “\(config.command)”")
                 continue
@@ -104,8 +146,12 @@ final class MCPHostManager: ObservableObject {
                     return
                 }
                 let slug = Self.uniqueSlug(for: config, used: &usedSlugs)
-                register(tools: tools, client: client, slug: slug)
-                clients[config.id] = client
+                connections[config.id] = Connection(
+                    config: config,
+                    client: client,
+                    slug: slug,
+                    tools: tools
+                )
                 states[config.id] = .connected(toolCount: tools.count)
             } catch {
                 await client.disconnect()
@@ -115,26 +161,31 @@ final class MCPHostManager: ObservableObject {
         }
     }
 
-    private func register(tools: [MCPToolInfo], client: MCPClient, slug: String) {
-        for tool in tools {
-            let name = "mcp__\(slug)__\(tool.name)"
-            guard routes[name] == nil else { continue }
-            routes[name] = (client: client, toolName: tool.name)
-            definitions.append(
-                MLXChatToolDefinition(
-                    function: MLXChatFunctionDefinition(
-                        name: name,
-                        description: tool.description,
-                        parameters: tool.parameters
-                    )
-                )
-            )
+    private func route(for name: String) -> (client: MCPClient, toolName: String)? {
+        for connection in connections.values {
+            let prefix = "mcp__\(connection.slug)__"
+            guard name.hasPrefix(prefix) else { continue }
+            let toolName = String(name.dropFirst(prefix.count))
+            if connection.tools.contains(where: { $0.name == toolName }) {
+                return (connection.client, toolName)
+            }
         }
+        return nil
     }
 
     private func pruneStates(keeping servers: [MCPServerConfig]) {
         let ids = Set(servers.map(\.id))
         states = states.filter { ids.contains($0.key) }
+    }
+
+    private static func toolName(slug: String, tool: String) -> String {
+        "mcp__\(slug)__\(tool)"
+    }
+
+    private static func launchEquivalent(_ lhs: MCPServerConfig, _ rhs: MCPServerConfig) -> Bool {
+        lhs.command == rhs.command
+            && lhs.arguments == rhs.arguments
+            && lhs.environment == rhs.environment
     }
 
     private static func resolveExecutable(_ command: String, searchPath: String?) -> URL? {
