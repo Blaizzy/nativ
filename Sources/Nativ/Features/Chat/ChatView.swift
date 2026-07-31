@@ -369,7 +369,7 @@ final class ChatViewModel: ObservableObject {
     @discardableResult
     func createFolder(name: String) -> UUID {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed)
+        let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed, isCollapsed: true)
         folders.append(folder)
         sessionStore.saveFolders(folders)
         return folder.id

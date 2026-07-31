@@ -555,7 +555,7 @@ struct ControlPanelView: View {
     private var pinnedSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarPinnedHeader
-                .padding(.leading, 17)
+                .padding(.leading, 8)
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
@@ -588,7 +588,7 @@ struct ControlPanelView: View {
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarRecentsHeader
-                .padding(.leading, 17)
+                .padding(.leading, 8)
                 .padding(.trailing, 10)
                 .padding(.top, 12)
                 .padding(.bottom, 4)
@@ -615,7 +615,7 @@ struct ControlPanelView: View {
     private var foldersSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarFoldersHeader
-                .padding(.leading, 17)
+                .padding(.leading, 8)
                 .padding(.trailing, 10)
                 .padding(.top, 12)
                 .padding(.bottom, 4)
@@ -684,24 +684,15 @@ struct ControlPanelView: View {
         ))
 
         if !folder.isCollapsed {
-            if sessions(inFolder: folder.id).isEmpty {
-                Text("Drop a chat here")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary.opacity(0.6))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 28)
-                    .padding(.vertical, 6)
-            } else {
-                ForEach(sessions(inFolder: folder.id)) { recent in
-                    folderChatRow(recent, folderID: folder.id)
-                        .overlay(alignment: .top) {
-                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
-                        }
-                        .overlay(alignment: .bottom) {
-                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
-                        }
-                        .padding(.leading, 12)
-                }
+            ForEach(sessions(inFolder: folder.id)) { recent in
+                folderChatRow(recent, folderID: folder.id)
+                    .overlay(alignment: .top) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
+                    }
+                    .overlay(alignment: .bottom) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
+                    }
+                    .padding(.leading, 12)
             }
         }
     }
@@ -1013,7 +1004,7 @@ struct ControlPanelView: View {
 
     private var headerDivider: some View {
         Divider()
-            .padding(.leading, 17)
+            .padding(.leading, 8)
             .padding(.trailing, 10)
             .padding(.bottom, 6)
     }
@@ -3571,7 +3562,7 @@ private struct ControlPanelFolderHeaderView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            if folder.isPinned || isPinning {
+            if isPinning {
                 Image(systemName: folder.isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9))
                     .foregroundStyle(folder.isPinned ? Color.accentColor : Color.secondary)
