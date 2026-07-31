@@ -36,7 +36,6 @@ enum ChatToolRegistry {
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
-        tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
         return tools
     }
 }

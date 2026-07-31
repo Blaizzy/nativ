@@ -5,7 +5,6 @@ private let nativeToolNames = [
     ChatSystemMonitorToolRegistry.toolName,
     ChatModelLibraryToolRegistry.toolName,
     ChatServerStatsToolRegistry.toolName,
-    ChatSwitchModelToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
