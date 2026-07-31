@@ -314,6 +314,7 @@ struct NativSettings: Codable, Equatable {
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
     var mcpServers: [MCPServerConfig]
+    var disabledToolNames: [String]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
@@ -355,7 +356,8 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
-        mcpServers: [MCPServerConfig] = []
+        mcpServers: [MCPServerConfig] = [],
+        disabledToolNames: [String] = []
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
@@ -397,6 +399,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.mcpServers = mcpServers
+        self.disabledToolNames = disabledToolNames
     }
 
     enum CodingKeys: String, CodingKey {
@@ -441,6 +444,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlocks
         case prefixCacheBlockSize
         case mcpServers
+        case disabledToolNames
     }
 
     init(from decoder: Decoder) throws {
@@ -488,6 +492,7 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
         mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
+        disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
     }
 
     func encode(to encoder: Encoder) throws {
@@ -531,6 +536,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(mcpServers, forKey: .mcpServers)
+        try container.encode(disabledToolNames, forKey: .disabledToolNames)
     }
 
     static func load(

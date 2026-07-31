@@ -965,6 +965,7 @@ final class ChatViewModel: ObservableObject {
         if advertisesToolsForModel {
             toolDefinitions.append(contentsOf: appModel?.mcpHost.toolDefinitions() ?? [])
         }
+        toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
         return MLXChatCompletionRequest(
             model: modelID,

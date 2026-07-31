@@ -17,6 +17,7 @@ struct MCPCatalogEntry: Identifiable, Hashable {
     let icon: String
     let command: String
     let args: [String]
+    var requiredEnv: [String] = []
     var needsSetup: Bool = false
 
     static let seed: [MCPCatalogEntry] = [
@@ -74,15 +75,53 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             icon: "chevron.left.forwardslash.chevron.right",
             command: "npx",
             args: ["-y", "@modelcontextprotocol/server-github"],
+            requiredEnv: ["GITHUB_PERSONAL_ACCESS_TOKEN"],
             needsSetup: true
         ),
     ]
+}
+
+extension MCPCatalogEntry: Decodable {
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, category, icon, command, args, requiredEnv, needsSetup
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decode(String.self, forKey: .description)
+        category = try container.decodeIfPresent(String.self, forKey: .category) ?? "Other"
+        icon = try container.decodeIfPresent(String.self, forKey: .icon) ?? "wrench.and.screwdriver"
+        command = try container.decode(String.self, forKey: .command)
+        args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
+        requiredEnv = try container.decodeIfPresent([String].self, forKey: .requiredEnv) ?? []
+        needsSetup =
+            try container.decodeIfPresent(Bool.self, forKey: .needsSetup) ?? !requiredEnv.isEmpty
+    }
+}
+
+enum MCPCatalog {
+    static func load() -> [MCPCatalogEntry] {
+        guard let url = Bundle.main.url(forResource: "ToolCatalog", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let entries = try? JSONDecoder().decode([MCPCatalogEntry].self, from: data),
+            !entries.isEmpty
+        else {
+            return MCPCatalogEntry.seed
+        }
+        return entries
+    }
 }
 
 struct ToolsView: View {
     @ObservedObject var model: NativModel
     var titleLeadingInset: CGFloat = 0
     @State private var section: ToolsSection = .explore
+    @State private var pendingEntry: MCPCatalogEntry?
+    @State private var pendingEnv: [String: String] = [:]
+
+    private let catalog = MCPCatalog.load()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,6 +137,18 @@ struct ToolsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.nativMainContentBackground)
+        .sheet(item: $pendingEntry) { entry in
+            ToolSetupSheet(
+                entry: entry,
+                values: $pendingEnv,
+                onCancel: { pendingEntry = nil },
+                onAdd: {
+                    appendServer(entry, environment: pendingEnv, enabled: true)
+                    pendingEntry = nil
+                    section = .mcp
+                }
+            )
+        }
     }
 
     private var header: some View {
@@ -131,7 +182,7 @@ struct ToolsView: View {
         switch section {
         case .explore:
             ToolsExploreView(
-                entries: MCPCatalogEntry.seed,
+                entries: catalog,
                 addedNames: Set(model.settings.mcpServers.map(\.name)),
                 onAdd: add
             )
@@ -147,16 +198,79 @@ struct ToolsView: View {
 
     private func add(_ entry: MCPCatalogEntry) {
         guard !model.settings.mcpServers.contains(where: { $0.name == entry.name }) else { return }
+        if entry.requiredEnv.isEmpty {
+            appendServer(entry, environment: [:], enabled: !entry.needsSetup)
+            section = .mcp
+        } else {
+            pendingEnv = [:]
+            pendingEntry = entry
+        }
+    }
+
+    private func appendServer(
+        _ entry: MCPCatalogEntry,
+        environment: [String: String],
+        enabled: Bool
+    ) {
+        guard !model.settings.mcpServers.contains(where: { $0.name == entry.name }) else { return }
         model.settings.mcpServers.append(
             MCPServerConfig(
                 name: entry.name,
                 command: entry.command,
                 arguments: entry.args,
-                environment: [:],
-                isEnabled: !entry.needsSetup
+                environment: environment,
+                isEnabled: enabled
             )
         )
-        section = .mcp
+    }
+}
+
+private struct ToolSetupSheet: View {
+    let entry: MCPCatalogEntry
+    @Binding var values: [String: String]
+    let onCancel: () -> Void
+    let onAdd: () -> Void
+
+    private var isIncomplete: Bool {
+        entry.requiredEnv.contains { (values[$0] ?? "").isEmpty }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Set up \(entry.name)")
+                    .font(.headline)
+                Text("This server needs the values below to run. They're saved to your settings on this Mac only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ForEach(entry.requiredEnv, id: \.self) { key in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(key)
+                        .font(.caption.weight(.medium))
+                    SecureField(
+                        key,
+                        text: Binding(
+                            get: { values[key] ?? "" },
+                            set: { values[key] = $0 }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Add", action: onAdd)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isIncomplete)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
 
@@ -301,6 +415,18 @@ private struct ToolsActiveView: View {
         }
     }
 
+    private func isEnabled(_ name: String) -> Bool {
+        !model.settings.disabledToolNames.contains(name)
+    }
+
+    private func setEnabled(_ name: String, _ enabled: Bool) {
+        if enabled {
+            model.settings.disabledToolNames.removeAll { $0 == name }
+        } else if !model.settings.disabledToolNames.contains(name) {
+            model.settings.disabledToolNames.append(name)
+        }
+    }
+
     private func group(title: String, subtitle: String, tools: [MLXChatToolDefinition]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -314,7 +440,9 @@ private struct ToolsActiveView: View {
                 ForEach(Array(tools.enumerated()), id: \.element.function.name) { index, tool in
                     ToolRow(
                         name: tool.function.name,
-                        description: tool.function.description
+                        description: tool.function.description,
+                        isOn: isEnabled(tool.function.name),
+                        onToggle: { setEnabled(tool.function.name, $0) }
                     )
                     if index < tools.count - 1 {
                         Divider().padding(.leading, 52)
@@ -336,12 +464,14 @@ private struct ToolsActiveView: View {
 private struct ToolRow: View {
     let name: String
     let description: String
+    let isOn: Bool
+    let onToggle: (Bool) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: ChatToolPresentation.symbolName(toolName: name, status: nil))
                 .font(.system(size: 15))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(ChatToolPresentation.title(toolName: name, status: nil))
@@ -354,9 +484,14 @@ private struct ToolRow: View {
                 }
             }
             Spacer(minLength: 0)
+            Toggle("", isOn: Binding(get: { isOn }, set: onToggle))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .opacity(isOn ? 1 : 0.55)
     }
 }
