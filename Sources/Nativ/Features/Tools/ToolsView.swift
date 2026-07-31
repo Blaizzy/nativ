@@ -13,6 +13,7 @@ struct MCPCatalogEntry: Identifiable, Hashable {
     var requiredEnv: [String] = []
     var requiresFolder: Bool = false
     var sourceURL: String?
+    var official: Bool = false
 
     var needsSetup: Bool { !requiredEnv.isEmpty || requiresFolder }
 
@@ -79,13 +80,17 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             requiredEnv: ["GITHUB_PERSONAL_ACCESS_TOKEN"],
             sourceURL: "https://github.com/github/github-mcp-server"
         ),
-    ]
+    ].map { entry in
+        var updated = entry
+        updated.official = true
+        return updated
+    }
 }
 
 extension MCPCatalogEntry: Decodable {
     enum CodingKeys: String, CodingKey {
         case id, name, description, category, icon, command, args
-        case requiredEnv, requiresFolder, sourceURL
+        case requiredEnv, requiresFolder, sourceURL, official
     }
 
     init(from decoder: Decoder) throws {
@@ -100,6 +105,7 @@ extension MCPCatalogEntry: Decodable {
         requiredEnv = try container.decodeIfPresent([String].self, forKey: .requiredEnv) ?? []
         requiresFolder = try container.decodeIfPresent(Bool.self, forKey: .requiresFolder) ?? false
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        official = try container.decodeIfPresent(Bool.self, forKey: .official) ?? false
     }
 }
 
@@ -199,6 +205,9 @@ private struct CatalogColumn: View {
         }
     }
 
+    private var officialEntries: [MCPCatalogEntry] { filtered.filter(\.official) }
+    private var communityEntries: [MCPCatalogEntry] { filtered.filter { !$0.official } }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Catalog")
@@ -206,7 +215,7 @@ private struct CatalogColumn: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 .padding(.bottom, 4)
-            Text("Community-contributed servers. Enable one to add its tools.")
+            Text("Browse servers and enable one to add its tools.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
@@ -226,14 +235,13 @@ private struct CatalogColumn: View {
             .padding(.bottom, 12)
 
             ScrollView {
-                VStack(spacing: 12) {
-                    ForEach(filtered) { entry in
-                        CatalogCard(
-                            entry: entry,
-                            isAdded: addedNames.contains(entry.name),
-                            onAdd: { env, extraArgs in onAdd(entry, env, extraArgs) }
-                        )
-                    }
+                VStack(alignment: .leading, spacing: 18) {
+                    group(title: "Official", entries: officialEntries, emptyMessage: nil)
+                    group(
+                        title: "Community",
+                        entries: communityEntries,
+                        emptyMessage: query.isEmpty ? "Community-contributed servers appear here." : nil
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 16)
@@ -241,6 +249,30 @@ private struct CatalogColumn: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.04))
+    }
+
+    @ViewBuilder
+    private func group(title: String, entries: [MCPCatalogEntry], emptyMessage: String?) -> some View {
+        if !entries.isEmpty || emptyMessage != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if entries.isEmpty, let emptyMessage {
+                    Text(emptyMessage)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    ForEach(entries) { entry in
+                        CatalogCard(
+                            entry: entry,
+                            isAdded: addedNames.contains(entry.name),
+                            onAdd: { env, extraArgs in onAdd(entry, env, extraArgs) }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

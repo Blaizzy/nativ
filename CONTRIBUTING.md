@@ -36,6 +36,7 @@ Add one JSON object to [`Sources/Nativ/Resources/ToolCatalog.json`](Sources/Nati
 | `requiredEnv` | no | Environment variables the user must supply (tokens, keys). Nativ prompts for these when the server is added and stores them locally — **never commit secrets**. |
 | `requiresFolder` | no | If `true`, Nativ shows a folder picker and appends the chosen path to `args` (e.g. a filesystem root). |
 | `sourceURL` | no | Link to the server's homepage or repository. |
+| `official` | no | Leave this off. It's a maintainer curation flag — contributed entries appear under **Community** in the catalog; the Nativ team marks its own as **Official**. |
 
 ### Rules
 
