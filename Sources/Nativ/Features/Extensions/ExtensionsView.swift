@@ -28,7 +28,6 @@ struct ExtensionsView: View {
                     if !installedExtensions.isEmpty {
                         installedSection
                     }
-                    platformSection
                 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 24)
@@ -115,13 +114,6 @@ struct ExtensionsView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                isImporterPresented = true
-            } label: {
-                Label("Install Extension…", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 28)
         .padding(.leading, titleLeadingInset)
@@ -143,43 +135,6 @@ struct ExtensionsView: View {
             subtitle: "Extensions installed from local .nativextension packages.",
             records: installedExtensions
         )
-    }
-
-    private var platformSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Extension platform", systemImage: "shippingbox")
-                .font(.headline)
-
-            HStack(spacing: 24) {
-                platformMetric(
-                    value: "\(manager.records.filter { !$0.isRemoved }.count)",
-                    label: "Available"
-                )
-                platformMetric(
-                    value: "\(manager.records.filter(\.isEnabled).count)",
-                    label: "Enabled"
-                )
-                platformMetric(
-                    value: "\(manager.systemExtensionCount)",
-                    label: "ExtensionFoundation"
-                )
-            }
-
-            Text("Extension code runs behind versioned SDK contracts. Nativ brokers privileged services such as models, shortcuts, overlays, storage, and text insertion.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color.primary.opacity(0.035),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        }
     }
 
     private func extensionSection(
@@ -371,16 +326,6 @@ struct ExtensionsView: View {
             in: Capsule()
         )
         .contentShape(Capsule())
-    }
-
-    private func platformMetric(value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.title3.weight(.semibold).monospacedDigit())
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 
     private var includedExtensions: [NativExtensionRecord] {

@@ -90,8 +90,8 @@ final class VoiceDictationExtension: NativHostExtension {
         id: NativExtensionManager.voiceDictationID,
         version: "1.0.0",
         minimumNativVersion: "0.1.0",
-        displayName: "Voice Dictation",
-        summary: "Private, local voice dictation with global shortcuts and live feedback.",
+        displayName: "Audio",
+        summary: "Private, local audio capabilities including voice dictation, transcription analytics, configurable shortcuts, and speech-to-text model selection.",
         developer: "Nativ",
         systemImage: "waveform.badge.mic",
         included: true,
@@ -109,7 +109,7 @@ final class VoiceDictationExtension: NativHostExtension {
             commands: [
                 .init(
                     id: showRecordingsCommandID,
-                    title: "Show Voice Recordings",
+                    title: "Show Recordings",
                     systemImage: "waveform"
                 )
             ],

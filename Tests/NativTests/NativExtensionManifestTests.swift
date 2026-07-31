@@ -3,7 +3,7 @@ import NativExtensionSDK
 import XCTest
 
 final class NativExtensionManifestTests: XCTestCase {
-    func testVoiceDictationReferenceManifestMatchesSDKContract() throws {
+    func testAudioReferenceManifestMatchesSDKContract() throws {
         let testFileURL = URL(fileURLWithPath: #filePath)
         let repositoryRoot = testFileURL
             .deletingLastPathComponent()
@@ -23,6 +23,7 @@ final class NativExtensionManifestTests: XCTestCase {
             hostVersion: "0.1.0"
         )
         XCTAssertEqual(manifest.id, "com.nativ.voice-dictation")
+        XCTAssertEqual(manifest.displayName, "Audio")
         XCTAssertTrue(manifest.included)
         XCTAssertEqual(
             manifest.contributions.sidebar.map(\.id),

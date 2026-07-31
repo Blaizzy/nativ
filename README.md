@@ -36,8 +36,8 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [INTEGRATIONS.md](INTEGRATIONS.md) for per-tool setup. |
 | **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
-| **Extension platform** | Install, disable, remove, and restore independently versioned capabilities. Voice Dictation ships as the first included extension and contributes its own pages, commands, shortcuts, settings, and permission declarations. |
-| **Voice dictation extension** | Dictate into any app with either a pointer-following waveform or a camera-cutout pill with a reactive gradient orb and timer, review local transcript history, track words per minute, total words, time saved, and streaks, choose an installed speech model, and customize the record and retry shortcuts. |
+| **Extension platform** | Install, disable, remove, and restore independently versioned capabilities. Audio ships as the first included extension and contributes its own pages, commands, shortcuts, settings, and permission declarations. |
+| **Audio extension** | Use private local audio capabilities, including voice dictation in any app with either a pointer-following waveform or a camera-cutout pill with a reactive gradient orb and timer. Review transcript history, track words per minute, total words, time saved, and streaks, choose an installed speech model, and customize the record and retry shortcuts. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
 Inference runs on your Mac after a model has been downloaded. Model downloads and first-time build dependencies still require network access.
@@ -175,7 +175,7 @@ Sources/
 ├── NativExtensionSDK/           # Versioned extension manifests and XPC contracts
 └── NativServerKit/              # Embedded server and Swift clients
 Extensions/
-└── VoiceDictation/              # Included reference extension and runtime
+└── VoiceDictation/              # Audio extension (legacy internal target name)
 PythonDistribution/
 ├── Launcher/                    # Relocatable server launcher
 ├── Requirements/                # Pinned Python dependencies

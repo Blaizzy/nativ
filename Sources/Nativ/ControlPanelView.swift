@@ -1552,7 +1552,7 @@ struct ControlPanelView: View {
                     chat.deleteSession(sessionID)
                 case .imageGeneration(let sessionID):
                     imageGeneration.deleteSession(sessionID)
-                case .tab:
+                case .tab, .extensionPage:
                     break
                 }
             }

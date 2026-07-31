@@ -5,8 +5,9 @@ commands, shortcuts, and settings to the host app. First-party extensions can li
 in this repository and ship inside `Nativ.app`; third-party extensions use the same
 manifest and SDK contracts and can be installed from a `.nativextension` package.
 
-Voice Dictation is the reference first-party extension. It is installed and enabled
-by default, but a user can disable or remove it and restore it later.
+Audio is the reference first-party extension. Voice dictation is one of its current
+capabilities. It is installed and enabled by default, but a user can disable or
+remove it and restore it later.
 
 ## Repository layout
 
@@ -112,8 +113,8 @@ logic across XPC does not require changing the manifest or navigation model.
 - `settings` declares settings surfaces owned by the extension.
 
 The host only renders contributions for extensions that are installed, enabled, and
-have an available host adapter or runtime. Removing Voice Dictation therefore removes
-Audio from navigation and stops its global shortcuts immediately.
+have an available host adapter or runtime. Removing Audio therefore removes its page
+from navigation and stops its global shortcuts immediately.
 
 ## Permissions and host services
 
@@ -132,8 +133,8 @@ namespaced storage. The host owns macOS consent prompts and validates every requ
 against the connected extension ID and its granted permissions.
 
 Extensions must not persist raw microphone audio unless the feature explicitly
-requires it. Voice Dictation retains recordings only for its existing five-minute
-retry window.
+requires it. Audio's voice dictation feature retains recordings only for its existing
+five-minute retry window.
 
 ## Adding a first-party extension
 
