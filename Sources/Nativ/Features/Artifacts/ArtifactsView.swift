@@ -243,30 +243,14 @@ struct ArtifactsView: View {
                     artifact: artifact,
                     store: store,
                     isSelecting: isSelecting,
-                    isSelected: selection.contains(artifact.id)
+                    isSelected: selection.contains(artifact.id),
+                    onInspect: { inspectorArtifact = artifact }
                 )
-                .overlay(alignment: .topTrailing) {
-                    if !isSelecting {
-                        inspectButton(artifact).padding(8)
-                    }
-                }
                 .onTapGesture { activate(artifact) }
                 .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
                 .contextMenu { menu(for: artifact) }
             }
         }
-    }
-
-    private func inspectButton(_ artifact: Artifact) -> some View {
-        Button {
-            inspectorArtifact = artifact
-        } label: {
-            Image(systemName: "ellipsis.circle.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(.white, .black.opacity(0.4))
-        }
-        .buttonStyle(.plain)
-        .help("Details")
     }
 
     private func list(_ artifacts: [Artifact]) -> some View {
@@ -557,63 +541,72 @@ struct ArtifactTile: View {
     let store: ArtifactStore
     let isSelecting: Bool
     let isSelected: Bool
+    var onInspect: () -> Void = {}
+
+    @State private var isHovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ArtifactThumbnail(artifact: artifact, store: store, size: CGSize(width: 200, height: 132))
-                .frame(height: 132)
-                .frame(maxWidth: .infinity)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(alignment: .topLeading) {
-                    sourceBadge.padding(6)
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    typeBadge.padding(6)
-                }
-                .overlay(alignment: .topTrailing) {
-                    if isSelecting {
-                        selectionMark.padding(6)
-                    }
-                }
-
-            Text(artifact.filename)
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-
-            HStack(spacing: 4) {
-                Text(Int64(artifact.byteSize).formatted(.byteCount(style: .file)))
-                Spacer(minLength: 0)
-                Text(artifact.createdAt.formatted(date: .abbreviated, time: .omitted))
+        ArtifactThumbnail(artifact: artifact, store: store, size: CGSize(width: 240, height: 165))
+            .frame(height: 165)
+            .frame(maxWidth: .infinity)
+            .background(Color(nsColor: .textBackgroundColor))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(
+                        RadialGradient(
+                            colors: [.clear, .white.opacity(0.16)],
+                            center: .center,
+                            startRadius: 60,
+                            endRadius: 170
+                        )
+                    )
+                    .allowsHitTesting(false)
             }
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(isSelected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isSelected ? 2 : 0.5)
-        )
-        .contentShape(Rectangle())
-    }
-
-    private var sourceBadge: some View {
-        Image(systemName: artifact.source.systemImage)
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(5)
-            .background(artifact.source == .generated ? Color.accentColor : Color.black.opacity(0.55), in: Circle())
-            .help(artifact.source.label)
-    }
-
-    private var typeBadge: some View {
-        Text(artifact.fileExtension.isEmpty ? artifact.kind.label.uppercased() : artifact.fileExtension)
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(Color.black.opacity(0.6), in: Capsule())
+            .overlay(alignment: .bottom) {
+                if isHovering, !isSelecting {
+                    Text(artifact.filename)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .shadow(radius: 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            LinearGradient(
+                                colors: [.black.opacity(0.55), .clear],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                        )
+                        .transition(.opacity)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if isSelecting {
+                    selectionMark.padding(8)
+                } else if isHovering {
+                    Button(action: onInspect) {
+                        Image(systemName: "ellipsis.circle.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.white, .black.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .transition(.opacity)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+            )
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isHovering = hovering
+                }
+            }
     }
 
     private var selectionMark: some View {
@@ -814,17 +807,27 @@ struct ChatDeck: View {
         VStack(alignment: .leading, spacing: 8) {
             GeometryReader { geo in
                 ZStack {
-                    if group.items.count > 2 {
-                        deckCard(group.items[2], offset: 12, rotation: 6, opacity: 0.45)
+                    ForEach(Array(group.items.enumerated()), id: \.element.id) { index, artifact in
+                        let depth = (index - frontIndex + group.items.count) % group.items.count
+                        if depth <= 3 {
+                            deckCard(
+                                artifact,
+                                offset: CGFloat(min(depth, 2)) * 6,
+                                rotation: Double(min(depth, 2)) * 3,
+                                opacity: depth <= 2 ? 1 - Double(depth) * 0.28 : 0
+                            )
+                            .overlay(alignment: .topTrailing) {
+                                if depth == 0 {
+                                    countBadge
+                                }
+                            }
+                            .zIndex(Double(group.items.count - depth))
+                            .allowsHitTesting(depth == 0)
+                        }
                     }
-                    if group.items.count > 1 {
-                        deckCard(group.items[1], offset: 6, rotation: 3, opacity: 0.7)
-                    }
-                    deckCard(group.items[min(frontIndex, group.items.count - 1)], offset: 0, rotation: 0, opacity: 1)
-                        .overlay(alignment: .topTrailing) { countBadge }
-                        .onDrag { store.dragProvider(for: group.items[min(frontIndex, group.items.count - 1)]) }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.spring(response: 0.34, dampingFraction: 0.72), value: frontIndex)
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in
                     guard case .active(let location) = phase, group.items.count > 1 else {
@@ -834,6 +837,7 @@ struct ChatDeck: View {
                     frontIndex = min(group.items.count - 1, Int(ratio * CGFloat(group.items.count)))
                 }
                 .onTapGesture(perform: onOpen)
+                .onDrag { store.dragProvider(for: group.items[min(frontIndex, group.items.count - 1)]) }
             }
             .frame(height: 190)
 
