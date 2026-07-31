@@ -559,6 +559,8 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
+            headerDivider
+
             if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
                 emptyPinnedHint
             } else {
@@ -591,6 +593,8 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
+            headerDivider
+
             ForEach(ungroupedSessions) { recent in
                 draggableRow(recent, isPinnedRow: false)
                     .overlay(alignment: .top) {
@@ -615,6 +619,8 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.top, 12)
                 .padding(.bottom, 4)
+
+            headerDivider
 
             ForEach(unpinnedFolders) { folder in
                 folderView(folder)
@@ -981,6 +987,13 @@ struct ControlPanelView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))
         )
+    }
+
+    private var headerDivider: some View {
+        Divider()
+            .padding(.leading, 17)
+            .padding(.trailing, 10)
+            .padding(.bottom, 6)
     }
 
     private var sidebarPinnedHeader: some View {
