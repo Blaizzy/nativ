@@ -235,8 +235,8 @@ struct ChatComposer: View {
             disableThinkingIfUnsupported(modelID: selectedModelID, models: models)
             applyInitialReasoningDefaultIfNeeded(modelID: selectedModelID, models: models)
         }
-        .onChange(of: selectedModelID) { _, modelID in
-            configureReasoningForSelectedModel(modelID: modelID, models: localLibrary.models)
+        .onChange(of: selectedModelID) { oldModelID, newModelID in
+            applyModelConfigOnSwitch(from: oldModelID, to: newModelID, models: localLibrary.models)
         }
         .onDisappear {
             localLibrary.cancel()
@@ -364,6 +364,9 @@ struct ChatComposer: View {
                     return
                 }
                 applyReasoningLevel(level)
+                if let modelID = selectedModelID {
+                    model.settings.rememberProfile(forModel: modelID)
+                }
             }
         )
     }
@@ -388,13 +391,7 @@ struct ChatComposer: View {
             to: localModel,
             for: .language,
             availableModels: localLibrary.models
-        ) {
-            if localModel.capabilities.contains(.reasoning) {
-                applyReasoningLevel(.max)
-            } else {
-                model.settings.thinkingEnabled = false
-            }
-        }
+        ) {}
     }
 
     private func applyReasoningLevel(_ level: ChatReasoningLevel) {
@@ -428,32 +425,47 @@ struct ChatComposer: View {
     ) {
         guard !didApplyInitialReasoningDefault,
               let modelID,
-              let localModel = models.first(where: { $0.repoID == modelID })
+              models.contains(where: { $0.repoID == modelID })
         else {
             return
         }
 
         didApplyInitialReasoningDefault = true
-        if localModel.capabilities.contains(.reasoning) {
-            applyReasoningLevel(.max)
+        if let profile = model.settings.modelProfile(for: modelID) {
+            model.settings.applyProfile(profile)
+        } else {
+            model.settings.rememberProfile(forModel: modelID)
         }
     }
 
-    private func configureReasoningForSelectedModel(
-        modelID: String?,
+    private func applyModelConfigOnSwitch(
+        from oldModelID: String?,
+        to newModelID: String?,
         models: [LocalModel]
     ) {
-        guard let modelID,
-              let localModel = models.first(where: { $0.repoID == modelID })
-        else {
+        if let oldModelID, !oldModelID.isEmpty {
+            model.settings.rememberProfile(forModel: oldModelID)
+        }
+        guard let newModelID, !newModelID.isEmpty else {
             return
         }
+        applyModelConfig(to: newModelID, models: models)
+    }
 
-        if localModel.capabilities.contains(.reasoning) {
+    private func applyModelConfig(to modelID: String, models: [LocalModel]) {
+        if let profile = model.settings.modelProfile(for: modelID) {
+            model.settings.applyProfile(profile)
+            return
+        }
+        let isReasoning = models.first(where: { $0.repoID == modelID })?
+            .capabilities.contains(.reasoning) == true
+        if isReasoning {
             applyReasoningLevel(.max)
         } else {
             model.settings.thinkingEnabled = false
         }
+        model.settings.speculativeDecodingEnabled = false
+        model.settings.rememberProfile(forModel: modelID)
     }
 
     private func provider(for modelID: String) -> LocalModelProvider? {
