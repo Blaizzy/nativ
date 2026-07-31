@@ -674,7 +674,7 @@ final class ChatViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .movie, .pdf, .plainText, .rtf, .spreadsheet, .presentation]
 
         guard panel.runModal() == .OK else {
             return
@@ -2418,7 +2418,7 @@ private struct ChatImageAttachmentView: View {
                     .frame(width: size.width, height: size.height)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: "photo")
+                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
                         .font(.title2)
                     Text(attachment.filename)
                         .font(.caption)
