@@ -8,6 +8,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
     case system = "System"
     case models = "Models"
+    case tools = "Tools"
     case integrations = "Integrations"
     case developer = "Developer"
     case settings = "Settings"
@@ -19,6 +20,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             .dashboard,
             .system,
             .models,
+            .tools,
             .integrations,
             .developer,
         ]
@@ -38,6 +40,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "gauge.open.with.lines.needle.33percent"
         case .models:
             "cube.transparent"
+        case .tools:
+            "wrench.and.screwdriver"
         case .integrations:
             "puzzlepiece.extension"
         case .developer:
@@ -809,6 +813,11 @@ struct ControlPanelView: View {
                     ModelsView(
                         model: model,
                         showsConfiguration: $isModelConfigurationVisible,
+                        titleLeadingInset: detailTitleLeadingInset
+                    )
+                case .tools:
+                    ToolsView(
+                        model: model,
                         titleLeadingInset: detailTitleLeadingInset
                     )
                 case .integrations:
