@@ -231,6 +231,14 @@ struct ControlPanelView: View {
         let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
             ?? URL(string: "http://127.0.0.1:8080")!
         let modelID = Self.embeddingModelID
+        let hasEnoughMemory = ProcessInfo.processInfo.physicalMemory >= 16_000_000_000
+        let diskBlocker = downloads.capacityBlocker(
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath
+        )
+        let insufficientReason: String? = !hasEnoughMemory
+            ? "Requires 16 GB or more of memory"
+            : diskBlocker
         return ArtifactSemanticSearchConfig(
             modelID: modelID,
             sizeBytes: Self.embeddingModelSize,
@@ -238,6 +246,8 @@ struct ControlPanelView: View {
             isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
             isDownloading: downloads.isDownloading(modelID),
             downloadProgress: downloads.progress(for: modelID),
+            canInstall: insufficientReason == nil,
+            insufficientReason: insufficientReason,
             onEnable: {
                 downloads.download(
                     repoID: modelID,

@@ -8,6 +8,8 @@ struct ArtifactSemanticSearchConfig {
     let isModelInstalled: Bool
     let isDownloading: Bool
     let downloadProgress: Double
+    let canInstall: Bool
+    let insufficientReason: String?
     let onEnable: () -> Void
 
     var sizeLabel: String {

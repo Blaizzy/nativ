@@ -53,7 +53,8 @@ struct ArtifactsView: View {
     @StateObject private var searchIndex = ArtifactSearchIndex()
     @State private var semanticMatches: [UUID]?
     @State private var searchDebounce: Task<Void, Never>?
-    @State private var isSemanticDismissed = false
+    @State private var showsSemanticPopover = false
+    @AppStorage("artifactSemanticSearchOffered") private var semanticSearchOffered = false
 
     @State private var search = ""
     @State private var kindFilter: ArtifactKind?
@@ -112,43 +113,83 @@ struct ArtifactsView: View {
     }
 
     @ViewBuilder
+    @ViewBuilder
     private var semanticBanner: some View {
-        if let config = semanticSearch, !config.isModelInstalled, !store.artifacts.isEmpty,
-           config.isDownloading || !isSemanticDismissed {
+        if let config = semanticSearch, !config.isModelInstalled, !config.isDownloading,
+           config.canInstall, !semanticSearchOffered, !store.artifacts.isEmpty {
             HStack(spacing: 12) {
                 Image(systemName: "sparkle.magnifyingglass")
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Search by what's inside")
+                    Text("Search your artifacts by content")
                         .font(.system(size: 12, weight: .semibold))
-                    Text(config.isDownloading
-                        ? "Downloading search model… \(Int((config.downloadProgress * 100).rounded()))%"
-                        : "Find artifacts by their contents, not just names. Downloads a \(config.sizeLabel) model you can reuse.")
+                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the gear menu.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
-                if config.isDownloading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button("Enable") { config.onEnable() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    Button {
-                        isSemanticDismissed = true
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                Button("Install") {
+                    config.onEnable()
+                    semanticSearchOffered = true
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("Not now") {
+                    semanticSearchOffered = true
+                }
+                .controlSize(.small)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(Color(nsColor: .windowBackgroundColor))
             Divider()
+        }
+    }
+
+    @ViewBuilder
+    private func semanticSettingsButton(_ config: ArtifactSemanticSearchConfig) -> some View {
+        Button {
+            showsSemanticPopover = true
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .help("Content search settings")
+        .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Content search", systemImage: "sparkle.magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                if config.isModelInstalled {
+                    Text("On — searching by image, video and document contents.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else if config.isDownloading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Downloading model… \(Int((config.downloadProgress * 100).rounded()))%")
+                            .font(.system(size: 11))
+                    }
+                } else {
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by what's inside them.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Button("Install") {
+                        config.onEnable()
+                        semanticSearchOffered = true
+                        showsSemanticPopover = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!config.canInstall)
+                    if let reason = config.insufficientReason {
+                        Text(reason)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(width: 264)
         }
     }
 
@@ -507,6 +548,10 @@ struct ArtifactsView: View {
                     .animation(store.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
             }
             .help("Rescan chats for new artifacts")
+
+            if let config = semanticSearch {
+                semanticSettingsButton(config)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.top, 20)
