@@ -34,7 +34,10 @@ enum VoiceTranscriptInserter {
         guard pasteboard.setString(transcript, forType: .string) else {
             return false
         }
-        guard AXIsProcessTrusted() else {
+        let hasInsertTextAccess =
+            NativSystemPermissionController.hasInsertTextAccess()
+            || NativSystemPermissionController.requestInsertTextAccess()
+        guard hasInsertTextAccess else {
             return false
         }
 

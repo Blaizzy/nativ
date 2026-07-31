@@ -344,7 +344,7 @@ final class NativExtensionManager: ObservableObject {
                 return .notRequested
             }
         case .accessibilityInsertText:
-            if AXIsProcessTrusted() {
+            if NativSystemPermissionController.hasInsertTextAccess() {
                 return .granted
             }
             return requestedPermissions.contains(permission.rawValue)
@@ -393,9 +393,9 @@ final class NativExtensionManager: ObservableObject {
             }
         case .accessibilityInsertText:
             markPermissionRequested(permission)
-            _ = NativSystemPermissionController.requestAccessibility()
+            _ = NativSystemPermissionController.requestInsertTextAccess()
             refreshPermissionStatuses()
-            if !AXIsProcessTrusted() {
+            if !NativSystemPermissionController.hasInsertTextAccess() {
                 NativSystemPermissionController.openAccessibilitySettings()
             }
         case .notifications:
@@ -586,9 +586,10 @@ final class NativExtensionManager: ObservableObject {
             }
             systemExtensionCount = monitor.identities.count
             systemIdentities = Dictionary(
-                uniqueKeysWithValues: monitor.identities.map {
+                monitor.identities.map {
                     ($0.bundleIdentifier, $0)
-                }
+                },
+                uniquingKeysWith: { discovered, _ in discovered }
             )
             rebuildRecords()
             reconcileLifecycle()

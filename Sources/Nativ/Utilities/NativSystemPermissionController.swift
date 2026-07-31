@@ -15,12 +15,16 @@ enum NativSystemPermissionController {
         }
     }
 
+    static func hasInsertTextAccess() -> Bool {
+        // macOS can authorize synthesized paste events through either the
+        // dedicated Post Event service or the broader Accessibility grant
+        // exposed in System Settings. Accept both forms of authorization.
+        CGPreflightPostEventAccess() || AXIsProcessTrusted()
+    }
+
     @discardableResult
-    static func requestAccessibility() -> Bool {
-        let options = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-        ] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
+    static func requestInsertTextAccess() -> Bool {
+        CGRequestPostEventAccess()
     }
 
     @MainActor

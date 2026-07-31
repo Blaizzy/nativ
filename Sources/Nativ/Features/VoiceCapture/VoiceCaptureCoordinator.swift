@@ -467,10 +467,11 @@ final class VoiceCaptureCoordinator {
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "Allow Nativ to Insert Text"
+        alert.messageText = "Nativ Could Not Insert Text"
         alert.informativeText = """
-        The transcript is on the clipboard. Nativ needs Accessibility permission \
-        to insert future transcripts at the cursor in other apps.
+        The transcript is on the clipboard. macOS denied Nativ permission to \
+        paste it at the cursor. Enable Nativ in System Settings to insert future \
+        transcripts automatically.
         """
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Not Now")
@@ -479,7 +480,6 @@ final class VoiceCaptureCoordinator {
         shortcutMonitor.resynchronizeAfterModalInteraction()
 
         if response == .alertFirstButtonReturn {
-            _ = NativSystemPermissionController.requestAccessibility()
             NativSystemPermissionController.openAccessibilitySettings()
         }
     }
