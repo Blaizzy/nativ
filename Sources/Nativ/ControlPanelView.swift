@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
     case imageGeneration = "Images"
+    case artifacts = "Artifacts"
     case dashboard = "Dashboard"
     case system = "System"
     case models = "Models"
@@ -16,6 +17,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         [
             .chat,
             .imageGeneration,
+            .artifacts,
             .dashboard,
             .system,
             .models,
@@ -32,6 +34,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "bubble.left.and.bubble.right"
         case .imageGeneration:
             "photo.on.rectangle"
+        case .artifacts:
+            "photo.on.rectangle.angled"
         case .dashboard:
             "chart.bar.xaxis"
         case .system:
@@ -211,6 +215,7 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
+    @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
@@ -297,6 +302,9 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
+            artifacts.onDeleteAttachment = { sessionID, messageID, attachmentID in
+                chat.removeAttachment(sessionID: sessionID, messageID: messageID, attachmentID: attachmentID)
+            }
         }
         .onReceive(navigation.$requestedTab) { tab in
             guard let tab else { return }
@@ -578,7 +586,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .dashboard, .system, .integrations, .settings:
+        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .settings:
             false
         }
     }
@@ -793,6 +801,20 @@ struct ControlPanelView: View {
                     )
                 case .imageGeneration:
                     ImageGenerationView(model: model, viewModel: imageGeneration)
+                case .artifacts:
+                    ArtifactsView(
+                        store: artifacts,
+                        onOpenChat: { artifact in
+                            applySidebarSelection(.chat(artifact.sessionID))
+                            chat.scrollTargetMessageID = artifact.messageID
+                        },
+                        onUseInChat: { artifact in
+                            if let attachment = artifacts.chatAttachment(for: artifact) {
+                                chat.stageAttachment(attachment)
+                            }
+                            applySidebarSelection(.tab(.chat))
+                        }
+                    )
                 case .dashboard:
                     StatsView(
                         model: model,
@@ -902,7 +924,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .dashboard, .system, .models, .integrations, .developer:
             true
-        case .chat, .imageGeneration, .settings:
+        case .chat, .imageGeneration, .artifacts, .settings:
             false
         }
     }
