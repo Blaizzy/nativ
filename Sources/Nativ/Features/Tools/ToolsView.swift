@@ -1,13 +1,6 @@
+import AppKit
 import NativServerKit
 import SwiftUI
-
-private enum ToolsSection: String, CaseIterable, Identifiable {
-    case explore = "Explore"
-    case mcp = "MCP"
-    case active = "Active"
-
-    var id: String { rawValue }
-}
 
 struct MCPCatalogEntry: Identifiable, Hashable {
     let id: String
@@ -18,7 +11,10 @@ struct MCPCatalogEntry: Identifiable, Hashable {
     let command: String
     let args: [String]
     var requiredEnv: [String] = []
-    var needsSetup: Bool = false
+    var requiresFolder: Bool = false
+    var sourceURL: String?
+
+    var needsSetup: Bool { !requiredEnv.isEmpty || requiresFolder }
 
     static let seed: [MCPCatalogEntry] = [
         MCPCatalogEntry(
@@ -28,7 +24,8 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             category: "Web",
             icon: "globe",
             command: "uvx",
-            args: ["mcp-server-fetch"]
+            args: ["mcp-server-fetch"],
+            sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
         ),
         MCPCatalogEntry(
             id: "sequential-thinking",
@@ -37,7 +34,8 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             category: "Reasoning",
             icon: "brain",
             command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+            args: ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+            sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking"
         ),
         MCPCatalogEntry(
             id: "memory",
@@ -46,7 +44,8 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             category: "Utilities",
             icon: "externaldrive",
             command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-memory"]
+            args: ["-y", "@modelcontextprotocol/server-memory"],
+            sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
         ),
         MCPCatalogEntry(
             id: "time",
@@ -55,7 +54,8 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             category: "Utilities",
             icon: "clock",
             command: "uvx",
-            args: ["mcp-server-time"]
+            args: ["mcp-server-time"],
+            sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
         ),
         MCPCatalogEntry(
             id: "filesystem",
@@ -65,7 +65,8 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             icon: "folder",
             command: "npx",
             args: ["-y", "@modelcontextprotocol/server-filesystem"],
-            needsSetup: true
+            requiresFolder: true,
+            sourceURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
         ),
         MCPCatalogEntry(
             id: "github",
@@ -76,14 +77,15 @@ struct MCPCatalogEntry: Identifiable, Hashable {
             command: "npx",
             args: ["-y", "@modelcontextprotocol/server-github"],
             requiredEnv: ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-            needsSetup: true
+            sourceURL: "https://github.com/github/github-mcp-server"
         ),
     ]
 }
 
 extension MCPCatalogEntry: Decodable {
     enum CodingKeys: String, CodingKey {
-        case id, name, description, category, icon, command, args, requiredEnv, needsSetup
+        case id, name, description, category, icon, command, args
+        case requiredEnv, requiresFolder, sourceURL
     }
 
     init(from decoder: Decoder) throws {
@@ -96,8 +98,8 @@ extension MCPCatalogEntry: Decodable {
         command = try container.decode(String.self, forKey: .command)
         args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
         requiredEnv = try container.decodeIfPresent([String].self, forKey: .requiredEnv) ?? []
-        needsSetup =
-            try container.decodeIfPresent(Bool.self, forKey: .needsSetup) ?? !requiredEnv.isEmpty
+        requiresFolder = try container.decodeIfPresent(Bool.self, forKey: .requiresFolder) ?? false
+        sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
     }
 }
 
@@ -117,9 +119,6 @@ enum MCPCatalog {
 struct ToolsView: View {
     @ObservedObject var model: NativModel
     var titleLeadingInset: CGFloat = 0
-    @State private var section: ToolsSection = .explore
-    @State private var pendingEntry: MCPCatalogEntry?
-    @State private var pendingEnv: [String: String] = [:]
 
     private let catalog = MCPCatalog.load()
 
@@ -133,365 +132,203 @@ struct ToolsView: View {
 
             Divider()
 
-            content
+            HStack(spacing: 0) {
+                ScrollView {
+                    MCPServersPanel(host: model.mcpHost, servers: $model.settings.mcpServers)
+                        .padding(20)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                Divider()
+
+                CatalogColumn(
+                    entries: catalog,
+                    addedNames: Set(model.settings.mcpServers.map(\.name)),
+                    onAdd: add
+                )
+                .frame(width: 360)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.nativMainContentBackground)
-        .sheet(item: $pendingEntry) { entry in
-            ToolSetupSheet(
-                entry: entry,
-                values: $pendingEnv,
-                onCancel: { pendingEntry = nil },
-                onAdd: {
-                    appendServer(entry, environment: pendingEnv, enabled: true)
-                    pendingEntry = nil
-                    section = .mcp
-                }
-            )
-        }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Tools")
-                    .font(.title2.weight(.semibold))
-                Text("Give your models tools — browse the catalog, connect MCP servers, and manage what they can call.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            sectionPicker
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Tools")
+                .font(.title2.weight(.semibold))
+            Text("Connect Model Context Protocol servers to give your models tools. Add one from the catalog or configure your own.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var sectionPicker: some View {
-        Picker("Section", selection: $section) {
-            ForEach(ToolsSection.allCases) { option in
-                Text(option.rawValue).tag(option)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .frame(width: 260, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch section {
-        case .explore:
-            ToolsExploreView(
-                entries: catalog,
-                addedNames: Set(model.settings.mcpServers.map(\.name)),
-                onAdd: add
-            )
-        case .mcp:
-            ScrollView {
-                MCPServersPanel(host: model.mcpHost, servers: $model.settings.mcpServers)
-                    .padding(22)
-            }
-        case .active:
-            ToolsActiveView(model: model, host: model.mcpHost)
-        }
-    }
-
-    private func add(_ entry: MCPCatalogEntry) {
-        guard !model.settings.mcpServers.contains(where: { $0.name == entry.name }) else { return }
-        if entry.requiredEnv.isEmpty {
-            appendServer(entry, environment: [:], enabled: !entry.needsSetup)
-            section = .mcp
-        } else {
-            pendingEnv = [:]
-            pendingEntry = entry
-        }
-    }
-
-    private func appendServer(
-        _ entry: MCPCatalogEntry,
-        environment: [String: String],
-        enabled: Bool
-    ) {
+    private func add(_ entry: MCPCatalogEntry, environment: [String: String], extraArgs: [String]) {
         guard !model.settings.mcpServers.contains(where: { $0.name == entry.name }) else { return }
         model.settings.mcpServers.append(
             MCPServerConfig(
                 name: entry.name,
                 command: entry.command,
-                arguments: entry.args,
+                arguments: entry.args + extraArgs,
                 environment: environment,
-                isEnabled: enabled
+                isEnabled: true
             )
         )
     }
 }
 
-private struct ToolSetupSheet: View {
-    let entry: MCPCatalogEntry
-    @Binding var values: [String: String]
-    let onCancel: () -> Void
-    let onAdd: () -> Void
+private struct CatalogColumn: View {
+    let entries: [MCPCatalogEntry]
+    let addedNames: Set<String>
+    let onAdd: (MCPCatalogEntry, [String: String], [String]) -> Void
 
-    private var isIncomplete: Bool {
-        entry.requiredEnv.contains { (values[$0] ?? "").isEmpty }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Catalog")
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 4)
+            Text("Community-contributed servers. Enable one to add its tools.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(entries) { entry in
+                        CatalogCard(
+                            entry: entry,
+                            isAdded: addedNames.contains(entry.name),
+                            onAdd: { env, extraArgs in onAdd(entry, env, extraArgs) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.04))
+    }
+}
+
+private struct CatalogCard: View {
+    let entry: MCPCatalogEntry
+    let isAdded: Bool
+    let onAdd: ([String: String], [String]) -> Void
+
+    @State private var envValues: [String: String] = [:]
+    @State private var folderPath: String = ""
+    @State private var isHovering = false
+
+    private var isReady: Bool {
+        let envFilled = entry.requiredEnv.allSatisfy { !(envValues[$0] ?? "").isEmpty }
+        let folderFilled = !entry.requiresFolder || !folderPath.isEmpty
+        return envFilled && folderFilled
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Set up \(entry.name)")
-                    .font(.headline)
-                Text("This server needs the values below to run. They're saved to your settings on this Mac only.")
-                    .font(.caption)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: entry.icon)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.12))
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.name)
+                        .font(.callout.weight(.semibold))
+                    Text(entry.category)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let sourceURL = entry.sourceURL, let url = URL(string: sourceURL) {
+                    Link(destination: url) {
+                        Image(systemName: "arrow.up.right.square")
+                    }
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .help("Open source")
+                }
             }
 
-            ForEach(entry.requiredEnv, id: \.self) { key in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(key)
-                        .font(.caption.weight(.medium))
-                    SecureField(
-                        key,
-                        text: Binding(
-                            get: { values[key] ?? "" },
-                            set: { values[key] = $0 }
+            Text(entry.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !isAdded {
+                if !entry.requiredEnv.isEmpty {
+                    ForEach(entry.requiredEnv, id: \.self) { key in
+                        SecureField(
+                            key,
+                            text: Binding(
+                                get: { envValues[key] ?? "" },
+                                set: { envValues[key] = $0 }
+                            )
                         )
-                    )
-                    .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                    }
+                }
+                if entry.requiresFolder {
+                    HStack(spacing: 6) {
+                        Button("Choose Folder…", action: chooseFolder)
+                            .controlSize(.small)
+                        Text(folderPath.isEmpty ? "No folder" : (folderPath as NSString).lastPathComponent)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
             }
 
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Add", action: onAdd)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isIncomplete)
-            }
-        }
-        .padding(20)
-        .frame(width: 380)
-    }
-}
-
-private struct ToolsExploreView: View {
-    let entries: [MCPCatalogEntry]
-    let addedNames: Set<String>
-    let onAdd: (MCPCatalogEntry) -> Void
-
-    private let columns = [GridItem(.adaptive(minimum: 260, maximum: 340), spacing: 16)]
-
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-                ForEach(entries) { entry in
-                    ToolCatalogCard(
-                        entry: entry,
-                        isAdded: addedNames.contains(entry.name),
-                        onAdd: { onAdd(entry) }
-                    )
-                }
-            }
-            .padding(24)
-        }
-    }
-}
-
-private struct ToolCatalogCard: View {
-    let entry: MCPCatalogEntry
-    let isAdded: Bool
-    let onAdd: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top) {
-                Image(systemName: entry.icon)
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 52, height: 52)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.12))
-                    )
-                Spacer()
-                Text(entry.category)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.secondary.opacity(0.12)))
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(entry.name)
-                    .font(.title3.bold())
-                Text(entry.description)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: 8) {
                 if isAdded {
                     Label("Added", systemImage: "checkmark.circle.fill")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.green)
                 } else {
-                    Button(action: onAdd) {
+                    Button {
+                        onAdd(envValues, entry.requiresFolder && !folderPath.isEmpty ? [folderPath] : [])
+                    } label: {
                         Label("Add", systemImage: "plus")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                }
-                Spacer(minLength: 0)
-                if entry.needsSetup {
-                    Label("Needs setup", systemImage: "gearshape")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .disabled(!isReady)
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 185, alignment: .leading)
-        .padding(18)
+        .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isHovering ? Color.accentColor.opacity(0.06) : Color(nsColor: .controlBackgroundColor))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isHovering ? Color.accentColor.opacity(0.05) : Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(
-                    isHovering ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08),
-                    lineWidth: 1
-                )
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .onHover { isHovering = $0 }
     }
-}
 
-private struct ToolsActiveView: View {
-    @ObservedObject var model: NativModel
-    @ObservedObject var host: MCPHostManager
-
-    private var context: ChatToolExecutionContext {
-        ChatToolExecutionContext(
-            imageGenerationModelID: model.settings.imageGenerationModelID,
-            baseURL: model.settings.serverBaseURL,
-            apiKey: model.settings.serverAPIKey,
-            imageReferences: [],
-            modelSearchPath: model.settings.expandedModelSearchPath,
-            additionalModelSearchPaths: model.settings.additionalModelSearchPaths
-        )
-    }
-
-    private var builtIn: [MLXChatToolDefinition] {
-        ChatToolRegistry.definitions(context: context, canEditImage: false)
-    }
-
-    private var mcp: [MLXChatToolDefinition] {
-        host.toolDefinitions()
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                group(
-                    title: "Built-in",
-                    subtitle: "Bundled tools, available to any tool-capable model.",
-                    tools: builtIn
-                )
-                if !mcp.isEmpty {
-                    group(
-                        title: "From MCP servers",
-                        subtitle: "Provided by your connected servers.",
-                        tools: mcp
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24)
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        if panel.runModal() == .OK, let url = panel.url {
+            folderPath = url.path
         }
-    }
-
-    private func isEnabled(_ name: String) -> Bool {
-        !model.settings.disabledToolNames.contains(name)
-    }
-
-    private func setEnabled(_ name: String, _ enabled: Bool) {
-        if enabled {
-            model.settings.disabledToolNames.removeAll { $0 == name }
-        } else if !model.settings.disabledToolNames.contains(name) {
-            model.settings.disabledToolNames.append(name)
-        }
-    }
-
-    private func group(title: String, subtitle: String, tools: [MLXChatToolDefinition]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            VStack(spacing: 0) {
-                ForEach(Array(tools.enumerated()), id: \.element.function.name) { index, tool in
-                    ToolRow(
-                        name: tool.function.name,
-                        description: tool.function.description,
-                        isOn: isEnabled(tool.function.name),
-                        onToggle: { setEnabled(tool.function.name, $0) }
-                    )
-                    if index < tools.count - 1 {
-                        Divider().padding(.leading, 52)
-                    }
-                }
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-        }
-    }
-}
-
-private struct ToolRow: View {
-    let name: String
-    let description: String
-    let isOn: Bool
-    let onToggle: (Bool) -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: ChatToolPresentation.symbolName(toolName: name, status: nil))
-                .font(.system(size: 15))
-                .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ChatToolPresentation.title(toolName: name, status: nil))
-                    .font(.callout.weight(.medium))
-                if !description.isEmpty {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            Spacer(minLength: 0)
-            Toggle("", isOn: Binding(get: { isOn }, set: onToggle))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .opacity(isOn ? 1 : 0.55)
     }
 }

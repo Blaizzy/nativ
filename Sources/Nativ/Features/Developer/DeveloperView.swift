@@ -41,7 +41,6 @@ struct DeveloperView: View {
                             runtimeGrid
                             serverEndpointsPanel
                             authenticationPanels
-                            mcpServersPanel
                             logPanel
                                 .frame(height: max(320, geometry.size.height - 550))
                         }
@@ -141,10 +140,6 @@ struct DeveloperView: View {
                 tint: .orange
             )
         }
-    }
-
-    private var mcpServersPanel: some View {
-        MCPServersPanel(host: model.mcpHost, servers: $model.settings.mcpServers)
     }
 
     private var logPanel: some View {

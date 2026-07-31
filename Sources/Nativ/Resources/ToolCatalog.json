@@ -6,7 +6,8 @@
     "category": "Web",
     "icon": "globe",
     "command": "uvx",
-    "args": ["mcp-server-fetch"]
+    "args": ["mcp-server-fetch"],
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
   },
   {
     "id": "sequential-thinking",
@@ -15,7 +16,8 @@
     "category": "Reasoning",
     "icon": "brain",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking"
   },
   {
     "id": "memory",
@@ -24,7 +26,8 @@
     "category": "Utilities",
     "icon": "externaldrive",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-memory"]
+    "args": ["-y", "@modelcontextprotocol/server-memory"],
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
   },
   {
     "id": "time",
@@ -33,7 +36,8 @@
     "category": "Utilities",
     "icon": "clock",
     "command": "uvx",
-    "args": ["mcp-server-time"]
+    "args": ["mcp-server-time"],
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
   },
   {
     "id": "filesystem",
@@ -43,7 +47,8 @@
     "icon": "folder",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem"],
-    "needsSetup": true
+    "requiresFolder": true,
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
   },
   {
     "id": "github",
@@ -53,6 +58,7 @@
     "icon": "chevron.left.forwardslash.chevron.right",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-github"],
-    "requiredEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+    "requiredEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+    "sourceURL": "https://github.com/github/github-mcp-server"
   }
 ]
