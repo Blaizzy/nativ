@@ -157,6 +157,16 @@ struct ChatView: View {
             followsLatestMessage = true
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
+        .onChange(of: chat.scrollTargetMessageID) { _, target in
+            guard let target else {
+                return
+            }
+            followsLatestMessage = false
+            DispatchQueue.main.async {
+                transcriptScrollPosition.scrollTo(id: target, anchor: .center)
+                chat.scrollTargetMessageID = nil
+            }
+        }
         .onAppear {
             followsLatestMessage = true
             transcriptScrollPosition.scrollTo(edge: .bottom)
@@ -190,6 +200,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
+    @Published var scrollTargetMessageID: UUID?
 
     private let sessionStore = ChatSessionStore()
     private var activeTask: Task<Void, Never>?
@@ -312,6 +323,32 @@ final class ChatViewModel: ObservableObject {
         draft = ""
         pendingImageAttachments.removeAll()
         applyCurrentSession(session)
+    }
+
+    func stageAttachment(_ attachment: ChatImageAttachment) {
+        pendingImageAttachments.append(attachment)
+    }
+
+    func removeAttachment(sessionID: UUID, messageID: UUID, attachmentID: UUID) {
+        if sessionID == currentSessionID {
+            for index in messages.indices where messages[index].id == messageID {
+                messages[index].imageAttachments.removeAll { $0.id == attachmentID }
+            }
+            persistCurrentSession(updateTimestamp: false)
+            return
+        }
+
+        guard var session = storedSessions.first(where: { $0.id == sessionID })
+            ?? sessionStore.loadSession(id: sessionID)
+        else {
+            return
+        }
+        for index in session.messages.indices where session.messages[index].id == messageID {
+            session.messages[index].imageAttachments.removeAll { $0.id == attachmentID }
+        }
+        upsertStoredSession(session)
+        sessionStore.saveSession(session)
+        refreshSessionList()
     }
 
     func selectSession(_ sessionID: UUID) {
