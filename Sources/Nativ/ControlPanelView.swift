@@ -313,8 +313,21 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
-            artifacts.onDeleteAttachment = { sessionID, messageID, attachmentID in
-                chat.removeAttachment(sessionID: sessionID, messageID: messageID, attachmentID: attachmentID)
+            artifacts.onDeleteArtifact = { artifact in
+                switch artifact.source {
+                case .uploaded:
+                    chat.removeAttachment(
+                        sessionID: artifact.sessionID,
+                        messageID: artifact.messageID,
+                        attachmentID: artifact.id
+                    )
+                case .generated:
+                    imageGeneration.removeOutput(
+                        sessionID: artifact.sessionID,
+                        turnID: artifact.messageID,
+                        outputID: artifact.id
+                    )
+                }
             }
         }
         .onReceive(navigation.$requestedTab) { tab in
@@ -1524,14 +1537,25 @@ struct ControlPanelView: View {
                     ArtifactsView(
                         store: artifacts,
                         onOpenChat: { artifact in
-                            applySidebarSelection(.chat(artifact.sessionID))
-                            chat.scrollTargetMessageID = artifact.messageID
+                            switch artifact.source {
+                            case .uploaded:
+                                applySidebarSelection(.chat(artifact.sessionID))
+                                chat.scrollTargetMessageID = artifact.messageID
+                            case .generated:
+                                applySidebarSelection(.imageGeneration(artifact.sessionID))
+                            }
                         },
                         onUseInChat: { artifact in
                             if let attachment = artifacts.chatAttachment(for: artifact) {
                                 chat.stageAttachment(attachment)
                             }
                             applySidebarSelection(.tab(.chat))
+                        },
+                        onUseAsReference: { artifact in
+                            if let attachment = artifacts.chatAttachment(for: artifact) {
+                                imageGeneration.useAsReference(attachment)
+                            }
+                            applySidebarSelection(.tab(.imageGeneration))
                         }
                     )
                 case .dashboard:

@@ -702,6 +702,28 @@ final class ImageGenerationViewModel: ObservableObject {
         bumpScroll()
     }
 
+    func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) {
+        if sessionID == currentSessionID {
+            for turnIndex in turns.indices where turns[turnIndex].id == turnID {
+                turns[turnIndex].outputs.removeAll { $0.id == outputID }
+            }
+            persistCurrentSession(updateTimestamp: false)
+            return
+        }
+
+        guard var session = storedSessions.first(where: { $0.id == sessionID })
+            ?? sessionStore.loadSession(id: sessionID)
+        else {
+            return
+        }
+        for turnIndex in session.turns.indices where session.turns[turnIndex].id == turnID {
+            session.turns[turnIndex].outputs.removeAll { $0.id == outputID }
+        }
+        upsertStoredSession(session)
+        sessionStore.saveSession(session)
+        refreshSessionList()
+    }
+
     private func persistCurrentSession(updateTimestamp: Bool) {
         guard var session = currentSession else {
             return
@@ -1015,5 +1037,35 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
 private extension String {
     var nonEmpty: String? {
         isEmpty ? nil : self
+    }
+}
+
+struct GeneratedArtifactRecord: Sendable {
+    let id: UUID
+    let sessionID: UUID
+    let turnID: UUID
+    let prompt: String?
+    let imageData: Data
+    let mimeType: String
+    let createdAt: Date
+}
+
+enum ImageGenerationArtifactCatalog {
+    static func generatedRecords() -> [GeneratedArtifactRecord] {
+        ImageGenerationSessionStore().loadSessions().flatMap { session in
+            session.turns.flatMap { turn in
+                turn.outputs.map { output in
+                    GeneratedArtifactRecord(
+                        id: output.id,
+                        sessionID: session.id,
+                        turnID: turn.id,
+                        prompt: output.revisedPrompt ?? (turn.prompt.isEmpty ? nil : turn.prompt),
+                        imageData: output.imageData,
+                        mimeType: output.mimeType,
+                        createdAt: turn.createdAt
+                    )
+                }
+            }
+        }
     }
 }

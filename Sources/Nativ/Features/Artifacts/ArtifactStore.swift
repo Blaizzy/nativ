@@ -8,7 +8,7 @@ final class ArtifactStore: ObservableObject {
     @Published private(set) var artifacts: [Artifact] = []
     @Published private(set) var isRefreshing = false
 
-    var onDeleteAttachment: ((UUID, UUID, UUID) -> Void)?
+    var onDeleteArtifact: ((Artifact) -> Void)?
 
     private let indexURL: URL
     private let cacheDirectory: URL
@@ -54,7 +54,7 @@ final class ArtifactStore: ObservableObject {
     }
 
     func delete(_ artifact: Artifact) {
-        onDeleteAttachment?(artifact.sessionID, artifact.messageID, artifact.id)
+        onDeleteArtifact?(artifact)
         try? FileManager.default.removeItem(at: fileURL(for: artifact))
         artifacts.removeAll { $0.id == artifact.id }
         Self.writeIndex(artifacts, to: indexURL)
@@ -62,7 +62,7 @@ final class ArtifactStore: ObservableObject {
 
     func delete(_ toDelete: [Artifact]) {
         for artifact in toDelete {
-            onDeleteAttachment?(artifact.sessionID, artifact.messageID, artifact.id)
+            onDeleteArtifact?(artifact)
             try? FileManager.default.removeItem(at: fileURL(for: artifact))
         }
         let ids = Set(toDelete.map(\.id))
@@ -159,6 +159,17 @@ final class ArtifactStore: ObservableObject {
             }
         }
 
+        for record in ImageGenerationArtifactCatalog.generatedRecords() {
+            if let artifact = materializeGenerated(
+                record,
+                cacheDirectory: cacheDirectory,
+                existing: byID[record.id]
+            ) {
+                result.append(artifact)
+                byID[artifact.id] = artifact
+            }
+        }
+
         let sorted = result.sorted { $0.createdAt > $1.createdAt }
         writeIndex(sorted, to: indexURL)
         return sorted
@@ -206,6 +217,45 @@ final class ArtifactStore: ObservableObject {
             byteSize: data.count,
             createdAt: message.createdAt,
             prompt: prompt
+        )
+    }
+
+    private nonisolated static func materializeGenerated(
+        _ record: GeneratedArtifactRecord,
+        cacheDirectory: URL,
+        existing: Artifact?
+    ) -> Artifact? {
+        let ext = UTType(mimeType: record.mimeType)?.preferredFilenameExtension ?? "png"
+        let filename = "image-\(record.id.uuidString.prefix(8)).\(ext)"
+        let kind = ArtifactKind.resolve(mimeType: record.mimeType, filename: filename)
+        let relativePath = "\(kind.rawValue)/\(record.id.uuidString).\(ext)"
+        let destination = cacheDirectory.appendingPathComponent(relativePath)
+        let fileManager = FileManager.default
+
+        if let existing, fileManager.fileExists(atPath: destination.path) {
+            return existing
+        }
+
+        try? fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        guard (try? record.imageData.write(to: destination, options: .atomic)) != nil else {
+            return nil
+        }
+
+        return Artifact(
+            id: record.id,
+            kind: kind,
+            source: .generated,
+            sessionID: record.sessionID,
+            messageID: record.turnID,
+            filename: filename,
+            mimeType: record.mimeType,
+            relativePath: relativePath,
+            byteSize: record.imageData.count,
+            createdAt: record.createdAt,
+            prompt: record.prompt
         )
     }
 
