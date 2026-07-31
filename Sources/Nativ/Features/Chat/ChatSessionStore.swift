@@ -568,6 +568,23 @@ struct ChatSessionStore {
         .filter { $0.pathExtension == "json" }
     }
 
+    func sessionsFingerprint() -> String {
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: sessionsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+        )) ?? []
+        return urls
+            .filter { $0.pathExtension == "json" }
+            .compactMap { url in
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+                let size = values?.fileSize ?? 0
+                return "\(url.lastPathComponent):\(mtime):\(size)"
+            }
+            .sorted()
+            .joined(separator: "|")
+    }
+
     func sessionURL(for id: UUID) -> URL {
         sessionsDirectory.appendingPathComponent("\(id.uuidString).json")
     }
