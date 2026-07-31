@@ -92,7 +92,7 @@ struct ArtifactPreview: View {
                 unavailable
             }
         case .video:
-            VideoPlayer(player: AVPlayer(url: url))
+            ArtifactVideoPlayer(url: url)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         case .document:
             QuickLookPreview(url: url)
@@ -207,5 +207,29 @@ private struct QuickLookPreview: NSViewRepresentable {
 
     func updateNSView(_ nsView: QLPreviewView, context: Context) {
         nsView.previewItem = url as NSURL
+    }
+}
+
+private struct ArtifactVideoPlayer: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        view.player = AVPlayer(url: url)
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        let currentURL = (nsView.player?.currentItem?.asset as? AVURLAsset)?.url
+        if currentURL != url {
+            nsView.player = AVPlayer(url: url)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
+        nsView.player?.pause()
+        nsView.player = nil
     }
 }
