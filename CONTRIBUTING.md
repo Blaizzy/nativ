@@ -53,3 +53,16 @@ No Swift and no build changes are needed — the icon folder ships with the app 
 - **Review is approval.** Because an enabled server runs on the user's machine (each tool call still requires the user's in-chat approval), catalog entries are reviewed before merge. Merging an entry vouches for it.
 
 If a server can't be expressed as a plain launch command, it isn't a fit for the catalog today.
+
+### Verification
+
+Every catalog entry is checked by CI ([`.github/workflows/verify-mcp-catalog.yml`](.github/workflows/verify-mcp-catalog.yml)). The job launches each server exactly the way Nativ does, performs an MCP `initialize` handshake, and confirms the server lists at least one tool. It runs when the catalog changes (in a PR) and once a day on a schedule, so a server that stops working — a pulled package, a breaking release — turns the check red and can be fixed by editing its entry and re-running.
+
+The check needs no secrets: `requiresFolder` entries get a temporary directory, and `requiredEnv` entries get placeholder values (a healthy server still lists its tools without valid credentials). If a server genuinely can't start without real credentials or hardware, exempt it from the live check with two CI-only fields:
+
+| Field | Description |
+|---|---|
+| `ciSkip` | Set to `true` to skip the live handshake for this entry. |
+| `ciSkipReason` | Short note explaining why it's skipped. |
+
+Prefer fixing the entry over skipping it.
