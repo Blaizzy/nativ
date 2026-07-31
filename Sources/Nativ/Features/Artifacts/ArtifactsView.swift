@@ -57,6 +57,7 @@ struct ArtifactsView: View {
     @State private var selection: Set<Artifact.ID> = []
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
+    @State private var inspectorArtifact: Artifact?
 
     private var filtered: [Artifact] {
         let query = search.lowercased()
@@ -127,6 +128,21 @@ struct ArtifactsView: View {
         } message: {
             Text("This removes the file from the artifact and from its chat history. It can't be undone.")
         }
+        .sheet(item: $inspectorArtifact) { artifact in
+            ArtifactInspector(
+                artifact: artifact,
+                store: store,
+                onOpenPreview: {
+                    inspectorArtifact = nil
+                    previewID = artifact.id
+                },
+                onGoToChat: {
+                    inspectorArtifact = nil
+                    onOpenChat(artifact)
+                },
+                onClose: { inspectorArtifact = nil }
+            )
+        }
     }
 
     @ViewBuilder
@@ -172,11 +188,28 @@ struct ArtifactsView: View {
                     isSelecting: isSelecting,
                     isSelected: selection.contains(artifact.id)
                 )
+                .overlay(alignment: .topTrailing) {
+                    if !isSelecting {
+                        inspectButton(artifact).padding(8)
+                    }
+                }
                 .onTapGesture { activate(artifact) }
                 .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
                 .contextMenu { menu(for: artifact) }
             }
         }
+    }
+
+    private func inspectButton(_ artifact: Artifact) -> some View {
+        Button {
+            inspectorArtifact = artifact
+        } label: {
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(.white, .black.opacity(0.4))
+        }
+        .buttonStyle(.plain)
+        .help("Details")
     }
 
     private func list(_ artifacts: [Artifact]) -> some View {
@@ -288,7 +321,8 @@ struct ArtifactsView: View {
             }
 
             ForEach(ArtifactKind.allCases) { kind in
-                filterChip(title: kind.pluralLabel, systemImage: kind.systemImage, isOn: kindFilter == kind) {
+                let count = store.artifacts.filter { $0.kind == kind }.count
+                filterChip(title: "\(kind.pluralLabel) \(count)", systemImage: kind.systemImage, isOn: kindFilter == kind) {
                     kindFilter = kindFilter == kind ? nil : kind
                 }
             }
@@ -296,7 +330,8 @@ struct ArtifactsView: View {
             Divider().frame(height: 16)
 
             ForEach(ArtifactSource.allCases) { source in
-                filterChip(title: source.label, systemImage: source.systemImage, isOn: sourceFilter == source) {
+                let count = store.artifacts.filter { $0.source == source }.count
+                filterChip(title: "\(source.label) \(count)", systemImage: source.systemImage, isOn: sourceFilter == source) {
                     sourceFilter = sourceFilter == source ? nil : source
                 }
             }
@@ -606,5 +641,90 @@ private struct ArtifactThumbnail: View {
                 }
             }
         }
+    }
+}
+
+struct ArtifactInspector: View {
+    let artifact: Artifact
+    let store: ArtifactStore
+    let onOpenPreview: () -> Void
+    let onGoToChat: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Details")
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ArtifactThumbnail(artifact: artifact, store: store, size: CGSize(width: 340, height: 200))
+                        .frame(height: 200)
+                        .frame(maxWidth: .infinity)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        detailRow("Name", artifact.filename)
+                        detailRow("Type", artifact.typeLabel)
+                        detailRow("Source", artifact.source.label)
+                        detailRow("Size", Int64(artifact.byteSize).formatted(.byteCount(style: .file)))
+                        detailRow("Created", artifact.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        if let prompt = artifact.prompt, !prompt.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Prompt")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                Text(prompt)
+                                    .font(.system(size: 12))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+
+                    VStack(spacing: 8) {
+                        action("Open Preview", "arrow.up.left.and.arrow.down.right", onOpenPreview)
+                        action(artifact.source == .generated ? "Go to Image Session" : "Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
+                        action("Reveal in Finder", "folder", { store.revealInFinder(artifact) })
+                        action("Export…", "square.and.arrow.down", { store.export(artifact) })
+                        action("Copy", "doc.on.doc", { store.copyToPasteboard(artifact) })
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(width: 380, height: 540)
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 68, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func action(_ title: String, _ icon: String, _ handler: @escaping () -> Void) -> some View {
+        Button(action: handler) {
+            Label(title, systemImage: icon)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
     }
 }
