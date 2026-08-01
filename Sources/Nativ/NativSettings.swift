@@ -783,7 +783,22 @@ struct NativSettings: Codable, Equatable {
             environment["APC_NUM_BLOCKS"] = "\(settings.prefixCacheBlocks)"
             environment["APC_BLOCK_SIZE"] = "\(settings.prefixCacheBlockSize)"
         }
+        if let modelConfigsJSON = encodedModelConfigs {
+            environment["NATIV_MODEL_CONFIGS"] = modelConfigsJSON
+        }
         return environment
+    }
+
+    var encodedModelConfigs: String? {
+        guard !modelConfigs.isEmpty else {
+            return nil
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(modelConfigs) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     var launchArguments: [String] {

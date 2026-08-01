@@ -799,6 +799,46 @@ def resolve_thinking_enabled(payload: dict[str, Any]) -> bool:
     return bool(base.get_server_enable_thinking())
 
 
+def _load_per_model_configs() -> dict[str, Any]:
+    raw = os.environ.get("NATIV_MODEL_CONFIGS")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+_PER_MODEL_CONFIGS = _load_per_model_configs()
+
+
+def apply_per_model_request_defaults(payload: dict[str, Any]) -> bool:
+    model_id = payload.get("model")
+    if not isinstance(model_id, str):
+        return False
+    profile = _PER_MODEL_CONFIGS.get(model_id)
+    if not isinstance(profile, dict):
+        return False
+
+    changed = False
+    thinking_enabled = profile.get("thinkingEnabled")
+    if "enable_thinking" not in payload and isinstance(thinking_enabled, bool):
+        payload["enable_thinking"] = thinking_enabled
+        changed = True
+
+    thinking_budget = profile.get("thinkingBudget")
+    if (
+        "thinking_budget" not in payload
+        and profile.get("thinkingBudgetEnabled") is True
+        and isinstance(thinking_budget, int)
+    ):
+        payload["thinking_budget"] = thinking_budget
+        changed = True
+
+    return changed
+
+
 def parse_request_observation(request: Request, payload: dict[str, Any]) -> RequestObservation:
     image_count = 0
     audio_count = 0
@@ -1164,6 +1204,16 @@ def install_metrics_overlay() -> None:
             payload = json.loads(body.decode("utf-8")) if body else {}
         except json.JSONDecodeError:
             payload = {}
+
+        if isinstance(payload, dict) and apply_per_model_request_defaults(payload):
+            body = json.dumps(payload).encode("utf-8")
+            request._body = body
+
+            async def _receive() -> dict[str, Any]:
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            request._receive = _receive
+
         observation = parse_request_observation(request, payload)
         TRACKER.record_started(observation)
         metrics_capture: dict[str, Any] = {}
