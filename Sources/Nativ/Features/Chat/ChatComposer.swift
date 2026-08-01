@@ -238,6 +238,12 @@ struct ChatComposer: View {
         .onChange(of: selectedModelID) { oldModelID, newModelID in
             applyModelConfigOnSwitch(from: oldModelID, to: newModelID, models: localLibrary.models)
         }
+        .onChange(of: model.settings.currentModelProfile) { _, _ in
+            guard let modelID = selectedModelID, !modelID.isEmpty else {
+                return
+            }
+            model.settings.rememberProfile(forModel: modelID)
+        }
         .onDisappear {
             localLibrary.cancel()
         }
@@ -364,9 +370,6 @@ struct ChatComposer: View {
                     return
                 }
                 applyReasoningLevel(level)
-                if let modelID = selectedModelID {
-                    model.settings.rememberProfile(forModel: modelID)
-                }
             }
         )
     }
@@ -433,6 +436,7 @@ struct ChatComposer: View {
         didApplyInitialReasoningDefault = true
         if let profile = model.settings.modelProfile(for: modelID) {
             model.settings.applyProfile(profile)
+            disableThinkingIfUnsupported(modelID: modelID, models: models)
         } else {
             model.settings.rememberProfile(forModel: modelID)
         }
@@ -455,6 +459,7 @@ struct ChatComposer: View {
     private func applyModelConfig(to modelID: String, models: [LocalModel]) {
         if let profile = model.settings.modelProfile(for: modelID) {
             model.settings.applyProfile(profile)
+            disableThinkingIfUnsupported(modelID: modelID, models: models)
             return
         }
         let isReasoning = models.first(where: { $0.repoID == modelID })?
