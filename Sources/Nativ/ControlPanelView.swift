@@ -919,11 +919,11 @@ struct ControlPanelView: View {
             Button {
                 bulkTogglePinSelected()
             } label: {
-                Image(systemName: allSelectedChatsPinned ? "pin.slash" : "pin")
+                Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
                     .frame(width: 24, height: 22)
             }
-            .help(allSelectedChatsPinned ? "Unpin selected" : "Pin selected")
-            .disabled(!hasSelectedChats)
+            .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
+            .disabled(!hasSelectedPinnable)
 
             Button {
                 bulkExportSelected()
@@ -1387,8 +1387,18 @@ struct ControlPanelView: View {
         !selectedChats.isEmpty
     }
 
-    private var allSelectedChatsPinned: Bool {
-        hasSelectedChats && selectedChats.allSatisfy(\.pinned)
+    private var selectedFolders: [ChatFolder] {
+        chat.folders.filter { selectedFolderIDs.contains($0.id) }
+    }
+
+    private var hasSelectedPinnable: Bool {
+        !selectedChats.isEmpty || !selectedFolders.isEmpty
+    }
+
+    private var allSelectedPinned: Bool {
+        hasSelectedPinnable
+            && selectedChats.allSatisfy(\.pinned)
+            && selectedFolders.allSatisfy(\.isPinned)
     }
 
     private var bulkSelectionTitle: String {
@@ -1397,13 +1407,17 @@ struct ControlPanelView: View {
     }
 
     private func bulkTogglePinSelected() {
-        let shouldPin = !allSelectedChatsPinned
-        let ids = selectedChats.compactMap(\.chatID)
-        guard !ids.isEmpty else {
+        let shouldPin = !allSelectedPinned
+        let chatIDs = selectedChats.compactMap(\.chatID)
+        let folderIDs = selectedFolders.map(\.id)
+        guard !chatIDs.isEmpty || !folderIDs.isEmpty else {
             return
         }
-        for id in ids {
+        for id in chatIDs {
             chat.setPinned(id, pinned: shouldPin)
+        }
+        for id in folderIDs {
+            chat.setFolderPinned(id, pinned: shouldPin)
         }
         exitSelectMode()
     }
