@@ -11,17 +11,23 @@ final class ArtifactStore: ObservableObject {
 
     var onDeleteArtifact: ((Artifact) -> Void)?
 
+    @Published private(set) var favoriteIDs: Set<UUID> = []
+    @Published private(set) var displayNames: [UUID: String] = [:]
+
     private let indexURL: URL
     private let cacheDirectory: URL
+    private let favoritesURL: URL
+    private let displayNamesURL: URL
     private let thumbnailCache = NSCache<NSString, NSImage>()
 
     init() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? FileManager.default.temporaryDirectory
-        indexURL = support
-            .appendingPathComponent("Nativ", isDirectory: true)
-            .appendingPathComponent("Artifacts Index.json")
+        let nativDirectory = support.appendingPathComponent("Nativ", isDirectory: true)
+        indexURL = nativDirectory.appendingPathComponent("Artifacts Index.json")
+        favoritesURL = nativDirectory.appendingPathComponent("Artifact Favorites.json")
+        displayNamesURL = nativDirectory.appendingPathComponent("Artifact Names.json")
 
         let caches = FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask)
@@ -31,12 +37,105 @@ final class ArtifactStore: ObservableObject {
             .appendingPathComponent("Artifacts", isDirectory: true)
 
         thumbnailCache.countLimit = 150
+        favoriteIDs = Self.loadFavorites(favoritesURL)
+        displayNames = Self.loadNames(displayNamesURL)
         artifacts = Self.loadIndex(indexURL)
         refresh()
     }
 
     func fileURL(for artifact: Artifact) -> URL {
         cacheDirectory.appendingPathComponent(artifact.relativePath)
+    }
+
+    // MARK: - Favorites & rename
+
+    func isFavorite(_ artifact: Artifact) -> Bool {
+        favoriteIDs.contains(artifact.id)
+    }
+
+    func toggleFavorite(_ artifact: Artifact) {
+        if favoriteIDs.contains(artifact.id) {
+            favoriteIDs.remove(artifact.id)
+        } else {
+            favoriteIDs.insert(artifact.id)
+        }
+        Self.saveFavorites(favoriteIDs, to: favoritesURL)
+    }
+
+    func displayName(for artifact: Artifact) -> String {
+        let custom = displayNames[artifact.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let custom, !custom.isEmpty {
+            return custom
+        }
+        return artifact.filename
+    }
+
+    func rename(_ artifact: Artifact, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == artifact.filename {
+            displayNames[artifact.id] = nil
+        } else {
+            displayNames[artifact.id] = trimmed
+        }
+        Self.saveNames(displayNames, to: displayNamesURL)
+    }
+
+    func textPreview(for artifact: Artifact, lineLimit: Int = 12) async -> String? {
+        let url = fileURL(for: artifact)
+        return await Task.detached(priority: .utility) {
+            guard let data = try? Data(contentsOf: url) else {
+                return nil
+            }
+            guard let text = String(data: data.prefix(8192), encoding: .utf8) else {
+                return nil
+            }
+            let lines = text
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .prefix(lineLimit)
+            let joined = lines.joined(separator: "\n")
+            return joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : joined
+        }.value
+    }
+
+    private static func loadFavorites(_ url: URL) -> Set<UUID> {
+        guard let data = try? Data(contentsOf: url),
+              let raw = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return Set(raw.compactMap(UUID.init(uuidString:)))
+    }
+
+    private static func saveFavorites(_ ids: Set<UUID>, to url: URL) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(ids.map(\.uuidString)) else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private static func loadNames(_ url: URL) -> [UUID: String] {
+        guard let data = try? Data(contentsOf: url),
+              let raw = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        var result: [UUID: String] = [:]
+        for (key, value) in raw where UUID(uuidString: key) != nil {
+            result[UUID(uuidString: key)!] = value
+        }
+        return result
+    }
+
+    private static func saveNames(_ names: [UUID: String], to url: URL) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var raw: [String: String] = [:]
+        for (id, value) in names {
+            raw[id.uuidString] = value
+        }
+        guard let data = try? JSONEncoder().encode(raw) else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
     }
 
     func refresh() {

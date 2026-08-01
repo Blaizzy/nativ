@@ -2,10 +2,33 @@ import AppKit
 import AVFoundation
 import PDFKit
 import SwiftUI
+import Vision
 
 enum ArtifactLayout {
     case grid
     case list
+}
+
+enum ArtifactDateFilter: String, CaseIterable, Identifiable {
+    case all = "Any date"
+    case today = "Today"
+    case week = "Past 7 days"
+    case month = "Past 30 days"
+
+    var id: String { rawValue }
+
+    func includes(_ date: Date) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .today:
+            return Calendar.current.isDateInToday(date)
+        case .week:
+            return date >= Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? .distantPast
+        case .month:
+            return date >= Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? .distantPast
+        }
+    }
 }
 
 enum ArtifactSort: String, CaseIterable, Identifiable {
@@ -69,6 +92,13 @@ struct ArtifactsView: View {
     @State private var inspectorArtifact: Artifact?
     @State private var groupByChat = true
     @State private var albumSessionID: UUID?
+    @State private var favoritesOnly = false
+    @State private var dateFilter: ArtifactDateFilter = .all
+    @State private var renameTarget: Artifact?
+    @State private var renameText = ""
+    @State private var cursorID: Artifact.ID?
+    @FocusState private var gridFocused: Bool
+    @FocusState private var searchFocused: Bool
 
     private var filtered: [Artifact] {
         var result = store.artifacts
@@ -77,6 +107,12 @@ struct ArtifactsView: View {
         }
         if let sourceFilter {
             result = result.filter { $0.source == sourceFilter }
+        }
+        if favoritesOnly {
+            result = result.filter { store.isFavorite($0) }
+        }
+        if dateFilter != .all {
+            result = result.filter { dateFilter.includes($0.createdAt) }
         }
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
@@ -227,25 +263,50 @@ struct ArtifactsView: View {
     }
 
     private func documentTextChunks(for artifact: Artifact) async -> [String] {
-        guard artifact.kind == .document else {
-            return []
-        }
         let url = store.fileURL(for: artifact)
-        let ext = artifact.fileExtension.lowercased()
-        return await Task.detached(priority: .utility) {
-            let raw: String
-            if ext == "pdf" {
-                guard let document = PDFDocument(url: url), let string = document.string else {
-                    return []
-                }
-                raw = string
-            } else {
-                guard let string = try? String(contentsOf: url, encoding: .utf8) else {
-                    return []
-                }
-                raw = string
+        switch artifact.kind {
+        case .image:
+            // On-device OCR (Apple Vision) so text inside screenshots/photos is searchable.
+            if let text = await Self.recognizeText(in: url), !text.isEmpty {
+                return Self.chunkedText(text, maxChunks: 4, chunkSize: 1200)
             }
-            return Self.chunkedText(raw, maxChunks: 8, chunkSize: 1200)
+            return []
+        case .video:
+            return []
+        case .document:
+            let ext = artifact.fileExtension.lowercased()
+            return await Task.detached(priority: .utility) {
+                let raw: String
+                if ext == "pdf" {
+                    guard let document = PDFDocument(url: url), let string = document.string else {
+                        return []
+                    }
+                    raw = string
+                } else {
+                    guard let string = try? String(contentsOf: url, encoding: .utf8) else {
+                        return []
+                    }
+                    raw = string
+                }
+                return Self.chunkedText(raw, maxChunks: 8, chunkSize: 1200)
+            }.value
+        }
+    }
+
+    private static func recognizeText(in url: URL) async -> String? {
+        await Task.detached(priority: .utility) {
+            guard let image = NSImage(contentsOf: url),
+                  let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                return nil
+            }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([request])
+            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            let text = lines.joined(separator: "\n")
+            return text.isEmpty ? nil : text
         }.value
     }
 
@@ -328,6 +389,10 @@ struct ArtifactsView: View {
             Divider()
             contentView
         }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($gridFocused)
+        .onKeyPress(action: handleKey)
         .onChange(of: search) { _, _ in
             scheduleSemanticSearch()
         }
@@ -395,6 +460,23 @@ struct ArtifactsView: View {
                 onClose: { inspectorArtifact = nil }
             )
         }
+        .alert("Rename artifact", isPresented: renamePresented) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let target = renameTarget {
+                    store.rename(target, to: renameText)
+                }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        }
+    }
+
+    private var renamePresented: Binding<Bool> {
+        Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )
     }
 
     @ViewBuilder
@@ -463,8 +545,8 @@ struct ArtifactsView: View {
 
     private func grid(_ artifacts: [Artifact]) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 172, maximum: 220), spacing: 14)],
-            spacing: 14
+            columns: [GridItem(.adaptive(minimum: 172, maximum: 220), spacing: 18)],
+            spacing: 18
         ) {
             ForEach(artifacts) { artifact in
                 ArtifactTile(
@@ -472,10 +554,26 @@ struct ArtifactsView: View {
                     store: store,
                     isSelecting: isSelecting,
                     isSelected: selection.contains(artifact.id),
-                    onInspect: { inspectorArtifact = artifact }
+                    isFavorite: store.isFavorite(artifact),
+                    onInspect: { inspectorArtifact = artifact },
+                    onToggleFavorite: { store.toggleFavorite(artifact) }
                 )
                 .onTapGesture { activate(artifact) }
                 .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
+                .overlay {
+                    if isSelecting {
+                        SelectionDrag(
+                            onToggle: { activate(artifact) },
+                            fileURLs: { selectedFileURLs(including: artifact) }
+                        )
+                    }
+                }
+                .overlay {
+                    if cursorID == artifact.id, !isSelecting {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.9), lineWidth: 2.5)
+                    }
+                }
                 .contextMenu { menu(for: artifact) }
             }
         }
@@ -517,29 +615,35 @@ struct ArtifactsView: View {
                 }
             }
 
-            Picker("", selection: $groupByChat) {
-                Text("By Date").tag(false)
-                Text("By Chat").tag(true)
-            }
-            .labelsHidden()
-            .frame(width: 108)
-
-            Picker("", selection: $sort) {
-                ForEach(ArtifactSort.allCases) { option in
-                    Text(option.rawValue).tag(option)
+            Menu {
+                Picker("", selection: $groupByChat) {
+                    Text("By Chat").tag(true)
+                    Text("By Date").tag(false)
                 }
+                .pickerStyle(.inline)
+                if !groupByChat {
+                    Divider()
+                    Picker("Sort", selection: $sort) {
+                        ForEach(ArtifactSort.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+            } label: {
+                Text(groupByChat ? "By Chat" : "By Date · \(sort.rawValue)")
             }
-            .labelsHidden()
-            .frame(width: 120)
-            .disabled(groupByChat)
+            .fixedSize()
 
-            Picker("", selection: $layout) {
-                Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
-                Image(systemName: "list.bullet").tag(ArtifactLayout.list)
+            if !groupByChat {
+                Picker("", selection: $layout) {
+                    Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
+                    Image(systemName: "list.bullet").tag(ArtifactLayout.list)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 84)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 84)
 
             Button(action: store.refresh) {
                 Image(systemName: "arrow.clockwise")
@@ -575,18 +679,28 @@ struct ArtifactsView: View {
             Spacer(minLength: 0)
 
             Button {
+                ArtifactShare.present(urls: selectedArtifacts.map { store.fileURL(for: $0) })
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .help("Share")
+            .disabled(selection.isEmpty)
+
+            Button {
                 store.exportToDirectory(selectedArtifacts)
             } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
+                Image(systemName: "square.and.arrow.down")
             }
+            .help("Export")
             .disabled(selection.isEmpty)
 
             Button(role: .destructive) {
                 pendingDelete = selectedArtifacts
                 isConfirmingDelete = true
             } label: {
-                Label("Delete", systemImage: "trash")
+                Image(systemName: "trash")
             }
+            .help("Delete")
             .disabled(selection.isEmpty)
         }
         .padding(.horizontal, 24)
@@ -596,6 +710,8 @@ struct ArtifactsView: View {
 
     private var filterBar: some View {
         HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
             filterChip(title: "All", isOn: kindFilter == nil && sourceFilter == nil) {
                 kindFilter = nil
                 sourceFilter = nil
@@ -617,13 +733,52 @@ struct ArtifactsView: View {
                 }
             }
 
-            Spacer(minLength: 12)
+            Divider().frame(height: 16)
+
+            filterChip(title: "Favorites", systemImage: favoritesOnly ? "star.fill" : "star", isOn: favoritesOnly) {
+                favoritesOnly.toggle()
+            }
+
+            Menu {
+                Picker("Date", selection: $dateFilter) {
+                    ForEach(ArtifactDateFilter.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "calendar")
+                    Text(dateFilter == .all ? "Date" : dateFilter.rawValue)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(dateFilter != .all ? Color.white : Color.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(dateFilter != .all ? Color.accentColor : Color(nsColor: .controlBackgroundColor), in: Capsule())
+            }
+            .menuIndicator(.hidden)
+            .fixedSize()
+                }
+                .padding(.vertical, 2)
+            }
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.88),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Search name or prompt", text: $search)
                     .textFieldStyle(.plain)
+                    .focused($searchFocused)
                     .frame(width: 200)
                 if !search.isEmpty {
                     Button {
@@ -642,6 +797,7 @@ struct ArtifactsView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
+            .shadow(color: .black.opacity(0.12), radius: 6, x: -3, y: 0)
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 12)
@@ -665,12 +821,21 @@ struct ArtifactsView: View {
         Button("Open Preview") { previewID = artifact.id }
         Button("Open in Default App") { store.open(artifact) }
         Divider()
+        Button(store.isFavorite(artifact) ? "Remove from Favorites" : "Add to Favorites") {
+            store.toggleFavorite(artifact)
+        }
+        Button("Rename…") {
+            renameText = store.displayName(for: artifact)
+            renameTarget = artifact
+        }
+        Divider()
         if artifact.kind == .image {
             Button("Use in Chat") { onUseInChat(artifact) }
             Button("Use as Image Reference") { onUseAsReference(artifact) }
         }
         Button("Go to Chat") { onOpenChat(artifact) }
         Divider()
+        Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)]) }
         Button("Reveal in Finder") { store.revealInFinder(artifact) }
         Button("Export…") { store.export(artifact) }
         Button("Copy") { store.copyToPasteboard(artifact) }
@@ -678,6 +843,48 @@ struct ArtifactsView: View {
         Button("Delete", role: .destructive) {
             pendingDelete = [artifact]
             isConfirmingDelete = true
+        }
+    }
+
+    private func selectedFileURLs(including artifact: Artifact) -> [URL] {
+        let ids = selection.contains(artifact.id) && !selection.isEmpty ? selection : [artifact.id]
+        return store.artifacts
+            .filter { ids.contains($0.id) }
+            .map { store.fileURL(for: $0) }
+    }
+
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard !searchFocused else { return .ignored }
+        let items = filtered
+        guard !items.isEmpty else { return .ignored }
+        let index = cursorID.flatMap { id in items.firstIndex { $0.id == id } }
+
+        if press.modifiers.contains(.command), press.characters.lowercased() == "a" {
+            isSelecting = true
+            selection = Set(items.map(\.id))
+            return .handled
+        }
+
+        switch press.key {
+        case .leftArrow, .upArrow:
+            cursorID = items[index.map { max(0, $0 - 1) } ?? 0].id
+            return .handled
+        case .rightArrow, .downArrow:
+            cursorID = items[index.map { min(items.count - 1, $0 + 1) } ?? 0].id
+            return .handled
+        case .space, .return:
+            if let cursorID {
+                previewID = cursorID
+            }
+            return .handled
+        case .delete:
+            if let index {
+                pendingDelete = [items[index]]
+                isConfirmingDelete = true
+            }
+            return .handled
+        default:
+            return .ignored
         }
     }
 
@@ -690,6 +897,8 @@ struct ArtifactsView: View {
                 }
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -768,12 +977,92 @@ private struct ArtifactDrag: ViewModifier {
     }
 }
 
+enum ArtifactShare {
+    @MainActor
+    static func present(urls: [URL]) {
+        guard !urls.isEmpty,
+              let window = NSApp.keyWindow ?? NSApp.mainWindow,
+              let view = window.contentView else {
+            return
+        }
+        let picker = NSSharingServicePicker(items: urls)
+        let anchor = NSRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+        picker.show(relativeTo: anchor, of: view, preferredEdge: .minY)
+    }
+}
+
+private struct SelectionDrag: NSViewRepresentable {
+    let onToggle: () -> Void
+    let fileURLs: () -> [URL]
+
+    func makeNSView(context: Context) -> NSView {
+        SelectionDragNSView(onToggle: onToggle, fileURLs: fileURLs)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? SelectionDragNSView else { return }
+        view.onToggle = onToggle
+        view.fileURLs = fileURLs
+    }
+}
+
+private final class SelectionDragNSView: NSView, NSDraggingSource {
+    var onToggle: () -> Void
+    var fileURLs: () -> [URL]
+    private var mouseDownPoint: NSPoint?
+
+    init(onToggle: @escaping () -> Void, fileURLs: @escaping () -> [URL]) {
+        self.onToggle = onToggle
+        self.fileURLs = fileURLs
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownPoint = event.locationInWindow
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = mouseDownPoint else { return }
+        let dx = event.locationInWindow.x - start.x
+        let dy = event.locationInWindow.y - start.y
+        guard (dx * dx + dy * dy) > 25 else { return }
+        mouseDownPoint = nil
+        let items = fileURLs().map { url -> NSDraggingItem in
+            let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+            item.setDraggingFrame(bounds, contents: NSWorkspace.shared.icon(forFile: url.path))
+            return item
+        }
+        guard !items.isEmpty else { return }
+        beginDraggingSession(with: items, event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if mouseDownPoint != nil {
+            onToggle()
+        }
+        mouseDownPoint = nil
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        .copy
+    }
+}
+
 struct ArtifactTile: View {
     let artifact: Artifact
     let store: ArtifactStore
     let isSelecting: Bool
     let isSelected: Bool
+    let isFavorite: Bool
     var onInspect: () -> Void = {}
+    var onToggleFavorite: () -> Void = {}
 
     @State private var isHovering = false
 
@@ -796,7 +1085,7 @@ struct ArtifactTile: View {
             }
             .overlay(alignment: .bottom) {
                 if isHovering, !isSelecting {
-                    Text(artifact.filename)
+                    Text(store.displayName(for: artifact))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
@@ -822,6 +1111,18 @@ struct ArtifactTile: View {
                         Image(systemName: "ellipsis.circle.fill")
                             .font(.system(size: 17))
                             .foregroundStyle(.white, .black.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .transition(.opacity)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if !isSelecting, isHovering || isFavorite {
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .font(.system(size: 14))
+                            .foregroundStyle(isFavorite ? Color.yellow : Color.white, .black.opacity(0.45))
                     }
                     .buttonStyle(.plain)
                     .padding(8)
@@ -900,10 +1201,25 @@ private struct ArtifactThumbnail: View {
     let size: CGSize
 
     @State private var image: NSImage?
+    @State private var textPreview: String?
+
+    static let textPreviewExtensions: Set<String> = [
+        "md", "markdown", "mdown", "mkd", "txt", "text", "log", "json", "csv", "tsv",
+        "py", "js", "ts", "jsx", "tsx", "swift", "java", "kt", "c", "cpp", "cc", "h",
+        "hpp", "rb", "go", "rs", "sh", "bash", "zsh", "php", "html", "htm", "css",
+        "scss", "xml", "yaml", "yml", "toml",
+    ]
+
+    private var isTextDocument: Bool {
+        artifact.kind == .document
+            && Self.textPreviewExtensions.contains(artifact.fileExtension.lowercased())
+    }
 
     var body: some View {
         Group {
-            if let image {
+            if isTextDocument, let textPreview {
+                textCard(textPreview)
+            } else if let image {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
@@ -913,7 +1229,34 @@ private struct ArtifactThumbnail: View {
         }
         .clipped()
         .task(id: artifact.id) {
-            image = await store.thumbnail(for: artifact, size: size)
+            if isTextDocument {
+                textPreview = await store.textPreview(for: artifact)
+            } else {
+                image = await store.thumbnail(for: artifact, size: size)
+            }
+        }
+    }
+
+    private func textCard(_ text: String) -> some View {
+        ZStack(alignment: .bottom) {
+            Color(nsColor: .textBackgroundColor)
+            Text(text)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+                .lineSpacing(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(8)
+            LinearGradient(
+                colors: [Color(nsColor: .textBackgroundColor).opacity(0), Color(nsColor: .textBackgroundColor)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 44)
+            .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            FileTypeIcon(fileExtension: artifact.fileExtension, size: 20).padding(6)
         }
     }
 
