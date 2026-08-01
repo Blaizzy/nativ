@@ -3395,38 +3395,38 @@ private struct ControlPanelRecentSessionRow: View {
                 .help(recent.title)
             }
 
-            if isHovering, !isSelecting {
-                Menu {
-                    rowMenuContents
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.caption)
-                        .frame(width: 24, height: 20)
-                        .contentShape(.rect)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .foregroundStyle(.secondary)
-                .help("Actions")
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .frame(width: 26, height: 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(isDeleteHovering ? Color.red.opacity(0.13) : Color.clear)
-                        )
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
-                .disabled(isDeleteDisabled)
-                .help("Delete \(recent.title)")
-                .opacity(isHovering && !isDeleteDisabled ? 1 : 0)
-                .allowsHitTesting(isHovering && !isDeleteDisabled)
-                .onHover { isDeleteHovering = $0 }
+            Menu {
+                rowMenuContents
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.caption)
+                    .frame(width: 24, height: 20)
+                    .contentShape(.rect)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Actions")
+            .opacity(isHovering && !isSelecting ? 1 : 0)
+            .allowsHitTesting(isHovering && !isSelecting)
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.caption)
+                    .frame(width: 26, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(isDeleteHovering ? Color.red.opacity(0.13) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
+            .disabled(isDeleteDisabled)
+            .help("Delete \(recent.title)")
+            .opacity(isHovering && !isSelecting && !isDeleteDisabled ? 1 : 0)
+            .allowsHitTesting(isHovering && !isSelecting && !isDeleteDisabled)
+            .onHover { isDeleteHovering = $0 }
         }
         .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
         .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
