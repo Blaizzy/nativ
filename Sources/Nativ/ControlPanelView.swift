@@ -232,7 +232,6 @@ struct ControlPanelView: View {
     @State private var isSelectingRecents = false
     @State private var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
     @State private var selectedFolderIDs: Set<UUID> = []
-    @State private var isPinningRecents = false
     @State private var isPinnedDropTargeted = false
     @State private var isSessionsDropTargeted = false
     @State private var reorderTargetID: ControlPanelRecentSession.ID?
@@ -364,10 +363,6 @@ struct ControlPanelView: View {
 
             if isSelectingRecents {
                 bulkSelectionBar
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 8)
-            } else if isPinningRecents {
-                pinModeBar
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
             } else {
@@ -650,7 +645,6 @@ struct ControlPanelView: View {
         ControlPanelFolderHeaderView(
             folder: folder,
             count: sessions(inFolder: folder.id).count,
-            isPinning: isPinningRecents,
             isSelecting: isSelectingRecents,
             isChecked: selectedFolderIDs.contains(folder.id),
             onToggleCollapse: {
@@ -885,20 +879,6 @@ struct ControlPanelView: View {
 
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
-                    enterPinMode()
-                }
-            } label: {
-                Image(systemName: "pin")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
-            .help("Pin chats or folders")
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
                     enterSelectMode()
                 }
             } label: {
@@ -926,31 +906,6 @@ struct ControlPanelView: View {
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
         }
-    }
-
-    private var pinModeBar: some View {
-        HStack(spacing: 6) {
-            Text("Tap chats or folders to pin")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 0)
-
-            Button("Done") {
-                withAnimation(.snappy(duration: 0.2)) {
-                    exitPinMode()
-                }
-            }
-            .font(.system(size: 12, weight: .medium))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.secondary.opacity(0.08))
-        )
     }
 
     private var bulkSelectionBar: some View {
@@ -1274,7 +1229,6 @@ struct ControlPanelView: View {
             isDeleteDisabled: isRecentDeleteDisabled(recent),
             canExport: canExportRecent(recent),
             isSelecting: isSelectingRecents,
-            isPinning: isPinningRecents,
             isChecked: selectedRecentIDs.contains(recent.id),
             onToggleSelect: {
                 toggleRecentSelection(recent)
@@ -1398,7 +1352,6 @@ struct ControlPanelView: View {
     }
 
     private func enterSelectMode() {
-        isPinningRecents = false
         selectedRecentIDs = []
         selectedFolderIDs = []
         isSelectingRecents = true
@@ -1408,17 +1361,6 @@ struct ControlPanelView: View {
         isSelectingRecents = false
         selectedRecentIDs = []
         selectedFolderIDs = []
-    }
-
-    private func enterPinMode() {
-        isSelectingRecents = false
-        selectedRecentIDs = []
-        selectedFolderIDs = []
-        isPinningRecents = true
-    }
-
-    private func exitPinMode() {
-        isPinningRecents = false
     }
 
     private func toggleRecentSelection(_ recent: ControlPanelRecentSession) {
@@ -3298,7 +3240,6 @@ private struct ControlPanelRecentSessionRow: View {
     let isDeleteDisabled: Bool
     let canExport: Bool
     let isSelecting: Bool
-    let isPinning: Bool
     let isChecked: Bool
     let onToggleSelect: () -> Void
     let onSelect: () -> Void
@@ -3342,8 +3283,6 @@ private struct ControlPanelRecentSessionRow: View {
                 Button {
                     if isSelecting {
                         onToggleSelect()
-                    } else if isPinning, recent.isChat {
-                        onTogglePin()
                     } else if isSelected, recent.isChat {
                         beginRename()
                     } else {
@@ -3356,11 +3295,6 @@ private struct ControlPanelRecentSessionRow: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
                                 .accessibilityLabel(isChecked ? "Selected" : "Not selected")
-                        } else if isPinning, recent.isChat {
-                            Image(systemName: recent.pinned ? "pin.fill" : "pin")
-                                .font(.system(size: 11))
-                                .foregroundStyle(recent.pinned ? Color.accentColor : Color.secondary)
-                                .accessibilityLabel(recent.pinned ? "Pinned" : "Not pinned")
                         } else {
                             Circle()
                                 .fill(isCurrent ? Color.accentColor : Color.clear)
@@ -3531,7 +3465,6 @@ private struct ControlPanelRecentSessionRow: View {
 private struct ControlPanelFolderHeaderView: View {
     let folder: ChatFolder
     let count: Int
-    let isPinning: Bool
     let isSelecting: Bool
     let isChecked: Bool
     let onToggleCollapse: () -> Void
@@ -3565,12 +3498,6 @@ private struct ControlPanelFolderHeaderView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            if isPinning {
-                Image(systemName: folder.isPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 9))
-                    .foregroundStyle(folder.isPinned ? Color.accentColor : Color.secondary)
-            }
-
             if isRenaming {
                 TextField("Name", text: $renameDraft)
                     .textFieldStyle(.plain)
@@ -3597,15 +3524,13 @@ private struct ControlPanelFolderHeaderView: View {
         .padding(.vertical, 5)
         .contentShape(.rect)
         .onTapGesture(count: 2) {
-            if !isSelecting && !isPinning {
+            if !isSelecting {
                 beginRename()
             }
         }
         .onTapGesture {
             if isSelecting {
                 onToggleSelect()
-            } else if isPinning {
-                onTogglePin()
             }
         }
         .contextMenu {
