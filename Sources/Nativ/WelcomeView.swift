@@ -153,11 +153,11 @@ private struct WelcomeView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: 760, maxHeight: 680)
+            .frame(maxWidth: 760, maxHeight: 900)
             .padding(.horizontal, 48)
             .padding(.vertical, 32)
         }
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 900, minHeight: 760)
         .task(id: modelSearchPath) {
             modelLibrary.scan(path: model.settings.modelSearchPath)
         }
@@ -265,7 +265,7 @@ private struct WelcomeView: View {
                         }
                         .padding(12)
                     }
-                    .frame(minHeight: 190, maxHeight: 280)
+                    .frame(minHeight: 340, maxHeight: .infinity)
 
                     if let modelScanMessage {
                         Divider()
