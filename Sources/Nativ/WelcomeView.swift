@@ -51,14 +51,14 @@ enum WelcomeModelTier: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
-    var precisionSummary: String {
+    var summary: String {
         switch self {
         case .fast:
-            return "4-bit precision · Smallest, quickest to download"
+            return "Small and quick — runs on any Mac"
         case .balanced:
-            return "6–8-bit precision · Best available fit for this Mac"
+            return "A capable daily driver for this Mac"
         case .smart:
-            return "BF16 precision · Highest quality"
+            return "The most capable models your memory can run"
         }
     }
 }
@@ -68,21 +68,21 @@ enum WelcomeModelCatalog {
         switch tier {
         case .fast:
             return [
-                "mlx-community/gemma-4-E4B-it-4bit",
-                "mlx-community/LFM2.5-VL-1.6B-4bit",
-                "mlx-community/Qwen3.5-0.8B-4bit"
+                "mlx-community/LFM2.5-VL-1.6B-8bit",
+                "mlx-community/Qwen3.5-0.8B-8bit",
+                "mlx-community/Qwen3-VL-2B-Instruct-4bit"
             ]
         case .balanced:
             return [
-                "mlx-community/gemma-4-E4B-it-8bit",
-                "mlx-community/LFM2.5-VL-1.6B-8bit",
-                "mlx-community/Qwen3.5-0.8B-8bit"
+                "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                "mlx-community/Qwen3.5-9B-4bit",
+                "mlx-community/Qwen3.5-4B-MLX-4bit"
             ]
         case .smart:
             return [
-                "mlx-community/gemma-4-E4B-it-bf16",
-                "mlx-community/LFM2.5-VL-1.6B-bf16",
-                "mlx-community/Qwen3.5-0.8B-bf16"
+                "mlx-community/Qwen2.5-VL-32B-Instruct-4bit",
+                "mlx-community/Qwen3.6-35B-A3B-4bit",
+                "mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit"
             ]
         }
     }
@@ -100,6 +100,16 @@ enum WelcomeModelCatalog {
 
     static func allModelIDs(for tier: WelcomeModelTier) -> [String] {
         recommendedModelIDs(for: tier) + [codingModelID(for: tier)]
+    }
+
+    static var allTierModelIDs: [String] {
+        var ids: [String] = []
+        for tier in WelcomeModelTier.allCases {
+            for id in allModelIDs(for: tier) where !ids.contains(id) {
+                ids.append(id)
+            }
+        }
+        return ids
     }
 }
 
@@ -164,9 +174,6 @@ private struct WelcomeView: View {
         .onChange(of: modelLibrary.isScanning) { _, isScanning in
             guard !isScanning else { return }
             loadRecommendedModelsIfNeeded()
-        }
-        .onChange(of: selectedTier) { _, _ in
-            requestRecommendedModels()
         }
         .onDisappear {
             modelLibrary.cancel()
@@ -324,7 +331,7 @@ private struct WelcomeView: View {
             .labelsHidden()
             .pickerStyle(.segmented)
 
-            Text(selectedTier.precisionSummary)
+            Text(selectedTier.summary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
@@ -575,8 +582,9 @@ private struct WelcomeView: View {
     }
 
     private var recommendedModels: [HuggingFaceModel] {
-        let ids = Set(WelcomeModelCatalog.recommendedModelIDs(for: selectedTier))
-        return hubLibrary.models.filter { ids.contains($0.id) && !$0.isPrivate && !$0.isGated }
+        WelcomeModelCatalog.recommendedModelIDs(for: selectedTier).compactMap { id in
+            hubLibrary.models.first { $0.id == id && !$0.isPrivate && !$0.isGated }
+        }
     }
 
     private var codingModel: HuggingFaceModel? {
@@ -645,7 +653,7 @@ private struct WelcomeView: View {
     private func requestRecommendedModels() {
         didRequestRecommendedModels = true
         hubLibrary.loadCurated(
-            ids: WelcomeModelCatalog.allModelIDs(for: selectedTier),
+            ids: WelcomeModelCatalog.allTierModelIDs,
             token: model.effectiveHuggingFaceToken
         )
     }
