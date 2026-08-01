@@ -359,7 +359,7 @@ struct ControlPanelView: View {
 
             sidebarNavigation
                 .padding(.horizontal, 10)
-                .padding(.bottom, 10)
+                .padding(.bottom, 5)
 
             if isSelectingRecents {
                 bulkSelectionBar
