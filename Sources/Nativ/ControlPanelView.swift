@@ -237,6 +237,7 @@ struct ControlPanelView: View {
     @State private var isSessionsDropTargeted = false
     @State private var reorderTargetID: ControlPanelRecentSession.ID?
     @State private var reorderInsertAfter = false
+    @State private var isFoldersDropTargeted = false
     @State private var pendingDeleteRecent: ControlPanelRecentSession?
     @State private var pendingDeleteFolder: ChatFolder?
     @State private var isConfirmingBulkDelete = false
@@ -565,7 +566,7 @@ struct ControlPanelView: View {
                 emptyPinnedHint
             } else {
                 ForEach(pinnedFolders) { folder in
-                    folderView(folder)
+                    folderView(folder, dropTargeted: isPinnedDropTargeted)
                 }
                 ForEach(pinnedSessions) { recent in
                     draggableRow(recent, isPinnedRow: true)
@@ -626,11 +627,13 @@ struct ControlPanelView: View {
                 emptyFoldersHint
             } else {
                 ForEach(unpinnedFolders) { folder in
-                    folderView(folder)
+                    folderView(folder, dropTargeted: isFoldersDropTargeted)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dropHighlight(isTargeted: isFoldersDropTargeted))
+        .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
     }
 
     private var emptyFoldersHint: some View {
@@ -643,7 +646,7 @@ struct ControlPanelView: View {
     }
 
     @ViewBuilder
-    private func folderView(_ folder: ChatFolder) -> some View {
+    private func folderView(_ folder: ChatFolder, dropTargeted: Bool) -> some View {
         ControlPanelFolderHeaderView(
             folder: folder,
             count: sessions(inFolder: folder.id).count,
@@ -687,10 +690,10 @@ struct ControlPanelView: View {
             ForEach(sessions(inFolder: folder.id)) { recent in
                 folderChatRow(recent, folderID: folder.id)
                     .overlay(alignment: .top) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter)
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && dropTargeted)
                     }
                     .overlay(alignment: .bottom) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter)
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && dropTargeted)
                     }
                     .padding(.leading, 12)
             }
