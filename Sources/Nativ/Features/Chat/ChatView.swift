@@ -424,13 +424,7 @@ final class ChatViewModel: ObservableObject {
         guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
             return
         }
-        if pinned {
-            for other in folders.indices {
-                folders[other].isPinned = (other == index)
-            }
-        } else {
-            folders[index].isPinned = false
-        }
+        folders[index].isPinned = pinned
         sessionStore.saveFolders(folders)
     }
 
