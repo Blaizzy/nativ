@@ -6,6 +6,28 @@ enum ArtifactLayout {
     case list
 }
 
+enum ArtifactDateFilter: String, CaseIterable, Identifiable {
+    case all = "Any date"
+    case today = "Today"
+    case week = "Past 7 days"
+    case month = "Past 30 days"
+
+    var id: String { rawValue }
+
+    func includes(_ date: Date) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .today:
+            return Calendar.current.isDateInToday(date)
+        case .week:
+            return date >= Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? .distantPast
+        case .month:
+            return date >= Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? .distantPast
+        }
+    }
+}
+
 enum ArtifactSort: String, CaseIterable, Identifiable {
     case newest = "Newest"
     case oldest = "Oldest"
@@ -60,6 +82,10 @@ struct ArtifactsView: View {
     @State private var inspectorArtifact: Artifact?
     @State private var groupByChat = true
     @State private var albumSessionID: UUID?
+    @State private var favoritesOnly = false
+    @State private var dateFilter: ArtifactDateFilter = .all
+    @State private var renameTarget: Artifact?
+    @State private var renameText = ""
 
     private var filtered: [Artifact] {
         let query = search.lowercased()
@@ -69,6 +95,12 @@ struct ArtifactsView: View {
         }
         if let sourceFilter {
             result = result.filter { $0.source == sourceFilter }
+        }
+        if favoritesOnly {
+            result = result.filter { store.isFavorite($0) }
+        }
+        if dateFilter != .all {
+            result = result.filter { dateFilter.includes($0.createdAt) }
         }
         if !query.isEmpty {
             result = result.filter { $0.searchText.contains(query) }
@@ -167,6 +199,23 @@ struct ArtifactsView: View {
                 onClose: { inspectorArtifact = nil }
             )
         }
+        .alert("Rename artifact", isPresented: renamePresented) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let target = renameTarget {
+                    store.rename(target, to: renameText)
+                }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        }
+    }
+
+    private var renamePresented: Binding<Bool> {
+        Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )
     }
 
     @ViewBuilder
@@ -244,7 +293,9 @@ struct ArtifactsView: View {
                     store: store,
                     isSelecting: isSelecting,
                     isSelected: selection.contains(artifact.id),
-                    onInspect: { inspectorArtifact = artifact }
+                    isFavorite: store.isFavorite(artifact),
+                    onInspect: { inspectorArtifact = artifact },
+                    onToggleFavorite: { store.toggleFavorite(artifact) }
                 )
                 .onTapGesture { activate(artifact) }
                 .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
@@ -385,6 +436,32 @@ struct ArtifactsView: View {
                 }
             }
 
+            Divider().frame(height: 16)
+
+            filterChip(title: "Favorites", systemImage: favoritesOnly ? "star.fill" : "star", isOn: favoritesOnly) {
+                favoritesOnly.toggle()
+            }
+
+            Menu {
+                Picker("Date", selection: $dateFilter) {
+                    ForEach(ArtifactDateFilter.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "calendar")
+                    Text(dateFilter == .all ? "Date" : dateFilter.rawValue)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(dateFilter != .all ? Color.white : Color.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(dateFilter != .all ? Color.accentColor : Color(nsColor: .controlBackgroundColor), in: Capsule())
+            }
+            .menuIndicator(.hidden)
+            .fixedSize()
+
             Spacer(minLength: 12)
 
             HStack(spacing: 6) {
@@ -432,6 +509,14 @@ struct ArtifactsView: View {
     private func menu(for artifact: Artifact) -> some View {
         Button("Open Preview") { previewID = artifact.id }
         Button("Open in Default App") { store.open(artifact) }
+        Divider()
+        Button(store.isFavorite(artifact) ? "Remove from Favorites" : "Add to Favorites") {
+            store.toggleFavorite(artifact)
+        }
+        Button("Rename…") {
+            renameText = store.displayName(for: artifact)
+            renameTarget = artifact
+        }
         Divider()
         if artifact.kind == .image {
             Button("Use in Chat") { onUseInChat(artifact) }
@@ -541,7 +626,9 @@ struct ArtifactTile: View {
     let store: ArtifactStore
     let isSelecting: Bool
     let isSelected: Bool
+    let isFavorite: Bool
     var onInspect: () -> Void = {}
+    var onToggleFavorite: () -> Void = {}
 
     @State private var isHovering = false
 
@@ -564,7 +651,7 @@ struct ArtifactTile: View {
             }
             .overlay(alignment: .bottom) {
                 if isHovering, !isSelecting {
-                    Text(artifact.filename)
+                    Text(store.displayName(for: artifact))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
@@ -590,6 +677,18 @@ struct ArtifactTile: View {
                         Image(systemName: "ellipsis.circle.fill")
                             .font(.system(size: 17))
                             .foregroundStyle(.white, .black.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .transition(.opacity)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if !isSelecting, isHovering || isFavorite {
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .font(.system(size: 14))
+                            .foregroundStyle(isFavorite ? Color.yellow : Color.white, .black.opacity(0.45))
                     }
                     .buttonStyle(.plain)
                     .padding(8)
