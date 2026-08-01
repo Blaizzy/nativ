@@ -443,6 +443,26 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertTrue(settings.modelConfigs.isEmpty)
     }
 
+    func testModelConfigsAreExportedToServerLaunchEnvironment() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.thinkingBudgetEnabled = true
+        settings.thinkingBudget = 1_024
+        settings.rememberProfile(forModel: "org/main")
+
+        let json = try XCTUnwrap(settings.launchEnvironment["NATIV_MODEL_CONFIGS"])
+        let decoded = try JSONDecoder().decode(
+            [String: ModelConfigProfile].self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(decoded["org/main"]?.thinkingEnabled, true)
+        XCTAssertEqual(decoded["org/main"]?.thinkingBudget, 1_024)
+    }
+
+    func testLaunchEnvironmentOmitsModelConfigsWhenEmpty() {
+        XCTAssertNil(NativSettings().launchEnvironment["NATIV_MODEL_CONFIGS"])
+    }
+
     private func temporarySettingsURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
