@@ -689,12 +689,11 @@ private struct ServerAPIAuthenticationPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .confirmationDialog(
+        .alert(
             "Remove the server API token?",
-            isPresented: $showsRemovalConfirmation,
-            titleVisibility: .visible
+            isPresented: $showsRemovalConfirmation
         ) {
-            Button("Remove Token", role: .destructive) {
+            Button("Remove Token") {
                 onSetToken(nil)
             }
             .keyboardShortcut(.defaultAction)
@@ -1133,12 +1132,11 @@ private struct HuggingFaceAuthenticationPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .confirmationDialog(
+        .alert(
             logoutConfirmationTitle,
-            isPresented: $showsLogoutConfirmation,
-            titleVisibility: .visible
+            isPresented: $showsLogoutConfirmation
         ) {
-            Button(logoutConfirmationAction, role: .destructive) {
+            Button(logoutConfirmationAction) {
                 performLogout()
             }
             .keyboardShortcut(.defaultAction)

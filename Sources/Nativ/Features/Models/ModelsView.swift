@@ -1073,7 +1073,7 @@ private struct InstalledModelRow: View {
             )
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
-            Button("Delete Model", role: .destructive, action: onDelete)
+            Button("Delete Model", action: onDelete)
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
