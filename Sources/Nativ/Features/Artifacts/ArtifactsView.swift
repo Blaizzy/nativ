@@ -86,6 +86,9 @@ struct ArtifactsView: View {
     @State private var dateFilter: ArtifactDateFilter = .all
     @State private var renameTarget: Artifact?
     @State private var renameText = ""
+    @State private var cursorID: Artifact.ID?
+    @FocusState private var gridFocused: Bool
+    @FocusState private var searchFocused: Bool
 
     private var filtered: [Artifact] {
         let query = search.lowercased()
@@ -135,6 +138,10 @@ struct ArtifactsView: View {
             Divider()
             contentView
         }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($gridFocused)
+        .onKeyPress(action: handleKey)
         .overlay {
             if previewID != nil {
                 ArtifactPreview(
@@ -299,6 +306,20 @@ struct ArtifactsView: View {
                 )
                 .onTapGesture { activate(artifact) }
                 .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
+                .overlay {
+                    if isSelecting {
+                        SelectionDrag(
+                            onToggle: { activate(artifact) },
+                            fileURLs: { selectedFileURLs(including: artifact) }
+                        )
+                    }
+                }
+                .overlay {
+                    if cursorID == artifact.id, !isSelecting {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.9), lineWidth: 2.5)
+                    }
+                }
                 .contextMenu { menu(for: artifact) }
             }
         }
@@ -394,6 +415,13 @@ struct ArtifactsView: View {
             Spacer(minLength: 0)
 
             Button {
+                ArtifactShare.present(urls: selectedArtifacts.map { store.fileURL(for: $0) })
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .disabled(selection.isEmpty)
+
+            Button {
                 store.exportToDirectory(selectedArtifacts)
             } label: {
                 Label("Export", systemImage: "square.and.arrow.down")
@@ -469,6 +497,7 @@ struct ArtifactsView: View {
                     .foregroundStyle(.secondary)
                 TextField("Search name or prompt", text: $search)
                     .textFieldStyle(.plain)
+                    .focused($searchFocused)
                     .frame(width: 200)
                 if !search.isEmpty {
                     Button {
@@ -524,6 +553,7 @@ struct ArtifactsView: View {
         }
         Button("Go to Chat") { onOpenChat(artifact) }
         Divider()
+        Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)]) }
         Button("Reveal in Finder") { store.revealInFinder(artifact) }
         Button("Export…") { store.export(artifact) }
         Button("Copy") { store.copyToPasteboard(artifact) }
@@ -531,6 +561,48 @@ struct ArtifactsView: View {
         Button("Delete", role: .destructive) {
             pendingDelete = [artifact]
             isConfirmingDelete = true
+        }
+    }
+
+    private func selectedFileURLs(including artifact: Artifact) -> [URL] {
+        let ids = selection.contains(artifact.id) && !selection.isEmpty ? selection : [artifact.id]
+        return store.artifacts
+            .filter { ids.contains($0.id) }
+            .map { store.fileURL(for: $0) }
+    }
+
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard !searchFocused else { return .ignored }
+        let items = filtered
+        guard !items.isEmpty else { return .ignored }
+        let index = cursorID.flatMap { id in items.firstIndex { $0.id == id } }
+
+        if press.modifiers.contains(.command), press.characters.lowercased() == "a" {
+            isSelecting = true
+            selection = Set(items.map(\.id))
+            return .handled
+        }
+
+        switch press.key {
+        case .leftArrow, .upArrow:
+            cursorID = items[index.map { max(0, $0 - 1) } ?? 0].id
+            return .handled
+        case .rightArrow, .downArrow:
+            cursorID = items[index.map { min(items.count - 1, $0 + 1) } ?? 0].id
+            return .handled
+        case .space, .return:
+            if let cursorID {
+                previewID = cursorID
+            }
+            return .handled
+        case .delete:
+            if let index {
+                pendingDelete = [items[index]]
+                isConfirmingDelete = true
+            }
+            return .handled
+        default:
+            return .ignored
         }
     }
 
@@ -618,6 +690,84 @@ private struct ArtifactDrag: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+enum ArtifactShare {
+    @MainActor
+    static func present(urls: [URL]) {
+        guard !urls.isEmpty,
+              let window = NSApp.keyWindow ?? NSApp.mainWindow,
+              let view = window.contentView else {
+            return
+        }
+        let picker = NSSharingServicePicker(items: urls)
+        let anchor = NSRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+        picker.show(relativeTo: anchor, of: view, preferredEdge: .minY)
+    }
+}
+
+private struct SelectionDrag: NSViewRepresentable {
+    let onToggle: () -> Void
+    let fileURLs: () -> [URL]
+
+    func makeNSView(context: Context) -> NSView {
+        SelectionDragNSView(onToggle: onToggle, fileURLs: fileURLs)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? SelectionDragNSView else { return }
+        view.onToggle = onToggle
+        view.fileURLs = fileURLs
+    }
+}
+
+private final class SelectionDragNSView: NSView, NSDraggingSource {
+    var onToggle: () -> Void
+    var fileURLs: () -> [URL]
+    private var mouseDownPoint: NSPoint?
+
+    init(onToggle: @escaping () -> Void, fileURLs: @escaping () -> [URL]) {
+        self.onToggle = onToggle
+        self.fileURLs = fileURLs
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownPoint = event.locationInWindow
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = mouseDownPoint else { return }
+        let dx = event.locationInWindow.x - start.x
+        let dy = event.locationInWindow.y - start.y
+        guard (dx * dx + dy * dy) > 25 else { return }
+        mouseDownPoint = nil
+        let items = fileURLs().map { url -> NSDraggingItem in
+            let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+            item.setDraggingFrame(bounds, contents: NSWorkspace.shared.icon(forFile: url.path))
+            return item
+        }
+        guard !items.isEmpty else { return }
+        beginDraggingSession(with: items, event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if mouseDownPoint != nil {
+            onToggle()
+        }
+        mouseDownPoint = nil
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        .copy
     }
 }
 
