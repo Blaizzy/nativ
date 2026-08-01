@@ -44,17 +44,63 @@ struct WelcomeGateView: View {
     }
 }
 
+enum WelcomeModelTier: String, CaseIterable, Identifiable {
+    case fast = "Fast"
+    case balanced = "Balanced"
+    case smart = "Smart"
+
+    var id: Self { self }
+
+    var precisionSummary: String {
+        switch self {
+        case .fast:
+            return "4-bit precision · Smallest, quickest to download"
+        case .balanced:
+            return "6–8-bit precision · Best available fit for this Mac"
+        case .smart:
+            return "BF16 precision · Highest quality"
+        }
+    }
+}
+
 enum WelcomeModelCatalog {
-    static let curatedModelIDs: [String] = [
-        "mlx-community/LFM2.5-VL-450M-6bit",
-        "lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit",
-        "mlx-community/LFM2.5-VL-1.6B-4bit",
-        "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",
-        "lmstudio-community/Qwen3.5-9B-MLX-4bit",
-        "lmstudio-community/GLM-4.7-Flash-MLX-4bit",
-        "mlx-community/Qwen3-VL-32B-Instruct-4bit",
-        "mlx-community/gpt-oss-120b-MXFP4-Q4"
-    ]
+    static func recommendedModelIDs(for tier: WelcomeModelTier) -> [String] {
+        switch tier {
+        case .fast:
+            return [
+                "mlx-community/gemma-4-E4B-it-4bit",
+                "mlx-community/LFM2.5-VL-1.6B-4bit",
+                "mlx-community/Qwen3.5-0.8B-4bit"
+            ]
+        case .balanced:
+            return [
+                "mlx-community/gemma-4-E4B-it-8bit",
+                "mlx-community/LFM2.5-VL-1.6B-8bit",
+                "mlx-community/Qwen3.5-0.8B-8bit"
+            ]
+        case .smart:
+            return [
+                "mlx-community/gemma-4-E4B-it-bf16",
+                "mlx-community/LFM2.5-VL-1.6B-bf16",
+                "mlx-community/Qwen3.5-0.8B-bf16"
+            ]
+        }
+    }
+
+    static func codingModelID(for tier: WelcomeModelTier) -> String {
+        switch tier {
+        case .fast:
+            return "mlx-community/Qwen2.5-Coder-3B-Instruct-4bit"
+        case .balanced:
+            return "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+        case .smart:
+            return "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
+        }
+    }
+
+    static func allModelIDs(for tier: WelcomeModelTier) -> [String] {
+        recommendedModelIDs(for: tier) + [codingModelID(for: tier)]
+    }
 }
 
 private struct WelcomeView: View {
@@ -69,6 +115,7 @@ private struct WelcomeView: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
     @State private var step = Step.model
     @State private var selectedModelID: String?
+    @State private var selectedTier: WelcomeModelTier = .balanced
     @State private var didRequestRecommendedModels = false
     @State private var showsAPIKeyEditor = false
     @State private var serverAPIKey: String
@@ -117,6 +164,9 @@ private struct WelcomeView: View {
         .onChange(of: modelLibrary.isScanning) { _, isScanning in
             guard !isScanning else { return }
             loadRecommendedModelsIfNeeded()
+        }
+        .onChange(of: selectedTier) { _, _ in
+            requestRecommendedModels()
         }
         .onDisappear {
             modelLibrary.cancel()
@@ -250,10 +300,13 @@ private struct WelcomeView: View {
 
     @ViewBuilder
     private var recommendedModelsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Recommended downloads")
-                    .font(.caption.weight(.semibold))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "memorychip")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(deviceMemoryLabel)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("Hugging Face")
@@ -263,50 +316,118 @@ private struct WelcomeView: View {
             .padding(.horizontal, 4)
             .padding(.top, 4)
 
-            if hubLibrary.isSearching && recommendedModels.isEmpty {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Finding models for this Mac…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 54)
-            } else if recommendedModels.isEmpty {
-                Label(
-                    hubLibrary.error == nil
-                        ? "No recommended models are available right now."
-                        : "Couldn’t load recommended models.",
-                    systemImage: hubLibrary.error == nil
-                        ? "shippingbox"
-                        : "wifi.exclamationmark"
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 54)
-            } else {
-                ForEach(recommendedModels) { hubModel in
-                    WelcomeDownloadModelRow(
-                        model: hubModel,
-                        isDownloaded: isInstalled(hubModel.id),
-                        isSelected: selectedModelID == hubModel.id,
-                        isDownloading: downloadManager.isDownloading(hubModel.id),
-                        downloadProgress: downloadManager.progress(for: hubModel.id),
-                        downloadBlockedReason: downloadManager.capacityBlocker(
-                            sizeBytes: hubModel.sizeBytes,
-                            cachePath: model.settings.modelSearchPath
-                        ),
-                        downloadError: downloadManager.errorByModelID[hubModel.id],
-                        onSelect: { selectedModelID = hubModel.id },
-                        onDownload: { downloadRecommendedModel(hubModel) },
-                        onCancel: { downloadManager.removeDownload(hubModel.id) }
-                    )
+            Picker("", selection: $selectedTier) {
+                ForEach(WelcomeModelTier.allCases) { tier in
+                    Text(tier.rawValue).tag(tier)
                 }
             }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+
+            Text(selectedTier.precisionSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            HStack {
+                Text("Recommended models")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if !recommendedModels.isEmpty {
+                    Text("\(recommendedFitCount) fit")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 4)
+
+            recommendedModelRows
+
+            Divider()
+                .padding(.vertical, 2)
+
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Coding agent")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+
+            codingAgentRow
         }
+    }
+
+    @ViewBuilder
+    private var recommendedModelRows: some View {
+        if hubLibrary.isSearching && recommendedModels.isEmpty {
+            searchingPlaceholder
+        } else if recommendedModels.isEmpty {
+            emptyRecommendedLabel
+        } else {
+            ForEach(recommendedModels) { hubModel in
+                downloadRow(for: hubModel)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var codingAgentRow: some View {
+        if let codingModel {
+            downloadRow(for: codingModel)
+        } else if hubLibrary.isSearching {
+            searchingPlaceholder
+        } else {
+            emptyRecommendedLabel
+        }
+    }
+
+    private var searchingPlaceholder: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Finding models for this Mac…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 54)
+    }
+
+    private var emptyRecommendedLabel: some View {
+        Label(
+            hubLibrary.error == nil
+                ? "No recommended models are available right now."
+                : "Couldn’t load recommended models.",
+            systemImage: hubLibrary.error == nil ? "shippingbox" : "wifi.exclamationmark"
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 54)
+    }
+
+    private func downloadRow(for hubModel: HuggingFaceModel) -> some View {
+        WelcomeDownloadModelRow(
+            model: hubModel,
+            isDownloaded: isInstalled(hubModel.id),
+            isSelected: selectedModelID == hubModel.id,
+            isDownloading: downloadManager.isDownloading(hubModel.id),
+            downloadProgress: downloadManager.progress(for: hubModel.id),
+            downloadBlockedReason: downloadManager.capacityBlocker(
+                sizeBytes: hubModel.sizeBytes,
+                cachePath: model.settings.modelSearchPath
+            ),
+            downloadError: downloadManager.errorByModelID[hubModel.id],
+            onSelect: { selectedModelID = hubModel.id },
+            onDownload: { downloadRecommendedModel(hubModel) },
+            onCancel: { downloadManager.removeDownload(hubModel.id) }
+        )
     }
 
     private var apiKeyStep: some View {
@@ -454,7 +575,25 @@ private struct WelcomeView: View {
     }
 
     private var recommendedModels: [HuggingFaceModel] {
-        hubLibrary.models.filter { !$0.isPrivate && !$0.isGated }
+        let ids = Set(WelcomeModelCatalog.recommendedModelIDs(for: selectedTier))
+        return hubLibrary.models.filter { ids.contains($0.id) && !$0.isPrivate && !$0.isGated }
+    }
+
+    private var codingModel: HuggingFaceModel? {
+        let id = WelcomeModelCatalog.codingModelID(for: selectedTier)
+        return hubLibrary.models.first { $0.id == id && !$0.isPrivate && !$0.isGated }
+    }
+
+    private var recommendedFitCount: Int {
+        recommendedModels.filter { $0.memoryEstimate?.isUsable ?? true }.count
+    }
+
+    private var deviceMemoryLabel: String {
+        let gb = ByteCountFormatter.string(
+            fromByteCount: Int64(ProcessInfo.processInfo.physicalMemory),
+            countStyle: .memory
+        )
+        return "\(gb) unified memory"
     }
 
     private func isInstalled(_ repoID: String) -> Bool {
@@ -506,7 +645,7 @@ private struct WelcomeView: View {
     private func requestRecommendedModels() {
         didRequestRecommendedModels = true
         hubLibrary.loadCurated(
-            ids: WelcomeModelCatalog.curatedModelIDs,
+            ids: WelcomeModelCatalog.allModelIDs(for: selectedTier),
             token: model.effectiveHuggingFaceToken
         )
     }
