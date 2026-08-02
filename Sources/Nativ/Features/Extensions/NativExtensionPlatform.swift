@@ -343,6 +343,13 @@ final class NativExtensionManager: ObservableObject {
             @unknown default:
                 return .notRequested
             }
+        case .systemAudioCapture:
+            if NativSystemPermissionController.hasScreenCaptureAccess() {
+                return .granted
+            }
+            return requestedPermissions.contains(permission.rawValue)
+                ? .denied
+                : .notRequested
         case .accessibilityInsertText:
             if NativSystemPermissionController.hasInsertTextAccess() {
                 return .granted
@@ -365,7 +372,7 @@ final class NativExtensionManager: ObservableObject {
             return nil
         }
         switch permission {
-        case .microphone, .accessibilityInsertText:
+        case .microphone, .systemAudioCapture, .accessibilityInsertText:
             return status == .denied ? "Open Settings" : "Request"
         case .notifications:
             return nil
@@ -389,6 +396,14 @@ final class NativExtensionManager: ObservableObject {
             case .authorized:
                 refreshPermissionStatuses()
             @unknown default:
+                refreshPermissionStatuses()
+            }
+        case .systemAudioCapture:
+            markPermissionRequested(permission)
+            if NativSystemPermissionController.requestScreenCaptureAccess() {
+                refreshPermissionStatuses()
+            } else {
+                NativSystemPermissionController.openScreenCaptureSettings()
                 refreshPermissionStatuses()
             }
         case .accessibilityInsertText:

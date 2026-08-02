@@ -10,6 +10,7 @@ final class VoiceDictationExtension: NativHostExtension {
     let manifest: NativExtensionManifest
 
     private let coordinator = VoiceCaptureCoordinator()
+    private let audioCaptureLibrary = AudioCaptureLibrary()
     private var isActive = false
 
     init(bundle: Bundle = .main) {
@@ -23,6 +24,7 @@ final class VoiceDictationExtension: NativHostExtension {
             return
         }
         coordinator.transcriptionConfigurationProvider = context.transcriptionConfiguration
+        audioCaptureLibrary.transcriptionConfigurationProvider = context.transcriptionConfiguration
         coordinator.onOpenSpeechModels = {
             context.openSpeechModels()
             context.showMainWindow()
@@ -36,7 +38,9 @@ final class VoiceDictationExtension: NativHostExtension {
             return
         }
         coordinator.stop()
+        audioCaptureLibrary.shutdown()
         coordinator.transcriptionConfigurationProvider = nil
+        audioCaptureLibrary.transcriptionConfigurationProvider = nil
         coordinator.onOpenSpeechModels = nil
         isActive = false
     }
@@ -51,6 +55,7 @@ final class VoiceDictationExtension: NativHostExtension {
         return AnyView(
             AudioView(
                 model: context.model,
+                captureLibrary: audioCaptureLibrary,
                 titleLeadingInset: context.titleLeadingInset,
                 onOpenSpeechModels: context.openSpeechModels
             )
@@ -61,7 +66,7 @@ final class VoiceDictationExtension: NativHostExtension {
         guard id == Self.showRecordingsCommandID else {
             return
         }
-        coordinator.showRecordingsInFinder()
+        audioCaptureLibrary.revealLibrary()
     }
 
     private static func loadBundledManifest(
@@ -91,7 +96,7 @@ final class VoiceDictationExtension: NativHostExtension {
         version: "1.0.0",
         minimumNativVersion: "0.1.0",
         displayName: "Audio",
-        summary: "Private, local audio capabilities including voice dictation, transcription analytics, configurable shortcuts, and speech-to-text model selection.",
+        summary: "Private, local audio capabilities including meeting capture, voice notes, transcription, summaries, dictation, analytics, and shortcuts.",
         developer: "Nativ",
         systemImage: "waveform.badge.mic",
         included: true,
@@ -109,7 +114,7 @@ final class VoiceDictationExtension: NativHostExtension {
             commands: [
                 .init(
                     id: showRecordingsCommandID,
-                    title: "Show Recordings",
+                    title: "Show Audio Library",
                     systemImage: "waveform"
                 )
             ],
@@ -138,6 +143,7 @@ final class VoiceDictationExtension: NativHostExtension {
         ),
         permissions: [
             .microphone,
+            .systemAudioCapture,
             .accessibilityInsertText,
             .modelsSpeechToText,
             .overlay,

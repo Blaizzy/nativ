@@ -1,6 +1,34 @@
 import Combine
 import Foundation
 
+enum AudioRecordKind: String, Codable, CaseIterable, Sendable {
+    case dictation
+    case voiceNote
+    case meeting
+
+    var title: String {
+        switch self {
+        case .dictation:
+            "Dictation"
+        case .voiceNote:
+            "Voice note"
+        case .meeting:
+            "Meeting"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .dictation:
+            "text.cursor"
+        case .voiceNote:
+            "mic.fill"
+        case .meeting:
+            "person.2.wave.2"
+        }
+    }
+}
+
 struct AudioTranscriptionRecord: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let recordedAt: Date
@@ -9,6 +37,21 @@ struct AudioTranscriptionRecord: Codable, Equatable, Identifiable, Sendable {
     let transcript: String
     let modelID: String?
     let applicationName: String?
+    let kind: AudioRecordKind?
+    let title: String?
+    let audioFileName: String?
+    let summary: String?
+
+    var resolvedKind: AudioRecordKind {
+        kind ?? .dictation
+    }
+
+    var displayTitle: String {
+        if let title, !title.isEmpty {
+            return title
+        }
+        return resolvedKind.title
+    }
 
     var wordCount: Int {
         AudioAnalyticsStore.wordCount(in: transcript)
@@ -130,6 +173,10 @@ final class AudioAnalyticsStore: ObservableObject {
         durationSeconds: TimeInterval?,
         modelID: String?,
         applicationName: String?,
+        kind: AudioRecordKind? = nil,
+        title: String? = nil,
+        persistAudioReference: Bool = false,
+        summary: String? = nil,
         recordedAt: Date? = nil,
         updatedAt: Date = Date()
     ) {
@@ -146,11 +193,66 @@ final class AudioAnalyticsStore: ObservableObject {
             durationSeconds: durationSeconds ?? existing?.durationSeconds,
             transcript: transcript,
             modelID: modelID ?? existing?.modelID,
-            applicationName: applicationName ?? existing?.applicationName
+            applicationName: applicationName ?? existing?.applicationName,
+            kind: kind ?? existing?.kind,
+            title: title ?? existing?.title,
+            audioFileName: persistAudioReference
+                ? recordingURL.lastPathComponent
+                : existing?.audioFileName,
+            summary: summary ?? existing?.summary
         )
         records.removeAll { $0.id == id }
         records.append(record)
         records.sort { $0.recordedAt > $1.recordedAt }
+        save()
+    }
+
+    func addCapture(
+        recordingURL: URL,
+        kind: AudioRecordKind,
+        title: String,
+        durationSeconds: TimeInterval?
+    ) {
+        upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "",
+            durationSeconds: durationSeconds,
+            modelID: nil,
+            applicationName: nil,
+            kind: kind,
+            title: title,
+            persistAudioReference: true
+        )
+    }
+
+    func updateSummary(_ summary: String, for recordID: String) {
+        guard let existing = record(withID: recordID) else {
+            return
+        }
+        let record = AudioTranscriptionRecord(
+            id: existing.id,
+            recordedAt: existing.recordedAt,
+            updatedAt: Date(),
+            durationSeconds: existing.durationSeconds,
+            transcript: existing.transcript,
+            modelID: existing.modelID,
+            applicationName: existing.applicationName,
+            kind: existing.kind,
+            title: existing.title,
+            audioFileName: existing.audioFileName,
+            summary: summary
+        )
+        records.removeAll { $0.id == recordID }
+        records.append(record)
+        records.sort { $0.recordedAt > $1.recordedAt }
+        save()
+    }
+
+    func removeRecord(withID recordID: String) {
+        guard records.contains(where: { $0.id == recordID }) else {
+            return
+        }
+        records.removeAll { $0.id == recordID }
         save()
     }
 
@@ -193,7 +295,11 @@ final class AudioAnalyticsStore: ObservableObject {
                     durationSeconds: nil,
                     transcript: transcript,
                     modelID: nil,
-                    applicationName: nil
+                    applicationName: nil,
+                    kind: nil,
+                    title: nil,
+                    audioFileName: nil,
+                    summary: nil
                 )
             )
             changed = true

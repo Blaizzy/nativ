@@ -85,4 +85,37 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records.first?.wordCount, 4)
         XCTAssertNil(store.records.first?.durationSeconds)
     }
+
+    func testPersistsMeetingAudioTranscriptAndSummaryMetadata() throws {
+        let recordingURL = temporaryDirectory.appendingPathComponent("meeting.m4a")
+        try Data([0x00]).write(to: recordingURL)
+
+        store.addCapture(
+            recordingURL: recordingURL,
+            kind: .meeting,
+            title: "Weekly planning",
+            durationSeconds: 1_800
+        )
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "We agreed to ship the audio library on Friday.",
+            durationSeconds: 1_800,
+            modelID: "local-asr",
+            applicationName: nil,
+            kind: .meeting,
+            title: "Weekly planning",
+            persistAudioReference: true
+        )
+        store.updateSummary("- Ship on Friday", for: "meeting")
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        let record = try XCTUnwrap(reloaded.records.first)
+        XCTAssertEqual(record.resolvedKind, .meeting)
+        XCTAssertEqual(record.displayTitle, "Weekly planning")
+        XCTAssertEqual(record.audioFileName, "meeting.m4a")
+        XCTAssertEqual(record.summary, "- Ship on Friday")
+        XCTAssertEqual(record.durationSeconds, 1_800)
+    }
 }

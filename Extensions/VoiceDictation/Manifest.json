@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "minimumNativVersion": "0.1.0",
   "displayName": "Audio",
-  "summary": "Private, local audio capabilities including voice dictation, transcription analytics, configurable shortcuts, and speech-to-text model selection.",
+  "summary": "Private, local audio capabilities including meeting capture, voice notes, transcription, summaries, dictation, analytics, and shortcuts.",
   "developer": "Nativ",
   "systemImage": "waveform.badge.mic",
   "included": true,
@@ -23,7 +23,7 @@
     "commands": [
       {
         "id": "com.nativ.voice-dictation.show-recordings",
-        "title": "Show Recordings",
+        "title": "Show Audio Library",
         "systemImage": "waveform"
       }
     ],
@@ -61,6 +61,7 @@
   },
   "permissions": [
     "microphone",
+    "audio.systemCapture",
     "accessibility.insertText",
     "models.speechToText",
     "overlay",

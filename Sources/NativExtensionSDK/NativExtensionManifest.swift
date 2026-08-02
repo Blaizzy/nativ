@@ -7,6 +7,7 @@ public enum NativExtensionRuntimeKind: String, Codable, Hashable, Sendable {
 
 public enum NativExtensionPermission: String, Codable, CaseIterable, Hashable, Sendable {
     case microphone
+    case systemAudioCapture = "audio.systemCapture"
     case accessibilityInsertText = "accessibility.insertText"
     case modelsSpeechToText = "models.speechToText"
     case overlay
@@ -17,6 +18,8 @@ public enum NativExtensionPermission: String, Codable, CaseIterable, Hashable, S
         switch self {
         case .microphone:
             "Microphone"
+        case .systemAudioCapture:
+            "System audio"
         case .accessibilityInsertText:
             "Insert text"
         case .modelsSpeechToText:

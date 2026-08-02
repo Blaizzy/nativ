@@ -6,6 +6,7 @@ struct VoiceTranscriptionConfiguration {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
     let selectedModelID: String?
+    let languageModelID: String?
     let serverBaseURL: URL
     let serverAPIKey: String?
     let serverIsRunning: Bool
@@ -126,7 +127,9 @@ final class VoiceCaptureCoordinator {
             }
 
             do {
-                try self.recorder.start()
+                try self.recorder.start(
+                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
+                )
                 self.overlay.didStartRecording()
             } catch {
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
