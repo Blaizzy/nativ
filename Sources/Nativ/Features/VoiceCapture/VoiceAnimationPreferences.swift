@@ -54,9 +54,9 @@ final class VoiceAnimationPreferences: ObservableObject {
     static let shared = VoiceAnimationPreferences()
 
     static let recordingStyles: [VoiceCaptureAnimationStyle] = [
+        .verticalRecorder,
         .gradientIsland,
         .notchShelf,
-        .verticalRecorder,
     ]
 
     static let dictationStyles: [VoiceCaptureAnimationStyle] = [
