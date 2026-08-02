@@ -37,6 +37,11 @@ private enum AudioDestination: String, CaseIterable, Identifiable {
     }
 }
 
+private enum AudioAnimationPurpose {
+    case dictation
+    case recording
+}
+
 @MainActor
 struct AudioView: View {
     @ObservedObject var model: NativModel
@@ -146,13 +151,23 @@ struct AudioView: View {
                 get: { captureLibrary.lastErrorMessage != nil },
                 set: { isPresented in
                     if !isPresented {
-                        captureLibrary.lastErrorMessage = nil
+                        captureLibrary.clearLastError()
                     }
                 }
             )
         ) {
-            Button("OK", role: .cancel) {
-                captureLibrary.lastErrorMessage = nil
+            if captureLibrary.shouldOfferScreenCaptureSettings {
+                Button("Open System Settings") {
+                    captureLibrary.clearLastError()
+                    NativSystemPermissionController.openScreenCaptureSettings()
+                }
+                Button("Not Now", role: .cancel) {
+                    captureLibrary.clearLastError()
+                }
+            } else {
+                Button("OK", role: .cancel) {
+                    captureLibrary.clearLastError()
+                }
             }
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
@@ -738,15 +753,35 @@ struct AudioView: View {
             Spacer()
 
             if captureLibrary.phase == .recording {
+                Button(role: .destructive) {
+                    Task {
+                        await captureLibrary.deleteCurrentRecording()
+                    }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button {
+                    Task {
+                        await captureLibrary.restart()
+                    }
+                } label: {
+                    Label("Restart", systemImage: "arrow.counterclockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
                 Button {
                     Task {
                         await captureLibrary.stop()
                     }
                 } label: {
-                    Label("Stop & transcribe", systemImage: "stop.fill")
+                    Label("Complete", systemImage: "checkmark")
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .tint(.green)
                 .controlSize(.large)
             }
         }
@@ -1056,19 +1091,25 @@ struct AudioView: View {
     }
 
     private var animationPicker: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 300), spacing: 14)],
-                alignment: .leading,
-                spacing: 14
-            ) {
-                ForEach(VoiceCaptureAnimationStyle.allCases) { style in
-                    animationCard(style)
-                }
-            }
+        VStack(alignment: .leading, spacing: 28) {
+            animationSection(
+                title: "Voice dictation",
+                subtitle: "Shown while you dictate text with a global shortcut.",
+                styles: VoiceCaptureAnimationStyle.allCases,
+                purpose: .dictation
+            )
+
+            Divider()
+
+            animationSection(
+                title: "Recordings",
+                subtitle: "Shown while a meeting or voice note keeps recording across apps.",
+                styles: VoiceAnimationPreferences.recordingStyles,
+                purpose: .recording
+            )
 
             Label(
-                "Gradient Island wraps the camera in a pill. Wide Notch extends the physical cutout sideways without increasing its height. Displays without a cutout use the centered floating fallback.",
+                "Notch styles appear around the camera on supported MacBooks. Other displays use a centered pill at the top of the screen.",
                 systemImage: "info.circle"
             )
             .font(.caption)
@@ -1076,16 +1117,52 @@ struct AudioView: View {
         }
     }
 
-    private func animationCard(
-        _ style: VoiceCaptureAnimationStyle
+    private func animationSection(
+        title: String,
+        subtitle: String,
+        styles: [VoiceCaptureAnimationStyle],
+        purpose: AudioAnimationPurpose
     ) -> some View {
-        Button {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 300), spacing: 14)],
+                alignment: .leading,
+                spacing: 14
+            ) {
+                ForEach(styles) { style in
+                    animationCard(style, purpose: purpose)
+                }
+            }
+        }
+    }
+
+    private func animationCard(
+        _ style: VoiceCaptureAnimationStyle,
+        purpose: AudioAnimationPurpose
+    ) -> some View {
+        let isSelected = selectedAnimationStyle(for: purpose) == style
+
+        return Button {
             withAnimation(.snappy(duration: 0.18)) {
-                animations.selectedStyle = style
+                selectAnimationStyle(style, for: purpose)
             }
         } label: {
             VStack(alignment: .leading, spacing: 14) {
-                animationPreview(style)
+                Group {
+                    if purpose == .recording {
+                        recordingAnimationPreview(style)
+                    } else {
+                        animationPreview(style)
+                    }
+                }
                     .frame(maxWidth: .infinity, minHeight: 112)
                     .background(
                         Color.black.opacity(0.92),
@@ -1094,15 +1171,15 @@ struct AudioView: View {
 
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(style.title)
+                        Text(animationTitle(for: style, purpose: purpose))
                             .font(.headline)
                             .foregroundStyle(.primary)
-                        Text(style.subtitle)
+                        Text(animationSubtitle(for: style, purpose: purpose))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text(style.locationLabel)
+                        Text(animationLocation(for: style, purpose: purpose))
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(Color.accentColor)
                             .padding(.horizontal, 8)
@@ -1117,13 +1194,13 @@ struct AudioView: View {
                     Spacer(minLength: 8)
 
                     Image(
-                        systemName: animations.selectedStyle == style
+                        systemName: isSelected
                             ? "checkmark.circle.fill"
                             : "circle"
                     )
                     .font(.title3)
                     .foregroundStyle(
-                        animations.selectedStyle == style
+                        isSelected
                             ? Color.accentColor
                             : Color.secondary
                     )
@@ -1138,17 +1215,170 @@ struct AudioView: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(
-                        animations.selectedStyle == style
+                        isSelected
                             ? Color.accentColor
                             : Color.primary.opacity(0.08),
-                        lineWidth: animations.selectedStyle == style ? 1.5 : 0.75
+                        lineWidth: isSelected ? 1.5 : 0.75
                     )
             }
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(
-            animations.selectedStyle == style ? .isSelected : []
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func selectedAnimationStyle(
+        for purpose: AudioAnimationPurpose
+    ) -> VoiceCaptureAnimationStyle {
+        purpose == .dictation
+            ? animations.selectedStyle
+            : animations.recordingStyle
+    }
+
+    private func selectAnimationStyle(
+        _ style: VoiceCaptureAnimationStyle,
+        for purpose: AudioAnimationPurpose
+    ) {
+        if purpose == .dictation {
+            animations.selectedStyle = style
+        } else {
+            animations.recordingStyle = style
+        }
+    }
+
+    private func animationTitle(
+        for style: VoiceCaptureAnimationStyle,
+        purpose: AudioAnimationPurpose
+    ) -> String {
+        guard purpose == .recording else {
+            return style.title
+        }
+        return style == .notchShelf ? "Notch Recorder" : "Floating Recorder"
+    }
+
+    private func animationSubtitle(
+        for style: VoiceCaptureAnimationStyle,
+        purpose: AudioAnimationPurpose
+    ) -> String {
+        guard purpose == .recording else {
+            return style.subtitle
+        }
+        return style == .notchShelf
+            ? "Widens the MacBook notch with the Nativ mark and recording controls."
+            : "A compact Nativ recording pill with restart, delete, and finish controls."
+    }
+
+    private func animationLocation(
+        for style: VoiceCaptureAnimationStyle,
+        purpose: AudioAnimationPurpose
+    ) -> String {
+        guard purpose == .recording else {
+            return style.locationLabel
+        }
+        return style == .notchShelf ? "Around camera" : "Top of screen"
+    }
+
+    private func recordingAnimationPreview(
+        _ style: VoiceCaptureAnimationStyle
+    ) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            let pulse = (sin(time * 2.2) + 1) / 2
+            let level = Float(0.24 + (pulse * 0.56))
+
+            ZStack(alignment: .top) {
+                if style == .notchShelf {
+                    recordingNotchPreview(level: level)
+                } else {
+                    recordingPillPreview(level: level)
+                        .frame(maxHeight: .infinity, alignment: .center)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 112)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.04, green: 0.06, blue: 0.09),
+                                Color(red: 0.08, green: 0.09, blue: 0.12),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            }
+        }
+    }
+
+    private func recordingPillPreview(level: Float) -> some View {
+        HStack(spacing: 7) {
+            recordingMarkPreview(level: level)
+            Text("0:08")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.76))
+                .frame(width: 36, alignment: .trailing)
+            recordingControlPreview("arrow.counterclockwise", tint: .white)
+            recordingControlPreview("trash.fill", tint: .red)
+            recordingControlPreview("checkmark", tint: .green)
+        }
+        .padding(.horizontal, 10)
+        .frame(width: 226, height: 46)
+        .background(Color.black.opacity(0.96), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+        }
+    }
+
+    private func recordingNotchPreview(level: Float) -> some View {
+        ZStack {
+            VoiceWideNotchShape(
+                shoulderWidth: 3,
+                shoulderDepth: 4,
+                bottomCornerRadius: 11
+            )
+            .fill(Color.black.opacity(0.985))
+
+            HStack(spacing: 0) {
+                HStack(spacing: 5) {
+                    recordingMarkPreview(level: level)
+                    recordingControlPreview("arrow.counterclockwise", tint: .white)
+                    recordingControlPreview("trash.fill", tint: .red)
+                }
+                .frame(width: 96)
+
+                Color.clear.frame(width: 78)
+
+                HStack(spacing: 6) {
+                    Text("0:08")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.76))
+                    recordingControlPreview("checkmark", tint: .green)
+                }
+                .frame(width: 78)
+            }
+        }
+        .frame(width: 252, height: 38)
+    }
+
+    private func recordingMarkPreview(level: Float) -> some View {
+        NativAudioCaptureMark(
+            kind: .meeting,
+            state: .recording,
+            level: level
         )
+        .frame(width: 24, height: 24)
+    }
+
+    private func recordingControlPreview(
+        _ systemImage: String,
+        tint: Color
+    ) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(tint)
+            .frame(width: 20, height: 20)
+            .background(tint.opacity(0.14), in: Circle())
     }
 
     @ViewBuilder

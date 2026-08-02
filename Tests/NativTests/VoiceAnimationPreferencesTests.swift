@@ -10,6 +10,7 @@ final class VoiceAnimationPreferencesTests: XCTestCase {
         let preferences = VoiceAnimationPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.selectedStyle, .cursorWaveform)
+        XCTAssertEqual(preferences.recordingStyle, .gradientIsland)
     }
 
     func testPersistsGradientIslandSelection() throws {
@@ -40,5 +41,22 @@ final class VoiceAnimationPreferencesTests: XCTestCase {
 
         let restored = VoiceAnimationPreferences(defaults: defaults)
         XCTAssertEqual(restored.selectedStyle, .notchShelf)
+    }
+
+    func testPersistsRecordingSelectionSeparately() throws {
+        let suiteName = "VoiceAnimationPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var preferences: VoiceAnimationPreferences? = VoiceAnimationPreferences(
+            defaults: defaults
+        )
+        preferences?.selectedStyle = .cursorWaveform
+        preferences?.recordingStyle = .notchShelf
+        preferences = nil
+
+        let restored = VoiceAnimationPreferences(defaults: defaults)
+        XCTAssertEqual(restored.selectedStyle, .cursorWaveform)
+        XCTAssertEqual(restored.recordingStyle, .notchShelf)
     }
 }
