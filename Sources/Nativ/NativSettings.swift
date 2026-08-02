@@ -321,6 +321,7 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    var chatFontScale: Double
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
@@ -362,7 +363,8 @@ struct NativSettings: Codable, Equatable {
         structuredOutputSchema: String = Self.defaultStructuredOutputSchema,
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
-        prefixCacheBlockSize: Int = 16
+        prefixCacheBlockSize: Int = 16,
+        chatFontScale: Double = Self.defaultChatFontScale
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
@@ -404,6 +406,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.chatFontScale = chatFontScale
     }
 
     enum CodingKeys: String, CodingKey {
@@ -448,6 +451,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case chatFontScale
     }
 
     init(from decoder: Decoder) throws {
@@ -495,6 +499,7 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixCachingEnabled) ?? defaults.prefixCachingEnabled
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
+        chatFontScale = try container.decodeIfPresent(Double.self, forKey: .chatFontScale) ?? defaults.chatFontScale
     }
 
     func encode(to encoder: Encoder) throws {
@@ -538,6 +543,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(chatFontScale, forKey: .chatFontScale)
     }
 
     static func load(
@@ -642,7 +648,25 @@ struct NativSettings: Codable, Equatable {
         settings.structuredOutputName = Self.nonEmpty(settings.structuredOutputName, fallback: "Response")
         settings.prefixCacheBlocks = min(max(settings.prefixCacheBlocks, 1), 1_048_576)
         settings.prefixCacheBlockSize = min(max(settings.prefixCacheBlockSize, 1), 4096)
+        settings.chatFontScale = min(max(settings.chatFontScale, Self.minChatFontScale), Self.maxChatFontScale)
         return settings
+    }
+
+    static let chatFontScaleSteps: [Double] = [0.85, 1.0, 1.15, 1.3, 1.5]
+    static let defaultChatFontScale: Double = 1.0
+    static let minChatFontScale: Double = 0.85
+    static let maxChatFontScale: Double = 1.5
+
+    mutating func stepChatFontScale(by delta: Int) {
+        let steps = Self.chatFontScaleSteps
+        let current = steps.enumerated().min {
+            abs($0.element - chatFontScale) < abs($1.element - chatFontScale)
+        }?.offset ?? 0
+        chatFontScale = steps[min(max(current + delta, 0), steps.count - 1)]
+    }
+
+    mutating func resetChatFontScale() {
+        chatFontScale = Self.defaultChatFontScale
     }
 
     func hasSameLaunchConfiguration(as other: Self) -> Bool {

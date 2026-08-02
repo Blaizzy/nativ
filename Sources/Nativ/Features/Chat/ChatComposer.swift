@@ -130,12 +130,13 @@ struct ChatComposer: View {
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
-                        }
+                        },
+                        fontScale: model.settings.chatFontScale
                     )
 
                     if viewModel.draft.isEmpty {
                         Text("Message")
-                            .font(.body)
+                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
                             .foregroundStyle(.tertiary)
                             .padding(textInset)
                             .offset(x: 4)
@@ -1246,6 +1247,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let onSubmit: () -> Void
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
+    var fontScale: Double = 1.0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1263,7 +1265,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.onPasteImage = context.coordinator.handlePasteImage
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
-        textView.font = NSFont.preferredFont(forTextStyle: .body)
+        textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = .clear
         textView.drawsBackground = false
@@ -1302,6 +1304,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
+        textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
         guard textView.string != text else {
             context.coordinator.reportContentHeight()

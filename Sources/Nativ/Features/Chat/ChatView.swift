@@ -70,6 +70,7 @@ struct ChatView: View {
             }
         }
         .background(Color.nativMainContentBackground)
+        .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
     private var selectedModelID: String? {
@@ -2372,6 +2373,7 @@ private struct ChatMessageText: View {
     let content: String
     let rendersMarkdown: Bool
     let isStreaming: Bool
+    @Environment(\.chatFontScale) private var chatFontScale
 
     @ViewBuilder
     var body: some View {
@@ -2382,11 +2384,11 @@ private struct ChatMessageText: View {
             )
             .textual.structuredTextStyle(.gitHub)
             .textual.textSelection(.enabled)
-            .font(.body)
+            .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else {
             renderedText
                 .textSelection(.enabled)
-                .font(.body)
+                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         }
     }
 
