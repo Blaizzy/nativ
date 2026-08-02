@@ -48,6 +48,7 @@ struct AudioView: View {
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
     @ObservedObject private var animations: VoiceAnimationPreferences
+    @ObservedObject private var sounds: VoiceSoundPreferences
     @ObservedObject private var captureLibrary: AudioCaptureLibrary
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var inputDevices = AudioInputDevicePreferences.shared
@@ -71,6 +72,7 @@ struct AudioView: View {
         analytics: AudioAnalyticsStore? = nil,
         shortcuts: VoiceShortcutPreferences? = nil,
         animations: VoiceAnimationPreferences? = nil,
+        sounds: VoiceSoundPreferences? = nil,
         titleLeadingInset: CGFloat = 0,
         onOpenSpeechModels: @escaping () -> Void
     ) {
@@ -81,6 +83,7 @@ struct AudioView: View {
         _analytics = ObservedObject(wrappedValue: analytics ?? .shared)
         _shortcuts = ObservedObject(wrappedValue: shortcuts ?? .shared)
         _animations = ObservedObject(wrappedValue: animations ?? .shared)
+        _sounds = ObservedObject(wrappedValue: sounds ?? .shared)
     }
 
     var body: some View {
@@ -1114,6 +1117,100 @@ struct AudioView: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            Divider()
+
+            soundPicker
+        }
+    }
+
+    private var soundPicker: some View {
+        let selectedStyle = sounds.selectedStyle
+
+        return VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Sounds")
+                    .font(.headline)
+                Text("Choose the start and finish cues used across all audio capture.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Image(systemName: "waveform.badge.mic")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.blue)
+                        .frame(width: 38, height: 38)
+                        .background(
+                            Color.blue.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 10)
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Capture sound")
+                            .font(.headline)
+                        Text("Used for voice dictation, meetings, and voice notes.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 12)
+                }
+
+                HStack(spacing: 10) {
+                    Menu {
+                        ForEach(VoiceCaptureSoundStyle.allCases) { style in
+                            Button {
+                                sounds.selectedStyle = style
+                            } label: {
+                                HStack {
+                                    Label(
+                                        style.title,
+                                        systemImage: style.systemImage
+                                    )
+                                    if selectedStyle == style {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 0) {
+                            Image(systemName: selectedStyle.systemImage)
+                                .frame(width: 14, alignment: .center)
+                            Text(selectedStyle.title)
+                                .padding(.leading, 14)
+                        }
+                    }
+                    .menuStyle(.button)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button {
+                        VoiceCaptureSoundPlayer.preview.playStart(
+                            style: selectedStyle
+                        )
+                    } label: {
+                        Label("Preview", systemImage: "speaker.wave.2.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedStyle == .none)
+                }
+
+                Text(selectedStyle.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .frame(maxWidth: 620, alignment: .leading)
+            .background(
+                Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.75)
+            }
         }
     }
 
