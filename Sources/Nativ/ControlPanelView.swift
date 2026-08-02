@@ -303,6 +303,10 @@ struct ControlPanelView: View {
                     cachePath: settings.modelSearchPath,
                     token: model.effectiveHuggingFaceToken
                 ) {
+                    EmbeddingModelPreparer.prepare(
+                        repoID: modelID,
+                        searchPath: settings.modelSearchPath
+                    )
                     embeddingLibrary.scan(
                         path: settings.modelSearchPath,
                         additionalPaths: settings.additionalModelSearchPaths
@@ -323,6 +327,12 @@ struct ControlPanelView: View {
                     )
                     NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
                 }
+            },
+            prepareModel: {
+                EmbeddingModelPreparer.prepare(
+                    repoID: modelID,
+                    searchPath: settings.modelSearchPath
+                )
             }
         )
     }
