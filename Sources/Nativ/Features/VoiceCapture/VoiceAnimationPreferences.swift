@@ -5,6 +5,7 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
     case cursorWaveform
     case gradientIsland
     case notchShelf
+    case verticalRecorder
 
     var id: String { rawValue }
 
@@ -16,6 +17,8 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
             "Gradient Island"
         case .notchShelf:
             "Wide Notch"
+        case .verticalRecorder:
+            "Vertical Recorder"
         }
     }
 
@@ -27,6 +30,8 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
             "A liquid-glass listening orb with start and finish cues."
         case .notchShelf:
             "Widens the MacBook notch sideways without making it taller."
+        case .verticalRecorder:
+            "A movable recording meter for the side of your screen."
         }
     }
 
@@ -38,6 +43,8 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
             "Beside camera"
         case .notchShelf:
             "Around camera"
+        case .verticalRecorder:
+            "Right side"
         }
     }
 }
@@ -47,6 +54,13 @@ final class VoiceAnimationPreferences: ObservableObject {
     static let shared = VoiceAnimationPreferences()
 
     static let recordingStyles: [VoiceCaptureAnimationStyle] = [
+        .gradientIsland,
+        .notchShelf,
+        .verticalRecorder,
+    ]
+
+    static let dictationStyles: [VoiceCaptureAnimationStyle] = [
+        .cursorWaveform,
         .gradientIsland,
         .notchShelf,
     ]

@@ -1095,7 +1095,7 @@ struct AudioView: View {
             animationSection(
                 title: "Voice dictation",
                 subtitle: "Shown while you dictate text with a global shortcut.",
-                styles: VoiceCaptureAnimationStyle.allCases,
+                styles: VoiceAnimationPreferences.dictationStyles,
                 purpose: .dictation
             )
 
@@ -1149,6 +1149,7 @@ struct AudioView: View {
         purpose: AudioAnimationPurpose
     ) -> some View {
         let isSelected = selectedAnimationStyle(for: purpose) == style
+        let previewHeight: CGFloat = purpose == .recording ? 180 : 112
 
         return Button {
             withAnimation(.snappy(duration: 0.18)) {
@@ -1163,7 +1164,11 @@ struct AudioView: View {
                         animationPreview(style)
                     }
                 }
-                    .frame(maxWidth: .infinity, minHeight: 112)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: previewHeight,
+                        maxHeight: previewHeight
+                    )
                     .background(
                         Color.black.opacity(0.92),
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1252,7 +1257,14 @@ struct AudioView: View {
         guard purpose == .recording else {
             return style.title
         }
-        return style == .notchShelf ? "Notch Recorder" : "Floating Recorder"
+        return switch style {
+        case .notchShelf:
+            "Notch Recorder"
+        case .verticalRecorder:
+            "Side Recorder"
+        case .cursorWaveform, .gradientIsland:
+            "Floating Recorder"
+        }
     }
 
     private func animationSubtitle(
@@ -1262,9 +1274,14 @@ struct AudioView: View {
         guard purpose == .recording else {
             return style.subtitle
         }
-        return style == .notchShelf
-            ? "Widens the MacBook notch with the Nativ mark and recording controls."
-            : "A compact Nativ recording pill with restart, delete, and finish controls."
+        return switch style {
+        case .notchShelf:
+            "Widens the MacBook notch with the Nativ mark and recording controls."
+        case .verticalRecorder:
+            "A vertical live meter you can drag anywhere along your screen."
+        case .cursorWaveform, .gradientIsland:
+            "A compact Nativ recording pill with restart, delete, and finish controls."
+        }
     }
 
     private func animationLocation(
@@ -1274,7 +1291,14 @@ struct AudioView: View {
         guard purpose == .recording else {
             return style.locationLabel
         }
-        return style == .notchShelf ? "Around camera" : "Top of screen"
+        return switch style {
+        case .notchShelf:
+            "Around camera"
+        case .verticalRecorder:
+            "Movable · right side"
+        case .cursorWaveform, .gradientIsland:
+            "Top of screen"
+        }
     }
 
     private func recordingAnimationPreview(
@@ -1288,12 +1312,19 @@ struct AudioView: View {
             ZStack(alignment: .top) {
                 if style == .notchShelf {
                     recordingNotchPreview(level: level)
+                } else if style == .verticalRecorder {
+                    recordingVerticalPreview(level: level)
+                        .frame(maxHeight: .infinity, alignment: .center)
                 } else {
                     recordingPillPreview(level: level)
                         .frame(maxHeight: .infinity, alignment: .center)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 112)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: 180,
+                maxHeight: 180
+            )
             .background {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(
@@ -1359,6 +1390,70 @@ struct AudioView: View {
             }
         }
         .frame(width: 252, height: 38)
+    }
+
+    private func recordingVerticalPreview(level: Float) -> some View {
+        VStack(spacing: 0) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.32))
+                .frame(height: 8)
+                .padding(.bottom, 5)
+
+            NativAudioCaptureMark(
+                kind: .meeting,
+                state: .recording,
+                level: level
+            )
+            .frame(width: 24, height: 24)
+            .padding(.bottom, 6)
+
+            VoiceVerticalLiveWaveform(level: level, isRecording: true)
+                .frame(width: 28, height: 52)
+                .clipped()
+                .padding(.bottom, 6)
+
+            Text("0:08")
+                .font(
+                    .system(
+                        size: 8,
+                        weight: .semibold,
+                        design: .monospaced
+                    )
+                )
+                .foregroundStyle(.white.opacity(0.76))
+                .frame(height: 9)
+                .padding(.bottom, 5)
+
+            VStack(spacing: 3) {
+                recordingCompactControlPreview(
+                    "arrow.counterclockwise",
+                    tint: .white
+                )
+                recordingCompactControlPreview("stop.fill", tint: .red)
+            }
+        }
+        .padding(.vertical, 6)
+        .frame(width: 58, height: 166)
+        .background(
+            Color.black.opacity(0.96),
+            in: RoundedRectangle(cornerRadius: 27, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 27, style: .continuous)
+                .strokeBorder(.white.opacity(0.16), lineWidth: 0.7)
+        }
+    }
+
+    private func recordingCompactControlPreview(
+        _ systemImage: String,
+        tint: Color
+    ) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 6.5, weight: .bold))
+            .foregroundStyle(tint)
+            .frame(width: 15, height: 15)
+            .background(tint.opacity(0.14), in: Circle())
     }
 
     private func recordingMarkPreview(level: Float) -> some View {
@@ -1506,6 +1601,8 @@ struct AudioView: View {
                         )
                     )
             }
+        case .verticalRecorder:
+            recordingVerticalPreview(level: 0.62)
         }
     }
 

@@ -59,4 +59,19 @@ final class VoiceAnimationPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.selectedStyle, .cursorWaveform)
         XCTAssertEqual(restored.recordingStyle, .notchShelf)
     }
+
+    func testPersistsVerticalRecorderSelection() throws {
+        let suiteName = "VoiceAnimationPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var preferences: VoiceAnimationPreferences? = VoiceAnimationPreferences(
+            defaults: defaults
+        )
+        preferences?.recordingStyle = .verticalRecorder
+        preferences = nil
+
+        let restored = VoiceAnimationPreferences(defaults: defaults)
+        XCTAssertEqual(restored.recordingStyle, .verticalRecorder)
+    }
 }
