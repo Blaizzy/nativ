@@ -88,6 +88,7 @@ final class VoiceCaptureOverlayController {
     private static let waveformPanelSize = NSSize(width: 184, height: 58)
     private static let floatingIslandPanelSize = NSSize(width: 128, height: 52)
     private static let floatingAudioCapturePanelSize = NSSize(width: 226, height: 52)
+    private static let verticalAudioCapturePanelSize = NSSize(width: 72, height: 258)
     private let model: VoiceCaptureOverlayModel
     private let animationPreferences: VoiceAnimationPreferences
     private let waveformPanel: VoiceCapturePanel
@@ -182,16 +183,19 @@ final class VoiceCaptureOverlayController {
         model.elapsed = 0
         model.showsNoSpeechFeedback = false
         if presentation.audioCaptureKind != nil {
-            activeStyle = animationPreferences.recordingStyle == .notchShelf
-                ? .notchShelf
-                : .gradientIsland
+            let recordingStyle = animationPreferences.recordingStyle
+            activeStyle = VoiceAnimationPreferences.recordingStyles.contains(
+                recordingStyle
+            ) ? recordingStyle : .gradientIsland
         } else {
             activeStyle = animationPreferences.selectedStyle
         }
         model.islandStyle = activeStyle
         islandPanel.ignoresMouseEvents = presentation.audioCaptureKind == nil
+        islandPanel.isMovable = activeStyle == .verticalRecorder
+        islandPanel.isMovableByWindowBackground = activeStyle == .verticalRecorder
         waveformPanel.clearPinnedFrame()
-        if presentation.audioCaptureKind == nil {
+        if presentation.audioCaptureKind == nil || activeStyle == .verticalRecorder {
             islandPanel.clearPinnedFrame()
         }
         waveformPanel.orderOut(nil)
@@ -203,6 +207,9 @@ final class VoiceCaptureOverlayController {
             waveformPanel.orderFrontRegardless()
         case .gradientIsland, .notchShelf:
             positionIslandPanel(on: screen(containing: cursorPosition))
+            islandPanel.orderFrontRegardless()
+        case .verticalRecorder:
+            positionVerticalRecorderPanel(on: screen(containing: cursorPosition))
             islandPanel.orderFrontRegardless()
         }
     }
@@ -428,6 +435,23 @@ final class VoiceCaptureOverlayController {
                 width: size.width,
                 height: size.height
             )
+        )
+    }
+
+    private func positionVerticalRecorderPanel(on screen: NSScreen) {
+        let size = Self.verticalAudioCapturePanelSize
+        let visibleFrame = screen.visibleFrame
+        let edgeInset: CGFloat = 12
+        model.islandUsesCameraCutout = false
+        islandPanel.clearPinnedFrame()
+        islandPanel.setFrame(
+            NSRect(
+                x: visibleFrame.maxX - size.width - edgeInset,
+                y: visibleFrame.midY - (size.height / 2),
+                width: size.width,
+                height: size.height
+            ),
+            display: true
         )
     }
 
@@ -1285,7 +1309,11 @@ private struct VoiceCaptureIslandView: View {
 
     var body: some View {
         Group {
-            if model.islandUsesCameraCutout {
+            if model.islandStyle == .verticalRecorder,
+               model.presentation.audioCaptureKind != nil
+            {
+                VoiceCaptureVerticalRecorderView(model: model)
+            } else if model.islandUsesCameraCutout {
                 if model.islandStyle == .notchShelf {
                     VoiceCaptureWideNotchView(model: model)
                 } else {
@@ -1403,6 +1431,116 @@ private struct VoiceCaptureIslandView: View {
         case .noSpeech:
             "No speech detected"
         }
+    }
+}
+
+private struct VoiceCaptureVerticalRecorderView: View {
+    @ObservedObject var model: VoiceCaptureOverlayModel
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            let finishProgress = voiceCaptureFinishProgress(
+                state: model.state,
+                stateChangedAt: model.stateChangedAt,
+                date: timeline.date
+            )
+
+            VStack(spacing: 0) {
+                ZStack {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.3))
+
+                    VoiceCapturePanelDragHandle()
+                }
+                .frame(width: 38, height: 10)
+                .help("Drag to move")
+                .padding(.bottom, 8)
+
+                if let kind = model.presentation.audioCaptureKind {
+                    NativAudioCaptureMark(
+                        kind: kind,
+                        state: model.state,
+                        level: model.level
+                    )
+                    .frame(width: 32, height: 32)
+                    .padding(.bottom, 10)
+                }
+
+                VoiceVerticalLiveWaveform(
+                    level: model.state == .finishing
+                        ? model.closingLevel
+                        : model.level,
+                    isRecording: model.state == .recording
+                        || model.state == .finishing
+                )
+                .frame(width: 34, height: 72)
+                .clipped()
+                .opacity(model.state == .transcribing ? 0.28 : 1)
+                .padding(.bottom, 10)
+
+                Text(formattedElapsed)
+                    .font(
+                        .system(
+                            size: 10,
+                            weight: .semibold,
+                            design: .monospaced
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.76))
+                    .frame(height: 16)
+                    .padding(.bottom, 8)
+
+                VStack(spacing: 6) {
+                    VoiceCaptureActionButton(
+                        title: "Restart recording",
+                        systemImage: "arrow.counterclockwise",
+                        tint: .white,
+                        action: model.restartAudioCapture
+                    )
+                    VoiceCaptureActionButton(
+                        title: "Stop recording",
+                        systemImage: "stop.fill",
+                        tint: .red,
+                        action: model.completeAudioCapture
+                    )
+                }
+                .disabled(model.state != .recording)
+                .opacity(model.state == .recording ? 1 : 0.45)
+            }
+            .padding(.vertical, 10)
+            .frame(width: 66, height: 252)
+            .background {
+                RoundedRectangle(cornerRadius: 31, style: .continuous)
+                    .fill(Color.black.opacity(0.96))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 31, style: .continuous)
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.8)
+            }
+            .scaleEffect(1 - (finishProgress * 0.08))
+            .opacity(1 - finishProgress)
+        }
+        .padding(3)
+    }
+
+    private var formattedElapsed: String {
+        let seconds = max(0, Int(model.elapsed))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct VoiceCapturePanelDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        VoiceCapturePanelDragHandleView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class VoiceCapturePanelDragHandleView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 
@@ -2233,5 +2371,67 @@ struct VoiceLiveWaveform: View {
         let liveLevel = isRecording ? max(0.1, Double(level)) : 0.14
         let height = 4 + (liveLevel * envelope * motion * 28)
         return CGFloat(min(32, max(4, height)))
+    }
+}
+
+struct VoiceVerticalLiveWaveform: View {
+    let level: Float
+    let isRecording: Bool
+
+    private let barCount = 13
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            GeometryReader { geometry in
+                VStack(spacing: 2.25) {
+                    ForEach(0..<barCount, id: \.self) { index in
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.66),
+                                        .white,
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(
+                                width: barWidth(
+                                    at: index,
+                                    time: timeline.date
+                                        .timeIntervalSinceReferenceDate,
+                                    maximumWidth: geometry.size.width
+                                ),
+                                height: 3
+                            )
+                    }
+                }
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.size.height,
+                    alignment: .center
+                )
+            }
+        }
+        .clipped()
+    }
+
+    private func barWidth(
+        at index: Int,
+        time: TimeInterval,
+        maximumWidth: CGFloat
+    ) -> CGFloat {
+        let center = Double(barCount - 1) / 2
+        let distanceFromCenter = abs(Double(index) - center) / center
+        let envelope = 1 - (distanceFromCenter * 0.46)
+        let phase = (time * 7.2) + (Double(index) * 0.72)
+        let motion = 0.58 + (abs(sin(phase)) * 0.42)
+        let liveLevel = isRecording ? max(0.1, Double(level)) : 0.14
+        let normalizedWidth = 0.22 + (liveLevel * envelope * motion * 0.78)
+        return min(
+            maximumWidth,
+            max(7, maximumWidth * CGFloat(normalizedWidth))
+        )
     }
 }
