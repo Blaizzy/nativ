@@ -392,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         additionalModelSearchPaths: settings.additionalModelSearchPaths,
                         selectedModelID: settings.speechToTextModelID,
                         languageModelID: settings.languageModelID,
+                        maxTokens: settings.maxTokens,
                         serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
                         serverAPIKey: settings.serverAPIKey,
                         serverIsRunning: self.model.isRunning

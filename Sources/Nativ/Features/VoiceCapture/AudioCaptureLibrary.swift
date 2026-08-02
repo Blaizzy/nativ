@@ -507,7 +507,11 @@ final class AudioCaptureLibrary: ObservableObject {
                 \(chunk)
                 """
             let completion = try await client.completeChat(
-                Self.summaryRequest(modelID: modelID, prompt: prompt)
+                Self.summaryRequest(
+                    modelID: modelID,
+                    prompt: prompt,
+                    maxTokens: configuration.maxTokens
+                )
             )
             partialSummaries.append(completion.content)
         }
@@ -521,14 +525,19 @@ final class AudioCaptureLibrary: ObservableObject {
             \(partialSummaries.joined(separator: "\n\n---\n\n"))
             """
         let completion = try await client.completeChat(
-            Self.summaryRequest(modelID: modelID, prompt: combinedPrompt)
+            Self.summaryRequest(
+                modelID: modelID,
+                prompt: combinedPrompt,
+                maxTokens: configuration.maxTokens
+            )
         )
         return completion.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func summaryRequest(
         modelID: String,
-        prompt: String
+        prompt: String,
+        maxTokens: Int
     ) -> MLXChatCompletionRequest {
         MLXChatCompletionRequest(
             model: modelID,
@@ -539,7 +548,7 @@ final class AudioCaptureLibrary: ObservableObject {
                 ),
                 MLXChatMessage(role: "user", content: prompt),
             ],
-            maxTokens: 1_200,
+            maxTokens: maxTokens,
             temperature: 0.2,
             topK: 0,
             topP: 1,
