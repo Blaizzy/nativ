@@ -1405,6 +1405,7 @@ struct AudioView: View {
                             onPlay: { captureLibrary.openAudio(for: record) },
                             onTranscribe: { captureLibrary.retryTranscription(record) },
                             onSummarize: { captureLibrary.summarize(record) },
+                            onRename: { analytics.updateTitle($0, for: record.id) },
                             onDelete: { captureLibrary.delete(record) }
                         )
                     }
@@ -1708,6 +1709,127 @@ private struct AudioMetricCard: View {
     }
 }
 
+private struct AudioTitleDoubleClickTarget: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        let recognizer = NSClickGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleDoubleClick)
+        )
+        recognizer.numberOfClicksRequired = 2
+        recognizer.buttonMask = 0x1
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.action = action
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func handleDoubleClick() {
+            action()
+        }
+    }
+}
+
+private struct InlineEditableAudioTitle: View {
+    let title: String
+    let placeholder: String
+    let font: Font
+    let onRename: (String) -> Void
+
+    @State private var isEditing = false
+    @State private var draftTitle = ""
+    @State private var editorHasReceivedFocus = false
+    @FocusState private var titleFieldIsFocused: Bool
+
+    var body: some View {
+        Group {
+            if isEditing {
+                TextField(placeholder, text: $draftTitle)
+                    .textFieldStyle(.plain)
+                    .font(font)
+                    .frame(minWidth: 180, idealWidth: 260, maxWidth: 420)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Color.accentColor.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.7), lineWidth: 1)
+                    }
+                    .focused($titleFieldIsFocused)
+                    .onSubmit(saveTitle)
+                    .onExitCommand(perform: cancelEditing)
+            } else if title.isEmpty {
+                Text("Add title")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: beginEditing)
+                    .help("Add a title")
+            } else {
+                Text(title)
+                    .font(font)
+                    .padding(.vertical, 2)
+                    .textSelection(.disabled)
+                    .overlay {
+                        AudioTitleDoubleClickTarget(action: beginEditing)
+                    }
+                    .help("Double-click to rename")
+            }
+        }
+        .onChange(of: titleFieldIsFocused) { _, isFocused in
+            if isFocused {
+                editorHasReceivedFocus = true
+            } else if isEditing, editorHasReceivedFocus {
+                saveTitle()
+            }
+        }
+    }
+
+    private func beginEditing() {
+        draftTitle = title
+        editorHasReceivedFocus = false
+        isEditing = true
+        DispatchQueue.main.async {
+            titleFieldIsFocused = true
+        }
+    }
+
+    private func saveTitle() {
+        guard isEditing else { return }
+        let normalizedTitle = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        isEditing = false
+        editorHasReceivedFocus = false
+        titleFieldIsFocused = false
+        if !normalizedTitle.isEmpty, normalizedTitle != title {
+            onRename(normalizedTitle)
+        }
+    }
+
+    private func cancelEditing() {
+        isEditing = false
+        editorHasReceivedFocus = false
+        titleFieldIsFocused = false
+    }
+}
+
 private struct AudioTranscriptRow: View {
     let record: AudioTranscriptionRecord
     @State private var copied = false
@@ -1773,6 +1895,7 @@ private struct AudioCaptureRecordRow: View {
     let onPlay: () -> Void
     let onTranscribe: () -> Void
     let onSummarize: () -> Void
+    let onRename: (String) -> Void
     let onDelete: () -> Void
 
     @State private var copied = false
@@ -1793,8 +1916,12 @@ private struct AudioCaptureRecordRow: View {
                     )
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(record.displayTitle)
-                        .font(.callout.weight(.semibold))
+                    InlineEditableAudioTitle(
+                        title: record.displayTitle,
+                        placeholder: "\(record.resolvedKind.title) title",
+                        font: .callout.weight(.semibold),
+                        onRename: onRename
+                    )
                     HStack(spacing: 7) {
                         Text(record.resolvedKind.title)
                         Text("·")
