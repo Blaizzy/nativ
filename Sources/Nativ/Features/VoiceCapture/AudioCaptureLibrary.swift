@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import NativServerKit
+import ScreenCaptureKit
 
 enum AudioCapturePhase: Equatable {
     case idle
@@ -53,11 +54,13 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
+    @Published private(set) var shouldOfferScreenCaptureSettings = false
 
     var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
 
     private let voiceRecorder = VoiceAudioRecorder()
     private let meetingRecorder = SystemAudioMeetingRecorder()
+    private let recordingOverlay = VoiceCaptureOverlayController()
     private let analytics: AudioAnalyticsStore
     private var elapsedTimer: Timer?
     private var captureStartedAt: Date?
@@ -67,12 +70,37 @@ final class AudioCaptureLibrary: ObservableObject {
 
     init(analytics: AudioAnalyticsStore? = nil) {
         self.analytics = analytics ?? .shared
+        recordingOverlay.setAudioCaptureActions(
+            complete: { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.stop()
+                }
+            },
+            restart: { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.restart()
+                }
+            },
+            delete: { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.deleteCurrentRecording()
+                }
+            }
+        )
         voiceRecorder.onMeterUpdate = { [weak self] level, elapsed in
-            self?.inputLevel = level
-            self?.elapsed = elapsed
+            guard let self else {
+                return
+            }
+            self.inputLevel = level
+            self.elapsed = elapsed
+            self.updateRecordingOverlay(level: level, elapsed: elapsed)
         }
         meetingRecorder.onMicrophoneLevelUpdate = { [weak self] level in
-            self?.inputLevel = level
+            guard let self else {
+                return
+            }
+            self.inputLevel = level
+            self.updateRecordingOverlay(level: level, elapsed: self.elapsed)
         }
     }
 
@@ -112,7 +140,7 @@ final class AudioCaptureLibrary: ObservableObject {
             return
         }
 
-        lastErrorMessage = nil
+        clearLastError()
         activeKind = kind
         phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
@@ -129,6 +157,8 @@ final class AudioCaptureLibrary: ObservableObject {
             fail(AudioCaptureLibraryError.screenCapturePermissionRequired)
             return
         }
+
+        recordingOverlay.showAudioCapture(kind, at: NSEvent.mouseLocation)
 
         do {
             let outputURL = try Self.makeOutputURL(
@@ -163,10 +193,22 @@ final class AudioCaptureLibrary: ObservableObject {
             captureStartedAt = Date()
             elapsed = 0
             phase = .recording
+            recordingOverlay.update(level: 0, elapsed: 0)
             startElapsedTimer()
         } catch {
+            if Self.isScreenCapturePermissionError(error) {
+                // ScreenCaptureKit presents the native permission dialog itself.
+                // Do not stack a second Nativ alert underneath it.
+                resetCaptureState()
+                return
+            }
             fail(error)
         }
+    }
+
+    func clearLastError() {
+        lastErrorMessage = nil
+        shouldOfferScreenCaptureSettings = false
     }
 
     func stop() async {
@@ -178,6 +220,7 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         phase = .processing
+        recordingOverlay.waitForTranscription()
         stopElapsedTimer()
         let duration = max(
             elapsed,
@@ -225,6 +268,30 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         resetCaptureState()
+    }
+
+    func restart() async {
+        guard phase == .recording,
+              let kind = activeKind
+        else {
+            return
+        }
+
+        let automaticallySummarize = shouldSummarizeCurrentCapture
+        let includeSystemAudio = activeIncludesSystemAudio
+        await discardCurrentCapture(hideOverlay: false)
+        await start(
+            kind,
+            automaticallySummarize: automaticallySummarize,
+            includeSystemAudio: includeSystemAudio
+        )
+    }
+
+    func deleteCurrentRecording() async {
+        guard phase == .recording else {
+            return
+        }
+        await discardCurrentCapture(hideOverlay: true)
     }
 
     func summarize(_ record: AudioTranscriptionRecord) {
@@ -490,11 +557,53 @@ final class AudioCaptureLibrary: ObservableObject {
 
     private func fail(_ error: Error) {
         lastErrorMessage = error.localizedDescription
+        if let captureError = error as? AudioCaptureLibraryError,
+           case .screenCapturePermissionRequired = captureError
+        {
+            shouldOfferScreenCaptureSettings = true
+        } else {
+            shouldOfferScreenCaptureSettings = false
+        }
         resetCaptureState()
     }
 
-    private func resetCaptureState() {
+    private static func isScreenCapturePermissionError(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == SCStreamError.errorDomain,
+           error.code == SCStreamError.Code.userDeclined.rawValue
+        {
+            return true
+        }
+
+        // macOS 26 can surface this wording from shareable-content discovery
+        // before returning the public ScreenCaptureKit error code.
+        return error.localizedDescription.localizedCaseInsensitiveContains("declined TCC")
+    }
+
+    private func discardCurrentCapture(hideOverlay: Bool) async {
+        guard let activeBackend else {
+            resetCaptureState(hideOverlay: hideOverlay)
+            return
+        }
+
+        phase = .preparing
         stopElapsedTimer()
+        switch activeBackend {
+        case .microphone:
+            if let recordingURL = voiceRecorder.stop() {
+                try? FileManager.default.removeItem(at: recordingURL)
+            }
+        case .systemAndMicrophone:
+            await meetingRecorder.cancel()
+        }
+        resetCaptureState(hideOverlay: hideOverlay)
+    }
+
+    private func resetCaptureState(hideOverlay: Bool = true) {
+        stopElapsedTimer()
+        if hideOverlay {
+            recordingOverlay.hide()
+        }
         phase = .idle
         activeKind = nil
         elapsed = 0
@@ -514,6 +623,10 @@ final class AudioCaptureLibrary: ObservableObject {
                     return
                 }
                 self.elapsed = Date().timeIntervalSince(captureStartedAt)
+                self.updateRecordingOverlay(
+                    level: self.inputLevel,
+                    elapsed: self.elapsed
+                )
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -523,6 +636,13 @@ final class AudioCaptureLibrary: ObservableObject {
     private func stopElapsedTimer() {
         elapsedTimer?.invalidate()
         elapsedTimer = nil
+    }
+
+    private func updateRecordingOverlay(level: Float, elapsed: TimeInterval) {
+        guard phase == .recording else {
+            return
+        }
+        recordingOverlay.update(level: level, elapsed: elapsed)
     }
 
     private static func requestMicrophoneAccess() async -> Bool {

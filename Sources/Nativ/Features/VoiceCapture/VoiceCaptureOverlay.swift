@@ -5,6 +5,7 @@ import SwiftUI
 private enum VoiceIslandLayoutMetrics {
     static let sideWidth: CGFloat = 48
     static let shelfSideWidth: CGFloat = 56
+    static let audioCaptureSideWidth: CGFloat = 106
 }
 
 private let voiceCaptureDismissalDuration: TimeInterval = 0.38
@@ -29,6 +30,18 @@ private func voiceCaptureFinishProgress(
 
 @MainActor
 final class VoiceCaptureOverlayModel: ObservableObject {
+    enum Presentation: Equatable {
+        case dictation
+        case audioCapture(AudioRecordKind)
+
+        var audioCaptureKind: AudioRecordKind? {
+            guard case let .audioCapture(kind) = self else {
+                return nil
+            }
+            return kind
+        }
+    }
+
     enum State: Equatable {
         case preparing
         case recording
@@ -47,9 +60,15 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     @Published var islandUsesCameraCutout = false
     @Published var islandStyle: VoiceCaptureAnimationStyle = .gradientIsland
     @Published var showsNoSpeechFeedback = false
+    @Published var presentation: Presentation = .dictation
 
-    func beginActivation() {
+    var completeAudioCapture: (() -> Void)?
+    var restartAudioCapture: (() -> Void)?
+    var deleteAudioCapture: (() -> Void)?
+
+    func beginActivation(presentation: Presentation = .dictation) {
         let now = Date()
+        self.presentation = presentation
         state = .preparing
         stateChangedAt = now
         activationStartedAt = now
@@ -68,10 +87,11 @@ final class VoiceCaptureOverlayModel: ObservableObject {
 final class VoiceCaptureOverlayController {
     private static let waveformPanelSize = NSSize(width: 184, height: 58)
     private static let floatingIslandPanelSize = NSSize(width: 128, height: 52)
+    private static let floatingAudioCapturePanelSize = NSSize(width: 226, height: 52)
     private let model: VoiceCaptureOverlayModel
     private let animationPreferences: VoiceAnimationPreferences
-    private let waveformPanel: NSPanel
-    private let islandPanel: NSPanel
+    private let waveformPanel: VoiceCapturePanel
+    private let islandPanel: VoiceCapturePanel
     private let soundPlayer = VoiceCaptureSoundPlayer()
     private var activeStyle: VoiceCaptureAnimationStyle = .cursorWaveform
     private var dismissalTask: Task<Void, Never>?
@@ -93,10 +113,20 @@ final class VoiceCaptureOverlayController {
         )
     }
 
+    func setAudioCaptureActions(
+        complete: @escaping () -> Void,
+        restart: @escaping () -> Void,
+        delete: @escaping () -> Void
+    ) {
+        model.completeAudioCapture = complete
+        model.restartAudioCapture = restart
+        model.deleteAudioCapture = delete
+    }
+
     private static func makePanel<Content: View>(
         size: NSSize,
         content: Content
-    ) -> NSPanel {
+    ) -> VoiceCapturePanel {
         let panel = VoiceCapturePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -117,25 +147,53 @@ final class VoiceCaptureOverlayController {
             .ignoresCycle,
             .stationary,
         ]
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.contentView = NSHostingView(rootView: content)
         panel.setContentSize(size)
+        panel.beginEnforcingPinnedFrame()
         return panel
     }
 
     func show(at cursorPosition: NSPoint) {
+        show(at: cursorPosition, presentation: .dictation)
+    }
+
+    func showAudioCapture(
+        _ kind: AudioRecordKind,
+        at cursorPosition: NSPoint
+    ) {
+        show(at: cursorPosition, presentation: .audioCapture(kind))
+    }
+
+    private func show(
+        at cursorPosition: NSPoint,
+        presentation: VoiceCaptureOverlayModel.Presentation
+    ) {
         dismissalTask?.cancel()
         dismissalTask = nil
         startCueTask?.cancel()
         startCueTask = nil
         activationID = UUID()
         didPlayStartCue = false
-        model.beginActivation()
+        model.beginActivation(presentation: presentation)
         model.level = 0
         model.closingLevel = 0
         model.elapsed = 0
         model.showsNoSpeechFeedback = false
-        activeStyle = animationPreferences.selectedStyle
+        if presentation.audioCaptureKind != nil {
+            activeStyle = animationPreferences.recordingStyle == .notchShelf
+                ? .notchShelf
+                : .gradientIsland
+        } else {
+            activeStyle = animationPreferences.selectedStyle
+        }
         model.islandStyle = activeStyle
+        islandPanel.ignoresMouseEvents = presentation.audioCaptureKind == nil
+        waveformPanel.clearPinnedFrame()
+        if presentation.audioCaptureKind == nil {
+            islandPanel.clearPinnedFrame()
+        }
         waveformPanel.orderOut(nil)
         islandPanel.orderOut(nil)
 
@@ -337,10 +395,13 @@ final class VoiceCaptureOverlayController {
         if let leftArea = screen.auxiliaryTopLeftArea,
            let rightArea = screen.auxiliaryTopRightArea,
            rightArea.minX - leftArea.maxX > 20 {
-            let wingWidth = min(
-                activeStyle == .notchShelf
+            let requestedWingWidth = model.presentation.audioCaptureKind == nil
+                ? (activeStyle == .notchShelf
                     ? VoiceIslandLayoutMetrics.shelfSideWidth
-                    : VoiceIslandLayoutMetrics.sideWidth,
+                    : VoiceIslandLayoutMetrics.sideWidth)
+                : VoiceIslandLayoutMetrics.audioCaptureSideWidth
+            let wingWidth = min(
+                requestedWingWidth,
                 leftArea.width,
                 rightArea.width
             )
@@ -352,21 +413,31 @@ final class VoiceCaptureOverlayController {
                 height: cameraHeight
             )
             model.islandUsesCameraCutout = true
-            islandPanel.setFrame(frame, display: true)
+            setIslandPanelFrame(frame)
             return
         }
 
-        let size = Self.floatingIslandPanelSize
+        let size = model.presentation.audioCaptureKind == nil
+            ? Self.floatingIslandPanelSize
+            : Self.floatingAudioCapturePanelSize
         model.islandUsesCameraCutout = false
-        islandPanel.setFrame(
+        setIslandPanelFrame(
             NSRect(
                 x: screen.frame.midX - (size.width / 2),
                 y: screen.visibleFrame.maxY - size.height - 5,
                 width: size.width,
                 height: size.height
-            ),
-            display: true
+            )
         )
+    }
+
+    private func setIslandPanelFrame(_ frame: NSRect) {
+        if model.presentation.audioCaptureKind != nil {
+            islandPanel.setPinnedFrame(frame)
+        } else {
+            islandPanel.clearPinnedFrame()
+            islandPanel.setFrame(frame, display: true)
+        }
     }
 
     private func screen(containing point: NSPoint) -> NSScreen {
@@ -377,8 +448,106 @@ final class VoiceCaptureOverlayController {
 }
 
 private final class VoiceCapturePanel: NSPanel {
+    private var pinnedFrame: NSRect?
+    private var isApplyingPinnedFrame = false
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    func beginEnforcingPinnedFrame() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(restoreAfterWindowMove(_:)),
+            name: NSWindow.didMoveNotification,
+            object: self
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(restoreAfterApplicationSwitch(_:)),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(restoreAfterApplicationSwitch(_:)),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
+    }
+
+    func setPinnedFrame(_ frame: NSRect) {
+        pinnedFrame = frame
+        restorePinnedFrame(display: true)
+    }
+
+    func clearPinnedFrame() {
+        pinnedFrame = nil
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        guard !isApplyingPinnedFrame, pinnedFrame != nil else {
+            super.setFrame(frameRect, display: flag)
+            return
+        }
+        restorePinnedFrame(display: flag)
+    }
+
+    override func setFrameOrigin(_ point: NSPoint) {
+        guard !isApplyingPinnedFrame, pinnedFrame != nil else {
+            super.setFrameOrigin(point)
+            return
+        }
+        restorePinnedFrame(display: true)
+    }
+
+    override func constrainFrameRect(
+        _ frameRect: NSRect,
+        to screen: NSScreen?
+    ) -> NSRect {
+        // AppKit normally pushes panels out of the menu-bar area when the
+        // owning app resigns active. The island intentionally occupies that
+        // area, so preserve the frame chosen by VoiceCaptureOverlayController.
+        frameRect
+    }
+
+    private func restorePinnedFrame(display: Bool) {
+        guard let pinnedFrame else {
+            return
+        }
+        isApplyingPinnedFrame = true
+        super.setFrame(pinnedFrame, display: display)
+        isApplyingPinnedFrame = false
+    }
+
+    @objc
+    private func restoreAfterWindowMove(_ notification: Notification) {
+        guard let pinnedFrame,
+              !isApplyingPinnedFrame,
+              !frame.equalTo(pinnedFrame)
+        else {
+            return
+        }
+        restorePinnedFrame(display: true)
+    }
+
+    @objc
+    private func restoreAfterApplicationSwitch(_ notification: Notification) {
+        guard pinnedFrame != nil else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.pinnedFrame != nil else {
+                return
+            }
+            self.restorePinnedFrame(display: true)
+            self.orderFrontRegardless()
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
 }
 
 @MainActor
@@ -717,6 +886,119 @@ private final class VoiceCaptureSoundPlayer {
     }
 }
 
+struct NativAudioCaptureMark: View {
+    let kind: AudioRecordKind
+    let state: VoiceCaptureOverlayModel.State
+    let level: Float
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            GeometryReader { geometry in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let shortestSide = min(geometry.size.width, geometry.size.height)
+                let meterLevel = state == .recording
+                    ? Double(min(max(level, 0), 1))
+                    : 0
+                let voiceEnergy = pow(meterLevel, 0.7)
+                let breathing = (sin(time * 2.1) + 1) / 2
+                let isProcessing = state == .transcribing
+                let ringSpeed = isProcessing ? 150.0 : 42.0
+                let pulseScale = 1
+                    + (breathing * 0.025)
+                    + (voiceEnergy * 0.11)
+
+                ZStack {
+                    Circle()
+                        .fill(tint.opacity(0.16 + (voiceEnergy * 0.16)))
+                        .scaleEffect(pulseScale)
+                        .blur(radius: shortestSide * 0.05)
+
+                    Circle()
+                        .fill(Color.black.opacity(0.98))
+                        .overlay {
+                            Circle()
+                                .fill(
+                                    RadialGradient(
+                                        colors: [
+                                            tint.opacity(0.32 + (voiceEnergy * 0.2)),
+                                            .clear,
+                                        ],
+                                        center: .topLeading,
+                                        startRadius: 0,
+                                        endRadius: shortestSide * 0.82
+                                    )
+                                )
+                        }
+                        .overlay {
+                            Circle()
+                                .strokeBorder(.white.opacity(0.15), lineWidth: 0.65)
+                        }
+
+                    Image("NativMark")
+                        .resizable()
+                        .renderingMode(.template)
+                        .scaledToFit()
+                        .foregroundStyle(.white)
+                        .frame(
+                            width: shortestSide * 0.54,
+                            height: shortestSide * 0.54
+                        )
+                        .scaleEffect(1 + (voiceEnergy * 0.05))
+
+                    Circle()
+                        .trim(from: 0.03, to: isProcessing ? 0.38 : 0.72)
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    .clear,
+                                    tint.opacity(0.85),
+                                    Color.cyan.opacity(0.9),
+                                    .clear,
+                                ],
+                                center: .center
+                            ),
+                            style: StrokeStyle(
+                                lineWidth: max(1.1, shortestSide * 0.075),
+                                lineCap: .round
+                            )
+                        )
+                        .rotationEffect(.degrees(time * ringSpeed))
+                }
+                .scaleEffect(state == .finishing ? 0.92 : 1)
+                .opacity(state == .failed ? 0.48 : 1)
+                .animation(.easeOut(duration: 0.12), value: level)
+            }
+        }
+    }
+
+    private var tint: Color {
+        kind == .voiceNote ? .purple : .blue
+    }
+}
+
+private struct VoiceCapturePrimaryVisual: View {
+    @ObservedObject var model: VoiceCaptureOverlayModel
+
+    @ViewBuilder
+    var body: some View {
+        if let kind = model.presentation.audioCaptureKind {
+            NativAudioCaptureMark(
+                kind: kind,
+                state: model.state,
+                level: model.level
+            )
+        } else {
+            VoiceGradientOrb(
+                level: model.level,
+                state: model.state,
+                stateChangedAt: model.stateChangedAt,
+                activationStartedAt: model.activationStartedAt,
+                showsNoSpeechFeedback: model.showsNoSpeechFeedback
+            )
+        }
+    }
+}
+
 private struct VoiceCaptureOverlayView: View {
     @ObservedObject var model: VoiceCaptureOverlayModel
 
@@ -728,7 +1010,7 @@ private struct VoiceCaptureOverlayView: View {
                 date: timeline.date
             )
 
-            HStack(spacing: 9) {
+            HStack(spacing: isAudioCapture ? 7 : 9) {
                 if model.showsNoSpeechFeedback {
                     Image(systemName: "waveform.slash")
                         .font(.system(size: 17, weight: .semibold))
@@ -740,7 +1022,7 @@ private struct VoiceCaptureOverlayView: View {
                             .opacity.combined(with: .scale(scale: 0.84))
                         )
                 } else {
-                    recordingIndicator
+                    primaryIndicator
 
                     if model.state == .failed {
                         Label("Mic unavailable", systemImage: "mic.slash.fill")
@@ -762,7 +1044,7 @@ private struct VoiceCaptureOverlayView: View {
                                     .transition(.opacity)
                             }
                         }
-                        .frame(width: 90, height: 32)
+                        .frame(width: isAudioCapture ? 74 : 90, height: 32)
 
                         Text(formattedElapsed)
                             .font(
@@ -773,11 +1055,11 @@ private struct VoiceCaptureOverlayView: View {
                                 )
                             )
                             .foregroundStyle(.white.opacity(0.68))
-                            .frame(width: 32, alignment: .trailing)
+                            .frame(width: 34, alignment: .trailing)
                     }
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, isAudioCapture ? 10 : 14)
             .frame(width: 184, height: 52)
             .background {
                 Capsule()
@@ -794,6 +1076,20 @@ private struct VoiceCaptureOverlayView: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
+    @ViewBuilder
+    private var primaryIndicator: some View {
+        if let kind = model.presentation.audioCaptureKind {
+            NativAudioCaptureMark(
+                kind: kind,
+                state: model.state,
+                level: model.level
+            )
+            .frame(width: 22, height: 22)
+        } else {
+            recordingIndicator
+        }
+    }
+
     private var recordingIndicator: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
@@ -808,6 +1104,10 @@ private struct VoiceCaptureOverlayView: View {
                 )
         }
         .frame(width: 10, height: 16)
+    }
+
+    private var isAudioCapture: Bool {
+        model.presentation.audioCaptureKind != nil
     }
 
     private var indicatorColor: Color {
@@ -851,6 +1151,22 @@ private struct VoiceCaptureOverlayView: View {
     }
 
     private var accessibilityLabel: String {
+        if let kind = model.presentation.audioCaptureKind {
+            return switch model.state {
+            case .preparing:
+                "Preparing \(kind.title.lowercased()) recording"
+            case .recording:
+                "Recording \(kind.title.lowercased()), \(formattedElapsed)"
+            case .transcribing:
+                "Saving and transcribing \(kind.title.lowercased())"
+            case .finishing:
+                "Finished recording \(kind.title.lowercased())"
+            case .failed:
+                "Could not record \(kind.title.lowercased())"
+            case .noSpeech:
+                "No speech detected"
+            }
+        }
         if model.showsNoSpeechFeedback {
             return "No speech detected"
         }
@@ -991,20 +1307,14 @@ private struct VoiceCaptureIslandView: View {
                 date: timeline.date
             )
 
-            HStack(spacing: 10) {
+            HStack(spacing: 9) {
                 if model.state == .failed {
                     Image(systemName: "mic.slash.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.red)
                         .frame(width: 30, height: 30)
                 } else {
-                    VoiceGradientOrb(
-                        level: model.level,
-                        state: model.state,
-                        stateChangedAt: model.stateChangedAt,
-                        activationStartedAt: model.activationStartedAt,
-                        showsNoSpeechFeedback: model.showsNoSpeechFeedback
-                    )
+                    VoiceCapturePrimaryVisual(model: model)
                     .frame(width: 26, height: 26)
                 }
 
@@ -1018,9 +1328,16 @@ private struct VoiceCaptureIslandView: View {
                     )
                     .foregroundStyle(.white.opacity(0.76))
                     .frame(width: 38, alignment: .trailing)
+
+                if model.presentation.audioCaptureKind != nil {
+                    VoiceCaptureRecordingControls(model: model)
+                }
             }
-            .padding(.horizontal, 15)
-            .frame(width: 128, height: 46)
+            .padding(.horizontal, model.presentation.audioCaptureKind == nil ? 15 : 12)
+            .frame(
+                width: model.presentation.audioCaptureKind == nil ? 128 : 226,
+                height: 46
+            )
             .background {
                 Capsule()
                     .fill(Color.black.opacity(0.96))
@@ -1053,6 +1370,22 @@ private struct VoiceCaptureIslandView: View {
     }
 
     private var accessibilityLabel: String {
+        if let kind = model.presentation.audioCaptureKind {
+            return switch model.state {
+            case .preparing:
+                "Preparing \(kind.title.lowercased()) recording"
+            case .recording:
+                "Recording \(kind.title.lowercased()), \(formattedElapsed)"
+            case .transcribing:
+                "Saving and transcribing \(kind.title.lowercased())"
+            case .finishing:
+                "Finished recording \(kind.title.lowercased())"
+            case .failed:
+                "Could not record \(kind.title.lowercased())"
+            case .noSpeech:
+                "No speech detected"
+            }
+        }
         if model.showsNoSpeechFeedback {
             return "No speech detected"
         }
@@ -1084,9 +1417,12 @@ struct VoiceCaptureNotchIslandView: View {
                     stateChangedAt: model.stateChangedAt,
                     date: timeline.date
                 )
+                let sideWidth = model.presentation.audioCaptureKind == nil
+                    ? VoiceIslandLayoutMetrics.sideWidth
+                    : VoiceIslandLayoutMetrics.audioCaptureSideWidth
                 let cameraWidth = max(
                     1,
-                    geometry.size.width - (VoiceIslandLayoutMetrics.sideWidth * 2)
+                    geometry.size.width - (sideWidth * 2)
                 )
                 let collapsedScale = cameraWidth / max(1, geometry.size.width)
                 let backgroundProgress = finishProgress * finishProgress
@@ -1100,12 +1436,12 @@ struct VoiceCaptureNotchIslandView: View {
 
                     HStack(spacing: 0) {
                         leftContent
-                            .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+                            .frame(width: sideWidth)
 
                         Spacer(minLength: 0)
 
                         rightContent
-                            .frame(width: VoiceIslandLayoutMetrics.sideWidth)
+                            .frame(width: sideWidth)
                     }
                     .scaleEffect(1 - (finishProgress * 0.08))
                     .opacity(1 - finishProgress)
@@ -1116,19 +1452,34 @@ struct VoiceCaptureNotchIslandView: View {
     }
 
     private var leftContent: some View {
-        Group {
+        HStack(spacing: 6) {
             if model.state == .failed {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
             } else {
                 orb
+
+                if model.presentation.audioCaptureKind != nil {
+                    VoiceCaptureActionButton(
+                        title: "Restart recording",
+                        systemImage: "arrow.counterclockwise",
+                        tint: .white,
+                        action: model.restartAudioCapture
+                    )
+                    VoiceCaptureActionButton(
+                        title: "Delete recording",
+                        systemImage: "trash.fill",
+                        tint: .red,
+                        action: model.deleteAudioCapture
+                    )
+                }
             }
         }
     }
 
     private var rightContent: some View {
-        Group {
+        HStack(spacing: 7) {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
@@ -1137,18 +1488,21 @@ struct VoiceCaptureNotchIslandView: View {
                 Text(formattedElapsed)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.78))
+
+                if model.presentation.audioCaptureKind != nil {
+                    VoiceCaptureActionButton(
+                        title: "Complete recording",
+                        systemImage: "checkmark",
+                        tint: .green,
+                        action: model.completeAudioCapture
+                    )
+                }
             }
         }
     }
 
     private var orb: some View {
-        VoiceGradientOrb(
-            level: model.level,
-            state: model.state,
-            stateChangedAt: model.stateChangedAt,
-            activationStartedAt: model.activationStartedAt,
-            showsNoSpeechFeedback: model.showsNoSpeechFeedback
-        )
+        VoiceCapturePrimaryVisual(model: model)
         .frame(width: 22, height: 22)
     }
 
@@ -1253,9 +1607,12 @@ private struct VoiceCaptureWideNotchView: View {
                     stateChangedAt: model.stateChangedAt,
                     date: timeline.date
                 )
+                let sideWidth = model.presentation.audioCaptureKind == nil
+                    ? VoiceIslandLayoutMetrics.shelfSideWidth
+                    : VoiceIslandLayoutMetrics.audioCaptureSideWidth
                 let cameraWidth = max(
                     1,
-                    geometry.size.width - (VoiceIslandLayoutMetrics.shelfSideWidth * 2)
+                    geometry.size.width - (sideWidth * 2)
                 )
                 let collapsedScale = cameraWidth / max(1, geometry.size.width)
                 let backgroundProgress = finishProgress * finishProgress
@@ -1273,12 +1630,12 @@ private struct VoiceCaptureWideNotchView: View {
 
                     HStack(spacing: 0) {
                         leftContent
-                            .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+                            .frame(width: sideWidth)
 
                         Spacer(minLength: 0)
 
                         rightContent
-                            .frame(width: VoiceIslandLayoutMetrics.shelfSideWidth)
+                            .frame(width: sideWidth)
                     }
                     .scaleEffect(1 - (finishProgress * 0.08))
                     .opacity(1 - finishProgress)
@@ -1289,26 +1646,35 @@ private struct VoiceCaptureWideNotchView: View {
     }
 
     private var leftContent: some View {
-        Group {
+        HStack(spacing: 6) {
             if model.state == .failed {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.red)
             } else {
-                VoiceGradientOrb(
-                    level: model.level,
-                    state: model.state,
-                    stateChangedAt: model.stateChangedAt,
-                    activationStartedAt: model.activationStartedAt,
-                    showsNoSpeechFeedback: model.showsNoSpeechFeedback
-                )
-                .frame(width: 22, height: 22)
+                VoiceCapturePrimaryVisual(model: model)
+                    .frame(width: 22, height: 22)
+
+                if model.presentation.audioCaptureKind != nil {
+                    VoiceCaptureActionButton(
+                        title: "Restart recording",
+                        systemImage: "arrow.counterclockwise",
+                        tint: .white,
+                        action: model.restartAudioCapture
+                    )
+                    VoiceCaptureActionButton(
+                        title: "Delete recording",
+                        systemImage: "trash.fill",
+                        tint: .red,
+                        action: model.deleteAudioCapture
+                    )
+                }
             }
         }
     }
 
     private var rightContent: some View {
-        Group {
+        HStack(spacing: 7) {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
@@ -1317,6 +1683,15 @@ private struct VoiceCaptureWideNotchView: View {
                 Text(formattedElapsed)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.78))
+
+                if model.presentation.audioCaptureKind != nil {
+                    VoiceCaptureActionButton(
+                        title: "Complete recording",
+                        systemImage: "checkmark",
+                        tint: .green,
+                        action: model.completeAudioCapture
+                    )
+                }
             }
         }
     }
@@ -1324,6 +1699,58 @@ private struct VoiceCaptureWideNotchView: View {
     private var formattedElapsed: String {
         let seconds = max(0, Int(model.elapsed))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct VoiceCaptureRecordingControls: View {
+    @ObservedObject var model: VoiceCaptureOverlayModel
+
+    var body: some View {
+        HStack(spacing: 5) {
+            VoiceCaptureActionButton(
+                title: "Restart recording",
+                systemImage: "arrow.counterclockwise",
+                tint: .white,
+                action: model.restartAudioCapture
+            )
+            VoiceCaptureActionButton(
+                title: "Delete recording",
+                systemImage: "trash.fill",
+                tint: .red,
+                action: model.deleteAudioCapture
+            )
+            VoiceCaptureActionButton(
+                title: "Complete recording",
+                systemImage: "checkmark",
+                tint: .green,
+                action: model.completeAudioCapture
+            )
+        }
+        .disabled(model.state != .recording)
+        .opacity(model.state == .recording ? 1 : 0.45)
+    }
+}
+
+private struct VoiceCaptureActionButton: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let action: (() -> Void)?
+
+    var body: some View {
+        Button {
+            action?()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 22, height: 22)
+                .background(tint.opacity(0.14), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
 

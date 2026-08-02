@@ -46,23 +46,41 @@ enum VoiceCaptureAnimationStyle: String, CaseIterable, Codable, Identifiable, Se
 final class VoiceAnimationPreferences: ObservableObject {
     static let shared = VoiceAnimationPreferences()
 
+    static let recordingStyles: [VoiceCaptureAnimationStyle] = [
+        .gradientIsland,
+        .notchShelf,
+    ]
+
     @Published var selectedStyle: VoiceCaptureAnimationStyle {
         didSet {
             defaults.set(selectedStyle.rawValue, forKey: storageKey)
         }
     }
 
+    @Published var recordingStyle: VoiceCaptureAnimationStyle {
+        didSet {
+            defaults.set(recordingStyle.rawValue, forKey: recordingStorageKey)
+        }
+    }
+
     private let defaults: UserDefaults
     private let storageKey: String
+    private let recordingStorageKey: String
 
     init(
         defaults: UserDefaults = .standard,
-        storageKey: String = "voiceCaptureAnimationStyle"
+        storageKey: String = "voiceCaptureAnimationStyle",
+        recordingStorageKey: String = "audioRecordingAnimationStyle"
     ) {
         self.defaults = defaults
         self.storageKey = storageKey
+        self.recordingStorageKey = recordingStorageKey
         selectedStyle = defaults.string(forKey: storageKey)
             .flatMap(VoiceCaptureAnimationStyle.init(rawValue:))
             ?? .cursorWaveform
+        recordingStyle = defaults.string(forKey: recordingStorageKey)
+            .flatMap(VoiceCaptureAnimationStyle.init(rawValue:))
+            .flatMap { Self.recordingStyles.contains($0) ? $0 : nil }
+            ?? .gradientIsland
     }
 }
