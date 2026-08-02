@@ -2347,9 +2347,35 @@ private struct AudioCaptureRecordRow: View {
     let onRename: (String) -> Void
     let onDelete: () -> Void
 
-    @State private var copied = false
-    @State private var summaryIsExpanded = false
-    @State private var transcriptIsExpanded = false
+    @State private var selectedDetail: DetailSection?
+    @State private var copiedDetail: DetailSection?
+    @State private var hoveredDetail: DetailSection?
+
+    private enum DetailSection: Hashable {
+        case summary
+        case transcript
+
+        var title: String {
+            switch self {
+            case .summary: "Summary"
+            case .transcript: "Transcript"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .summary: "sparkles"
+            case .transcript: "text.alignleft"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .summary: .white
+            case .transcript: .primary
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2416,13 +2442,23 @@ private struct AudioCaptureRecordRow: View {
                 Menu {
                     if !record.transcript.isEmpty {
                         Button("Copy transcript", action: copyTranscript)
-                        Button("Generate summary", action: onSummarize)
-                            .disabled(isProcessing)
+                        if let summary = record.summary, !summary.isEmpty {
+                            Button("Copy summary") {
+                                copy(summary, detail: .summary)
+                            }
+                        }
+                        Button(
+                            record.summary?.isEmpty == false
+                                ? "Regenerate summary"
+                                : "Generate summary",
+                            action: onSummarize
+                        )
+                        .disabled(isProcessing)
                     }
                     Divider()
                     Button("Delete recording", role: .destructive, action: onDelete)
                 } label: {
-                    Image(systemName: copied ? "checkmark" : "ellipsis")
+                    Image(systemName: "ellipsis")
                         .frame(width: 18)
                 }
                 .menuStyle(.borderlessButton)
@@ -2430,109 +2466,23 @@ private struct AudioCaptureRecordRow: View {
                 .fixedSize()
             }
 
-            if record.summary?.isEmpty == false || !record.transcript.isEmpty {
+            if !record.transcript.isEmpty {
                 VStack(spacing: 0) {
-                    if let summary = record.summary, !summary.isEmpty {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                summaryIsExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "sparkles")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.purple)
-                                    .frame(width: 24, height: 24)
-                                    .background(Color.purple.opacity(0.1), in: Circle())
+                    detailMenu
 
-                                Text("Summary")
-                                    .font(.callout.weight(.semibold))
-                                    .foregroundStyle(.primary)
-
-                                Spacer(minLength: 12)
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.tertiary)
-                                    .rotationEffect(.degrees(summaryIsExpanded ? 90 : 0))
-                            }
-                            .contentShape(Rectangle())
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 44)
-                        }
-                        .buttonStyle(.plain)
-
-                        if summaryIsExpanded {
-                            StructuredText(
-                                markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: summary),
-                                syntaxExtensions: [.math]
-                            )
-                            .textual.structuredTextStyle(.gitHub)
-                            .textual.textSelection(.enabled)
-                            .font(.callout)
-                            .padding(.horizontal, 14)
-                            .padding(.bottom, 14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                    }
-
-                    if record.summary?.isEmpty == false && !record.transcript.isEmpty {
+                    if let selectedDetail {
                         Divider()
-                            .padding(.leading, 46)
-                    }
-
-                    if !record.transcript.isEmpty {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                transcriptIsExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "text.alignleft")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 24, height: 24)
-                                    .background(Color.primary.opacity(0.06), in: Circle())
-
-                                Text("Transcript")
-                                    .font(.callout.weight(.semibold))
-                                    .foregroundStyle(.primary)
-
-                                Text("\(record.wordCount) words")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-
-                                Spacer(minLength: 12)
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.tertiary)
-                                    .rotationEffect(.degrees(transcriptIsExpanded ? 90 : 0))
-                            }
-                            .contentShape(Rectangle())
                             .padding(.horizontal, 12)
-                            .frame(minHeight: 44)
-                        }
-                        .buttonStyle(.plain)
 
-                        if transcriptIsExpanded {
-                            Text(record.transcript)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .padding(.horizontal, 14)
-                                .padding(.bottom, 14)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
+                        detailContent(selectedDetail)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10))
+                .background(Color.primary.opacity(0.032), in: RoundedRectangle(cornerRadius: 11))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                 }
             }
 
@@ -2556,13 +2506,197 @@ private struct AudioCaptureRecordRow: View {
         }
     }
 
+    private var detailMenu: some View {
+        HStack(spacing: 5) {
+            detailButton(.summary)
+            detailButton(.transcript)
+            Spacer(minLength: 8)
+
+            if selectedDetail != nil {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        selectedDetail = nil
+                    }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(Color.primary.opacity(0.05), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Collapse details")
+            }
+        }
+        .padding(6)
+    }
+
+    private func detailButton(_ detail: DetailSection) -> some View {
+        let isSelected = selectedDetail == detail
+        let isHovered = hoveredDetail == detail
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                selectedDetail = isSelected ? nil : detail
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: detail.systemImage)
+                    .font(.caption.weight(.semibold))
+
+                Text(detail.title)
+                    .font(.callout.weight(.semibold))
+
+                if detail == .summary, record.summary?.isEmpty != false {
+                    Text(isProcessing ? "Working" : "Create")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            (isSelected ? Color.white : Color.purple).opacity(0.14),
+                            in: Capsule()
+                        )
+                } else if detail == .transcript {
+                    Text(record.wordCount.formatted())
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(
+                            isSelected ? Color.white.opacity(0.78) : Color.primary.opacity(0.42)
+                        )
+                }
+            }
+            .foregroundStyle(isSelected ? Color.white : detail.tint)
+            .padding(.horizontal, 11)
+            .frame(height: 32)
+            .background(
+                isSelected
+                    ? Color.accentColor
+                    : (isHovered ? Color.white.opacity(0.08) : Color.clear),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                hoveredDetail = hovering ? detail : nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detailContent(_ detail: DetailSection) -> some View {
+        switch detail {
+        case .summary:
+            if let summary = record.summary, !summary.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    detailHeader(
+                        title: "AI-generated notes",
+                        detail: .summary,
+                        text: summary
+                    )
+
+                    ScrollView {
+                        StructuredText(
+                            markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: summary),
+                            syntaxExtensions: [.math]
+                        )
+                        .textual.structuredTextStyle(.gitHub)
+                        .textual.textSelection(.enabled)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 360)
+                }
+                .padding(14)
+            } else {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.purple)
+                        .frame(width: 34, height: 34)
+                        .background(Color.purple.opacity(0.1), in: Circle())
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(isProcessing ? "Creating your summary" : "Create a concise summary")
+                            .font(.callout.weight(.semibold))
+                        Text("Turn this transcript into structured notes, decisions, and action items.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    if isProcessing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button("Generate", action: onSummarize)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                }
+                .padding(14)
+            }
+
+        case .transcript:
+            VStack(alignment: .leading, spacing: 10) {
+                detailHeader(
+                    title: "Verbatim transcript · \(record.wordCount.formatted()) words",
+                    detail: .transcript,
+                    text: record.transcript
+                )
+
+                ScrollView {
+                    Text(record.transcript)
+                        .font(.body)
+                        .foregroundStyle(Color.primary.opacity(0.82))
+                        .lineSpacing(4)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 320)
+            }
+            .padding(14)
+        }
+    }
+
+    private func detailHeader(
+        title: String,
+        detail: DetailSection,
+        text: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button {
+                copy(text, detail: detail)
+            } label: {
+                Label(
+                    copiedDetail == detail ? "Copied" : "Copy",
+                    systemImage: copiedDetail == detail ? "checkmark" : "doc.on.doc"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+        }
+    }
+
     private func copyTranscript() {
+        copy(record.transcript, detail: .transcript)
+    }
+
+    private func copy(_ text: String, detail: DetailSection) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(record.transcript, forType: .string)
-        copied = true
+        NSPasteboard.general.setString(text, forType: .string)
+        copiedDetail = detail
         Task {
             try? await Task.sleep(for: .seconds(1.5))
-            copied = false
+            if copiedDetail == detail {
+                copiedDetail = nil
+            }
         }
     }
 
