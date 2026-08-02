@@ -194,6 +194,7 @@ final class AudioCaptureLibrary: ObservableObject {
             elapsed = 0
             phase = .recording
             recordingOverlay.update(level: 0, elapsed: 0)
+            recordingOverlay.didStartRecording()
             startElapsedTimer()
         } catch {
             if Self.isScreenCapturePermissionError(error) {

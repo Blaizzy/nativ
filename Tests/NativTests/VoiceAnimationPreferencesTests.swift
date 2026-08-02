@@ -86,3 +86,53 @@ final class VoiceAnimationPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.recordingStyle, .verticalRecorder)
     }
 }
+
+@MainActor
+final class VoiceSoundPreferencesTests: XCTestCase {
+    func testDefaultsToNativChime() throws {
+        let suiteName = "VoiceSoundPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let preferences = VoiceSoundPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.selectedStyle, .nativChime)
+    }
+
+    func testPersistsSharedCaptureSound() throws {
+        let suiteName = "VoiceSoundPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var preferences: VoiceSoundPreferences? = VoiceSoundPreferences(
+            defaults: defaults
+        )
+        preferences?.selectedStyle = .minimalPlay
+        preferences = nil
+
+        let restored = VoiceSoundPreferences(defaults: defaults)
+        XCTAssertEqual(restored.selectedStyle, .minimalPlay)
+    }
+
+    func testMigratesLegacyRecordingSoundWhenNoSharedChoiceExists() throws {
+        let suiteName = "VoiceSoundPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("minimalPlay", forKey: "audioRecordingSoundStyle")
+
+        let preferences = VoiceSoundPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.selectedStyle, .minimalPlay)
+    }
+
+    func testUnknownStoredSoundFallsBackToNativChime() throws {
+        let suiteName = "VoiceSoundPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("future-sound", forKey: "voiceCaptureSoundStyle")
+
+        let preferences = VoiceSoundPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.selectedStyle, .nativChime)
+    }
+}

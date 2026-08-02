@@ -98,3 +98,72 @@ final class VoiceAnimationPreferences: ObservableObject {
             ?? .gradientIsland
     }
 }
+
+enum VoiceCaptureSoundStyle: String, CaseIterable, Codable, Identifiable, Sendable {
+    case nativChime
+    case minimalPlay
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .nativChime:
+            "Nativ Chime"
+        case .minimalPlay:
+            "Minimal Play"
+        case .none:
+            "No Sound"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .nativChime:
+            "The original spacious Nativ start and finish chimes."
+        case .minimalPlay:
+            "A short, neutral UI SFX cue with a crisp start and stop."
+        case .none:
+            "Keep visual feedback while muting capture cues."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .nativChime:
+            "sparkles"
+        case .minimalPlay:
+            "play.fill"
+        case .none:
+            "speaker.slash.fill"
+        }
+    }
+}
+
+@MainActor
+final class VoiceSoundPreferences: ObservableObject {
+    static let shared = VoiceSoundPreferences()
+
+    @Published var selectedStyle: VoiceCaptureSoundStyle {
+        didSet {
+            defaults.set(selectedStyle.rawValue, forKey: storageKey)
+        }
+    }
+
+    private let defaults: UserDefaults
+    private let storageKey: String
+
+    init(
+        defaults: UserDefaults = .standard,
+        storageKey: String = "voiceCaptureSoundStyle",
+        legacyRecordingStorageKey: String = "audioRecordingSoundStyle"
+    ) {
+        self.defaults = defaults
+        self.storageKey = storageKey
+        selectedStyle = defaults.string(forKey: storageKey)
+            .flatMap(VoiceCaptureSoundStyle.init(rawValue:))
+            ?? defaults.string(forKey: legacyRecordingStorageKey)
+                .flatMap(VoiceCaptureSoundStyle.init(rawValue:))
+            ?? .nativChime
+    }
+}

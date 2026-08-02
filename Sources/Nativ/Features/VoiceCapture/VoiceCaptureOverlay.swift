@@ -91,19 +91,25 @@ final class VoiceCaptureOverlayController {
     private static let verticalAudioCapturePanelSize = NSSize(width: 72, height: 258)
     private let model: VoiceCaptureOverlayModel
     private let animationPreferences: VoiceAnimationPreferences
+    private let soundPreferences: VoiceSoundPreferences
     private let waveformPanel: VoiceCapturePanel
     private let islandPanel: VoiceCapturePanel
     private let soundPlayer = VoiceCaptureSoundPlayer()
     private var activeStyle: VoiceCaptureAnimationStyle = .cursorWaveform
+    private var activeSoundStyle: VoiceCaptureSoundStyle = .nativChime
     private var dismissalTask: Task<Void, Never>?
     private var startCueTask: Task<Void, Never>?
     private var activationID = UUID()
     private var didPlayStartCue = false
 
-    init(animationPreferences: VoiceAnimationPreferences? = nil) {
+    init(
+        animationPreferences: VoiceAnimationPreferences? = nil,
+        soundPreferences: VoiceSoundPreferences? = nil
+    ) {
         let model = VoiceCaptureOverlayModel()
         self.model = model
         self.animationPreferences = animationPreferences ?? .shared
+        self.soundPreferences = soundPreferences ?? .shared
         waveformPanel = Self.makePanel(
             size: Self.waveformPanelSize,
             content: VoiceCaptureOverlayView(model: model)
@@ -190,6 +196,7 @@ final class VoiceCaptureOverlayController {
         } else {
             activeStyle = animationPreferences.selectedStyle
         }
+        activeSoundStyle = soundPreferences.selectedStyle
         model.islandStyle = activeStyle
         islandPanel.ignoresMouseEvents = presentation.audioCaptureKind == nil
         islandPanel.isMovable = activeStyle == .verticalRecorder
@@ -231,7 +238,9 @@ final class VoiceCaptureOverlayController {
             else {
                 return
             }
-            self.didPlayStartCue = self.soundPlayer.playStart()
+            self.didPlayStartCue = self.soundPlayer.playStart(
+                style: self.activeSoundStyle
+            )
             self.startCueTask = nil
         }
     }
@@ -264,7 +273,7 @@ final class VoiceCaptureOverlayController {
         model.level = 0
         model.transition(to: .transcribing)
         if didPlayStartCue {
-            soundPlayer.playEnd()
+            soundPlayer.playEnd(style: activeSoundStyle)
         }
         didPlayStartCue = false
     }
@@ -348,7 +357,7 @@ final class VoiceCaptureOverlayController {
 
         model.transition(to: .finishing)
         if didPlayStartCue {
-            soundPlayer.playEnd()
+            soundPlayer.playEnd(style: activeSoundStyle)
         }
         didPlayStartCue = false
         dismissalTask?.cancel()
@@ -575,7 +584,9 @@ private final class VoiceCapturePanel: NSPanel {
 }
 
 @MainActor
-private final class VoiceCaptureSoundPlayer {
+final class VoiceCaptureSoundPlayer {
+    static let preview = VoiceCaptureSoundPlayer()
+
     private struct Tone {
         let startsAt: TimeInterval
         let duration: TimeInterval
@@ -615,9 +626,19 @@ private final class VoiceCaptureSoundPlayer {
 
     private let startSoundData: Data
     private let endSoundData: Data
+    private let minimalStartSoundData: Data?
+    private let minimalEndSoundData: Data?
     private var activeSound: NSSound?
 
-    init() {
+    init(bundle: Bundle = .main) {
+        minimalStartSoundData = Self.resourceData(
+            named: "UISFXMinimalPlay",
+            bundle: bundle
+        )
+        minimalEndSoundData = Self.resourceData(
+            named: "UISFXMinimalStop",
+            bundle: bundle
+        )
         startSoundData = Self.makeSoundData(
             tones: [
                 Tone(
@@ -715,20 +736,55 @@ private final class VoiceCaptureSoundPlayer {
     }
 
     @discardableResult
-    func playStart() -> Bool {
-        play(
-            data: startSoundData,
-            volume: 0.42,
-            cueName: "start"
-        )
+    func playStart(style: VoiceCaptureSoundStyle) -> Bool {
+        switch style {
+        case .nativChime:
+            return play(
+                data: startSoundData,
+                volume: 0.42,
+                cueName: "start"
+            )
+        case .minimalPlay:
+            return playBundled(
+                data: minimalStartSoundData,
+                volume: 0.72,
+                cueName: "minimal start"
+            )
+        case .none:
+            activeSound?.stop()
+            return false
+        }
     }
 
-    func playEnd() {
-        play(
-            data: endSoundData,
-            volume: 0.36,
-            cueName: "finish"
-        )
+    func playEnd(style: VoiceCaptureSoundStyle) {
+        switch style {
+        case .nativChime:
+            play(
+                data: endSoundData,
+                volume: 0.36,
+                cueName: "finish"
+            )
+        case .minimalPlay:
+            playBundled(
+                data: minimalEndSoundData,
+                volume: 0.68,
+                cueName: "minimal finish"
+            )
+        case .none:
+            activeSound?.stop()
+        }
+    }
+
+    private func playBundled(
+        data: Data?,
+        volume: Float,
+        cueName: String
+    ) -> Bool {
+        guard let data else {
+            NSLog("Nativ could not find the voice %@ cue.", cueName)
+            return false
+        }
+        return play(data: data, volume: volume, cueName: cueName)
     }
 
     @discardableResult
@@ -749,6 +805,22 @@ private final class VoiceCaptureSoundPlayer {
             NSLog("Nativ could not play the voice %@ cue.", cueName)
         }
         return didPlay
+    }
+
+    private static func resourceData(
+        named name: String,
+        bundle: Bundle
+    ) -> Data? {
+        let resourceURL = bundle.url(forResource: name, withExtension: "mp3")
+            ?? bundle.url(
+                forResource: name,
+                withExtension: "mp3",
+                subdirectory: "AudioCues"
+            )
+        guard let resourceURL else {
+            return nil
+        }
+        return try? Data(contentsOf: resourceURL)
     }
 
     private static func makeSoundData(
