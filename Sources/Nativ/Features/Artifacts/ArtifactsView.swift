@@ -362,11 +362,24 @@ struct ArtifactsView: View {
             }
 
             Menu {
-                Picker("", selection: $groupByChat) {
-                    Text("By Chat").tag(true)
-                    Text("By Date").tag(false)
+                Button {
+                    groupByChat = true
+                } label: {
+                    if groupByChat {
+                        Label("By Chat", systemImage: "checkmark")
+                    } else {
+                        Text("By Chat")
+                    }
                 }
-                .pickerStyle(.inline)
+                Button {
+                    groupByChat = false
+                } label: {
+                    if !groupByChat {
+                        Label("By Date", systemImage: "checkmark")
+                    } else {
+                        Text("By Date")
+                    }
+                }
                 if !groupByChat {
                     Divider()
                     Picker("Sort", selection: $sort) {
