@@ -1327,17 +1327,42 @@ struct AudioView: View {
             )
             .background {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.04, green: 0.06, blue: 0.09),
-                                Color(red: 0.08, green: 0.09, blue: 0.12),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                    .fill(recordingPreviewBackground(for: style))
             }
+        }
+    }
+
+    private func recordingPreviewBackground(
+        for style: VoiceCaptureAnimationStyle
+    ) -> LinearGradient {
+        switch style {
+        case .verticalRecorder, .cursorWaveform:
+            LinearGradient(
+                colors: [
+                    Color.black,
+                    Color(red: 0.025, green: 0.035, blue: 0.055),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .gradientIsland:
+            LinearGradient(
+                colors: [
+                    Color(red: 0.03, green: 0.05, blue: 0.08),
+                    Color(red: 0.02, green: 0.12, blue: 0.14),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        case .notchShelf:
+            LinearGradient(
+                colors: [
+                    Color(red: 0.16, green: 0.18, blue: 0.21),
+                    Color(red: 0.06, green: 0.08, blue: 0.1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
     }
 
@@ -1558,7 +1583,7 @@ struct AudioView: View {
                 let voicePulse = (sin(time * 1.25) + 1) / 2
                 let previewLevel = Float(0.16 + (voicePulse * 0.62))
 
-                ZStack(alignment: .top) {
+                ZStack {
                     ZStack {
                         VoiceWideNotchShape(
                             shoulderWidth: 3,
@@ -1586,7 +1611,7 @@ struct AudioView: View {
                     }
                     .frame(width: 230, height: 36)
                 }
-                .frame(maxWidth: .infinity, minHeight: 112, alignment: .top)
+                .frame(maxWidth: .infinity, minHeight: 112, alignment: .center)
             }
             .background {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
