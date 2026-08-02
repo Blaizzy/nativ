@@ -357,7 +357,7 @@ final class AudioCaptureLibrary: ObservableObject {
                 modelID: modelID,
                 applicationName: nil,
                 kind: kind,
-                title: title,
+                title: analytics.record(withID: recordID)?.title ?? title,
                 persistAudioReference: true
             )
 

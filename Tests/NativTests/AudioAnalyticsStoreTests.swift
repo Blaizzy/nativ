@@ -118,4 +118,25 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(record.summary, "- Ship on Friday")
         XCTAssertEqual(record.durationSeconds, 1_800)
     }
+
+    func testPersistsEditedRecordingTitle() throws {
+        let recordingURL = temporaryDirectory.appendingPathComponent("voice-note.wav")
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "A note worth naming",
+            durationSeconds: 4,
+            modelID: "local-asr",
+            applicationName: nil,
+            kind: .voiceNote,
+            title: "Voice note",
+            persistAudioReference: true
+        )
+
+        store.updateTitle("  Product launch idea  ", for: "voice-note")
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        XCTAssertEqual(reloaded.records.first?.displayTitle, "Product launch idea")
+    }
 }

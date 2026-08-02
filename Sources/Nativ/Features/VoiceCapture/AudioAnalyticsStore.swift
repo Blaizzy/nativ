@@ -248,6 +248,32 @@ final class AudioAnalyticsStore: ObservableObject {
         save()
     }
 
+    func updateTitle(_ title: String, for recordID: String) {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTitle.isEmpty,
+              let existing = record(withID: recordID)
+        else {
+            return
+        }
+        let record = AudioTranscriptionRecord(
+            id: existing.id,
+            recordedAt: existing.recordedAt,
+            updatedAt: Date(),
+            durationSeconds: existing.durationSeconds,
+            transcript: existing.transcript,
+            modelID: existing.modelID,
+            applicationName: existing.applicationName,
+            kind: existing.kind,
+            title: normalizedTitle,
+            audioFileName: existing.audioFileName,
+            summary: existing.summary
+        )
+        records.removeAll { $0.id == recordID }
+        records.append(record)
+        records.sort { $0.recordedAt > $1.recordedAt }
+        save()
+    }
+
     func removeRecord(withID recordID: String) {
         guard records.contains(where: { $0.id == recordID }) else {
             return
