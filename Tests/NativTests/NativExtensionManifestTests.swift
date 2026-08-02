@@ -29,6 +29,7 @@ final class NativExtensionManifestTests: XCTestCase {
             manifest.contributions.sidebar.map(\.id),
             ["com.nativ.voice-dictation.audio"]
         )
+        XCTAssertTrue(manifest.permissions.contains(.systemAudioCapture))
     }
 
     func testValidManifestPassesValidation() throws {

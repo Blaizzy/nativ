@@ -22,9 +22,37 @@ enum NativSystemPermissionController {
         CGPreflightPostEventAccess() || AXIsProcessTrusted()
     }
 
+    static func hasScreenCaptureAccess() -> Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    @MainActor
+    @discardableResult
+    static func requestScreenCaptureAccess() -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        return CGRequestScreenCaptureAccess()
+    }
+
     @discardableResult
     static func requestInsertTextAccess() -> Bool {
-        CGRequestPostEventAccess()
+        if hasInsertTextAccess() {
+            return true
+        }
+
+        // Posting the paste shortcut is covered by the Post Event service on
+        // newer macOS releases, while Accessibility is still the permission
+        // surfaced in System Settings and used on older releases. Request both
+        // so a fresh or re-signed development build receives the native macOS
+        // prompt instead of only being sent to a stale Settings entry.
+        let postEventAccess = CGRequestPostEventAccess()
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        let accessibilityAccess = AXIsProcessTrustedWithOptions(
+            [promptKey: true] as CFDictionary
+        )
+        return postEventAccess || accessibilityAccess || hasInsertTextAccess()
     }
 
     @MainActor
@@ -35,6 +63,11 @@ enum NativSystemPermissionController {
     @MainActor
     static func openMicrophoneSettings() {
         openPrivacyPane("Privacy_Microphone")
+    }
+
+    @MainActor
+    static func openScreenCaptureSettings() {
+        openPrivacyPane("Privacy_ScreenCapture")
     }
 
     @MainActor
