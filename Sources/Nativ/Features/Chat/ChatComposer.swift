@@ -90,6 +90,7 @@ struct ChatComposer: View {
     let onSend: (Bool) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
+    @State private var isDropTargeted = false
     private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
     private let editorMaximumHeight: CGFloat = 120
@@ -216,7 +217,16 @@ struct ChatComposer: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
             }
+            .overlay {
+                if isDropTargeted {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                }
+            }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            .dropDestination(for: URL.self) { urls, _ in
+                viewModel.attachImages(fromURLs: urls)
+            } isTargeted: { isDropTargeted = $0 }
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {

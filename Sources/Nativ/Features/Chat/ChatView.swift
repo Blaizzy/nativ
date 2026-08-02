@@ -667,6 +667,16 @@ final class ChatViewModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func attachImages(fromURLs urls: [URL]) -> Bool {
+        let attachments = urls.compactMap { try? ChatImageAttachment(contentsOf: $0) }
+        guard !attachments.isEmpty else {
+            return false
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+        return true
+    }
+
     func pasteImageFromClipboard() {
         attachImages(from: .general)
     }
