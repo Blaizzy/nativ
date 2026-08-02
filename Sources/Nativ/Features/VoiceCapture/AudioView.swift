@@ -2475,11 +2475,12 @@ private struct AudioCaptureRecordRow: View {
                             .padding(.horizontal, 12)
 
                         detailContent(selectedDetail)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.032), in: RoundedRectangle(cornerRadius: 11))
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
