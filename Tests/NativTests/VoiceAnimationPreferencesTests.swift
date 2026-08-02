@@ -2,6 +2,17 @@ import XCTest
 
 @MainActor
 final class VoiceAnimationPreferencesTests: XCTestCase {
+    func testAnimationStyleOrderByPurpose() {
+        XCTAssertEqual(
+            VoiceAnimationPreferences.dictationStyles,
+            [.cursorWaveform, .gradientIsland, .notchShelf]
+        )
+        XCTAssertEqual(
+            VoiceAnimationPreferences.recordingStyles,
+            [.verticalRecorder, .gradientIsland, .notchShelf]
+        )
+    }
+
     func testDefaultsToCursorWaveform() throws {
         let suiteName = "VoiceAnimationPreferencesTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
