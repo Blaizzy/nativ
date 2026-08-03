@@ -1073,7 +1073,7 @@ private struct InstalledModelRow: View {
             )
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
-            Button("Delete Model", role: .destructive, action: onDelete)
+            Button("Delete Model", action: onDelete)
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -1144,6 +1144,23 @@ private struct HubModelRow: View {
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
 
+    private var memoryFitWarning: String? {
+        if let estimate = model.memoryEstimate, !estimate.isUsable {
+            return "Pre-download estimate. \(estimate.explanation)"
+        }
+        if let sizeBytes = model.sizeBytes, sizeBytes > 0 {
+            let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+            let budget = Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction)
+            if Double(sizeBytes) > budget {
+                let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .memory)
+                let total = ByteCountFormatter.string(
+                    fromByteCount: Int64(clamping: totalMemoryBytes), countStyle: .memory)
+                return "Pre-download estimate. Model weights are ~\(size), larger than your \(total) of unified memory."
+            }
+        }
+        return nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
@@ -1156,14 +1173,6 @@ private struct HubModelRow: View {
                             .lineLimit(1)
                         if model.isGated {
                             ModelPill(title: "Gated", systemImage: "lock")
-                        }
-                        if let memoryEstimate = model.memoryEstimate, !memoryEstimate.isUsable {
-                            ModelPill(
-                                title: "May not fit in memory",
-                                systemImage: "exclamationmark.triangle.fill",
-                                color: .orange
-                            )
-                            .help("Pre-download estimate. \(memoryEstimate.explanation)")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1185,6 +1194,18 @@ private struct HubModelRow: View {
                                     fromByteCount: sizeBytes, countStyle: .file),
                                 systemImage: "internaldrive"
                             )
+                        }
+                        if let memoryFitWarning {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color.red)
+                                )
+                                .help(memoryFitWarning)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -401,6 +401,95 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(extreme.normalized().chatFontScale, NativSettings.maxChatFontScale)
     }
 
+    func testRememberProfileCapturesCurrentModelSettings() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.thinkingBudgetEnabled = true
+        settings.thinkingBudget = 1_024
+        settings.speculativeDecodingEnabled = true
+        settings.draftModelID = "org/drafter"
+        settings.draftKind = "mtp"
+
+        settings.rememberProfile(forModel: "org/main")
+
+        let profile = try XCTUnwrap(settings.modelProfile(for: "org/main"))
+        XCTAssertTrue(profile.thinkingEnabled)
+        XCTAssertTrue(profile.thinkingBudgetEnabled)
+        XCTAssertEqual(profile.thinkingBudget, 1_024)
+        XCTAssertTrue(profile.speculativeDecodingEnabled)
+        XCTAssertEqual(profile.draftModelID, "org/drafter")
+        XCTAssertEqual(profile.draftKind, "mtp")
+    }
+
+    func testApplyProfileRestoresSavedValues() {
+        var settings = NativSettings()
+        settings.applyProfile(
+            ModelConfigProfile(
+                thinkingEnabled: false,
+                thinkingBudgetEnabled: true,
+                thinkingBudget: 2_048,
+                speculativeDecodingEnabled: true,
+                draftModelID: "org/drafter",
+                draftKind: "ngram"
+            )
+        )
+
+        XCTAssertFalse(settings.thinkingEnabled)
+        XCTAssertTrue(settings.thinkingBudgetEnabled)
+        XCTAssertEqual(settings.thinkingBudget, 2_048)
+        XCTAssertTrue(settings.speculativeDecodingEnabled)
+        XCTAssertEqual(settings.draftModelID, "org/drafter")
+        XCTAssertEqual(settings.draftKind, "ngram")
+    }
+
+    func testModelConfigsRoundTripThroughCoding() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.draftModelID = "org/drafter"
+        settings.rememberProfile(forModel: "org/main")
+
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        let profile = try XCTUnwrap(decoded.modelProfile(for: "org/main"))
+        XCTAssertTrue(profile.thinkingEnabled)
+        XCTAssertEqual(profile.draftModelID, "org/drafter")
+    }
+
+    func testModelProfileIsNilForUnconfiguredModel() {
+        XCTAssertNil(NativSettings().modelProfile(for: "org/never-configured"))
+    }
+
+    func testRememberProfileIgnoresEmptyModelID() {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.rememberProfile(forModel: "")
+
+        XCTAssertTrue(settings.modelConfigs.isEmpty)
+    }
+
+    func testModelConfigsAreExportedToServerLaunchEnvironment() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.thinkingBudgetEnabled = true
+        settings.thinkingBudget = 1_024
+        settings.rememberProfile(forModel: "org/main")
+
+        let json = try XCTUnwrap(settings.launchEnvironment["NATIV_MODEL_CONFIGS"])
+        let decoded = try JSONDecoder().decode(
+            [String: ModelConfigProfile].self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(decoded["org/main"]?.thinkingEnabled, true)
+        XCTAssertEqual(decoded["org/main"]?.thinkingBudget, 1_024)
+    }
+
+    func testLaunchEnvironmentOmitsModelConfigsWhenEmpty() {
+        XCTAssertNil(NativSettings().launchEnvironment["NATIV_MODEL_CONFIGS"])
+    }
+
     private func temporarySettingsURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

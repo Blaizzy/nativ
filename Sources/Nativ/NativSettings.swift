@@ -270,6 +270,47 @@ struct ModelPreloadMemoryWarning: Equatable, Identifiable, Sendable {
     }
 }
 
+struct ModelConfigProfile: Codable, Equatable {
+    var thinkingEnabled: Bool
+    var thinkingBudgetEnabled: Bool
+    var thinkingBudget: Int
+    var speculativeDecodingEnabled: Bool
+    var draftModelID: String
+    var draftKind: String
+
+    init(
+        thinkingEnabled: Bool = false,
+        thinkingBudgetEnabled: Bool = false,
+        thinkingBudget: Int = 512,
+        speculativeDecodingEnabled: Bool = false,
+        draftModelID: String = "",
+        draftKind: String = "auto"
+    ) {
+        self.thinkingEnabled = thinkingEnabled
+        self.thinkingBudgetEnabled = thinkingBudgetEnabled
+        self.thinkingBudget = thinkingBudget
+        self.speculativeDecodingEnabled = speculativeDecodingEnabled
+        self.draftModelID = draftModelID
+        self.draftKind = draftKind
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case thinkingEnabled, thinkingBudgetEnabled, thinkingBudget
+        case speculativeDecodingEnabled, draftModelID, draftKind
+    }
+
+    init(from decoder: Decoder) throws {
+        let defaults = ModelConfigProfile()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled) ?? defaults.thinkingEnabled
+        thinkingBudgetEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingBudgetEnabled) ?? defaults.thinkingBudgetEnabled
+        thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget) ?? defaults.thinkingBudget
+        speculativeDecodingEnabled = try container.decodeIfPresent(Bool.self, forKey: .speculativeDecodingEnabled) ?? defaults.speculativeDecodingEnabled
+        draftModelID = try container.decodeIfPresent(String.self, forKey: .draftModelID) ?? defaults.draftModelID
+        draftKind = try container.decodeIfPresent(String.self, forKey: .draftKind) ?? defaults.draftKind
+    }
+}
+
 struct NativSettings: Codable, Equatable {
     /// Default hub cache location, resolved from the environment.
     /// See `HuggingFaceCache.defaultHubPath`.
@@ -322,6 +363,7 @@ struct NativSettings: Codable, Equatable {
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
     var chatFontScale: Double
+    var modelConfigs: [String: ModelConfigProfile]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
@@ -364,7 +406,8 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
-        chatFontScale: Double = Self.defaultChatFontScale
+        chatFontScale: Double = Self.defaultChatFontScale,
+        modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
@@ -407,6 +450,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.chatFontScale = chatFontScale
+        self.modelConfigs = modelConfigs
     }
 
     enum CodingKeys: String, CodingKey {
@@ -452,6 +496,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlocks
         case prefixCacheBlockSize
         case chatFontScale
+        case modelConfigs
     }
 
     init(from decoder: Decoder) throws {
@@ -500,6 +545,7 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
         chatFontScale = try container.decodeIfPresent(Double.self, forKey: .chatFontScale) ?? defaults.chatFontScale
+        modelConfigs = try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs) ?? defaults.modelConfigs
     }
 
     func encode(to encoder: Encoder) throws {
@@ -544,6 +590,38 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(chatFontScale, forKey: .chatFontScale)
+        try container.encode(modelConfigs, forKey: .modelConfigs)
+    }
+
+    var currentModelProfile: ModelConfigProfile {
+        ModelConfigProfile(
+            thinkingEnabled: thinkingEnabled,
+            thinkingBudgetEnabled: thinkingBudgetEnabled,
+            thinkingBudget: thinkingBudget,
+            speculativeDecodingEnabled: speculativeDecodingEnabled,
+            draftModelID: draftModelID,
+            draftKind: draftKind
+        )
+    }
+
+    func modelProfile(for modelID: String) -> ModelConfigProfile? {
+        modelConfigs[modelID]
+    }
+
+    mutating func rememberProfile(forModel modelID: String) {
+        guard !modelID.isEmpty else {
+            return
+        }
+        modelConfigs[modelID] = currentModelProfile
+    }
+
+    mutating func applyProfile(_ profile: ModelConfigProfile) {
+        thinkingEnabled = profile.thinkingEnabled
+        thinkingBudgetEnabled = profile.thinkingBudgetEnabled
+        thinkingBudget = profile.thinkingBudget
+        speculativeDecodingEnabled = profile.speculativeDecodingEnabled
+        draftModelID = profile.draftModelID
+        draftKind = profile.draftKind
     }
 
     static func load(
@@ -729,7 +807,22 @@ struct NativSettings: Codable, Equatable {
             environment["APC_NUM_BLOCKS"] = "\(settings.prefixCacheBlocks)"
             environment["APC_BLOCK_SIZE"] = "\(settings.prefixCacheBlockSize)"
         }
+        if let modelConfigsJSON = encodedModelConfigs {
+            environment["NATIV_MODEL_CONFIGS"] = modelConfigsJSON
+        }
         return environment
+    }
+
+    var encodedModelConfigs: String? {
+        guard !modelConfigs.isEmpty else {
+            return nil
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(modelConfigs) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     var launchArguments: [String] {
