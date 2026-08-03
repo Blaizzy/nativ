@@ -30,6 +30,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Image generation and editing** | Generate and edit images locally with compatible MLX image models in a dedicated Images tab. |
 | **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, and speech models at once, with a warning if the combination would exceed your Mac's memory. |
+| **LoRA adapters** | Discover native MLX and standard PEFT LoRA adapters for an installed language model on Hugging Face, download an exact commit, and activate or disable it without restarting the app. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, and SMART health. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
@@ -98,6 +99,12 @@ The transcript remains on the clipboard. If no speech-to-text model is installed
 links directly to filtered speech-model discovery. Open **Audio** to inspect dictation
 analytics and history, select an installed speech-to-text model, choose the capture
 animation, or change either global shortcut.
+
+### Use a LoRA adapter
+
+Select a language model, open the right-side **Model Configuration** panel, and use its **LoRA Adapter** section. Click **Find on Hugging Face** to search for adapters that explicitly declare that base model and contain either a native MLX package or a standard PEFT LoRA package. This declaration is discovery metadata, not proof that an adapter was trained against the exact checkpoint. Install an adapter and click **Use**, or select any installed adapter from the panel's **Active adapter** menu. The selection is restored the next time the server starts.
+
+Downloads are pinned to the repository commit shown in the adapter sheet. Nativ performs structural and static runtime-policy validation before recording an installation, then verifies every adapter tensor's name and shape against the loaded model during activation. Standard PEFT LoRA tensors are translated to MLX names and orientation in memory, without modifying the downloaded artifact. Specialized PEFT variants that cannot be translated losslessly are rejected. Private and gated repositories require a Hugging Face token in Nativ's settings. Local-file import is intentionally not exposed.
 
 ### Build from source
 
@@ -198,6 +205,12 @@ Generate and build the Xcode project:
 ```sh
 make xcode-generate
 make xcode-build
+```
+
+Run the Python validation tests and the complete Xcode unit-test suite:
+
+```sh
+make test
 ```
 
 Verify that the bundled executable can launch and print `mlx_vlm.server` help:
