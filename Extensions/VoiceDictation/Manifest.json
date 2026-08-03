@@ -38,11 +38,6 @@
         "id": "com.nativ.voice-dictation.retranscribe",
         "title": "Retranscribe",
         "defaultShortcut": "Fn+R"
-      },
-      {
-        "id": "com.nativ.voice-dictation.hands-free",
-        "title": "Hands-free",
-        "defaultShortcut": "Option"
       }
     ],
     "settings": [

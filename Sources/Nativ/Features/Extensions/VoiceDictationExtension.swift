@@ -130,11 +130,6 @@ final class VoiceDictationExtension: NativHostExtension {
                     title: "Retranscribe",
                     defaultShortcut: "Fn+R"
                 ),
-                .init(
-                    id: "com.nativ.voice-dictation.hands-free",
-                    title: "Hands-free",
-                    defaultShortcut: "Command+Option"
-                ),
             ],
             settings: [
                 .init(id: "com.nativ.voice-dictation.model", title: "Speech-to-text model"),

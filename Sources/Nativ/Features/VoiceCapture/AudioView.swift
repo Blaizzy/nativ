@@ -1680,16 +1680,35 @@ struct AudioView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Hands-free")
+                            .font(.callout.weight(.medium))
+                        Text(
+                            shortcuts.isHandsFreeEnabled
+                                ? "Press once to start; press again to transcribe."
+                                : "Hold while speaking; release to transcribe."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 16)
+
+                    Toggle("Hands-free", isOn: $shortcuts.isHandsFreeEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .padding(10)
+                .background(
+                    Color.primary.opacity(0.035),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+
                 shortcutRow(
-                    title: "Record while held",
+                    title: "Dictation shortcut",
                     shortcut: shortcuts.recordShortcut,
                     kind: .record
-                )
-                shortcutRow(
-                    title: "Hands-free toggle",
-                    subtitle: "Press once to start; press again to transcribe.",
-                    shortcut: shortcuts.handsFreeShortcut,
-                    kind: .handsFree
                 )
                 shortcutRow(
                     title: "Retry recent audio",
@@ -1852,8 +1871,6 @@ struct AudioView: View {
                     switch kind {
                     case .record:
                         shortcuts.resetRecordShortcut()
-                    case .handsFree:
-                        shortcuts.resetHandsFreeShortcut()
                     case .retry:
                         shortcuts.resetRetryShortcut()
                     }
@@ -2038,7 +2055,6 @@ struct AudioView: View {
     private func apply(_ shortcut: VoiceShortcut, to kind: AudioShortcutKind) {
         let assignments: [(AudioShortcutKind, VoiceShortcut)] = [
             (.record, shortcuts.recordShortcut),
-            (.handsFree, shortcuts.handsFreeShortcut),
             (.retry, shortcuts.retryShortcut),
         ]
         guard !assignments.contains(where: {
@@ -2052,8 +2068,6 @@ struct AudioView: View {
         switch kind {
         case .record:
             shortcuts.recordShortcut = shortcut
-        case .handsFree:
-            shortcuts.handsFreeShortcut = shortcut
         case .retry:
             shortcuts.retryShortcut = shortcut
         }
@@ -2116,15 +2130,13 @@ private struct AudioInputLevelMeterView: View {
 
 private enum AudioShortcutKind: String, Identifiable {
     case record
-    case handsFree
     case retry
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .record: "Record shortcut"
-        case .handsFree: "Hands-free shortcut"
+        case .record: "Dictation shortcut"
         case .retry: "Retry shortcut"
         }
     }

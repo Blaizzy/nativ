@@ -39,9 +39,6 @@ final class VoiceCaptureCoordinator {
         shortcutMonitor.onRetry = { [weak self] in
             self?.retryLastTranscription()
         }
-        shortcutMonitor.onHandsFreeToggle = { [weak self] in
-            self?.toggleHandsFreeCapture()
-        }
         overlay.setDictationCancelAction { [weak self] in
             self?.cancelCapture()
         }
@@ -85,29 +82,32 @@ final class VoiceCaptureCoordinator {
     }
 
     private func handleShortcutChange(_ isHeld: Bool) {
-        guard !isHandsFreeMode else {
-            return
-        }
-        isShortcutHeld = isHeld
-        if isHeld {
-            beginCapture()
-        } else {
-            endCapture()
-        }
-    }
-
-    private func toggleHandsFreeCapture() {
         if isHandsFreeMode {
+            guard isHeld else {
+                return
+            }
             isHandsFreeMode = false
             isShortcutHeld = false
             endCapture()
             return
         }
 
-        guard !isShortcutHeld, !recorder.isRecording else {
+        if isShortcutHeld {
+            guard !isHeld else {
+                return
+            }
+            isShortcutHeld = false
+            endCapture()
             return
         }
-        isHandsFreeMode = true
+
+        guard isHeld else {
+            return
+        }
+
+        if VoiceShortcutPreferences.shared.isHandsFreeEnabled {
+            isHandsFreeMode = true
+        }
         isShortcutHeld = true
         beginCapture()
     }

@@ -30,6 +30,13 @@ final class NativExtensionManifestTests: XCTestCase {
             manifest.contributions.sidebar.map(\.id),
             ["com.nativ.voice-dictation.audio"]
         )
+        XCTAssertEqual(
+            manifest.contributions.shortcuts.map(\.id),
+            [
+                "com.nativ.voice-dictation.transcribe",
+                "com.nativ.voice-dictation.retranscribe",
+            ]
+        )
         XCTAssertTrue(manifest.permissions.contains(.systemAudioCapture))
     }
 
