@@ -53,6 +53,7 @@ enum ChatSwitchModelToolError: LocalizedError {
     case invalidArguments
     case timedOut
     case switchFailed
+    case runtimeBusy
     case mismatchedModel(requested: String, active: String?)
     case appModelUnavailable
 
@@ -64,6 +65,8 @@ enum ChatSwitchModelToolError: LocalizedError {
             return "The model switch did not finish in time."
         case .switchFailed:
             return "The server failed to start with the requested model."
+        case .runtimeBusy:
+            return "Another model or adapter change is already in progress."
         case .mismatchedModel(let requested, let active):
             return "Requested \(requested) but the active model is now \(active ?? "unknown")."
         case .appModelUnavailable:
@@ -76,6 +79,7 @@ enum ChatSwitchModelToolError: LocalizedError {
 protocol ChatModelSwitchingSurface {
     var settings: NativSettings { get }
     var modelSwitchInProgress: Bool { get }
+    var runtimeTransitionInProgress: Bool { get }
     var isRunning: Bool { get }
     func switchLanguageModel(to modelID: String?)
 }
@@ -105,13 +109,17 @@ struct ChatSwitchModelToolExecutor {
             ))
         }
 
+        guard !appModel.runtimeTransitionInProgress else {
+            throw ChatSwitchModelToolError.runtimeBusy
+        }
+
         appModel.switchLanguageModel(to: requestedModelID)
 
         let deadline = Date().addingTimeInterval(60)
-        while appModel.modelSwitchInProgress, Date() < deadline {
+        while appModel.runtimeTransitionInProgress, Date() < deadline {
             try await Task.sleep(nanoseconds: 200_000_000)
         }
-        guard !appModel.modelSwitchInProgress else {
+        guard !appModel.runtimeTransitionInProgress else {
             throw ChatSwitchModelToolError.timedOut
         }
         guard appModel.isRunning else {

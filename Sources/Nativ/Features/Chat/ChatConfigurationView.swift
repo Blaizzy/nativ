@@ -48,6 +48,7 @@ struct ModelConfigurationLayout<Content: View>: View {
             .animation(nil, value: isConfigurationVisible)
 
             ModelConfigurationView(
+                model: model,
                 settings: $model.settings,
                 settingsRequireRestart: model.settingsRequireRestart,
                 onReset: model.resetSettings
@@ -75,13 +76,20 @@ struct ModelConfigurationLayout<Content: View>: View {
     }
 }
 
+private struct LoRAAdapterBrowserTarget: Identifiable {
+    let id: String
+}
+
 struct ModelConfigurationView: View {
+    @ObservedObject var model: NativModel
     @Binding var settings: NativSettings
     let settingsRequireRestart: Bool
     let onReset: () -> Void
+    @ObservedObject private var adapterCatalog = LoRAAdapterCatalog.shared
     @State private var modelConfiguration: LocalModelConfigurationMetadata?
     @State private var isLoadingModelConfiguration = false
     @State private var modelConfigurationRevision = 0
+    @State private var adapterBrowserTarget: LoRAAdapterBrowserTarget?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -92,6 +100,7 @@ struct ModelConfigurationView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     modelContextSection
+                    loraAdapterSection
                     kvQuantizationSection
                     thinkingSection
                     samplingSection
@@ -112,6 +121,13 @@ struct ModelConfigurationView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             modelConfigurationRevision += 1
+        }
+        .sheet(item: $adapterBrowserTarget) { target in
+            LoRAAdapterSheet(
+                model: model,
+                catalog: adapterCatalog,
+                baseModelID: target.id
+            )
         }
     }
 
@@ -193,6 +209,119 @@ struct ModelConfigurationView: View {
                     .configurationHintStyle()
             }
         }
+    }
+
+    @ViewBuilder
+    private var loraAdapterSection: some View {
+        ChatConfigurationSection(title: "LoRA Adapter") {
+            if let baseModelID = settings.normalized().languageModelID {
+                HStack(spacing: 8) {
+                    Text("Active adapter")
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Picker("Active adapter", selection: adapterSelection(for: baseModelID)) {
+                        Text("None")
+                            .tag(Optional<HubLoRAAdapterReference>.none)
+                        ForEach(installedAdapters(for: baseModelID)) { adapter in
+                            Text(adapter.displayName)
+                                .tag(Optional(adapter.reference))
+                        }
+                        if let selectedReference = selectedAdapter(for: baseModelID),
+                           adapterCatalog.localURL(
+                               for: selectedReference,
+                               baseModelID: baseModelID
+                           ) == nil {
+                            Text("\(selectedReference.displayName) · unavailable")
+                                .tag(Optional(selectedReference))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 150)
+                    .disabled(model.runtimeTransitionInProgress)
+                }
+                .font(.body)
+
+                if model.adapterSwitchInProgress {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Applying adapter…")
+                            .configurationHintStyle()
+                    }
+                } else if let selectedReference = selectedAdapter(for: baseModelID),
+                          let installedAdapter = adapterCatalog.adapter(
+                              for: selectedReference
+                          ),
+                          installedAdapter.baseModelID == baseModelID {
+                    Text(
+                        "Rank \(installedAdapter.rank) · \(installedAdapter.tensorCount) structurally verified tensors"
+                    )
+                    .configurationHintStyle()
+                } else {
+                    Text("The base model is currently running without an adapter.")
+                        .configurationHintStyle()
+                }
+
+                if let failure = model.modelLoadFailure,
+                   failure.modelID == baseModelID {
+                    Text(failure.message)
+                        .configurationHintStyle(isError: true)
+                        .textSelection(.enabled)
+                }
+
+                Button {
+                    adapterBrowserTarget = LoRAAdapterBrowserTarget(id: baseModelID)
+                } label: {
+                    Label(
+                        "Find on Hugging Face",
+                        systemImage: "point.3.connected.trianglepath.dotted"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.runtimeTransitionInProgress)
+
+                Text(
+                    "Shows MLX and PEFT LoRA packages that declare \(baseModelID). Nativ verifies package structure before installation and verifies every tensor against the loaded model when you activate it."
+                )
+                .configurationHintStyle()
+            } else {
+                Text("Select a language model before adding a LoRA adapter.")
+                    .configurationHintStyle()
+            }
+        }
+    }
+
+    private func installedAdapters(for baseModelID: String) -> [InstalledLoRAAdapter] {
+        let installed = adapterCatalog.adapters(for: baseModelID).filter {
+            adapterCatalog.localURL(
+                for: $0.reference,
+                baseModelID: baseModelID
+            ) != nil
+        }
+        return LoRAAdapterListSnapshot(
+            installed: installed,
+            remoteAdapters: [],
+            activeReference: selectedAdapter(for: baseModelID)
+        ).installed
+    }
+
+    private func selectedAdapter(
+        for baseModelID: String
+    ) -> HubLoRAAdapterReference? {
+        settings.normalized().languageAdapter(for: baseModelID)
+    }
+
+    private func adapterSelection(
+        for baseModelID: String
+    ) -> Binding<HubLoRAAdapterReference?> {
+        Binding(
+            get: { selectedAdapter(for: baseModelID) },
+            set: { reference in
+                guard reference != selectedAdapter(for: baseModelID) else { return }
+                model.activateLanguageAdapter(reference, for: baseModelID)
+            }
+        )
     }
 
     private var modelConfigurationLookupID: String {

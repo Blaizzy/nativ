@@ -1278,7 +1278,7 @@ struct ControlPanelView: View {
                 footerIcon(systemName: model.isRunning ? "stop.circle" : "play.circle")
             }
             .buttonStyle(.plain)
-            .disabled(model.modelSwitchInProgress)
+            .disabled(model.runtimeTransitionInProgress)
         }
     }
 

@@ -60,6 +60,7 @@ struct ModelsView: View {
     // Observing the manager here invalidates the entire Models view for every
     // progress tick, which makes Discover scroll janky during downloads.
     private var downloadManager: HuggingFaceDownloadManager { .shared }
+    @ObservedObject private var adapterCatalog = LoRAAdapterCatalog.shared
     @State private var section: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
@@ -68,6 +69,7 @@ struct ModelsView: View {
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
+    @State private var adapterModel: LocalModel?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -114,6 +116,13 @@ struct ModelsView: View {
         .onDisappear {
             localLibrary.cancel()
             hubLibrary.cancel()
+        }
+        .sheet(item: $adapterModel) { localModel in
+            LoRAAdapterSheet(
+                model: model,
+                catalog: adapterCatalog,
+                baseModelID: localModel.repoID
+            )
         }
     }
 
@@ -224,13 +233,14 @@ struct ModelsView: View {
                                 preferredPreloadSlot: preferredPreloadSlot(
                                     among: preloadSlots
                                 ),
-                                isSelectionDisabled: model.modelSwitchInProgress,
+                                isSelectionDisabled: model.runtimeTransitionInProgress,
                                 isModelLoading: model.modelLoadingID
                                     == localModel.repoID,
                                 modelLoadingPercentage: model.modelLoadingPercentage,
+                                adapterName: selectedAdapterName(for: localModel.repoID),
                                 isDeleting: localLibrary.deletingModelIDs.contains(
                                     localModel.repoID),
-                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress
+                                canDelete: localModel.isDeletable && !model.runtimeTransitionInProgress
                                     && !isModelInUse(localModel.repoID),
                                 onSetPreload: { slot, isEnabled in
                                     if isEnabled {
@@ -243,6 +253,9 @@ struct ModelsView: View {
                                         model.switchPreloadedModel(to: nil, for: slot)
                                     }
                                 },
+                                onManageAdapters: localModel.capabilities.contains(.text)
+                                    ? { adapterModel = localModel }
+                                    : nil,
                                 onDelete: { deleteInstalledModel(localModel) }
                             )
                         }
@@ -457,6 +470,15 @@ struct ModelsView: View {
             ModelPreloadSlot.allCases.filter {
                 settings.modelID(for: $0) == repoID
             })
+    }
+
+    private func selectedAdapterName(for modelID: String) -> String? {
+        guard let reference = model.settings.normalized().languageAdapter(for: modelID),
+              adapterCatalog.localURL(for: reference, baseModelID: modelID) != nil
+        else {
+            return nil
+        }
+        return reference.displayName
     }
 
     private func preferredPreloadSlot(
@@ -903,9 +925,11 @@ private struct InstalledModelRow: View {
     let isSelectionDisabled: Bool
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
+    let adapterName: String?
     let isDeleting: Bool
     let canDelete: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
+    let onManageAdapters: (() -> Void)?
     let onDelete: () -> Void
 
     @State private var isHovered = false
@@ -980,6 +1004,13 @@ private struct InstalledModelRow: View {
                                     color: .accentColor
                                 )
                             }
+                            if let adapterName {
+                                ModelPill(
+                                    title: adapterName,
+                                    systemImage: "point.3.connected.trianglepath.dotted",
+                                    color: .purple
+                                )
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .clipped()
@@ -1029,6 +1060,17 @@ private struct InstalledModelRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(rowHelp)
             .accessibilityLabel(rowHelp)
+
+            if let onManageAdapters {
+                Button(action: onManageAdapters) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSelectionDisabled)
+                .help("Manage LoRA adapters")
+                .accessibilityLabel("Manage LoRA adapters for \(localModel.repoID)")
+            }
 
             if isDeleting {
                 ProgressView()
