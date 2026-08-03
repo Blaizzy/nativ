@@ -231,23 +231,80 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
 }
 
 enum LocalModelDiscovery {
+    private actor ScanCache {
+        struct Key: Hashable, Sendable {
+            let path: String
+            let additionalPaths: [String]
+        }
+
+        private struct Entry: Sendable {
+            let models: [LocalModel]
+            let expiresAt: Date
+        }
+
+        private var entries: [Key: Entry] = [:]
+        private var inFlight: [Key: Task<[LocalModel], Error>] = [:]
+
+        func scan(key: Key) async throws -> [LocalModel] {
+            let now = Date()
+            entries = entries.filter { $0.value.expiresAt > now }
+            if let entry = entries[key] {
+                return entry.models
+            }
+
+            if let task = inFlight[key] {
+                return try await task.value
+            }
+
+            let task = Task.detached(priority: .userInitiated) {
+                try LocalModelDiscovery.performScan(
+                    path: key.path,
+                    additionalPaths: key.additionalPaths
+                )
+            }
+            inFlight[key] = task
+
+            do {
+                let models = try await task.value
+                entries[key] = Entry(
+                    models: models,
+                    expiresAt: Date().addingTimeInterval(2)
+                )
+                inFlight.removeValue(forKey: key)
+                return models
+            } catch {
+                inFlight.removeValue(forKey: key)
+                throw error
+            }
+        }
+    }
+
+    private static let scanCache = ScanCache()
+
     static func scan(path: String, additionalPaths: [String] = []) async throws -> [LocalModel] {
         let expandedPath = Self.expandedPath(path)
         let expandedAdditionalPaths = additionalPaths.map(Self.expandedPath)
-        return try await Task.detached(priority: .userInitiated) {
-            let externalModels = Self.scanAdditionalPathsSynchronously(
-                expandedAdditionalPaths,
-                fileManager: FileManager.default
-            )
-            do {
-                return Self.sortedByDisplayName(try Self.scanSynchronously(path: expandedPath) + externalModels)
-            } catch {
-                guard !externalModels.isEmpty else {
-                    throw error
-                }
-                return Self.sortedByDisplayName(externalModels)
+        return try await scanCache.scan(
+            key: ScanCache.Key(path: expandedPath, additionalPaths: expandedAdditionalPaths)
+        )
+    }
+
+    private static func performScan(
+        path: String,
+        additionalPaths: [String]
+    ) throws -> [LocalModel] {
+        let externalModels = Self.scanAdditionalPathsSynchronously(
+            additionalPaths,
+            fileManager: FileManager.default
+        )
+        do {
+            return Self.sortedByDisplayName(try Self.scanSynchronously(path: path) + externalModels)
+        } catch {
+            guard !externalModels.isEmpty else {
+                throw error
             }
-        }.value
+            return Self.sortedByDisplayName(externalModels)
+        }
     }
 
     static func delete(repoID: String, path: String) async throws {
