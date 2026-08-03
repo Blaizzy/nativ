@@ -313,6 +313,50 @@ final class AudioAnalyticsStore: ObservableObject {
         save()
     }
 
+    func deleteDictation(
+        withID recordID: String,
+        recordingsDirectory: URL?,
+        fileManager: FileManager = .default
+    ) {
+        guard records.contains(where: {
+            $0.id == recordID && $0.resolvedKind == .dictation
+        }) else {
+            return
+        }
+        if let recordingsDirectory {
+            Self.deleteDictationFiles(
+                withID: recordID,
+                in: recordingsDirectory,
+                fileManager: fileManager
+            )
+        }
+        records.removeAll { $0.id == recordID }
+        save()
+    }
+
+    func deleteAllDictations(
+        recordingsDirectory: URL?,
+        fileManager: FileManager = .default
+    ) {
+        let recordIDs = records.compactMap { record in
+            record.resolvedKind == .dictation ? record.id : nil
+        }
+        guard !recordIDs.isEmpty else {
+            return
+        }
+        if let recordingsDirectory {
+            for recordID in recordIDs {
+                Self.deleteDictationFiles(
+                    withID: recordID,
+                    in: recordingsDirectory,
+                    fileManager: fileManager
+                )
+            }
+        }
+        records.removeAll { $0.resolvedKind == .dictation }
+        save()
+    }
+
     func importTranscripts(in directory: URL) {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -394,6 +438,19 @@ final class AudioAnalyticsStore: ObservableObject {
             forKeys: [.contentModificationDateKey, .creationDateKey]
         )
         return values?.contentModificationDate ?? values?.creationDate
+    }
+
+    private static func deleteDictationFiles(
+        withID recordID: String,
+        in directory: URL,
+        fileManager: FileManager
+    ) {
+        for pathExtension in ["txt", "wav"] {
+            let url = directory
+                .appendingPathComponent(recordID)
+                .appendingPathExtension(pathExtension)
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     private func load() {

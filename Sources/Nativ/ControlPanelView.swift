@@ -148,6 +148,11 @@ private enum ControlPanelLayout {
     static let sidebarTransitionSettleDuration: Duration = .milliseconds(225)
 }
 
+private enum ControlPanelOnboarding {
+    static let extensionsBadgeDismissedKey =
+        "nativ.control-panel.extensions-new-badge-dismissed.v1"
+}
+
 extension Color {
     static let nativMainContentBackground = Color(
         nsColor: NSColor(name: NSColor.Name("NativMainContentBackground")) { appearance in
@@ -263,6 +268,8 @@ struct ControlPanelView: View {
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
+    private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
@@ -616,6 +623,14 @@ struct ControlPanelView: View {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
                     .labelStyle(SidebarNavigationLabelStyle())
+                if tab == .extensions, !isExtensionsBadgeDismissed {
+                    Text("NEW")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                }
                 Spacer(minLength: 0)
                 if tab == .models {
                     HStack(spacing: 6) {
@@ -1822,6 +1837,9 @@ struct ControlPanelView: View {
     private func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
         switch selection {
         case .tab(let tab):
+            if tab == .extensions {
+                isExtensionsBadgeDismissed = true
+            }
             if tab == .chat, chat.currentSessionID == nil {
                 chat.createSession()
             } else if tab == .imageGeneration,
@@ -3877,7 +3895,6 @@ private struct SidebarRowSelectionStyle: ViewModifier {
             .foregroundStyle(Color.primary)
             .contentShape(.rect)
             .onHover { isHovering = $0 }
-            .animation(.easeInOut, value: isHovering)
     }
 
     private var backgroundColor: Color {

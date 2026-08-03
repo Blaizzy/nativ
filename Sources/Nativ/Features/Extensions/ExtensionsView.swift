@@ -267,7 +267,7 @@ struct ExtensionsView: View {
 
             FlowLayout(spacing: 8) {
                 ForEach(record.manifest.permissions, id: \.self) { permission in
-                    permissionBadge(permission)
+                    permissionBadge(permission, extensionIsEnabled: record.isEnabled)
                 }
             }
         }
@@ -275,10 +275,13 @@ struct ExtensionsView: View {
 
     @ViewBuilder
     private func permissionBadge(
-        _ permission: NativExtensionPermission
+        _ permission: NativExtensionPermission,
+        extensionIsEnabled: Bool
     ) -> some View {
         let status = manager.permissionStatus(permission)
-        let actionTitle = manager.permissionActionTitle(permission)
+        let actionTitle = extensionIsEnabled
+            ? manager.permissionActionTitle(permission)
+            : nil
         if let actionTitle {
             Button {
                 manager.requestPermission(permission)

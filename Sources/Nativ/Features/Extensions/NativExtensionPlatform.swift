@@ -211,9 +211,15 @@ final class NativExtensionManager: ObservableObject {
               !record.isRemoved else {
             return
         }
+        let shouldRequestMicrophone = enabled
+            && !record.isEnabled
+            && record.manifest.permissions.contains(.microphone)
         stateStore.set(enabled ? .enabled : .disabled, for: extensionID)
         rebuildRecords()
         reconcileLifecycle()
+        if shouldRequestMicrophone {
+            requestPermission(.microphone)
+        }
     }
 
     func remove(extensionID: String) {
@@ -240,12 +246,17 @@ final class NativExtensionManager: ObservableObject {
     }
 
     func restore(extensionID: String) {
-        guard records.contains(where: { $0.id == extensionID }) else {
+        guard let record = records.first(where: { $0.id == extensionID }),
+              record.isRemoved else {
             return
         }
+        let shouldRequestMicrophone = record.manifest.permissions.contains(.microphone)
         stateStore.set(.enabled, for: extensionID)
         rebuildRecords()
         reconcileLifecycle()
+        if shouldRequestMicrophone {
+            requestPermission(.microphone)
+        }
     }
 
     func installPackage(at sourceURL: URL) {
