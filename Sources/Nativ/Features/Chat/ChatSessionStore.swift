@@ -11,6 +11,9 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var updatedAt: Date
     var messages: [ChatTranscriptMessage]
     var pinned: Bool?
+    var pinnedOrder: Int?
+    var sessionOrder: Int?
+    var folderID: UUID?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -19,7 +22,10 @@ struct ChatSession: Identifiable, Equatable, Codable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             messageCount: messages.count,
-            isPinned: pinned ?? false
+            isPinned: pinned ?? false,
+            pinnedOrder: pinnedOrder,
+            sessionOrder: sessionOrder,
+            folderID: folderID
         )
     }
 
@@ -100,6 +106,9 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let updatedAt: Date
     let messageCount: Int
     let isPinned: Bool
+    let pinnedOrder: Int?
+    let sessionOrder: Int?
+    let folderID: UUID?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
@@ -131,6 +140,32 @@ struct ChatFolderAttachment: Identifiable, Equatable, Codable {
         self.totalFileCount = totalFileCount
         self.approxTokens = approxTokens
         self.text = text
+    }
+}
+
+struct ChatFolder: Identifiable, Equatable, Codable {
+    let id: UUID
+    var name: String
+    var isCollapsed: Bool
+    var isPinned: Bool
+
+    init(id: UUID = UUID(), name: String, isCollapsed: Bool = false, isPinned: Bool = false) {
+        self.id = id
+        self.name = name
+        self.isCollapsed = isCollapsed
+        self.isPinned = isPinned
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, isCollapsed, isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        isCollapsed = try container.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 
@@ -281,12 +316,15 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case .user:
             let folderText = folderAttachments.map(\.text).joined(separator: "\n\n")
             let combined = [folderText, content].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            if !imageAttachments.isEmpty {
+            let imageParts = imageAttachments.filter {
+                ArtifactKind.resolve(mimeType: $0.mimeType, filename: $0.filename) == .image
+            }
+            if !imageParts.isEmpty {
                 var parts: [MLXChatContentPart] = []
                 if !combined.isEmpty {
                     parts.append(MLXChatContentPart(text: combined))
                 }
-                parts.append(contentsOf: imageAttachments.map { MLXChatContentPart(imageURL: $0.dataURL) })
+                parts.append(contentsOf: imageParts.map { MLXChatContentPart(imageURL: $0.dataURL) })
                 return MLXChatMessage(role: "user", content: .parts(parts))
             }
 
@@ -487,6 +525,28 @@ struct ChatSessionStore {
         try? fileManager.removeItem(at: sessionURL(for: id))
     }
 
+    func loadFolders() -> [ChatFolder] {
+        guard let data = try? Data(contentsOf: foldersURL) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([ChatFolder].self, from: data)) ?? []
+    }
+
+    func saveFolders(_ folders: [ChatFolder]) {
+        do {
+            try fileManager.createDirectory(
+                at: chatDirectory,
+                withIntermediateDirectories: true
+            )
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(folders)
+            try data.write(to: foldersURL, options: .atomic)
+        } catch {
+        }
+    }
+
     private func loadSession(from url: URL) -> ChatSession? {
         guard let data = try? Data(contentsOf: url) else {
             return nil
@@ -541,6 +601,23 @@ struct ChatSessionStore {
         .filter { $0.pathExtension == "json" }
     }
 
+    func sessionsFingerprint() -> String {
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: sessionsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+        )) ?? []
+        return urls
+            .filter { $0.pathExtension == "json" }
+            .compactMap { url in
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+                let size = values?.fileSize ?? 0
+                return "\(url.lastPathComponent):\(mtime):\(size)"
+            }
+            .sorted()
+            .joined(separator: "|")
+    }
+
     func sessionURL(for id: UUID) -> URL {
         sessionsDirectory.appendingPathComponent("\(id.uuidString).json")
     }
@@ -556,6 +633,10 @@ struct ChatSessionStore {
 
     private var sessionsDirectory: URL {
         chatDirectory.appendingPathComponent("Sessions", isDirectory: true)
+    }
+
+    private var foldersURL: URL {
+        chatDirectory.appendingPathComponent("folders.json")
     }
 
     private var legacyTranscriptURL: URL {

@@ -133,6 +133,7 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
     case imageGeneration
     case textToSpeech
     case speechToText
+    case embeddings
 
     var id: Self { self }
 
@@ -146,6 +147,8 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
             "Text to Speech"
         case .speechToText:
             "Speech to Text"
+        case .embeddings:
+            "Embeddings"
         }
     }
 
@@ -159,6 +162,8 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
             "speaker.wave.2"
         case .speechToText:
             "waveform"
+        case .embeddings:
+            "square.stack.3d.up"
         }
     }
 }
@@ -265,6 +270,47 @@ struct ModelPreloadMemoryWarning: Equatable, Identifiable, Sendable {
     }
 }
 
+struct ModelConfigProfile: Codable, Equatable {
+    var thinkingEnabled: Bool
+    var thinkingBudgetEnabled: Bool
+    var thinkingBudget: Int
+    var speculativeDecodingEnabled: Bool
+    var draftModelID: String
+    var draftKind: String
+
+    init(
+        thinkingEnabled: Bool = false,
+        thinkingBudgetEnabled: Bool = false,
+        thinkingBudget: Int = 512,
+        speculativeDecodingEnabled: Bool = false,
+        draftModelID: String = "",
+        draftKind: String = "auto"
+    ) {
+        self.thinkingEnabled = thinkingEnabled
+        self.thinkingBudgetEnabled = thinkingBudgetEnabled
+        self.thinkingBudget = thinkingBudget
+        self.speculativeDecodingEnabled = speculativeDecodingEnabled
+        self.draftModelID = draftModelID
+        self.draftKind = draftKind
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case thinkingEnabled, thinkingBudgetEnabled, thinkingBudget
+        case speculativeDecodingEnabled, draftModelID, draftKind
+    }
+
+    init(from decoder: Decoder) throws {
+        let defaults = ModelConfigProfile()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled) ?? defaults.thinkingEnabled
+        thinkingBudgetEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingBudgetEnabled) ?? defaults.thinkingBudgetEnabled
+        thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget) ?? defaults.thinkingBudget
+        speculativeDecodingEnabled = try container.decodeIfPresent(Bool.self, forKey: .speculativeDecodingEnabled) ?? defaults.speculativeDecodingEnabled
+        draftModelID = try container.decodeIfPresent(String.self, forKey: .draftModelID) ?? defaults.draftModelID
+        draftKind = try container.decodeIfPresent(String.self, forKey: .draftKind) ?? defaults.draftKind
+    }
+}
+
 struct NativSettings: Codable, Equatable {
     /// Default hub cache location, resolved from the environment.
     /// See `HuggingFaceCache.defaultHubPath`.
@@ -274,12 +320,15 @@ struct NativSettings: Codable, Equatable {
 
     static let defaultServerHost = "127.0.0.1"
 
+    static let serverSupportsEmbeddingModelArgument = false
+
     var modelSearchPath: String
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
+    var embeddingModelID: String?
     var serverAPIKey: String?
     var huggingFaceToken: String?
     var serverHost: String
@@ -313,6 +362,7 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    var modelConfigs: [String: ModelConfigProfile]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
@@ -321,6 +371,7 @@ struct NativSettings: Codable, Equatable {
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
         speechToTextModelID: String? = nil,
+        embeddingModelID: String? = nil,
         serverAPIKey: String? = nil,
         huggingFaceToken: String? = nil,
         serverHost: String = Self.defaultServerHost,
@@ -353,7 +404,8 @@ struct NativSettings: Codable, Equatable {
         structuredOutputSchema: String = Self.defaultStructuredOutputSchema,
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
-        prefixCacheBlockSize: Int = 16
+        prefixCacheBlockSize: Int = 16,
+        modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
@@ -361,6 +413,7 @@ struct NativSettings: Codable, Equatable {
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
+        self.embeddingModelID = embeddingModelID
         self.serverAPIKey = serverAPIKey
         self.huggingFaceToken = huggingFaceToken
         self.serverHost = serverHost
@@ -394,6 +447,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.modelConfigs = modelConfigs
     }
 
     enum CodingKeys: String, CodingKey {
@@ -403,6 +457,7 @@ struct NativSettings: Codable, Equatable {
         case imageGenerationModelID
         case textToSpeechModelID
         case speechToTextModelID
+        case embeddingModelID
         case serverAPIKey
         case huggingFaceToken
         case serverHost
@@ -437,6 +492,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case modelConfigs
     }
 
     init(from decoder: Decoder) throws {
@@ -450,6 +506,7 @@ struct NativSettings: Codable, Equatable {
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
         speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
+        embeddingModelID = try container.decodeIfPresent(String.self, forKey: .embeddingModelID) ?? defaults.embeddingModelID
         serverAPIKey = try container.decodeIfPresent(String.self, forKey: .serverAPIKey) ?? defaults.serverAPIKey
         huggingFaceToken = try container.decodeIfPresent(String.self, forKey: .huggingFaceToken) ?? defaults.huggingFaceToken
         serverHost = try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
@@ -483,6 +540,7 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixCachingEnabled) ?? defaults.prefixCachingEnabled
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
+        modelConfigs = try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs) ?? defaults.modelConfigs
     }
 
     func encode(to encoder: Encoder) throws {
@@ -493,6 +551,7 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
+        try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
         try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
@@ -525,6 +584,38 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(modelConfigs, forKey: .modelConfigs)
+    }
+
+    var currentModelProfile: ModelConfigProfile {
+        ModelConfigProfile(
+            thinkingEnabled: thinkingEnabled,
+            thinkingBudgetEnabled: thinkingBudgetEnabled,
+            thinkingBudget: thinkingBudget,
+            speculativeDecodingEnabled: speculativeDecodingEnabled,
+            draftModelID: draftModelID,
+            draftKind: draftKind
+        )
+    }
+
+    func modelProfile(for modelID: String) -> ModelConfigProfile? {
+        modelConfigs[modelID]
+    }
+
+    mutating func rememberProfile(forModel modelID: String) {
+        guard !modelID.isEmpty else {
+            return
+        }
+        modelConfigs[modelID] = currentModelProfile
+    }
+
+    mutating func applyProfile(_ profile: ModelConfigProfile) {
+        thinkingEnabled = profile.thinkingEnabled
+        thinkingBudgetEnabled = profile.thinkingBudgetEnabled
+        thinkingBudget = profile.thinkingBudget
+        speculativeDecodingEnabled = profile.speculativeDecodingEnabled
+        draftModelID = profile.draftModelID
+        draftKind = profile.draftKind
     }
 
     static func load(
@@ -602,6 +693,7 @@ struct NativSettings: Codable, Equatable {
         }
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
+        settings.embeddingModelID = Self.normalizedModelID(settings.embeddingModelID)
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
         settings.serverHost = Self.normalizedServerHost(settings.serverHost)
@@ -641,6 +733,7 @@ struct NativSettings: Codable, Equatable {
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID
+            && lhs.embeddingModelID == rhs.embeddingModelID
             && lhs.serverAPIKey == rhs.serverAPIKey
             && lhs.huggingFaceToken == rhs.huggingFaceToken
             && lhs.serverHost == rhs.serverHost
@@ -690,7 +783,22 @@ struct NativSettings: Codable, Equatable {
             environment["APC_NUM_BLOCKS"] = "\(settings.prefixCacheBlocks)"
             environment["APC_BLOCK_SIZE"] = "\(settings.prefixCacheBlockSize)"
         }
+        if let modelConfigsJSON = encodedModelConfigs {
+            environment["NATIV_MODEL_CONFIGS"] = modelConfigsJSON
+        }
         return environment
+    }
+
+    var encodedModelConfigs: String? {
+        guard !modelConfigs.isEmpty else {
+            return nil
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(modelConfigs) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     var launchArguments: [String] {
@@ -712,6 +820,9 @@ struct NativSettings: Codable, Equatable {
         }
         if let speechToTextModelID = settings.speechToTextModelID {
             arguments.append(contentsOf: ["--stt-model", speechToTextModelID])
+        }
+        if Self.serverSupportsEmbeddingModelArgument, let embeddingModelID = settings.embeddingModelID {
+            arguments.append(contentsOf: ["--embedding-model", embeddingModelID])
         }
 
         if settings.maxKVSize > 0 {
@@ -750,6 +861,8 @@ struct NativSettings: Codable, Equatable {
             textToSpeechModelID
         case .speechToText:
             speechToTextModelID
+        case .embeddings:
+            embeddingModelID
         }
     }
 
@@ -763,6 +876,8 @@ struct NativSettings: Codable, Equatable {
             textToSpeechModelID = modelID
         case .speechToText:
             speechToTextModelID = modelID
+        case .embeddings:
+            embeddingModelID = modelID
         }
     }
 

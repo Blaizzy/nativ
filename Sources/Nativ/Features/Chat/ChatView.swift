@@ -24,6 +24,7 @@ struct ChatView: View {
     let conversationWidthReduction: CGFloat
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
+    @State private var isDropTargeted = false
     @State private var followsLatestMessage = true
     @State private var isUserScrollingTranscript = false
 
@@ -68,8 +69,42 @@ struct ChatView: View {
                         }
                     }
             }
+            .dropDestination(for: URL.self) { urls, _ in
+                chat.attachImages(fromURLs: urls)
+            } isTargeted: { isDropTargeted = $0 }
+            .overlay {
+                if isDropTargeted {
+                    dropOverlay
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+    }
+
+    private var dropOverlay: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor).opacity(0.72)
+            VStack(spacing: 14) {
+                Image(systemName: "plus")
+                    .font(.system(size: 34, weight: .semibold))
+                Text("Drop files here")
+                    .font(.system(size: 15, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(44)
+            .frame(maxWidth: 320)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        Color.secondary.opacity(0.55),
+                        style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                    )
+            )
+        }
+        .ignoresSafeArea()
     }
 
     private var selectedModelID: String? {
@@ -157,6 +192,16 @@ struct ChatView: View {
             followsLatestMessage = true
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
+        .onChange(of: chat.scrollTargetMessageID) { _, target in
+            guard let target else {
+                return
+            }
+            followsLatestMessage = false
+            DispatchQueue.main.async {
+                transcriptScrollPosition.scrollTo(id: target, anchor: .center)
+                chat.scrollTargetMessageID = nil
+            }
+        }
         .onAppear {
             followsLatestMessage = true
             transcriptScrollPosition.scrollTo(edge: .bottom)
@@ -183,6 +228,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     @Published private(set) var sessions: [ChatSessionSummary] = []
+    @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
@@ -191,6 +237,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
+    @Published var scrollTargetMessageID: UUID?
 
     private let sessionStore = ChatSessionStore()
     private var activeTask: Task<Void, Never>?
@@ -210,6 +257,7 @@ final class ChatViewModel: ObservableObject {
 
     init() {
         storedSessions = sessionStore.loadSessions()
+        folders = sessionStore.loadFolders()
         pruneRedundantEmptySessions()
         if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
             applyCurrentSession(latestSession)
@@ -316,6 +364,32 @@ final class ChatViewModel: ObservableObject {
         applyCurrentSession(session)
     }
 
+    func stageAttachment(_ attachment: ChatImageAttachment) {
+        pendingImageAttachments.append(attachment)
+    }
+
+    func removeAttachment(sessionID: UUID, messageID: UUID, attachmentID: UUID) {
+        if sessionID == currentSessionID {
+            for index in messages.indices where messages[index].id == messageID {
+                messages[index].imageAttachments.removeAll { $0.id == attachmentID }
+            }
+            persistCurrentSession(updateTimestamp: false)
+            return
+        }
+
+        guard var session = storedSessions.first(where: { $0.id == sessionID })
+            ?? sessionStore.loadSession(id: sessionID)
+        else {
+            return
+        }
+        for index in session.messages.indices where session.messages[index].id == messageID {
+            session.messages[index].imageAttachments.removeAll { $0.id == attachmentID }
+        }
+        upsertStoredSession(session)
+        sessionStore.saveSession(session)
+        refreshSessionList()
+    }
+
     func selectSession(_ sessionID: UUID) {
         guard sessionID != currentSessionID else {
             return
@@ -357,12 +431,129 @@ final class ChatViewModel: ObservableObject {
         guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
             return
         }
+        let order = pinned ? nextPinnedOrder() : nil
         storedSessions[index].pinned = pinned
+        storedSessions[index].pinnedOrder = order
         if currentSession?.id == sessionID {
             currentSession?.pinned = pinned
+            currentSession?.pinnedOrder = order
         }
         sessionStore.saveSession(storedSessions[index])
         refreshSessionList()
+    }
+
+    @discardableResult
+    func createFolder(name: String) -> UUID {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed, isCollapsed: true)
+        folders.append(folder)
+        sessionStore.saveFolders(folders)
+        return folder.id
+    }
+
+    func renameFolder(_ folderID: UUID, to newName: String) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
+            return
+        }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        folders[index].name = trimmed
+        sessionStore.saveFolders(folders)
+    }
+
+    func deleteFolder(_ folderID: UUID) {
+        folders.removeAll { $0.id == folderID }
+        sessionStore.saveFolders(folders)
+        for index in storedSessions.indices where storedSessions[index].folderID == folderID {
+            storedSessions[index].folderID = nil
+            sessionStore.saveSession(storedSessions[index])
+        }
+        if currentSession?.folderID == folderID {
+            currentSession?.folderID = nil
+        }
+        refreshSessionList()
+    }
+
+    func setFolderCollapsed(_ folderID: UUID, collapsed: Bool) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
+            return
+        }
+        folders[index].isCollapsed = collapsed
+        sessionStore.saveFolders(folders)
+    }
+
+    func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
+        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+            return
+        }
+        storedSessions[index].folderID = folderID
+        if currentSession?.id == sessionID {
+            currentSession?.folderID = folderID
+        }
+        sessionStore.saveSession(storedSessions[index])
+        refreshSessionList()
+    }
+
+    func setFolderPinned(_ folderID: UUID, pinned: Bool) {
+        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
+            return
+        }
+        folders[index].isPinned = pinned
+        sessionStore.saveFolders(folders)
+    }
+
+    func applyFolderOrder(_ orderedFolderIDs: [UUID]) {
+        var reordered: [ChatFolder] = []
+        for id in orderedFolderIDs {
+            if let folder = folders.first(where: { $0.id == id }) {
+                reordered.append(folder)
+            }
+        }
+        for folder in folders where !orderedFolderIDs.contains(folder.id) {
+            reordered.append(folder)
+        }
+        folders = reordered
+        sessionStore.saveFolders(folders)
+    }
+
+    func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
+        for (order, sessionID) in orderedSessionIDs.enumerated() {
+            guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+                continue
+            }
+            storedSessions[index].pinned = true
+            storedSessions[index].pinnedOrder = order
+            if currentSession?.id == sessionID {
+                currentSession?.pinned = true
+                currentSession?.pinnedOrder = order
+            }
+            sessionStore.saveSession(storedSessions[index])
+        }
+        refreshSessionList()
+    }
+
+    func applySessionOrder(_ orderedSessionIDs: [UUID]) {
+        for (order, sessionID) in orderedSessionIDs.enumerated() {
+            guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+                continue
+            }
+            storedSessions[index].pinned = false
+            storedSessions[index].pinnedOrder = nil
+            storedSessions[index].sessionOrder = order
+            if currentSession?.id == sessionID {
+                currentSession?.pinned = false
+                currentSession?.pinnedOrder = nil
+                currentSession?.sessionOrder = order
+            }
+            sessionStore.saveSession(storedSessions[index])
+        }
+        refreshSessionList()
+    }
+
+    private func nextPinnedOrder() -> Int {
+        (storedSessions.compactMap(\.pinnedOrder).max() ?? -1) + 1
     }
 
     func deleteSession(_ sessionID: UUID) {
@@ -526,7 +717,7 @@ final class ChatViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .movie, .pdf, .plainText, .rtf, .spreadsheet, .presentation]
 
         guard panel.runModal() == .OK else {
             return
@@ -691,6 +882,16 @@ final class ChatViewModel: ObservableObject {
     @discardableResult
     func attachImages(from pasteboard: NSPasteboard) -> Bool {
         let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
+        guard !attachments.isEmpty else {
+            return false
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+        return true
+    }
+
+    @discardableResult
+    func attachImages(fromURLs urls: [URL]) -> Bool {
+        let attachments = urls.compactMap { try? ChatImageAttachment(contentsOf: $0) }
         guard !attachments.isEmpty else {
             return false
         }
@@ -2442,7 +2643,7 @@ private struct ChatImageAttachmentView: View {
                     .frame(width: size.width, height: size.height)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: "photo")
+                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
                         .font(.title2)
                     Text(attachment.filename)
                         .font(.caption)

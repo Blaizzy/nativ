@@ -53,6 +53,26 @@ def default_mlx_vlm_source() -> Path | None:
     return source
 
 
+def default_mlx_audio_source() -> Path | None:
+    if os.environ.get("MLX_AUDIO_SOURCE_PATH"):
+        return None
+
+    source = REPO_ROOT.parent / "mlx-audio"
+    if not (source / "pyproject.toml").is_file() or not (source / "mlx_audio").is_dir():
+        return None
+
+    branch = subprocess.run(
+        ["git", "-C", str(source), "branch", "--show-current"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if branch.returncode != 0 or branch.stdout.strip() != "main":
+        return None
+
+    return source
+
+
 def is_mach_o(path: Path) -> bool:
     if path.is_symlink() or not path.is_file():
         return False
@@ -83,23 +103,24 @@ def sign_embedded_code(output: Path) -> None:
     if not mach_o_files:
         raise SystemExit(f"No Mach-O files found in {output}")
 
-    print(
-        f"Signing {len(mach_o_files)} embedded Mach-O files with Hardened Runtime."
+    use_hardened_runtime = identity != "-"
+    signing_mode = (
+        "with Hardened Runtime"
+        if use_hardened_runtime
+        else "for local ad-hoc execution"
     )
+    print(f"Signing {len(mach_o_files)} embedded Mach-O files {signing_mode}.")
     for path in mach_o_files:
-        subprocess.run(
-            [
-                "/usr/bin/codesign",
-                "--force",
-                "--sign",
-                identity,
-                "--options",
-                "runtime",
-                "--timestamp=none",
-                str(path),
-            ],
-            check=True,
-        )
+        command = [
+            "/usr/bin/codesign",
+            "--force",
+            "--sign",
+            identity,
+        ]
+        if use_hardened_runtime:
+            command.extend(["--options", "runtime"])
+        command.extend(["--timestamp=none", str(path)])
+        subprocess.run(command, check=True)
 
 
 def main() -> None:
@@ -116,6 +137,10 @@ def main() -> None:
     if mlx_vlm_source is not None:
         print(f"Using local mlx-vlm source {mlx_vlm_source}")
         command.extend(["--mlx-vlm-source", str(mlx_vlm_source)])
+    mlx_audio_source = default_mlx_audio_source()
+    if mlx_audio_source is not None:
+        print(f"Using local mlx-audio source {mlx_audio_source}")
+        command.extend(["--mlx-audio-source", str(mlx_audio_source)])
     subprocess.run(command, cwd=REPO_ROOT, check=True)
     sign_embedded_code(output)
 

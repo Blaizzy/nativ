@@ -21,6 +21,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
     case language = "Language"
     case image = "Image"
     case speech = "Speech"
+    case embeddings = "Embeddings"
 
     var id: String { rawValue }
 
@@ -34,6 +35,8 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
             !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing])
         case .speech:
             !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
+        case .embeddings:
+            capabilities.contains(.embeddings)
         }
     }
 
@@ -50,6 +53,7 @@ struct ModelsView: View {
     @ObservedObject var model: NativModel
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
+    var speechModelDiscoveryRequest = 0
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
@@ -60,6 +64,7 @@ struct ModelsView: View {
     @State private var hubSort: HuggingFaceModelSort = .downloads
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
+    @State private var handledSpeechModelDiscoveryRequest = 0
 
     var body: some View {
         ModelConfigurationLayout(
@@ -87,6 +92,12 @@ struct ModelsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             rescanLocalModels()
         }
+        .onAppear {
+            openSpeechModelDiscoveryIfRequested()
+        }
+        .onChange(of: speechModelDiscoveryRequest) { _, _ in
+            openSpeechModelDiscoveryIfRequested()
+        }
         .task(id: hubSearchTaskID) {
             guard section == .discover else { return }
             try? await Task.sleep(for: .milliseconds(350))
@@ -101,6 +112,18 @@ struct ModelsView: View {
             localLibrary.cancel()
             hubLibrary.cancel()
         }
+    }
+
+    private func openSpeechModelDiscoveryIfRequested() {
+        guard speechModelDiscoveryRequest > handledSpeechModelDiscoveryRequest else {
+            return
+        }
+        handledSpeechModelDiscoveryRequest = speechModelDiscoveryRequest
+        section = .discover
+        typeFilter = .speech
+        hubQuery = ""
+        hubCapabilityFilters = [.speechToText]
+        hubAccessFilter = .all
     }
 
     @ViewBuilder
@@ -441,6 +464,9 @@ struct ModelsView: View {
         if localModel.capabilities.contains(.speechToText) {
             slots.append(.speechToText)
         }
+        if localModel.capabilities.contains(.embeddings) {
+            slots.append(.embeddings)
+        }
         return slots
     }
 
@@ -467,6 +493,8 @@ struct ModelsView: View {
                 .imageGeneration
             case .speech:
                 nil
+            case .embeddings:
+                .embeddings
             }
         if let preferredSlot, slots.contains(preferredSlot) {
             return preferredSlot
@@ -1065,7 +1093,7 @@ private struct InstalledModelRow: View {
             )
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
-            Button("Delete Model", role: .destructive, action: onDelete)
+            Button("Delete Model", action: onDelete)
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -1136,6 +1164,23 @@ private struct HubModelRow: View {
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
 
+    private var memoryFitWarning: String? {
+        if let estimate = model.memoryEstimate, !estimate.isUsable {
+            return "Pre-download estimate. \(estimate.explanation)"
+        }
+        if let sizeBytes = model.sizeBytes, sizeBytes > 0 {
+            let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+            let budget = Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction)
+            if Double(sizeBytes) > budget {
+                let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .memory)
+                let total = ByteCountFormatter.string(
+                    fromByteCount: Int64(clamping: totalMemoryBytes), countStyle: .memory)
+                return "Pre-download estimate. Model weights are ~\(size), larger than your \(total) of unified memory."
+            }
+        }
+        return nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
@@ -1148,14 +1193,6 @@ private struct HubModelRow: View {
                             .lineLimit(1)
                         if model.isGated {
                             ModelPill(title: "Gated", systemImage: "lock")
-                        }
-                        if let memoryEstimate = model.memoryEstimate, !memoryEstimate.isUsable {
-                            ModelPill(
-                                title: "May not fit in memory",
-                                systemImage: "exclamationmark.triangle.fill",
-                                color: .orange
-                            )
-                            .help("Pre-download estimate. \(memoryEstimate.explanation)")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1177,6 +1214,18 @@ private struct HubModelRow: View {
                                     fromByteCount: sizeBytes, countStyle: .file),
                                 systemImage: "internaldrive"
                             )
+                        }
+                        if let memoryFitWarning {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color.red)
+                                )
+                                .help(memoryFitWarning)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
