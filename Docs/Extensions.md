@@ -116,6 +116,9 @@ The host only renders contributions for extensions that are installed, enabled, 
 have an available host adapter or runtime. Removing Audio therefore removes its page
 from navigation and stops its global shortcuts immediately.
 
+Included extensions are enabled by default unless their manifest sets
+`enabledByDefault` to `false`. External extensions always start disabled.
+
 ## Permissions and host services
 
 Permissions are declared up front and enforced again by the XPC broker:

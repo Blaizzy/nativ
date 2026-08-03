@@ -87,6 +87,11 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
     static let handsFreeDefault = VoiceShortcut(
         keyCode: nil,
         keyDisplay: nil,
+        modifiers: [.command, .option]
+    )
+    static let legacyHandsFreeDefault = VoiceShortcut(
+        keyCode: nil,
+        keyDisplay: nil,
         modifiers: [.option]
     )
 
@@ -178,9 +183,12 @@ final class VoiceShortcutPreferences: ObservableObject {
         {
             recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
-            handsFreeShortcut = payload.handsFreeShortcut.flatMap {
+            let storedHandsFreeShortcut = payload.handsFreeShortcut.flatMap {
                 $0.isValid ? $0 : nil
             } ?? .handsFreeDefault
+            handsFreeShortcut = storedHandsFreeShortcut == .legacyHandsFreeDefault
+                ? .handsFreeDefault
+                : storedHandsFreeShortcut
         } else {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault

@@ -42,6 +42,9 @@ final class VoiceCaptureCoordinator {
         shortcutMonitor.onHandsFreeToggle = { [weak self] in
             self?.toggleHandsFreeCapture()
         }
+        overlay.setDictationCancelAction { [weak self] in
+            self?.cancelCapture()
+        }
         recorder.onMeterUpdate = { [weak self] level, elapsed in
             self?.overlay.update(level: level, elapsed: elapsed)
         }
@@ -118,7 +121,7 @@ final class VoiceCaptureCoordinator {
             guard let self else {
                 return
             }
-            let isAuthorized = await Self.requestMicrophoneAccess()
+            let isAuthorized = Self.hasMicrophoneAccess()
             guard !Task.isCancelled, self.isShortcutHeld else {
                 return
             }
@@ -159,6 +162,17 @@ final class VoiceCaptureCoordinator {
             return
         }
         activeOverlayTranscriptionID = nil
+        overlay.hide()
+    }
+
+    private func cancelCapture() {
+        permissionTask?.cancel()
+        permissionTask = nil
+        recorder.discard()
+        activeOverlayTranscriptionID = nil
+        insertionTarget = nil
+        isShortcutHeld = false
+        isHandsFreeMode = false
         overlay.hide()
     }
 
@@ -488,16 +502,7 @@ final class VoiceCaptureCoordinator {
         }
     }
 
-    private static func requestMicrophoneAccess() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            true
-        case .notDetermined:
-            await AVCaptureDevice.requestAccess(for: .audio)
-        case .denied, .restricted:
-            false
-        @unknown default:
-            false
-        }
+    private static func hasMicrophoneAccess() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 }

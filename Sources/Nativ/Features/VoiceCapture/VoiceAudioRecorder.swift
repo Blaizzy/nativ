@@ -247,6 +247,13 @@ final class VoiceAudioRecorder {
         return recordingURL
     }
 
+    func discard() {
+        if let recordingURL = stop() {
+            try? FileManager.default.removeItem(at: recordingURL)
+        }
+        lastRecordingDuration = nil
+    }
+
     private func updateMeter(level: Float, elapsed: TimeInterval) {
         guard isRecording else {
             return

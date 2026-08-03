@@ -14,7 +14,7 @@ final class AudioInputLevelMonitor: ObservableObject {
         stop()
         errorMessage = nil
 
-        guard await Self.requestMicrophoneAccess() else {
+        guard Self.hasMicrophoneAccess() else {
             errorMessage = "Microphone access is required to test this input."
             return
         }
@@ -114,16 +114,7 @@ final class AudioInputLevelMonitor: ObservableObject {
         return pow(min(1, rootMeanSquare * 8), 0.65)
     }
 
-    private static func requestMicrophoneAccess() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            true
-        case .denied, .restricted:
-            false
-        case .notDetermined:
-            await AVCaptureDevice.requestAccess(for: .audio)
-        @unknown default:
-            false
-        }
+    private static func hasMicrophoneAccess() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 }

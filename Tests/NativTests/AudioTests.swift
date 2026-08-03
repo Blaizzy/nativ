@@ -87,6 +87,94 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertNil(store.records.first?.durationSeconds)
     }
 
+    func testDeletesDictationFilesAndPersistedRecord() throws {
+        let recordingURL = temporaryDirectory.appendingPathComponent("dictation.wav")
+        let transcriptURL = temporaryDirectory.appendingPathComponent("dictation.txt")
+        try Data([0x00]).write(to: recordingURL)
+        try "Delete this transcript".write(
+            to: transcriptURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "Delete this transcript",
+            durationSeconds: 2,
+            modelID: "local-asr",
+            applicationName: "Notes"
+        )
+
+        store.deleteDictation(
+            withID: "dictation",
+            recordingsDirectory: temporaryDirectory
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recordingURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: transcriptURL.path))
+        XCTAssertTrue(store.records.isEmpty)
+        store.importTranscripts(in: temporaryDirectory)
+        XCTAssertTrue(store.records.isEmpty)
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        XCTAssertTrue(reloaded.records.isEmpty)
+    }
+
+    func testDeletesAllDictationsWithoutDeletingSavedRecordings() throws {
+        let dictationURL = temporaryDirectory.appendingPathComponent("dictation.wav")
+        let dictationTranscriptURL = temporaryDirectory
+            .appendingPathComponent("dictation.txt")
+        try Data([0x00]).write(to: dictationURL)
+        try "Delete this dictation".write(
+            to: dictationTranscriptURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        store.upsertTranscription(
+            recordingURL: dictationURL,
+            transcript: "Delete this dictation",
+            durationSeconds: 2,
+            modelID: "local-asr",
+            applicationName: nil
+        )
+
+        let meetingURL = temporaryDirectory.appendingPathComponent("meeting.m4a")
+        let meetingTranscriptURL = temporaryDirectory
+            .appendingPathComponent("meeting.txt")
+        try Data([0x00]).write(to: meetingURL)
+        try "Keep this recording".write(
+            to: meetingTranscriptURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        store.upsertTranscription(
+            recordingURL: meetingURL,
+            transcript: "Keep this recording",
+            durationSeconds: 30,
+            modelID: "local-asr",
+            applicationName: nil,
+            kind: .meeting,
+            title: "Planning",
+            persistAudioReference: true
+        )
+
+        store.deleteAllDictations(recordingsDirectory: temporaryDirectory)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dictationURL.path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: dictationTranscriptURL.path)
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: meetingURL.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: meetingTranscriptURL.path)
+        )
+        XCTAssertEqual(store.records.map(\.id), ["meeting"])
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        XCTAssertEqual(reloaded.records.map(\.id), ["meeting"])
+    }
+
     func testPersistsMeetingAudioTranscriptAndSummaryMetadata() throws {
         let recordingURL = temporaryDirectory.appendingPathComponent("meeting.m4a")
         try Data([0x00]).write(to: recordingURL)
@@ -573,7 +661,10 @@ final class VoiceShortcutPreferencesTests: XCTestCase {
     func testDefaultsMatchExistingVoiceCommands() {
         XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Fn + Control")
         XCTAssertEqual(VoiceShortcut.retryDefault.displayName, "Fn + R")
-        XCTAssertEqual(VoiceShortcut.handsFreeDefault.displayName, "Option")
+        XCTAssertEqual(
+            VoiceShortcut.handsFreeDefault.displayName,
+            "Option + Command"
+        )
     }
 
     func testConvertsSystemModifierFlagsForGlobalPolling() {
@@ -611,6 +702,30 @@ final class VoiceShortcutPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.recordShortcut, shortcut)
         XCTAssertEqual(restored.retryShortcut, .retryDefault)
         XCTAssertEqual(restored.handsFreeShortcut, handsFreeShortcut)
+    }
+
+    func testMigratesLegacyBareOptionHandsFreeDefault() throws {
+        struct LegacyDefaultPayload: Codable {
+            let recordShortcut: VoiceShortcut
+            let retryShortcut: VoiceShortcut
+            let handsFreeShortcut: VoiceShortcut
+        }
+
+        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let payload = LegacyDefaultPayload(
+            recordShortcut: .recordDefault,
+            retryShortcut: .retryDefault,
+            handsFreeShortcut: .legacyHandsFreeDefault
+        )
+        defaults.set(
+            try JSONEncoder().encode(payload),
+            forKey: "voiceShortcutPreferences.v1"
+        )
+
+        let restored = VoiceShortcutPreferences(defaults: defaults)
+        XCTAssertEqual(restored.handsFreeShortcut, .handsFreeDefault)
     }
 
     func testAddsHandsFreeDefaultToLegacyPreferences() throws {

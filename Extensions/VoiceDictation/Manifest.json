@@ -8,6 +8,7 @@
   "developer": "Nativ",
   "systemImage": "waveform.badge.mic",
   "included": true,
+  "enabledByDefault": false,
   "runtime": "extensionFoundation",
   "extensionPoint": "com.nativ.extension",
   "runtimeBundleIdentifier": "dev.local.Nativ.VoiceDictationExtension",

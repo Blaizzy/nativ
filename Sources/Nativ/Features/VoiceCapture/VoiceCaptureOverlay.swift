@@ -65,6 +65,7 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     var completeAudioCapture: (() -> Void)?
     var restartAudioCapture: (() -> Void)?
     var deleteAudioCapture: (() -> Void)?
+    var cancelDictation: (() -> Void)?
 
     func beginActivation(presentation: Presentation = .dictation) {
         let now = Date()
@@ -85,8 +86,8 @@ final class VoiceCaptureOverlayModel: ObservableObject {
 
 @MainActor
 final class VoiceCaptureOverlayController {
-    private static let waveformPanelSize = NSSize(width: 184, height: 58)
-    private static let floatingIslandPanelSize = NSSize(width: 128, height: 52)
+    private static let waveformPanelSize = NSSize(width: 210, height: 58)
+    private static let floatingIslandPanelSize = NSSize(width: 140, height: 52)
     private static let floatingAudioCapturePanelSize = NSSize(width: 226, height: 52)
     private static let verticalAudioCapturePanelSize = NSSize(width: 72, height: 258)
     private let model: VoiceCaptureOverlayModel
@@ -128,6 +129,10 @@ final class VoiceCaptureOverlayController {
         model.completeAudioCapture = complete
         model.restartAudioCapture = restart
         model.deleteAudioCapture = delete
+    }
+
+    func setDictationCancelAction(_ action: @escaping () -> Void) {
+        model.cancelDictation = action
     }
 
     private static func makePanel<Content: View>(
@@ -198,7 +203,8 @@ final class VoiceCaptureOverlayController {
         }
         activeSoundStyle = soundPreferences.selectedStyle
         model.islandStyle = activeStyle
-        islandPanel.ignoresMouseEvents = presentation.audioCaptureKind == nil
+        waveformPanel.ignoresMouseEvents = presentation.audioCaptureKind != nil
+        islandPanel.ignoresMouseEvents = false
         islandPanel.isMovable = activeStyle == .verticalRecorder
         islandPanel.isMovableByWindowBackground = activeStyle == .verticalRecorder
         waveformPanel.clearPinnedFrame()
@@ -1152,11 +1158,18 @@ private struct VoiceCaptureOverlayView: View {
                             )
                             .foregroundStyle(.white.opacity(0.68))
                             .frame(width: 34, alignment: .trailing)
+
+                        if !isAudioCapture {
+                            VoiceCaptureDictationCancelButton(
+                                action: model.cancelDictation
+                            )
+                            .disabled(!canCancelDictation)
+                        }
                     }
                 }
             }
             .padding(.horizontal, isAudioCapture ? 10 : 14)
-            .frame(width: 184, height: 52)
+            .frame(width: isAudioCapture ? 184 : 210, height: 52)
             .background {
                 Capsule()
                     .fill(Color.black.opacity(0.94))
@@ -1168,7 +1181,7 @@ private struct VoiceCaptureOverlayView: View {
             .opacity(1 - finishProgress)
         }
         .padding(.vertical, 3)
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
 
@@ -1204,6 +1217,10 @@ private struct VoiceCaptureOverlayView: View {
 
     private var isAudioCapture: Bool {
         model.presentation.audioCaptureKind != nil
+    }
+
+    private var canCancelDictation: Bool {
+        !isAudioCapture && (model.state == .preparing || model.state == .recording)
     }
 
     private var indicatorColor: Color {
@@ -1395,7 +1412,7 @@ private struct VoiceCaptureIslandView: View {
                 floatingIsland
             }
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
 
@@ -1431,11 +1448,16 @@ private struct VoiceCaptureIslandView: View {
 
                 if model.presentation.audioCaptureKind != nil {
                     VoiceCaptureRecordingControls(model: model)
+                } else {
+                    VoiceCaptureDictationCancelButton(
+                        action: model.cancelDictation
+                    )
+                    .disabled(!canCancelDictation)
                 }
             }
             .padding(.horizontal, model.presentation.audioCaptureKind == nil ? 15 : 12)
             .frame(
-                width: model.presentation.audioCaptureKind == nil ? 128 : 226,
+                width: model.presentation.audioCaptureKind == nil ? 140 : 226,
                 height: 46
             )
             .background {
@@ -1458,6 +1480,11 @@ private struct VoiceCaptureIslandView: View {
     private var formattedElapsed: String {
         let seconds = max(0, Int(model.elapsed))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var canCancelDictation: Bool {
+        model.presentation.audioCaptureKind == nil
+            && (model.state == .preparing || model.state == .recording)
     }
 
     private var feedbackText: String {
@@ -1689,7 +1716,7 @@ struct VoiceCaptureNotchIslandView: View {
     }
 
     private var rightContent: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: model.presentation.audioCaptureKind == nil ? 3 : 7) {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
@@ -1706,6 +1733,11 @@ struct VoiceCaptureNotchIslandView: View {
                         tint: .red,
                         action: model.completeAudioCapture
                     )
+                } else {
+                    VoiceCaptureDictationCancelButton(
+                        action: model.cancelDictation
+                    )
+                    .disabled(!canCancelDictation)
                 }
             }
         }
@@ -1719,6 +1751,11 @@ struct VoiceCaptureNotchIslandView: View {
     private var formattedElapsed: String {
         let seconds = max(0, Int(model.elapsed))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var canCancelDictation: Bool {
+        model.presentation.audioCaptureKind == nil
+            && (model.state == .preparing || model.state == .recording)
     }
 }
 
@@ -1884,7 +1921,7 @@ private struct VoiceCaptureWideNotchView: View {
     }
 
     private var rightContent: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: model.presentation.audioCaptureKind == nil ? 5 : 7) {
             if model.state == .failed {
                 Text("Mic")
                     .font(.system(size: 10, weight: .semibold))
@@ -1901,6 +1938,11 @@ private struct VoiceCaptureWideNotchView: View {
                         tint: .red,
                         action: model.completeAudioCapture
                     )
+                } else {
+                    VoiceCaptureDictationCancelButton(
+                        action: model.cancelDictation
+                    )
+                    .disabled(!canCancelDictation)
                 }
             }
         }
@@ -1909,6 +1951,11 @@ private struct VoiceCaptureWideNotchView: View {
     private var formattedElapsed: String {
         let seconds = max(0, Int(model.elapsed))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var canCancelDictation: Bool {
+        model.presentation.audioCaptureKind == nil
+            && (model.state == .preparing || model.state == .recording)
     }
 }
 
@@ -1961,6 +2008,25 @@ private struct VoiceCaptureActionButton: View {
         .buttonStyle(.plain)
         .help(title)
         .accessibilityLabel(title)
+    }
+}
+
+private struct VoiceCaptureDictationCancelButton: View {
+    let action: (() -> Void)?
+
+    var body: some View {
+        Button {
+            action?()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.52))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Cancel dictation")
+        .accessibilityLabel("Cancel dictation")
     }
 }
 
