@@ -1680,7 +1680,7 @@ struct VoiceCaptureNotchIslandView: View {
                     VoiceCaptureActionButton(
                         title: "Delete recording",
                         systemImage: "trash.fill",
-                        tint: .red,
+                        tint: .white.opacity(0.72),
                         action: model.deleteAudioCapture
                     )
                 }
@@ -1702,8 +1702,8 @@ struct VoiceCaptureNotchIslandView: View {
                 if model.presentation.audioCaptureKind != nil {
                     VoiceCaptureActionButton(
                         title: "Complete recording",
-                        systemImage: "checkmark",
-                        tint: .green,
+                        systemImage: "stop.fill",
+                        tint: .red,
                         action: model.completeAudioCapture
                     )
                 }
@@ -1875,7 +1875,7 @@ private struct VoiceCaptureWideNotchView: View {
                     VoiceCaptureActionButton(
                         title: "Delete recording",
                         systemImage: "trash.fill",
-                        tint: .red,
+                        tint: .white.opacity(0.72),
                         action: model.deleteAudioCapture
                     )
                 }
@@ -1897,8 +1897,8 @@ private struct VoiceCaptureWideNotchView: View {
                 if model.presentation.audioCaptureKind != nil {
                     VoiceCaptureActionButton(
                         title: "Complete recording",
-                        systemImage: "checkmark",
-                        tint: .green,
+                        systemImage: "stop.fill",
+                        tint: .red,
                         action: model.completeAudioCapture
                     )
                 }
@@ -1926,13 +1926,13 @@ private struct VoiceCaptureRecordingControls: View {
             VoiceCaptureActionButton(
                 title: "Delete recording",
                 systemImage: "trash.fill",
-                tint: .red,
+                tint: .white.opacity(0.72),
                 action: model.deleteAudioCapture
             )
             VoiceCaptureActionButton(
                 title: "Complete recording",
-                systemImage: "checkmark",
-                tint: .green,
+                systemImage: "stop.fill",
+                tint: .red,
                 action: model.completeAudioCapture
             )
         }

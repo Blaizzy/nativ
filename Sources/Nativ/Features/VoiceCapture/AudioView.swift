@@ -701,7 +701,7 @@ struct AudioView: View {
             Spacer()
 
             if captureLibrary.phase == .recording {
-                Button(role: .destructive) {
+                Button {
                     Task {
                         await captureLibrary.deleteCurrentRecording()
                     }
@@ -726,10 +726,10 @@ struct AudioView: View {
                         await captureLibrary.stop()
                     }
                 } label: {
-                    Label("Complete", systemImage: "checkmark")
+                    Label("Complete", systemImage: "stop.fill")
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .tint(.red)
                 .controlSize(.large)
             }
         }
@@ -1416,8 +1416,8 @@ struct AudioView: View {
                 .foregroundStyle(.white.opacity(0.76))
                 .frame(width: 36, alignment: .trailing)
             recordingControlPreview("arrow.counterclockwise", tint: .white)
-            recordingControlPreview("trash.fill", tint: .red)
-            recordingControlPreview("checkmark", tint: .green)
+            recordingControlPreview("trash.fill", tint: .white.opacity(0.72))
+            recordingControlPreview("stop.fill", tint: .red)
         }
         .padding(.horizontal, 10)
         .frame(width: 226, height: 46)
@@ -1441,7 +1441,10 @@ struct AudioView: View {
                 HStack(spacing: 5) {
                     recordingMarkPreview(level: level)
                     recordingControlPreview("arrow.counterclockwise", tint: .white)
-                    recordingControlPreview("trash.fill", tint: .red)
+                    recordingControlPreview(
+                        "trash.fill",
+                        tint: .white.opacity(0.72)
+                    )
                 }
                 .frame(width: 96)
 
@@ -1451,7 +1454,7 @@ struct AudioView: View {
                     Text("0:08")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.76))
-                    recordingControlPreview("checkmark", tint: .green)
+                    recordingControlPreview("stop.fill", tint: .red)
                 }
                 .frame(width: 78)
             }
