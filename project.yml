@@ -134,7 +134,7 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
-        INFOPLIST_FILE: Configuration/VoiceDictationExtension-Info.plist
+        INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 2
         SKIP_INSTALL: YES
