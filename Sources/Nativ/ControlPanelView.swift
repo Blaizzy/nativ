@@ -1777,9 +1777,9 @@ struct ControlPanelView: View {
         }
         switch selectedTab {
         case .dashboard, .system, .models, .integrations, .extensions, .developer:
-            true
+            return true
         case .chat, .imageGeneration, .artifacts, .settings:
-            false
+            return false
         }
     }
 
