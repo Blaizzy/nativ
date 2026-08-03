@@ -1693,6 +1693,7 @@ struct ControlPanelView: View {
             )
         case .settings:
             SettingsView(
+                model: model,
                 softwareUpdater: softwareUpdater,
                 launchAtLogin: launchAtLogin
             )
