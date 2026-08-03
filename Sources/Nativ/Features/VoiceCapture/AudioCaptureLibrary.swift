@@ -30,7 +30,7 @@ enum AudioCaptureLibraryError: LocalizedError {
         case .microphonePermissionRequired:
             "Microphone access is required to record audio."
         case .screenCapturePermissionRequired:
-            "Screen & System Audio Recording access is required to capture meeting audio from other apps."
+            "Screen & System Audio Recording access is required to capture audio from other apps."
         case .serverNotRunning:
             "Start the Nativ server before transcribing or summarizing a recording."
         case .missingSpeechModel:
@@ -675,7 +675,7 @@ final class AudioCaptureLibrary: ObservableObject {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
-        let prefix = kind == .meeting ? "Meeting" : "Voice Note"
+        let prefix = kind == .dictation ? "Dictation" : "Recording"
         return try recordingsDirectory
             .appendingPathComponent("\(prefix) \(formatter.string(from: Date()))")
             .appendingPathExtension("wav")

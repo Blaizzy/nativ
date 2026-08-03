@@ -5,8 +5,8 @@ import SwiftUI
 import Textual
 
 private enum AudioDestination: String, CaseIterable, Identifiable {
-    case record
     case overview
+    case record
     case history
     case model
     case animation
@@ -182,7 +182,7 @@ struct AudioView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Audio")
                     .font(.title2.weight(.semibold))
-                Text("Record meetings, capture voice notes, and use local speech models across your Mac.")
+                Text("Record audio and use local speech models across your Mac.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -240,7 +240,7 @@ struct AudioView: View {
         case .record:
             AudioPage(
                 title: "Record audio",
-                subtitle: "Capture a meeting or turn a spoken note into searchable text",
+                subtitle: "Capture audio from your Mac and turn it into searchable text",
                 maxContentWidth: 1_120
             ) {
                 audioInputPanel
@@ -258,7 +258,7 @@ struct AudioView: View {
         case .history:
             AudioPage(
                 title: "Audio library",
-                subtitle: "Review persistent meeting and voice-note recordings alongside dictation history"
+                subtitle: "Review persistent recordings alongside dictation history"
             ) {
                 savedCapturesPanel
                 recentDictationsPanel
@@ -561,12 +561,12 @@ struct AudioView: View {
                     .foregroundStyle(Color.blue)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(includeSystemAudio ? "Included in meetings" : "Microphone only")
+                    Text(includeSystemAudio ? "Included in recordings" : "Microphone only")
                         .font(.callout.weight(.medium))
                     Text(
                         includeSystemAudio
-                            ? "Meeting recordings include audio playing in other apps."
-                            : "Meeting recordings use only your selected microphone."
+                            ? "Recordings include audio playing in other apps."
+                            : "Recordings use only your selected microphone."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -576,7 +576,7 @@ struct AudioView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .disabled(captureLibrary.isBusy)
-                    .accessibilityLabel("Include system audio in meeting recordings")
+                    .accessibilityLabel("Include system audio in recordings")
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 13)
@@ -585,134 +585,79 @@ struct AudioView: View {
     }
 
     private var captureControls: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Choose what to record")
-                        .font(.headline)
-                    Text("Both options are transcribed locally after you stop recording.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                HStack(spacing: 9) {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(.purple)
-                    Text("Auto-summary")
-                        .font(.callout.weight(.medium))
-                    Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .audioPanelStyle(cornerRadius: 11)
-                .disabled(captureLibrary.isBusy)
-            }
-            .padding(.horizontal, 2)
-
+        Group {
             if captureLibrary.phase == .idle {
-                LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(minimum: 260), spacing: 14),
-                        GridItem(.flexible(minimum: 260), spacing: 14),
-                    ],
-                    spacing: 14
-                ) {
-                    captureModeCard(
-                        kind: .meeting,
-                        title: "Record a meeting",
-                        subtitle: includeSystemAudio
-                            ? "Capture sound from every app together with your microphone."
-                            : "Capture a meeting using only your selected microphone.",
-                        detail: includeSystemAudio
-                            ? "System audio + microphone"
-                            : "Microphone only",
-                        tint: .blue
-                    )
-                    captureModeCard(
-                        kind: .voiceNote,
-                        title: "Record a voice note",
-                        subtitle: "Speak a journal entry, idea, or memo and save it as audio and text.",
-                        detail: "Microphone",
-                        tint: .purple
-                    )
-                }
+                unifiedCaptureCard
             } else {
                 activeCapturePanel
             }
         }
     }
 
-    private func captureModeCard(
-        kind: AudioRecordKind,
-        title: String,
-        subtitle: String,
-        detail: String,
-        tint: Color
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack {
-                Image(systemName: kind.systemImage)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        tint.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    )
-                Spacer()
-                Text(detail)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(tint)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(tint.opacity(0.1), in: Capsule())
-            }
+    private var unifiedCaptureCard: some View {
+        let tint = Color.blue
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.title3.weight(.semibold))
-                Text(subtitle)
-                    .font(.callout)
+        return HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "waveform.badge.mic")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 42, height: 42)
+                .background(
+                    tint.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("New recording")
+                    .font(.headline)
+                Text("Capture audio, then transcribe it locally when you finish.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer(minLength: 2)
+            Spacer(minLength: 16)
+
+            HStack(spacing: 9) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(Color.white)
+                Text("Auto-summary")
+                    .font(.callout.weight(.medium))
+                Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            .disabled(captureLibrary.isBusy)
 
             Button {
                 inputLevelMonitor.stop()
                 Task {
                     await captureLibrary.start(
-                        kind,
+                        .meeting,
                         automaticallySummarize: automaticallySummarize,
-                        includeSystemAudio: kind == .meeting && includeSystemAudio
+                        includeSystemAudio: includeSystemAudio
                     )
                 }
             } label: {
                 Label("Start recording", systemImage: "record.circle")
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 8)
             }
             .buttonStyle(.borderedProminent)
             .tint(tint)
             .controlSize(.large)
         }
         .padding(18)
-        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             LinearGradient(
-                colors: [tint.opacity(0.09), Color.primary.opacity(0.025)],
+                colors: [tint.opacity(0.065), Color.primary.opacity(0.025)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .stroke(tint.opacity(0.22), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(tint.opacity(0.2), lineWidth: 1)
         }
     }
 
@@ -1106,7 +1051,7 @@ struct AudioView: View {
 
             animationSection(
                 title: "Recordings",
-                subtitle: "Shown while a meeting or voice note keeps recording across apps.",
+                subtitle: "Shown while audio keeps recording across apps.",
                 styles: VoiceAnimationPreferences.recordingStyles,
                 purpose: .recording
             )
@@ -1150,7 +1095,7 @@ struct AudioView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Capture sound")
                             .font(.headline)
-                        Text("Used for voice dictation, meetings, and voice notes.")
+                        Text("Used for voice dictation and recordings.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1816,7 +1761,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Meetings & voice notes")
+                    Text("Recordings")
                         .font(.headline)
                     Text("Persistent audio, raw transcripts, and local summaries.")
                         .font(.caption)
@@ -1836,7 +1781,7 @@ struct AudioView: View {
                 ContentUnavailableView {
                     Label("No saved recordings", systemImage: "waveform.badge.plus")
                 } description: {
-                    Text("Record a meeting or voice note to create your local audio library.")
+                    Text("Start a recording to create your local audio library.")
                 } actions: {
                     Button("Record audio") {
                         destination = .record
@@ -2382,10 +2327,10 @@ private struct AudioCaptureRecordRow: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: record.resolvedKind.systemImage)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(record.resolvedKind == .meeting ? Color.blue : Color.purple)
+                    .foregroundStyle(record.resolvedKind == .dictation ? Color.secondary : Color.blue)
                     .frame(width: 36, height: 36)
                     .background(
-                        (record.resolvedKind == .meeting ? Color.blue : Color.purple)
+                        (record.resolvedKind == .dictation ? Color.secondary : Color.blue)
                             .opacity(0.11),
                         in: RoundedRectangle(cornerRadius: 9, style: .continuous)
                     )
