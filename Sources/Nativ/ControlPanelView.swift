@@ -997,17 +997,6 @@ struct ControlPanelView: View {
             Spacer(minLength: 0)
 
             Button {
-                toggleAllSidebarSections()
-            } label: {
-                Image(systemName: allSidebarSectionsCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .help(allSidebarSectionsCollapsed ? "Expand all sections" : "Collapse all sections")
-
-            Button {
                 withAnimation(.snappy(duration: 0.2)) {
                     enterSelectMode()
                 }
