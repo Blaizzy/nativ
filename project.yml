@@ -35,6 +35,21 @@ schemes:
       targets:
         - NativTests
 targets:
+  NativExtensionSDK:
+    type: framework
+    platform: macOS
+    configFiles:
+      Debug: Configuration/Signing.xcconfig
+      Release: Configuration/Signing.xcconfig
+    sources:
+      - path: Sources/NativExtensionSDK
+    settings:
+      base:
+        ARCHS: arm64
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_EXTENSION_SDK_BUNDLE_IDENTIFIER)
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
   NativServerKit:
     type: framework
     platform: macOS
@@ -48,6 +63,14 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
+          if [[ "${NATIV_SKIP_PYTHON_RESOURCE_BUILD:-NO}" == "YES" ]]; then
+            resource_root="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Resources/mlx-vlm-server"
+            if [[ ! -x "${resource_root}/bin/mlx-vlm-server" ]]; then
+              echo "error: NATIV_SKIP_PYTHON_RESOURCE_BUILD requires an existing complete server resource at ${resource_root}" >&2
+              exit 1
+            fi
+            exit 0
+          fi
           python3 "$SRCROOT/PythonDistribution/Scripts/build_xcode_framework_resource.py"
     settings:
       base:
@@ -69,8 +92,13 @@ targets:
       - path: Sources/Nativ/ModelProviderIcons
         type: folder
         buildPhase: resources
+      - path: Extensions/VoiceDictation/Manifest.json
+        buildPhase: resources
     dependencies:
       - target: NativServerKit
+      - target: NativExtensionSDK
+      - target: VoiceDictationExtensionRuntime
+        embed: true
       - package: Sparkle
         product: Sparkle
       - package: textual
@@ -85,14 +113,39 @@ targets:
         INFOPLIST_FILE: Configuration/Nativ-Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        EX_ENABLE_EXTENSION_POINT_GENERATION: YES
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 2
+  VoiceDictationExtensionRuntime:
+    type: extensionkit-extension
+    platform: macOS
+    configFiles:
+      Debug: Configuration/Signing.xcconfig
+      Release: Configuration/Signing.xcconfig
+    sources:
+      - path: Extensions/VoiceDictation/Runtime
+      - path: Extensions/VoiceDictation/Manifest.json
+        buildPhase: resources
+    dependencies:
+      - target: NativExtensionSDK
+    settings:
+      base:
+        ARCHS: arm64
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 2
+        SKIP_INSTALL: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
@@ -101,6 +154,12 @@ targets:
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceAudioRecorder.swift
+      - path: Sources/Nativ/Features/VoiceCapture/FnControlShortcutMonitor.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceShortcut.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
+      - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
@@ -108,6 +167,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatListModelsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatServerStatsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
+      - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
@@ -118,6 +178,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
     dependencies:
       - target: NativServerKit
+      - target: NativExtensionSDK
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests

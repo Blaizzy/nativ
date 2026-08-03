@@ -24,6 +24,7 @@ struct ChatView: View {
     let conversationWidthReduction: CGFloat
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
+    @State private var isDropTargeted = false
     @State private var followsLatestMessage = true
     @State private var isUserScrollingTranscript = false
 
@@ -68,9 +69,43 @@ struct ChatView: View {
                         }
                     }
             }
+            .dropDestination(for: URL.self) { urls, _ in
+                chat.attachImages(fromURLs: urls)
+            } isTargeted: { isDropTargeted = $0 }
+            .overlay {
+                if isDropTargeted {
+                    dropOverlay
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
         .environment(\.chatFontScale, model.settings.chatFontScale)
+    }
+
+    private var dropOverlay: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor).opacity(0.72)
+            VStack(spacing: 14) {
+                Image(systemName: "plus")
+                    .font(.system(size: 34, weight: .semibold))
+                Text("Drop files here")
+                    .font(.system(size: 15, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(44)
+            .frame(maxWidth: 320)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        Color.secondary.opacity(0.55),
+                        style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                    )
+            )
+        }
+        .ignoresSafeArea()
     }
 
     private var selectedModelID: String? {
@@ -698,6 +733,16 @@ final class ChatViewModel: ObservableObject {
     @discardableResult
     func attachImages(from pasteboard: NSPasteboard) -> Bool {
         let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
+        guard !attachments.isEmpty else {
+            return false
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+        return true
+    }
+
+    @discardableResult
+    func attachImages(fromURLs urls: [URL]) -> Bool {
+        let attachments = urls.compactMap { try? ChatImageAttachment(contentsOf: $0) }
         guard !attachments.isEmpty else {
             return false
         }
