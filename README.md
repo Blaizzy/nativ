@@ -36,6 +36,8 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [INTEGRATIONS.md](INTEGRATIONS.md) for per-tool setup. |
 | **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
+| **Extension platform** | Install, disable, remove, and restore independently versioned capabilities. Audio ships as the first included extension and contributes its own pages, commands, shortcuts, settings, and permission declarations. |
+| **Audio extension** | Use private local audio capabilities, including voice dictation in any app with either a pointer-following waveform or a camera-cutout pill with a reactive gradient orb and timer. Review transcript history, track words per minute, total words, time saved, and streaks, choose an installed speech model, and customize the record and retry shortcuts. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
 Inference runs on your Mac after a model has been downloaded. Model downloads and first-time build dependencies still require network access.
@@ -86,16 +88,43 @@ On first launch:
 3. Open **Models** to download or select a compatible model.
 4. Start chatting, inspect analytics, or connect one of the supported coding tools.
 
+Nativ asks for Accessibility permission so it can detect the default Fn + Control hold gesture
+outside the app, and for Microphone permission the first time you record. Recordings are
+saved temporarily as `.wav` files with matching `.txt` transcripts and can be opened from
+**Show Voice Recordings** in the menu-bar menu. Raw audio is deleted automatically after five
+minutes (or immediately when Nativ quits), while transcript files remain available. Press
+Fn + R to transcribe the newest available audio again and insert it at the current cursor.
+The transcript remains on the clipboard. If no speech-to-text model is installed, Nativ
+links directly to filtered speech-model discovery. Open **Audio** to inspect dictation
+analytics and history, select an installed speech-to-text model, choose the capture
+animation, or change either global shortcut.
+
 ### Build from source
 
 ```sh
 brew install xcodegen
 make xcode-generate
-make xcode-build
-open build/XcodeDerivedData/Build/Products/Debug/Nativ.app
+make xcode-run
 ```
 
 The first build can take a while because `NativServerKit` creates a relocatable Python runtime and installs the pinned `mlx-vlm` server dependencies into the framework resources. Later builds reuse the bundle until an input changes.
+
+Local builds are signed with the Apple Development identity configured in
+`Configuration/Signing.xcconfig` (or the ignored
+`Configuration/Signing.local.xcconfig` override). Keep the identity's login
+keychain unlocked while building. The stable signer-bound identity lets macOS
+keep Accessibility permission across rebuilds instead of treating each binary
+as a different app.
+
+To test an unreleased `mlx-audio` checkout, point the build at its local path:
+
+```sh
+MLX_AUDIO_SOURCE_PATH=/path/to/mlx-audio make xcode-build
+```
+
+The local package participates in dependency resolution, so its `pyproject.toml` metadata
+replaces the published package metadata. A sibling `../mlx-audio` checkout on the `main`
+branch is detected automatically, matching the existing local `mlx-vlm` behavior.
 
 ## Use Nativ as a local API server
 
@@ -134,14 +163,19 @@ Sources/
 │   │   ├── Chat/
 │   │   ├── Dashboard/
 │   │   ├── Developer/
+│   │   ├── Extensions/         # Extension registry, broker, and management UI
 │   │   ├── ImageGeneration/
 │   │   ├── Integrations/
 │   │   ├── Models/
+│   │   ├── VoiceCapture/
 │   │   └── SystemMonitor/
 │   ├── Assets.xcassets/
 │   ├── ModelProviderIcons/
 │   └── Utilities/
+├── NativExtensionSDK/           # Versioned extension manifests and XPC contracts
 └── NativServerKit/              # Embedded server and Swift clients
+Extensions/
+└── VoiceDictation/              # Audio extension (legacy internal target name)
 PythonDistribution/
 ├── Launcher/                    # Relocatable server launcher
 ├── Requirements/                # Pinned Python dependencies
@@ -151,6 +185,9 @@ Design/                          # Brand source files and README artwork
 scripts/                         # Archive, signing, notarization, and release tools
 project.yml                      # XcodeGen project definition
 ```
+
+See [Docs/Extensions.md](Docs/Extensions.md) for the extension package format,
+lifecycle, permission model, and the steps for adding another first-party extension.
 
 ## Development
 

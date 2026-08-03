@@ -19,6 +19,7 @@ struct WelcomeGateView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
+    @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
 
@@ -29,6 +30,7 @@ struct WelcomeGateView: View {
                     model: model,
                     navigation: navigation,
                     runtime: runtime,
+                    extensionManager: extensionManager,
                     softwareUpdater: softwareUpdater
                 )
             } else {
