@@ -159,13 +159,66 @@ sign_target() {
         "$target"
 }
 
+resolved_entitlements_file=""
+
+cleanup() {
+    if [[ -n "$resolved_entitlements_file" ]]; then
+        rm -f "$resolved_entitlements_file"
+    fi
+}
+trap cleanup EXIT
+
+resolve_app_entitlements() {
+    local target="$1"
+    local source_entitlements="$repository_root/Configuration/Nativ.entitlements"
+    local info_plist="$target/Contents/Info.plist"
+
+    [[ -f "$source_entitlements" ]] || fail "app entitlements are missing: $source_entitlements"
+    [[ -f "$info_plist" ]] || fail "app Info.plist is missing: $info_plist"
+
+    local bundle_identifier
+    bundle_identifier="$(plutil -extract CFBundleIdentifier raw -o - "$info_plist")"
+    [[ -n "$bundle_identifier" ]] || fail "app bundle identifier is missing"
+
+    local signing_team_id="$team_id"
+    if [[ -z "$signing_team_id" ]]; then
+        command -v openssl >/dev/null 2>&1 || \
+            fail "openssl is required to resolve the signing certificate Team ID"
+
+        local certificate_name
+        certificate_name="$(sed -n 's/^[[:space:]]*[0-9][0-9]*) [0-9A-F]\{40\} "\(.*\)"$/\1/p' <<< "$identity_line")"
+        [[ -n "$certificate_name" ]] || fail "could not resolve the signing certificate name"
+
+        local certificate_subject
+        certificate_subject="$(
+            security find-certificate -c "$certificate_name" -p 2>/dev/null |
+                openssl x509 -noout -subject -nameopt RFC2253 2>/dev/null || true
+        )"
+        signing_team_id="$(sed -n 's/.*OU=\([^,]*\).*/\1/p' <<< "$certificate_subject")"
+    fi
+    [[ "$signing_team_id" =~ ^[[:alnum:]]{10}$ ]] || \
+        fail "could not resolve the signing certificate Team ID"
+
+    resolved_entitlements_file="$(mktemp "${TMPDIR:-/tmp}/nativ-entitlements.XXXXXX.plist")"
+    cp "$source_entitlements" "$resolved_entitlements_file"
+    /usr/libexec/PlistBuddy \
+        -c "Set :keychain-access-groups:0 $signing_team_id.$bundle_identifier" \
+        "$resolved_entitlements_file"
+
+    if grep -q '\$(' "$resolved_entitlements_file"; then
+        fail "app entitlements still contain unresolved Xcode build settings"
+    fi
+    plutil -lint "$resolved_entitlements_file" >/dev/null
+}
+
 sign_app() {
     local target="$1"
+    resolve_app_entitlements "$target"
     codesign \
         --force \
         --sign "$identity" \
         --options runtime \
-        --entitlements "$repository_root/Configuration/Nativ-ManualSigning.entitlements" \
+        --entitlements "$resolved_entitlements_file" \
         "${timestamp_arguments[@]}" \
         "$target"
 }
@@ -230,6 +283,9 @@ if [[ "$app_entitlements" == *"com.apple.security.get-task-allow"* ]]; then
 fi
 if [[ "$app_entitlements" != *"com.apple.security.device.audio-input"* ]]; then
     fail "the signed app is missing the audio-input entitlement"
+fi
+if [[ "$app_entitlements" != *"keychain-access-groups"* ]]; then
+    fail "the signed app is missing its keychain access group"
 fi
 
 echo "Signed and verified: $app_path"

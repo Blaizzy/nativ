@@ -21,7 +21,6 @@ xcode-generate:
 
 xcode-build: xcode-generate
 	xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug -derivedDataPath $(XCODE_DERIVED_DATA) CODE_SIGNING_ALLOWED=NO build
-	./scripts/sign_macos_debug.sh $(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app
 
 xcode-run: xcode-build
 	./scripts/open_macos_debug.sh $(abspath $(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app)
