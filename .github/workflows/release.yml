@@ -69,6 +69,7 @@ jobs:
           cat > Configuration/Signing.local.xcconfig <<EOF
           NATIV_BUNDLE_IDENTIFIER = $APP_BUNDLE_ID
           NATIV_SERVER_KIT_BUNDLE_IDENTIFIER = $FRAMEWORK_BUNDLE_ID
+          NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER = ${APP_BUNDLE_ID}.VoiceDictationExtension
           DEVELOPMENT_TEAM = $APPLE_TEAM_ID
           EOF
 
