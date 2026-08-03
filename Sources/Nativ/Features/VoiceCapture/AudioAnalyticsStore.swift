@@ -84,6 +84,10 @@ final class AudioAnalyticsStore: ObservableObject {
 
     private let storageURL: URL
     private let calendar: Calendar
+    private var cachedWordCounts: [String: Int] = [:]
+    private var cachedTotalWords = 0
+    private var cachedAverageWordsPerMinute: Double?
+    private var cachedEstimatedTimeSaved: TimeInterval = 0
 
     init(
         storageURL: URL? = nil,
@@ -95,35 +99,56 @@ final class AudioAnalyticsStore: ObservableObject {
     }
 
     var totalWords: Int {
-        records.reduce(0) { $0 + $1.wordCount }
+        cachedTotalWords
     }
 
     var averageWordsPerMinute: Double? {
+        cachedAverageWordsPerMinute
+    }
+
+    var estimatedTimeSaved: TimeInterval {
+        cachedEstimatedTimeSaved
+    }
+
+    var currentStreak: Int {
+        calculateCurrentStreak()
+    }
+
+    private func wordCount(for record: AudioTranscriptionRecord) -> Int {
+        cachedWordCounts[record.id] ?? record.wordCount
+    }
+
+    private func rebuildDerivedMetrics() {
+        cachedWordCounts = Dictionary(
+            uniqueKeysWithValues: records.map { ($0.id, $0.wordCount) }
+        )
+        cachedTotalWords = records.reduce(0) { $0 + wordCount(for: $1) }
+
         let timed = records.compactMap { record -> (Int, TimeInterval)? in
             guard let duration = record.durationSeconds, duration > 0 else {
                 return nil
             }
-            return (record.wordCount, duration)
+            return (wordCount(for: record), duration)
         }
         let duration = timed.reduce(0) { $0 + $1.1 }
-        guard duration > 0 else {
-            return nil
+        if duration > 0 {
+            cachedAverageWordsPerMinute = Double(timed.reduce(0) { $0 + $1.0 }) / (duration / 60)
+        } else {
+            cachedAverageWordsPerMinute = nil
         }
-        return Double(timed.reduce(0) { $0 + $1.0 }) / (duration / 60)
-    }
 
-    var estimatedTimeSaved: TimeInterval {
-        records.reduce(0) { result, record in
+        cachedEstimatedTimeSaved = records.reduce(0) { result, record in
             guard let duration = record.durationSeconds else {
                 return result
             }
             let estimatedTypingDuration =
-                Double(record.wordCount) / Self.assumedTypingWordsPerMinute * 60
+                Double(wordCount(for: record)) / Self.assumedTypingWordsPerMinute * 60
             return result + max(0, estimatedTypingDuration - duration)
         }
+
     }
 
-    var currentStreak: Int {
+    private func calculateCurrentStreak() -> Int {
         let activeDays = Set(records.map { calendar.startOfDay(for: $0.recordedAt) })
         guard !activeDays.isEmpty else {
             return 0
@@ -159,7 +184,7 @@ final class AudioAnalyticsStore: ObservableObject {
             }
             return AudioDailyUsage(
                 date: date,
-                words: matching.reduce(0) { $0 + $1.wordCount },
+                words: matching.reduce(0) { $0 + self.wordCount(for: $1) },
                 sessions: matching.count
             )
         }
@@ -206,6 +231,7 @@ final class AudioAnalyticsStore: ObservableObject {
         records.removeAll { $0.id == id }
         records.append(record)
         records.sort { $0.recordedAt > $1.recordedAt }
+        rebuildDerivedMetrics()
         save()
     }
 
@@ -247,6 +273,7 @@ final class AudioAnalyticsStore: ObservableObject {
         records.removeAll { $0.id == recordID }
         records.append(record)
         records.sort { $0.recordedAt > $1.recordedAt }
+        rebuildDerivedMetrics()
         save()
     }
 
@@ -273,6 +300,7 @@ final class AudioAnalyticsStore: ObservableObject {
         records.removeAll { $0.id == recordID }
         records.append(record)
         records.sort { $0.recordedAt > $1.recordedAt }
+        rebuildDerivedMetrics()
         save()
     }
 
@@ -281,6 +309,7 @@ final class AudioAnalyticsStore: ObservableObject {
             return
         }
         records.removeAll { $0.id == recordID }
+        rebuildDerivedMetrics()
         save()
     }
 
@@ -336,6 +365,7 @@ final class AudioAnalyticsStore: ObservableObject {
             return
         }
         records.sort { $0.recordedAt > $1.recordedAt }
+        rebuildDerivedMetrics()
         save()
     }
 
@@ -374,9 +404,11 @@ final class AudioAnalyticsStore: ObservableObject {
               )
         else {
             records = []
+            rebuildDerivedMetrics()
             return
         }
         records = decoded.sorted { $0.recordedAt > $1.recordedAt }
+        rebuildDerivedMetrics()
     }
 
     private func save() {

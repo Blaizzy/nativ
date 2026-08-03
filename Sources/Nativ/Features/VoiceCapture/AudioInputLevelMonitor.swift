@@ -2,13 +2,25 @@ import AVFoundation
 import Foundation
 
 @MainActor
-final class AudioInputLevelMonitor: ObservableObject {
+final class AudioInputLevelState: ObservableObject {
     @Published private(set) var level: Float = 0
+
+    func update(_ level: Float) {
+        self.level = max(0, min(1, level))
+    }
+}
+
+@MainActor
+final class AudioInputLevelMonitor: ObservableObject {
+    private static let publishInterval: TimeInterval = 1.0 / 15.0
+
+    let meterState = AudioInputLevelState()
     @Published private(set) var isMonitoring = false
     @Published private(set) var errorMessage: String?
 
     private var audioEngine: AVAudioEngine?
     private var smoothedLevel: Float = 0
+    private var lastPublishedAt = Date.distantPast
 
     func start(deviceUniqueID: String?) async {
         stop()
@@ -75,7 +87,8 @@ final class AudioInputLevelMonitor: ObservableObject {
         audioEngine = nil
         isMonitoring = false
         smoothedLevel = 0
-        level = 0
+        lastPublishedAt = .distantPast
+        meterState.update(0)
         if resetError {
             errorMessage = nil
         }
@@ -86,7 +99,12 @@ final class AudioInputLevelMonitor: ObservableObject {
             return
         }
         smoothedLevel = (smoothedLevel * 0.65) + (newLevel * 0.35)
-        level = smoothedLevel
+        let now = Date()
+        guard now.timeIntervalSince(lastPublishedAt) >= Self.publishInterval else {
+            return
+        }
+        lastPublishedAt = now
+        meterState.update(smoothedLevel)
     }
 
     private nonisolated static func normalizedLevel(

@@ -97,11 +97,7 @@ struct AudioView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear {
-            refreshLocalModels()
-            importExistingTranscripts()
-            inputDevices.refresh()
-            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            startInputMonitoringIfNeeded()
+            handleViewAppear()
         }
         .onChange(of: model.settings.modelSearchPath) { _, _ in
             refreshLocalModels()
@@ -125,12 +121,7 @@ struct AudioView: View {
             }
         }
         .onChange(of: destination) { _, destination in
-            if destination == .record {
-                inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-                startInputMonitoringIfNeeded()
-            } else {
-                inputLevelMonitor.stop()
-            }
+            handleDestinationChange(destination)
         }
         .onDisappear {
             inputLevelMonitor.stop()
@@ -746,40 +737,11 @@ struct AudioView: View {
     }
 
     private var inputLevelMeter: some View {
-        HStack(spacing: 8) {
-            ForEach(0..<16, id: \.self) { index in
-                let threshold = Float(index + 1) / 16
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(
-                        displayedInputLevel >= threshold
-                            ? inputSegmentColor(at: index)
-                            : Color.secondary.opacity(0.18)
-                    )
-                    .frame(width: 12, height: 30)
-                    .animation(.linear(duration: 0.08), value: displayedInputLevel)
-            }
-        }
-        .frame(maxWidth: 312, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Microphone input level")
-        .accessibilityValue("\(Int(displayedInputLevel * 100)) percent")
-    }
-
-    private var displayedInputLevel: Float {
-        captureLibrary.phase == .recording
-            ? captureLibrary.inputLevel
-            : inputLevelMonitor.level
-    }
-
-    private func inputSegmentColor(at index: Int) -> Color {
-        switch index {
-        case 0..<11:
-            .accentColor
-        case 11..<14:
-            .orange
-        default:
-            .red
-        }
+        AudioInputLevelMeterView(
+            captureMeter: captureLibrary.meterState,
+            monitorMeter: inputLevelMonitor.meterState,
+            isRecording: captureLibrary.phase == .recording
+        )
     }
 
     private var audioInputStatus: String {
@@ -1954,6 +1916,39 @@ struct AudioView: View {
         return String(format: "%.1f hr", seconds / 3_600)
     }
 
+    private func handleViewAppear() {
+        switch destination {
+        case .record:
+            refreshLocalModels()
+            inputDevices.refresh()
+            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
+            startInputMonitoringIfNeeded()
+        case .model:
+            refreshLocalModels()
+        case .overview, .history:
+            importExistingTranscripts()
+        case .animation, .shortcuts:
+            break
+        }
+    }
+
+    private func handleDestinationChange(_ destination: AudioDestination) {
+        switch destination {
+        case .record:
+            refreshLocalModels()
+            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
+            startInputMonitoringIfNeeded()
+        case .model:
+            refreshLocalModels()
+            inputLevelMonitor.stop()
+        case .overview, .history:
+            importExistingTranscripts()
+            inputLevelMonitor.stop()
+        case .animation, .shortcuts:
+            inputLevelMonitor.stop()
+        }
+    }
+
     private func refreshLocalModels() {
         let settings = model.settings.normalized()
         localLibrary.scan(
@@ -2015,6 +2010,47 @@ struct AudioView: View {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         }
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+private struct AudioInputLevelMeterView: View {
+    @ObservedObject var captureMeter: AudioInputLevelState
+    @ObservedObject var monitorMeter: AudioInputLevelState
+    let isRecording: Bool
+
+    private var displayedLevel: Float {
+        isRecording ? captureMeter.level : monitorMeter.level
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<16, id: \.self) { index in
+                let threshold = Float(index + 1) / 16
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(
+                        displayedLevel >= threshold
+                            ? segmentColor(at: index)
+                            : Color.secondary.opacity(0.18)
+                    )
+                    .frame(width: 12, height: 30)
+                    .animation(.linear(duration: 0.08), value: displayedLevel)
+            }
+        }
+        .frame(maxWidth: 312, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Microphone input level")
+        .accessibilityValue("\(Int(displayedLevel * 100)) percent")
+    }
+
+    private func segmentColor(at index: Int) -> Color {
+        switch index {
+        case 0..<11:
+            .accentColor
+        case 11..<14:
+            .orange
+        default:
+            .red
+        }
     }
 }
 
