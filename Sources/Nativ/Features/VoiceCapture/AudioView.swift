@@ -62,6 +62,8 @@ struct AudioView: View {
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
     @State private var destination: AudioDestination = .record
+    @State private var pendingDeleteDictation: AudioTranscriptionRecord?
+    @State private var isConfirmingClearAllDictations = false
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -165,6 +167,35 @@ struct AudioView: View {
             }
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
+        }
+        .alert(
+            "Delete dictation?",
+            isPresented: Binding(
+                get: { pendingDeleteDictation != nil },
+                set: { if !$0 { pendingDeleteDictation = nil } }
+            ),
+            presenting: pendingDeleteDictation
+        ) { record in
+            Button("Delete", role: .destructive) {
+                deleteDictation(record)
+                pendingDeleteDictation = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDictation = nil
+            }
+        } message: { _ in
+            Text("The transcript and any retained audio will be permanently deleted.")
+        }
+        .alert(
+            "Clear all recent dictations?",
+            isPresented: $isConfirmingClearAllDictations
+        ) {
+            Button("Clear All", role: .destructive) {
+                clearAllDictations()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All locally stored dictation transcripts and retained dictation audio will be permanently deleted.")
         }
     }
 
@@ -1649,16 +1680,35 @@ struct AudioView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Hands-free")
+                            .font(.callout.weight(.medium))
+                        Text(
+                            shortcuts.isHandsFreeEnabled
+                                ? "Press once to start; press again to transcribe."
+                                : "Hold while speaking; release to transcribe."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 16)
+
+                    Toggle("Hands-free", isOn: $shortcuts.isHandsFreeEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .padding(10)
+                .background(
+                    Color.primary.opacity(0.035),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+
                 shortcutRow(
-                    title: "Record while held",
+                    title: "Dictation shortcut",
                     shortcut: shortcuts.recordShortcut,
                     kind: .record
-                )
-                shortcutRow(
-                    title: "Hands-free toggle",
-                    subtitle: "Press once to start; press again to transcribe.",
-                    shortcut: shortcuts.handsFreeShortcut,
-                    kind: .handsFree
                 )
                 shortcutRow(
                     title: "Retry recent audio",
@@ -1687,6 +1737,15 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button("Clear All", role: .destructive) {
+                    isConfirmingClearAllDictations = true
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.red)
+                .disabled(dictationRecords.isEmpty)
+                .help("Delete all recent dictations")
+
                 TextField("Search transcripts", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
@@ -1710,7 +1769,10 @@ struct AudioView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(filteredRecords.prefix(30).enumerated()), id: \.element.id) {
                         index, record in
-                        AudioTranscriptRow(record: record)
+                        AudioTranscriptRow(
+                            record: record,
+                            onDelete: { pendingDeleteDictation = record }
+                        )
                         if index < min(filteredRecords.count, 30) - 1 {
                             Divider()
                         }
@@ -1809,8 +1871,6 @@ struct AudioView: View {
                     switch kind {
                     case .record:
                         shortcuts.resetRecordShortcut()
-                    case .handsFree:
-                        shortcuts.resetHandsFreeShortcut()
                     case .retry:
                         shortcuts.resetRetryShortcut()
                     }
@@ -1839,16 +1899,19 @@ struct AudioView: View {
     }
 
     private var filteredRecords: [AudioTranscriptionRecord] {
-        let dictations = analytics.records.filter { $0.resolvedKind == .dictation }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            return dictations
+            return dictationRecords
         }
-        return dictations.filter { record in
+        return dictationRecords.filter { record in
             record.transcript.localizedCaseInsensitiveContains(query)
                 || record.applicationName?.localizedCaseInsensitiveContains(query) == true
                 || record.modelID?.localizedCaseInsensitiveContains(query) == true
         }
+    }
+
+    private var dictationRecords: [AudioTranscriptionRecord] {
+        analytics.records.filter { $0.resolvedKind == .dictation }
     }
 
     private var captureRecords: [AudioTranscriptionRecord] {
@@ -1975,10 +2038,23 @@ struct AudioView: View {
         analytics.importTranscripts(in: directory)
     }
 
+    private func deleteDictation(_ record: AudioTranscriptionRecord) {
+        analytics.deleteDictation(
+            withID: record.id,
+            recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
+        )
+    }
+
+    private func clearAllDictations() {
+        analytics.deleteAllDictations(
+            recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
+        )
+        searchText = ""
+    }
+
     private func apply(_ shortcut: VoiceShortcut, to kind: AudioShortcutKind) {
         let assignments: [(AudioShortcutKind, VoiceShortcut)] = [
             (.record, shortcuts.recordShortcut),
-            (.handsFree, shortcuts.handsFreeShortcut),
             (.retry, shortcuts.retryShortcut),
         ]
         guard !assignments.contains(where: {
@@ -1992,8 +2068,6 @@ struct AudioView: View {
         switch kind {
         case .record:
             shortcuts.recordShortcut = shortcut
-        case .handsFree:
-            shortcuts.handsFreeShortcut = shortcut
         case .retry:
             shortcuts.retryShortcut = shortcut
         }
@@ -2056,15 +2130,13 @@ private struct AudioInputLevelMeterView: View {
 
 private enum AudioShortcutKind: String, Identifiable {
     case record
-    case handsFree
     case retry
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .record: "Record shortcut"
-        case .handsFree: "Hands-free shortcut"
+        case .record: "Dictation shortcut"
         case .retry: "Retry shortcut"
         }
     }
@@ -2265,7 +2337,9 @@ private struct InlineEditableAudioTitle: View {
 
 private struct AudioTranscriptRow: View {
     let record: AudioTranscriptionRecord
+    let onDelete: () -> Void
     @State private var copied = false
+    @State private var isDeleteHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -2295,22 +2369,43 @@ private struct AudioTranscriptRow: View {
 
             Spacer(minLength: 12)
 
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(record.transcript, forType: .string)
-                copied = true
-                Task {
-                    try? await Task.sleep(for: .seconds(1.5))
-                    copied = false
+            HStack(spacing: 4) {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(record.transcript, forType: .string)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
+                    }
+                } label: {
+                    Label(
+                        copied ? "Copied" : "Copy",
+                        systemImage: copied ? "checkmark" : "doc.on.doc"
+                    )
                 }
-            } label: {
-                Label(
-                    copied ? "Copied" : "Copy",
-                    systemImage: copied ? "checkmark" : "doc.on.doc"
-                )
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .frame(width: 26, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(
+                                    isDeleteHovering
+                                        ? Color.red.opacity(0.13)
+                                        : Color.clear
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
+                .help("Delete dictation")
+                .accessibilityLabel("Delete dictation")
+                .onHover { isDeleteHovering = $0 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
         .padding(.vertical, 12)
     }

@@ -146,7 +146,7 @@ final class AudioCaptureLibrary: ObservableObject {
         meterState.update(0)
         lastMeterPublishAt = .distantPast
 
-        guard await Self.requestMicrophoneAccess() else {
+        guard Self.hasMicrophoneAccess() else {
             fail(AudioCaptureLibraryError.microphonePermissionRequired)
             return
         }
@@ -666,17 +666,8 @@ final class AudioCaptureLibrary: ObservableObject {
         updateRecordingOverlay(level: level, elapsed: elapsed)
     }
 
-    private static func requestMicrophoneAccess() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        @unknown default:
-            return false
-        }
+    private static func hasMicrophoneAccess() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private static func makeOutputURL(

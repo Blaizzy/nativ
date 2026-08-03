@@ -509,6 +509,16 @@ final class ChatViewModel: ObservableObject {
         sessionStore.saveFolders(folders)
     }
 
+    func setAllFoldersCollapsed(_ collapsed: Bool) {
+        guard folders.contains(where: { $0.isCollapsed != collapsed }) else {
+            return
+        }
+        for index in folders.indices {
+            folders[index].isCollapsed = collapsed
+        }
+        sessionStore.saveFolders(folders)
+    }
+
     func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
         guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
             return

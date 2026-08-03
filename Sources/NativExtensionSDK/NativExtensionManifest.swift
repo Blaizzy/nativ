@@ -113,6 +113,7 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
     public let developer: String
     public let systemImage: String
     public let included: Bool
+    public let enabledByDefault: Bool?
     public let runtime: NativExtensionRuntimeKind
     public let extensionPoint: String
     public let runtimeBundleIdentifier: String?
@@ -129,6 +130,7 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
         developer: String,
         systemImage: String,
         included: Bool,
+        enabledByDefault: Bool? = nil,
         runtime: NativExtensionRuntimeKind,
         extensionPoint: String = "com.nativ.extension",
         runtimeBundleIdentifier: String? = nil,
@@ -144,11 +146,16 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
         self.developer = developer
         self.systemImage = systemImage
         self.included = included
+        self.enabledByDefault = enabledByDefault
         self.runtime = runtime
         self.extensionPoint = extensionPoint
         self.runtimeBundleIdentifier = runtimeBundleIdentifier
         self.contributions = contributions
         self.permissions = permissions
+    }
+
+    public var isEnabledByDefault: Bool {
+        included && (enabledByDefault ?? true)
     }
 }
 

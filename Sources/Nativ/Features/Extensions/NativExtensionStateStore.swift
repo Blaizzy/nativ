@@ -31,7 +31,7 @@ final class NativExtensionStateStore {
     }
 
     func state(for manifest: NativExtensionManifest) -> NativExtensionInstallState {
-        states[manifest.id] ?? (manifest.included ? .enabled : .disabled)
+        states[manifest.id] ?? (manifest.isEnabledByDefault ? .enabled : .disabled)
     }
 
     func set(_ state: NativExtensionInstallState, for extensionID: String) {

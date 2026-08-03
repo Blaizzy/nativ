@@ -123,6 +123,11 @@ private struct NativApplication: App {
             }
 
             CommandGroup(after: .sidebar) {
+                Button("Collapse All Sections") {
+                    appDelegate.toggleAllSidebarSections()
+                }
+                .keyboardShortcut(".", modifiers: [.command, .option])
+
                 Button("Increase Chat Font Size") {
                     appDelegate.increaseChatFontSize()
                 }

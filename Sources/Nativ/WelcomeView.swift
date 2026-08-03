@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 enum WelcomePreferences {
@@ -50,6 +51,7 @@ private struct WelcomeView: View {
     private enum Step: Equatable {
         case model
         case apiKey
+        case voiceDictation
     }
 
     @ObservedObject var model: NativModel
@@ -62,6 +64,10 @@ private struct WelcomeView: View {
     @State private var didRequestRecommendedModels = false
     @State private var showsAPIKeyEditor = false
     @State private var serverAPIKey: String
+    @State private var configuredServerAPIKey: String?
+    @State private var microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio)
+    @State private var hasInsertTextAccess = false
+    @State private var isRequestingMicrophone = false
     @FocusState private var isAPIKeyFieldFocused: Bool
 
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
@@ -77,6 +83,7 @@ private struct WelcomeView: View {
         _serverAPIKey = State(
             initialValue: settings.serverAPIKey ?? ServerAPIAuthentication.generateToken()
         )
+        _configuredServerAPIKey = State(initialValue: settings.serverAPIKey)
     }
 
     var body: some View {
@@ -92,6 +99,8 @@ private struct WelcomeView: View {
                         modelStep
                     case .apiKey:
                         apiKeyStep
+                    case .voiceDictation:
+                        voiceDictationStep
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,6 +112,18 @@ private struct WelcomeView: View {
         .frame(minWidth: 900, minHeight: 600)
         .task(id: modelSearchPath) {
             modelLibrary.scan(path: model.settings.modelSearchPath)
+        }
+        .task(id: step) {
+            guard step == .voiceDictation else { return }
+            refreshVoicePermissions()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in
+            guard step == .voiceDictation else { return }
+            refreshVoicePermissions()
         }
         .onChange(of: modelLibrary.isScanning) { _, isScanning in
             guard !isScanning else { return }
@@ -127,9 +148,7 @@ private struct WelcomeView: View {
             VStack(spacing: 6) {
                 Text("Welcome to Nativ")
                     .font(.system(size: 32, weight: .semibold))
-                Text(step == .model
-                    ? "Choose how your local server should start."
-                    : "Optionally protect the server’s management endpoints.")
+                Text(stepSubtitle)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -141,9 +160,28 @@ private struct WelcomeView: View {
                     .fill(Color.secondary.opacity(0.22))
                     .frame(width: 34, height: 1)
                 WelcomeStepIndicator(number: 2, title: "API Key", isActive: step == .apiKey)
+                Capsule()
+                    .fill(Color.secondary.opacity(0.22))
+                    .frame(width: 34, height: 1)
+                WelcomeStepIndicator(
+                    number: 3,
+                    title: "Voice",
+                    isActive: step == .voiceDictation
+                )
             }
         }
         .padding(.bottom, 24)
+    }
+
+    private var stepSubtitle: String {
+        switch step {
+        case .model:
+            "Choose how your local server should start."
+        case .apiKey:
+            "Optionally protect the server’s management endpoints."
+        case .voiceDictation:
+            "Set up private, local voice dictation."
+        }
     }
 
     private var modelStep: some View {
@@ -338,7 +376,7 @@ private struct WelcomeView: View {
                             .controlSize(.large)
 
                             Button("Skip") {
-                                finish(serverAPIKey: nil)
+                                skipAPIKey()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.large)
@@ -363,20 +401,215 @@ private struct WelcomeView: View {
 
                 if showsAPIKeyEditor {
                     Button("Skip") {
-                        finish(serverAPIKey: nil)
+                        skipAPIKey()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
 
                     Button("Save & Continue") {
-                        finish(serverAPIKey: normalizedAPIKey)
+                        continueFromAPIKey()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
                     .disabled(normalizedAPIKey == nil)
+                } else {
+                    Button("Continue") {
+                        skipAPIKey()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
+        }
+    }
+
+    private var voiceDictationStep: some View {
+        VStack(spacing: 16) {
+            WelcomeCard {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top, spacing: 14) {
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 26))
+                            .foregroundStyle(.blue)
+                            .frame(width: 38, height: 38)
+                            .background(
+                                Color.blue.opacity(0.10),
+                                in: RoundedRectangle(cornerRadius: 10)
+                            )
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Dictate anywhere")
+                                .font(.headline)
+                            Text(
+                                "Press \(VoiceShortcut.recordDefault.displayName) once to start and again to transcribe into the app you are using. Audio and transcription stay local to your Mac."
+                            )
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(spacing: 12) {
+                        voicePermissionRow(
+                            title: "Microphone",
+                            detail: microphonePermissionDetail,
+                            systemImage: "mic.fill",
+                            isGranted: microphoneAccess == .authorized,
+                            actionTitle: microphoneActionTitle,
+                            action: handleMicrophonePermission
+                        )
+
+                        voicePermissionRow(
+                            title: "Text insertion",
+                            detail: hasInsertTextAccess
+                                ? "Nativ can paste transcripts into other apps."
+                                : "Needed to place transcripts at your cursor.",
+                            systemImage: "text.cursor",
+                            isGranted: hasInsertTextAccess,
+                            actionTitle: "Allow",
+                            action: requestInsertTextPermission
+                        )
+                    }
+
+                    Text("You can skip this step and configure voice dictation later from Audio in the sidebar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(20)
+            }
+
+            HStack {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        step = .apiKey
+                    }
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+
+                Spacer()
+
+                Button("Skip for Now") {
+                    finish(serverAPIKey: configuredServerAPIKey)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button("Finish Setup") {
+                    finish(serverAPIKey: configuredServerAPIKey)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
+    private func voicePermissionRow(
+        title: String,
+        detail: String,
+        systemImage: String,
+        isGranted: Bool,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(isGranted ? Color.green : Color.secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            if isGranted {
+                Label("Ready", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .fixedSize()
+            } else {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isRequestingMicrophone && title == "Microphone")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var microphonePermissionDetail: String {
+        switch microphoneAccess {
+        case .authorized:
+            "Nativ can capture your voice for dictation."
+        case .denied, .restricted:
+            "Allow access in System Settings to use dictation."
+        case .notDetermined:
+            isRequestingMicrophone ? "Waiting for your permission…" : "Needed to capture your voice."
+        @unknown default:
+            "Check your microphone permission in System Settings."
+        }
+    }
+
+    private var microphoneActionTitle: String {
+        switch microphoneAccess {
+        case .denied, .restricted:
+            "Open System Settings"
+        default:
+            isRequestingMicrophone ? "Requesting…" : "Allow"
+        }
+    }
+
+    private func handleMicrophonePermission() {
+        switch microphoneAccess {
+        case .denied, .restricted:
+            NativSystemPermissionController.openMicrophoneSettings()
+        default:
+            guard !isRequestingMicrophone else { return }
+            isRequestingMicrophone = true
+            NativSystemPermissionController.requestMicrophone { _ in
+                isRequestingMicrophone = false
+                refreshVoicePermissions()
+            }
+        }
+    }
+
+    private func requestInsertTextPermission() {
+        _ = NativSystemPermissionController.requestInsertTextAccess()
+        refreshVoicePermissions()
+    }
+
+    private func refreshVoicePermissions() {
+        microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio)
+        hasInsertTextAccess = NativSystemPermissionController.hasInsertTextAccess()
+    }
+
+    private func continueFromAPIKey() {
+        guard let normalizedAPIKey else { return }
+        configuredServerAPIKey = normalizedAPIKey
+        withAnimation(.easeInOut(duration: 0.2)) {
+            step = .voiceDictation
+        }
+    }
+
+    private func skipAPIKey() {
+        configuredServerAPIKey = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            step = .voiceDictation
         }
     }
 
@@ -399,9 +632,7 @@ private struct WelcomeView: View {
                     .font(.system(.body, design: .monospaced))
                     .focused($isAPIKeyFieldFocused)
                     .onSubmit {
-                        if let normalizedAPIKey {
-                            finish(serverAPIKey: normalizedAPIKey)
-                        }
+                        continueFromAPIKey()
                     }
 
                 Button {

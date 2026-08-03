@@ -64,8 +64,10 @@ final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
+    @Published private(set) var collapseAllSectionsRequest = 0
     private var consumedNewChatRequest = 0
     private var consumedToggleSidebarRequest = 0
+    private var consumedCollapseAllSectionsRequest = 0
 
     func open(_ tab: ControlPanelTab) {
         requestedExtensionPageID = nil
@@ -90,6 +92,10 @@ final class ControlPanelNavigation: ObservableObject {
         toggleSidebarRequest += 1
     }
 
+    func collapseAllSections() {
+        collapseAllSectionsRequest += 1
+    }
+
     func consumeNewChatRequest() -> Bool {
         guard consumedNewChatRequest < newChatRequest else {
             return false
@@ -103,6 +109,14 @@ final class ControlPanelNavigation: ObservableObject {
             return false
         }
         consumedToggleSidebarRequest = toggleSidebarRequest
+        return true
+    }
+
+    func consumeCollapseAllSectionsRequest() -> Bool {
+        guard consumedCollapseAllSectionsRequest < collapseAllSectionsRequest else {
+            return false
+        }
+        consumedCollapseAllSectionsRequest = collapseAllSectionsRequest
         return true
     }
 }
@@ -132,6 +146,11 @@ private enum ControlPanelLayout {
         windowControlsTopPadding + (windowControlsHeight / 2)
     static let sidebarTransitionDuration: TimeInterval = 0.2
     static let sidebarTransitionSettleDuration: Duration = .milliseconds(225)
+}
+
+private enum ControlPanelOnboarding {
+    static let extensionsBadgeDismissedKey =
+        "nativ.control-panel.extensions-new-badge-dismissed.v1"
 }
 
 extension Color {
@@ -249,6 +268,8 @@ struct ControlPanelView: View {
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
+    private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
@@ -381,6 +402,9 @@ struct ControlPanelView: View {
         }
         .onChange(of: navigation.toggleSidebarRequest) { _, _ in
             handleToggleSidebarRequest()
+        }
+        .onChange(of: navigation.collapseAllSectionsRequest) { _, _ in
+            handleCollapseAllSectionsRequest()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -599,6 +623,14 @@ struct ControlPanelView: View {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
                     .labelStyle(SidebarNavigationLabelStyle())
+                if tab == .extensions, !isExtensionsBadgeDismissed {
+                    Text("NEW")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                }
                 Spacer(minLength: 0)
                 if tab == .models {
                     HStack(spacing: 6) {
@@ -647,27 +679,32 @@ struct ControlPanelView: View {
 
             headerDivider
 
-            if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
-                emptyPinnedHint
-            } else {
-                ForEach(pinnedFolders) { folder in
-                    folderView(folder, dropTargeted: isPinnedDropTargeted)
-                }
-                ForEach(pinnedSessions) { recent in
-                    draggableRow(recent, isPinnedRow: true)
-                        .overlay(alignment: .top) {
-                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
-                        }
-                        .overlay(alignment: .bottom) {
-                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
-                        }
+            if !model.settings.sidebarPinnedCollapsed {
+                if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
+                    emptyPinnedHint
+                } else {
+                    ForEach(pinnedFolders) { folder in
+                        folderView(folder, dropTargeted: isPinnedDropTargeted)
+                    }
+                    ForEach(pinnedSessions) { recent in
+                        draggableRow(recent, isPinnedRow: true)
+                            .overlay(alignment: .top) {
+                                pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                            }
+                            .overlay(alignment: .bottom) {
+                                pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                            }
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isPinnedDropTargeted))
         .onDrop(of: [.text], isTargeted: $isPinnedDropTargeted) { providers in
-            loadDropString(providers) { handlePinnedDrop($0) }
+            loadDropString(providers) { payload in
+                revealSidebarSection(\.sidebarPinnedCollapsed)
+                handlePinnedDrop(payload)
+            }
         }
     }
 
@@ -681,20 +718,25 @@ struct ControlPanelView: View {
 
             headerDivider
 
-            ForEach(ungroupedSessions) { recent in
-                draggableRow(recent, isPinnedRow: false)
-                    .overlay(alignment: .top) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
-                    }
-                    .overlay(alignment: .bottom) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isSessionsDropTargeted)
-                    }
+            if !model.settings.sidebarSessionsCollapsed {
+                ForEach(ungroupedSessions) { recent in
+                    draggableRow(recent, isPinnedRow: false)
+                        .overlay(alignment: .top) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
+                        }
+                        .overlay(alignment: .bottom) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isSessionsDropTargeted)
+                        }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isSessionsDropTargeted))
         .onDrop(of: [.text], isTargeted: $isSessionsDropTargeted) { providers in
-            loadDropString(providers) { _ = handleSessionsDrop([$0]) }
+            loadDropString(providers) { payload in
+                revealSidebarSection(\.sidebarSessionsCollapsed)
+                _ = handleSessionsDrop([payload])
+            }
         }
     }
 
@@ -708,11 +750,13 @@ struct ControlPanelView: View {
 
             headerDivider
 
-            if chat.folders.isEmpty {
-                emptyFoldersHint
-            } else {
-                ForEach(unpinnedFolders) { folder in
-                    folderView(folder, dropTargeted: isFoldersDropTargeted)
+            if !model.settings.sidebarFoldersCollapsed {
+                if chat.folders.isEmpty {
+                    emptyFoldersHint
+                } else {
+                    ForEach(unpinnedFolders) { folder in
+                        folderView(folder, dropTargeted: isFoldersDropTargeted)
+                    }
                 }
             }
         }
@@ -1057,26 +1101,56 @@ struct ControlPanelView: View {
             .padding(.bottom, 6)
     }
 
-    private var sidebarPinnedHeader: some View {
+    private func sidebarSectionHeader<Trailing: View>(
+        title: String,
+        isCollapsed: Bool,
+        onToggle: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
         HStack(spacing: 8) {
-            Text("Pinned")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
+            HStack(spacing: 8) {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12)
 
-            Spacer(minLength: 0)
+                Text(title)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.secondary.opacity(0.7))
+
+                Spacer(minLength: 0)
+            }
+            .contentShape(.rect)
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.2)) {
+                    onToggle()
+                }
+            }
+            .help(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
+
+            trailing()
+        }
+    }
+
+    private var sidebarPinnedHeader: some View {
+        sidebarSectionHeader(
+            title: "Pinned",
+            isCollapsed: model.settings.sidebarPinnedCollapsed,
+            onToggle: { model.settings.sidebarPinnedCollapsed.toggle() }
+        ) {
+            EmptyView()
         }
     }
 
     private var sidebarFoldersHeader: some View {
-        HStack(spacing: 8) {
-            Text("Folders")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
-
-            Spacer(minLength: 0)
-
+        sidebarSectionHeader(
+            title: "Folders",
+            isCollapsed: model.settings.sidebarFoldersCollapsed,
+            onToggle: { model.settings.sidebarFoldersCollapsed.toggle() }
+        ) {
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
+                    model.settings.sidebarFoldersCollapsed = false
                     _ = chat.createFolder(name: "New Folder")
                 }
             } label: {
@@ -1091,12 +1165,34 @@ struct ControlPanelView: View {
     }
 
     private var sidebarRecentsHeader: some View {
-        HStack(spacing: 8) {
-            Text("Sessions")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
+        sidebarSectionHeader(
+            title: "Sessions",
+            isCollapsed: model.settings.sidebarSessionsCollapsed,
+            onToggle: { model.settings.sidebarSessionsCollapsed.toggle() }
+        ) {
+            EmptyView()
+        }
+    }
 
-            Spacer(minLength: 0)
+    private var allSidebarSectionsCollapsed: Bool {
+        model.settings.allSidebarSectionsCollapsed
+            && !chat.folders.contains { !$0.isCollapsed }
+    }
+
+    private func revealSidebarSection(_ keyPath: WritableKeyPath<NativSettings, Bool>) {
+        guard model.settings[keyPath: keyPath] else {
+            return
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            model.settings[keyPath: keyPath] = false
+        }
+    }
+
+    private func toggleAllSidebarSections() {
+        let shouldCollapse = !allSidebarSectionsCollapsed
+        withAnimation(.snappy(duration: 0.2)) {
+            model.settings.setAllSidebarSectionsCollapsed(shouldCollapse)
+            chat.setAllFoldersCollapsed(shouldCollapse)
         }
     }
 
@@ -1741,6 +1837,9 @@ struct ControlPanelView: View {
     private func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
         switch selection {
         case .tab(let tab):
+            if tab == .extensions {
+                isExtensionsBadgeDismissed = true
+            }
             if tab == .chat, chat.currentSessionID == nil {
                 chat.createSession()
             } else if tab == .imageGeneration,
@@ -1820,6 +1919,13 @@ struct ControlPanelView: View {
             return
         }
         toggleSidebarVisibility()
+    }
+
+    private func handleCollapseAllSectionsRequest() {
+        guard navigation.consumeCollapseAllSectionsRequest() else {
+            return
+        }
+        toggleAllSidebarSections()
     }
 
     private func canExportRecent(_ recent: ControlPanelRecentSession) -> Bool {
@@ -3789,7 +3895,6 @@ private struct SidebarRowSelectionStyle: ViewModifier {
             .foregroundStyle(Color.primary)
             .contentShape(.rect)
             .onHover { isHovering = $0 }
-            .animation(.easeInOut, value: isHovering)
     }
 
     private var backgroundColor: Color {

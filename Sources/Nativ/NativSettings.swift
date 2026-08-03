@@ -363,6 +363,9 @@ struct NativSettings: Codable, Equatable {
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
     var chatFontScale: Double
+    var sidebarPinnedCollapsed: Bool
+    var sidebarFoldersCollapsed: Bool
+    var sidebarSessionsCollapsed: Bool
     var modelConfigs: [String: ModelConfigProfile]
 
     init(
@@ -407,6 +410,9 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
         chatFontScale: Double = Self.defaultChatFontScale,
+        sidebarPinnedCollapsed: Bool = false,
+        sidebarFoldersCollapsed: Bool = false,
+        sidebarSessionsCollapsed: Bool = false,
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
@@ -450,6 +456,9 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.chatFontScale = chatFontScale
+        self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
+        self.sidebarFoldersCollapsed = sidebarFoldersCollapsed
+        self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
         self.modelConfigs = modelConfigs
     }
 
@@ -496,6 +505,9 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlocks
         case prefixCacheBlockSize
         case chatFontScale
+        case sidebarPinnedCollapsed
+        case sidebarFoldersCollapsed
+        case sidebarSessionsCollapsed
         case modelConfigs
     }
 
@@ -545,6 +557,9 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
         chatFontScale = try container.decodeIfPresent(Double.self, forKey: .chatFontScale) ?? defaults.chatFontScale
+        sidebarPinnedCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed) ?? defaults.sidebarPinnedCollapsed
+        sidebarFoldersCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed) ?? defaults.sidebarFoldersCollapsed
+        sidebarSessionsCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed) ?? defaults.sidebarSessionsCollapsed
         modelConfigs = try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs) ?? defaults.modelConfigs
     }
 
@@ -590,6 +605,9 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(chatFontScale, forKey: .chatFontScale)
+        try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
+        try container.encode(sidebarFoldersCollapsed, forKey: .sidebarFoldersCollapsed)
+        try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
         try container.encode(modelConfigs, forKey: .modelConfigs)
     }
 
@@ -745,6 +763,16 @@ struct NativSettings: Codable, Equatable {
 
     mutating func resetChatFontScale() {
         chatFontScale = Self.defaultChatFontScale
+    }
+
+    var allSidebarSectionsCollapsed: Bool {
+        sidebarPinnedCollapsed && sidebarFoldersCollapsed && sidebarSessionsCollapsed
+    }
+
+    mutating func setAllSidebarSectionsCollapsed(_ collapsed: Bool) {
+        sidebarPinnedCollapsed = collapsed
+        sidebarFoldersCollapsed = collapsed
+        sidebarSessionsCollapsed = collapsed
     }
 
     func hasSameLaunchConfiguration(as other: Self) -> Bool {
