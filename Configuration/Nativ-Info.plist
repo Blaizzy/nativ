@@ -30,6 +30,8 @@
 	<string>Copyright © 2025 Prince Canuma &amp; contributors</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nativ records your microphone for dictation, voice notes, and meeting capture.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Nativ uses macOS on-device speech recognition to transcribe dictation before a speech model has been downloaded. Audio stays on your Mac.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Nativ records system audio when you start an audio capture.</string>
 	<key>NSScreenCaptureUsageDescription</key>
