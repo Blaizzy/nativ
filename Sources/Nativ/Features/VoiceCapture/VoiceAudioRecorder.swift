@@ -121,6 +121,8 @@ enum VoiceAudioRetention {
 
 @MainActor
 final class VoiceAudioRecorder {
+    private static let meterPublishInterval: TimeInterval = 1.0 / 15.0
+
     var onMeterUpdate: ((Float, TimeInterval) -> Void)?
 
     private(set) var isRecording = false
@@ -129,6 +131,7 @@ final class VoiceAudioRecorder {
     private var recordingWriter: VoiceAudioRecordingWriter?
     private var recordingURL: URL?
     private var smoothedLevel: Float = 0
+    private var lastMeterUpdateElapsed = -Double.infinity
 
     static var recordingsDirectory: URL {
         get throws {
@@ -219,6 +222,7 @@ final class VoiceAudioRecorder {
         isRecording = true
         lastRecordingDuration = nil
         smoothedLevel = 0
+        lastMeterUpdateElapsed = -Double.infinity
         return outputURL
     }
 
@@ -237,6 +241,7 @@ final class VoiceAudioRecorder {
         isRecording = false
         lastRecordingDuration = duration
         smoothedLevel = 0
+        lastMeterUpdateElapsed = -Double.infinity
         onMeterUpdate?(0, duration)
 
         guard duration > 0 else {
@@ -253,6 +258,10 @@ final class VoiceAudioRecorder {
         }
         let shapedLevel = pow(max(0, min(1, level)), 0.72)
         smoothedLevel = (smoothedLevel * 0.68) + (shapedLevel * 0.32)
+        guard elapsed - lastMeterUpdateElapsed >= Self.meterPublishInterval else {
+            return
+        }
+        lastMeterUpdateElapsed = elapsed
         onMeterUpdate?(smoothedLevel, elapsed)
     }
 

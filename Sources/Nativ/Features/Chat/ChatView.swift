@@ -97,7 +97,7 @@ struct ChatView: View {
 
     private var transcript: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
@@ -115,6 +115,7 @@ struct ChatView: View {
                             onConfirmToolConsent: chat.confirmToolConsent,
                             onDenyToolConsent: chat.denyToolConsent
                         )
+                        .equatable()
                         .id(message.id)
                     }
                 }
@@ -171,7 +172,7 @@ struct ChatView: View {
 @MainActor
 final class ChatViewModel: ObservableObject {
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 30.0
+    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -1470,7 +1471,7 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-private struct ChatMessageRow: View {
+private struct ChatMessageRow: View, Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
@@ -1478,6 +1479,10 @@ private struct ChatMessageRow: View {
     let onDenyToolConsent: (UUID) -> Void
     @State private var didCopyResponse = false
     @State private var isHoveringMessage = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message
+    }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {

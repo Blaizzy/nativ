@@ -97,11 +97,7 @@ struct AudioView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear {
-            refreshLocalModels()
-            importExistingTranscripts()
-            inputDevices.refresh()
-            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            startInputMonitoringIfNeeded()
+            handleViewAppear()
         }
         .onChange(of: model.settings.modelSearchPath) { _, _ in
             refreshLocalModels()
@@ -125,12 +121,7 @@ struct AudioView: View {
             }
         }
         .onChange(of: destination) { _, destination in
-            if destination == .record {
-                inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-                startInputMonitoringIfNeeded()
-            } else {
-                inputLevelMonitor.stop()
-            }
+            handleDestinationChange(destination)
         }
         .onDisappear {
             inputLevelMonitor.stop()
@@ -1949,6 +1940,39 @@ struct AudioView: View {
             return "\(Int((seconds / 60).rounded())) min"
         }
         return String(format: "%.1f hr", seconds / 3_600)
+    }
+
+    private func handleViewAppear() {
+        switch destination {
+        case .record:
+            refreshLocalModels()
+            inputDevices.refresh()
+            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
+            startInputMonitoringIfNeeded()
+        case .model:
+            refreshLocalModels()
+        case .overview, .history:
+            importExistingTranscripts()
+        case .animation, .shortcuts:
+            break
+        }
+    }
+
+    private func handleDestinationChange(_ destination: AudioDestination) {
+        switch destination {
+        case .record:
+            refreshLocalModels()
+            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
+            startInputMonitoringIfNeeded()
+        case .model:
+            refreshLocalModels()
+            inputLevelMonitor.stop()
+        case .overview, .history:
+            importExistingTranscripts()
+            inputLevelMonitor.stop()
+        case .animation, .shortcuts:
+            inputLevelMonitor.stop()
+        }
     }
 
     private func refreshLocalModels() {

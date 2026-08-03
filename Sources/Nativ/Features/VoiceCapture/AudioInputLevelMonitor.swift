@@ -3,12 +3,15 @@ import Foundation
 
 @MainActor
 final class AudioInputLevelMonitor: ObservableObject {
+    private static let publishInterval: TimeInterval = 1.0 / 15.0
+
     @Published private(set) var level: Float = 0
     @Published private(set) var isMonitoring = false
     @Published private(set) var errorMessage: String?
 
     private var audioEngine: AVAudioEngine?
     private var smoothedLevel: Float = 0
+    private var lastPublishedAt = Date.distantPast
 
     func start(deviceUniqueID: String?) async {
         stop()
@@ -75,6 +78,7 @@ final class AudioInputLevelMonitor: ObservableObject {
         audioEngine = nil
         isMonitoring = false
         smoothedLevel = 0
+        lastPublishedAt = .distantPast
         level = 0
         if resetError {
             errorMessage = nil
@@ -86,6 +90,11 @@ final class AudioInputLevelMonitor: ObservableObject {
             return
         }
         smoothedLevel = (smoothedLevel * 0.65) + (newLevel * 0.35)
+        let now = Date()
+        guard now.timeIntervalSince(lastPublishedAt) >= Self.publishInterval else {
+            return
+        }
+        lastPublishedAt = now
         level = smoothedLevel
     }
 
