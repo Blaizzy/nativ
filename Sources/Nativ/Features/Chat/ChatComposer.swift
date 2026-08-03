@@ -17,7 +17,7 @@ private struct ChatImageThumbnail: View {
                     .scaledToFill()
             } else {
                 VStack(spacing: 6) {
-                    Image(systemName: "photo")
+                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
                         .font(.title3)
                     Text(attachment.filename)
                         .font(.caption2)
