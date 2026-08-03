@@ -563,6 +563,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showMainWindow()
     }
 
+    func toggleAllSidebarSections() {
+        controlPanelNavigation.collapseAllSections()
+        showMainWindow()
+    }
+
     func increaseChatFontSize() {
         stepChatFontSize(by: 1)
     }
