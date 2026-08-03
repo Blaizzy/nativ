@@ -37,5 +37,8 @@ jobs:
           path: build/XcodeDerivedData/SourcePackages
           key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
 
-      - name: Build app (unsigned Debug)
-        run: make xcode-build
+      - name: Test Python adapter validation
+        run: make python-test
+
+      - name: Build and test app (unsigned Debug)
+        run: make xcode-test

@@ -16,13 +16,23 @@ from typing import Any
 
 import mlx.core as mx
 from fastapi import HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
+import mlx_vlm.trainer.utils as base_trainer_utils
+import mlx_vlm.utils as base_utils
+
+from nativ_adapter_loader import (
+    AdapterCompatibilityError,
+    AdapterValidationReport,
+    apply_validated_lora_adapter,
+    validate_adapter_package,
+)
+from nativ_runtime import ModelRuntimeGate
 
 
 BACKEND_NAME = f"mlx_vlm/{base.__version__}"
@@ -31,6 +41,14 @@ TRACKED_PATHS = {
     "/v1/chat/completions",
     "/responses",
     "/v1/responses",
+}
+TEXT_RUNTIME_PATHS = TRACKED_PATHS | {
+    "/responses/input_tokens",
+    "/v1/responses/input_tokens",
+    "/messages",
+    "/v1/messages",
+    "/messages/count_tokens",
+    "/v1/messages/count_tokens",
 }
 METRICS_PATHS = {"/metrics", "/v1/metrics"}
 MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
@@ -45,6 +63,52 @@ _MODEL_LOAD_PROGRESS: ContextVar["ModelLoadProgress | None"] = ContextVar(
     default=None,
 )
 _ORIGINAL_MX_EVAL = mx.eval
+_MODEL_MANAGEMENT_LOCK = Lock()
+_ADAPTER_REPORTS_LOCK = Lock()
+_ADAPTER_REPORTS: dict[str, AdapterValidationReport] = {}
+
+
+_MODEL_RUNTIME_GATE = ModelRuntimeGate()
+
+
+def canonical_adapter_path(adapter_path: str) -> str:
+    return os.path.realpath(os.path.expanduser(adapter_path))
+
+
+def record_adapter_report(report: AdapterValidationReport) -> None:
+    with _ADAPTER_REPORTS_LOCK:
+        _ADAPTER_REPORTS[report.adapter_path] = report
+
+
+def adapter_report(adapter_path: str | None) -> dict[str, Any] | None:
+    if adapter_path is None:
+        return None
+    with _ADAPTER_REPORTS_LOCK:
+        report = _ADAPTER_REPORTS.get(canonical_adapter_path(adapter_path))
+    return report.to_dict() if report is not None else None
+
+
+def install_validated_adapter_loader() -> None:
+    """Replace MLX-VLM's permissive adapter load with a verified equivalent."""
+    if getattr(base_utils, "_nativ_adapter_loader_installed", False):
+        return
+
+    def apply_lora_layers(model: Any, path: str):
+        loaded_model, report = apply_validated_lora_adapter(
+            model,
+            path,
+            trainer_utils=base_trainer_utils,
+            mx=mx,
+            tree_flatten=tree_flatten,
+        )
+        record_adapter_report(report)
+        return loaded_model
+
+    # mlx_vlm.utils.load resolves this module global at call time. Patch the
+    # trainer export too so every in-process load path has identical semantics.
+    base_utils.apply_lora_layers = apply_lora_layers
+    base_trainer_utils.apply_lora_layers = apply_lora_layers
+    base_utils._nativ_adapter_loader_installed = True
 
 
 def emit_model_load_progress(value: float) -> None:
@@ -863,8 +927,20 @@ def parse_request_observation(request: Request, payload: dict[str, Any]) -> Requ
     )
 
 
+def text_model_cache() -> dict[str, Any]:
+    registry_factory = getattr(base, "_model_cache_registry", None)
+    if callable(registry_factory):
+        try:
+            cache = registry_factory().for_kind("text_generation")
+            if isinstance(cache, dict):
+                return cache
+        except Exception:
+            pass
+    return base.model_cache if isinstance(base.model_cache, dict) else {}
+
+
 def current_tool_parser() -> str | None:
-    processor = base.model_cache.get("processor") if isinstance(base.model_cache, dict) else None
+    processor = text_model_cache().get("processor")
     if processor is None:
         return None
     try:
@@ -874,9 +950,20 @@ def current_tool_parser() -> str | None:
 
 
 def current_runtime_snapshot() -> dict[str, Any]:
-    config = base.model_cache.get("config") if isinstance(base.model_cache, dict) else None
+    cache = text_model_cache()
+    config = cache.get("config")
     text_config = getattr(config, "text_config", None)
     loaded_context_size = getattr(text_config, "max_position_embeddings", None)
+
+    upstream_snapshot: dict[str, Any] = {}
+    snapshot_factory = getattr(base, "_server_runtime_snapshot", None)
+    if callable(snapshot_factory):
+        try:
+            candidate = snapshot_factory()
+            if isinstance(candidate, dict):
+                upstream_snapshot = dict(candidate)
+        except Exception as error:
+            base.logger.warning("could not read upstream runtime snapshot: %s", error)
 
     queue_depth = 0
     requests_queue = getattr(getattr(base, "response_generator", None), "requests", None)
@@ -892,18 +979,37 @@ def current_runtime_snapshot() -> dict[str, Any]:
     else:
         apc_snapshot = {"enabled": False}
 
-    return {
-        "loaded_model": base.model_cache.get("model_path") if isinstance(base.model_cache, dict) else None,
-        "loaded_adapter": base.model_cache.get("adapter_path") if isinstance(base.model_cache, dict) else None,
-        "loaded_context_size": loaded_context_size,
-        "configured_context_limit": loaded_context_size,
-        "effective_context_limit": loaded_context_size,
-        "loaded_tool_parser": current_tool_parser(),
+    loaded_model = upstream_snapshot.get("loaded_model", cache.get("model_path"))
+    loaded_adapter = upstream_snapshot.get("loaded_adapter", cache.get("adapter_path"))
+    snapshot = {
+        **upstream_snapshot,
+        "loaded_model": loaded_model,
+        "loaded_adapter": loaded_adapter,
+        "adapter_validation": adapter_report(loaded_adapter),
+        "loaded_context_size": upstream_snapshot.get(
+            "loaded_context_size",
+            loaded_context_size,
+        ),
+        "configured_context_limit": upstream_snapshot.get(
+            "configured_context_limit"
+        ),
+        "effective_context_limit": upstream_snapshot.get(
+            "effective_context_limit",
+            loaded_context_size,
+        ),
+        "loaded_tool_parser": upstream_snapshot.get(
+            "loaded_tool_parser",
+            current_tool_parser(),
+        ),
         "analytics_db_path": ANALYTICS_STORE.path,
-        "continuous_batching_enabled": getattr(base, "response_generator", None) is not None,
+        "continuous_batching_enabled": upstream_snapshot.get(
+            "continuous_batching_enabled",
+            getattr(base, "response_generator", None) is not None,
+        ),
         "request_queue_depth": queue_depth,
         "apc": apc_snapshot,
     }
+    return snapshot
 
 
 class StreamAccumulator:
@@ -1196,10 +1302,54 @@ def install_metrics_overlay() -> None:
 
     @base.app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
-        if request.url.path not in TRACKED_PATHS:
+        if request.url.path not in TEXT_RUNTIME_PATHS:
             return await call_next(request)
 
-        body = await request.body()
+        if not _MODEL_RUNTIME_GATE.begin_inference():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": (
+                        "The text model is being changed. Retry the inference request "
+                        "after the model transition completes."
+                    )
+                },
+                headers={"Retry-After": "1"},
+            )
+
+        inference_lease_active = True
+
+        def release_inference_lease() -> None:
+            nonlocal inference_lease_active
+            if not inference_lease_active:
+                return
+            inference_lease_active = False
+            _MODEL_RUNTIME_GATE.end_inference()
+
+        if request.url.path not in TRACKED_PATHS:
+            try:
+                response = await call_next(request)
+            except Exception:
+                release_inference_lease()
+                raise
+
+            original_iterator = response.body_iterator
+
+            async def runtime_protected_iterator():
+                try:
+                    async for chunk in original_iterator:
+                        yield chunk
+                finally:
+                    release_inference_lease()
+
+            response.body_iterator = runtime_protected_iterator()
+            return response
+
+        try:
+            body = await request.body()
+        except Exception:
+            release_inference_lease()
+            raise
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
         except json.JSONDecodeError:
@@ -1223,12 +1373,14 @@ def install_metrics_overlay() -> None:
             response = await call_next(request)
         except Exception:
             TRACKER.record_failed(observation)
+            release_inference_lease()
             raise
         finally:
             _BASE_METRICS_CAPTURE.reset(capture_token)
 
         if response.status_code >= 400:
             TRACKER.record_failed(observation)
+            release_inference_lease()
             return response
 
         content_type = response.headers.get("content-type", "")
@@ -1272,6 +1424,8 @@ def install_metrics_overlay() -> None:
                 except Exception:
                     TRACKER.record_failed(observation)
                     raise
+                finally:
+                    release_inference_lease()
 
             response.body_iterator = wrapped_iterator()
             return response
@@ -1289,6 +1443,8 @@ def install_metrics_overlay() -> None:
             TRACKER.record_completed(observation, completion)
         except Exception as error:
             base.logger.warning("metrics instrumentation failed for %s: %s", request.url.path, error)
+        finally:
+            release_inference_lease()
 
         return response
 
@@ -1312,18 +1468,81 @@ def install_metrics_overlay() -> None:
         adapter = payload.get("adapter_path")
         if adapter is not None and not isinstance(adapter, str):
             raise HTTPException(status_code=400, detail="adapter_path must be a string or null.")
+        if isinstance(adapter, str):
+            adapter = adapter.strip()
+            if not adapter:
+                raise HTTPException(
+                    status_code=400,
+                    detail="adapter_path must be a non-empty directory path or null.",
+                )
+            try:
+                adapter = validate_adapter_package(adapter)
+            except AdapterCompatibilityError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Adapter compatibility check failed: {error}",
+                ) from error
 
-        try:
-            base.get_cached_model(model.strip(), adapter)
-        except HTTPException:
-            raise
-        except Exception as error:
-            raise HTTPException(status_code=500, detail=f"Failed to load model: {error}") from error
+        with _MODEL_MANAGEMENT_LOCK:
+            with _MODEL_RUNTIME_GATE.transition():
+                # Capture state only after this transition owns both admission and
+                # model management. A queued request must never roll back over a
+                # model committed by the transition immediately before it.
+                previous_snapshot = current_runtime_snapshot()
+                previous_model = previous_snapshot.get("loaded_model")
+                previous_adapter = previous_snapshot.get("loaded_adapter")
+                try:
+                    base.get_cached_model(
+                        model.strip(),
+                        adapter,
+                        model_kind="text_generation",
+                    )
+                except Exception as load_error:
+                    rollback_error = None
+                    if isinstance(previous_model, str) and previous_model:
+                        try:
+                            base.get_cached_model(
+                                previous_model,
+                                previous_adapter,
+                                model_kind="text_generation",
+                            )
+                        except Exception as error:
+                            rollback_error = error
 
-        snapshot = current_runtime_snapshot()
+                    rollback_detail = (
+                        f" The previous model state could not be restored: {rollback_error}"
+                        if rollback_error is not None
+                        else ""
+                    )
+                    if isinstance(load_error, HTTPException):
+                        detail = f"{load_error.detail}{rollback_detail}"
+                        raise HTTPException(
+                            status_code=load_error.status_code,
+                            detail=detail,
+                            headers=load_error.headers,
+                        ) from load_error
+                    if isinstance(
+                        load_error,
+                        (AdapterCompatibilityError, FileNotFoundError, ValueError),
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "Adapter compatibility check failed: "
+                                f"{load_error}{rollback_detail}"
+                            ),
+                        ) from load_error
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to load model: {load_error}{rollback_detail}",
+                    ) from load_error
+
+                snapshot = current_runtime_snapshot()
         return {
             "status": "loaded",
             "model": snapshot.get("loaded_model"),
+            "adapter": snapshot.get("loaded_adapter"),
+            "adapter_validation": snapshot.get("adapter_validation"),
             "loaded_models": snapshot.get("loaded_models", {}),
         }
 
@@ -1344,6 +1563,7 @@ def main() -> None:
         base_cli.argparse = original_argparse
 
 
+install_validated_adapter_loader()
 install_model_load_progress()
 install_metrics_overlay()
 
