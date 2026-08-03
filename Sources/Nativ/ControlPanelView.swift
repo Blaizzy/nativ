@@ -181,6 +181,16 @@ private struct ModelsDownloadArrow: View {
     }
 }
 
+private struct SidebarNavigationLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+                .frame(width: 24, alignment: .center)
+            configuration.title
+        }
+    }
+}
+
 private struct GlobalModelLoadFailureBanner: View {
     let failure: ModelLoadFailure
     let onOpenModels: () -> Void
@@ -588,6 +598,7 @@ struct ControlPanelView: View {
         } label: {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
+                    .labelStyle(SidebarNavigationLabelStyle())
                 Spacer(minLength: 0)
                 if tab == .models {
                     HStack(spacing: 6) {
@@ -619,6 +630,7 @@ struct ControlPanelView: View {
             applySidebarSelection(selection)
         } label: {
             Label(contribution.title, systemImage: contribution.systemImage)
+                .labelStyle(SidebarNavigationLabelStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
         }
