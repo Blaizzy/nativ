@@ -10,10 +10,8 @@ enum AudioRecordKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .dictation:
             "Dictation"
-        case .voiceNote:
-            "Voice note"
-        case .meeting:
-            "Meeting"
+        case .voiceNote, .meeting:
+            "Recording"
         }
     }
 
@@ -21,10 +19,8 @@ enum AudioRecordKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .dictation:
             "text.cursor"
-        case .voiceNote:
-            "mic.fill"
-        case .meeting:
-            "person.2.wave.2"
+        case .voiceNote, .meeting:
+            "waveform.badge.mic"
         }
     }
 }
@@ -48,6 +44,12 @@ struct AudioTranscriptionRecord: Codable, Equatable, Identifiable, Sendable {
 
     var displayTitle: String {
         if let title, !title.isEmpty {
+            if resolvedKind != .dictation {
+                for prefix in ["Meeting · ", "Voice note · ", "Voice Note · "]
+                where title.hasPrefix(prefix) {
+                    return "Recording · " + String(title.dropFirst(prefix.count))
+                }
+            }
             return title
         }
         return resolvedKind.title
