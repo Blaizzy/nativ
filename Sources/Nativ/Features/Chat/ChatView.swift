@@ -12,63 +12,27 @@ struct ChatQueuedPrompt: Identifiable, Equatable {
     let position: Int
 }
 
-struct ChatView: View {
-    private enum Layout {
-        static let conversationMaxWidth: CGFloat = 680
-        static let horizontalPadding: CGFloat = 32
-    }
+private struct ChatSessionBootstrap {
+    let sessions: [ChatSession]
+}
 
+struct ChatView: View {
     @ObservedObject var model: NativModel
-    @ObservedObject var chat: ChatViewModel
+    let chat: ChatViewModel
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
-    @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
-    @State private var composerHeight: CGFloat = 0
     @State private var isDropTargeted = false
-    @State private var followsLatestMessage = true
-    @State private var isUserScrollingTranscript = false
 
     var body: some View {
         ModelConfigurationLayout(
             model: model,
             isConfigurationVisible: $showsConfiguration
         ) {
-            VStack(spacing: 0) {
-                transcript
-                    .overlay(alignment: .bottom) {
-                        ChatComposer(
-                            model: model,
-                            viewModel: chat,
-                            unavailableReason: unavailableReason,
-                            canCompose: canCompose,
-                            canSend: canSend,
-                            onSend: { languageModelSupportsTools in
-                                chat.send(
-                                    using: model,
-                                    languageModelSupportsTools: languageModelSupportsTools
-                                )
-                            }
-                        )
-                        .frame(
-                            maxWidth: Layout.conversationMaxWidth
-                                - conversationWidthReduction
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, Layout.horizontalPadding)
-                        .onGeometryChange(for: CGFloat.self) { proxy in
-                            proxy.size.height
-                        } action: { height in
-                            let isInitialMeasurement = composerHeight == 0
-                            composerHeight = height
-                            if isInitialMeasurement {
-                                Task { @MainActor in
-                                    try? await Task.sleep(for: .milliseconds(50))
-                                    transcriptScrollPosition.scrollTo(edge: .bottom)
-                                }
-                            }
-                        }
-                    }
-            }
+            ChatTranscriptView(
+                model: model,
+                chat: chat,
+                conversationWidthReduction: conversationWidthReduction
+            )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachImages(fromURLs: urls)
             } isTargeted: { isDropTargeted = $0 }
@@ -106,31 +70,27 @@ struct ChatView: View {
         }
         .ignoresSafeArea()
     }
+}
+
+private struct ChatTranscriptView: View {
+    private enum Layout {
+        static let conversationMaxWidth: CGFloat = 680
+        static let horizontalPadding: CGFloat = 32
+    }
+
+    @ObservedObject var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    let conversationWidthReduction: CGFloat
+    @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
+    @State private var composerHeight: CGFloat = 0
+    @State private var followsLatestMessage = true
+    @State private var isUserScrollingTranscript = false
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
     }
 
-    private var canSend: Bool {
-        !model.isModelLoading
-            && model.settings.structuredOutputValidationError == nil
-            && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID)
-    }
-
-    private var canCompose: Bool {
-        model.isRunning
-            && !model.isModelLoading
-            && selectedModelID?.isEmpty == false
-            && model.settings.structuredOutputValidationError == nil
-    }
-
-    private var unavailableReason: String? {
-        model.modelLoadingStatusText
-            ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
-            ?? model.settings.structuredOutputValidationError
-    }
-
-    private var transcript: some View {
+    var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
@@ -155,16 +115,30 @@ struct ChatView: View {
                     }
                 }
             }
-            .frame(
-                maxWidth: Layout.conversationMaxWidth
-                    - conversationWidthReduction
-            )
+            .frame(maxWidth: Layout.conversationMaxWidth - conversationWidthReduction)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Layout.horizontalPadding)
             .padding(.top, 18)
             .padding(.bottom, max(18, composerHeight))
         }
         .scrollPosition($transcriptScrollPosition)
+        .overlay(alignment: .bottom) {
+            ChatComposerContainer(
+                model: model,
+                chat: chat,
+                conversationWidthReduction: conversationWidthReduction,
+                onHeightChange: { height in
+                    let isInitialMeasurement = composerHeight == 0
+                    composerHeight = height
+                    if isInitialMeasurement {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(50))
+                            transcriptScrollPosition.scrollTo(edge: .bottom)
+                        }
+                    }
+                }
+            )
+        }
         .onScrollPhaseChange { _, newPhase, context in
             switch newPhase {
             case .tracking, .interacting:
@@ -175,9 +149,7 @@ struct ChatView: View {
                     followsLatestMessage = false
                 }
             case .idle:
-                guard isUserScrollingTranscript else {
-                    return
-                }
+                guard isUserScrollingTranscript else { return }
                 isUserScrollingTranscript = false
                 followsLatestMessage = isAtTranscriptBottom(context.geometry)
             case .animating:
@@ -194,9 +166,7 @@ struct ChatView: View {
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
         .onChange(of: chat.scrollTargetMessageID) { _, target in
-            guard let target else {
-                return
-            }
+            guard let target else { return }
             followsLatestMessage = false
             DispatchQueue.main.async {
                 transcriptScrollPosition.scrollTo(id: target, anchor: .center)
@@ -211,6 +181,48 @@ struct ChatView: View {
 
     private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
         geometry.visibleRect.maxY >= geometry.contentSize.height - 8
+    }
+}
+
+private struct ChatComposerContainer: View {
+    @ObservedObject var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    let conversationWidthReduction: CGFloat
+    let onHeightChange: (CGFloat) -> Void
+
+    private var selectedModelID: String? {
+        model.settings.normalized().languageModelID
+    }
+
+    var body: some View {
+        ChatComposer(
+            model: model,
+            viewModel: chat,
+            unavailableReason: model.modelLoadingStatusText
+                ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+                ?? model.settings.structuredOutputValidationError,
+            canCompose: model.isRunning
+                && !model.isModelLoading
+                && selectedModelID?.isEmpty == false
+                && model.settings.structuredOutputValidationError == nil,
+            canSend: !model.isModelLoading
+                && model.settings.structuredOutputValidationError == nil
+                && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
+            onSend: { languageModelSupportsTools in
+                chat.send(
+                    using: model,
+                    languageModelSupportsTools: languageModelSupportsTools
+                )
+            }
+        )
+        .frame(maxWidth: 680 - conversationWidthReduction)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 32)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            onHeightChange(height)
+        }
     }
 }
 
@@ -238,8 +250,10 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
     @Published var scrollTargetMessageID: UUID?
+    @Published private(set) var isLoadingSessions = true
 
     private let sessionStore = ChatSessionStore()
+    private var sessionLoadTask: Task<Void, Never>?
     private var activeTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var activeAssistantMessageID: UUID?
@@ -256,18 +270,31 @@ final class ChatViewModel: ObservableObject {
     private let toolConsentGate = ChatToolConsentGate()
 
     init() {
-        storedSessions = sessionStore.loadSessions()
         folders = sessionStore.loadFolders()
-        pruneRedundantEmptySessions()
-        if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
-            applyCurrentSession(latestSession)
-        } else {
-            createSession()
+        let now = Date()
+        applyCurrentSession(
+            ChatSession(
+                id: UUID(),
+                title: ChatSession.timestampTitle(for: now),
+                createdAt: now,
+                updatedAt: now,
+                messages: []
+            )
+        )
+
+        let loadTask = Task.detached(priority: .userInitiated) {
+            ChatSessionBootstrap(sessions: ChatSessionStore().loadSessions())
+        }
+        sessionLoadTask = Task { @MainActor [weak self] in
+            let bootstrap = await loadTask.value
+            guard let self, !Task.isCancelled else { return }
+            finishLoadingSessions(bootstrap)
         }
     }
 
     deinit {
         activeTask?.cancel()
+        sessionLoadTask?.cancel()
     }
 
     var isCurrentSessionSending: Bool {
@@ -1521,6 +1548,39 @@ final class ChatViewModel: ObservableObject {
         ) ? normalizedForLoad(session.messages) : session.messages
         refreshSessionList()
         bumpScroll()
+    }
+
+    private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {
+        let localSession = currentSession
+        let localSessionHasWork = localSession.map { session in
+            !session.messages.isEmpty
+                || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !pendingImageAttachments.isEmpty
+                || activeRequestID != nil
+        } == true
+
+        storedSessions = bootstrap.sessions
+        if localSessionHasWork, let localSession {
+            upsertStoredSession(localSession)
+        }
+
+        pruneRedundantEmptySessions()
+        isLoadingSessions = false
+
+        guard !localSessionHasWork else {
+            refreshSessionList()
+            return
+        }
+
+        if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
+            applyCurrentSession(latestSession)
+        } else if let localSession {
+            storedSessions = [localSession]
+            sessionStore.saveSession(localSession)
+            refreshSessionList()
+        } else {
+            createSession()
+        }
     }
 
     private func normalizedForLoad(_ messages: [ChatTranscriptMessage]) -> [ChatTranscriptMessage] {

@@ -50,7 +50,7 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var phase: AudioCapturePhase = .idle
     @Published private(set) var activeKind: AudioRecordKind?
     @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var inputLevel: Float = 0
+    let meterState = AudioInputLevelState()
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
@@ -143,7 +143,7 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
         activeIncludesSystemAudio = kind == .meeting && includeSystemAudio
-        inputLevel = 0
+        meterState.update(0)
         lastMeterPublishAt = .distantPast
 
         guard await Self.requestMicrophoneAccess() else {
@@ -616,7 +616,7 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .idle
         activeKind = nil
         elapsed = 0
-        inputLevel = 0
+        meterState.update(0)
         activeIncludesSystemAudio = false
         activeBackend = nil
         captureStartedAt = nil
@@ -634,7 +634,7 @@ final class AudioCaptureLibrary: ObservableObject {
                 }
                 self.elapsed = Date().timeIntervalSince(captureStartedAt)
                 self.updateRecordingOverlay(
-                    level: self.inputLevel,
+                    level: self.meterState.level,
                     elapsed: self.elapsed
                 )
             }
@@ -661,7 +661,7 @@ final class AudioCaptureLibrary: ObservableObject {
             return
         }
         lastMeterPublishAt = now
-        inputLevel = level
+        meterState.update(level)
         self.elapsed = elapsed
         updateRecordingOverlay(level: level, elapsed: elapsed)
     }
