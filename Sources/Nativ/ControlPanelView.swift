@@ -186,6 +186,16 @@ private struct ModelsDownloadArrow: View {
     }
 }
 
+private struct SidebarNavigationLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+                .frame(width: 24, alignment: .center)
+            configuration.title
+        }
+    }
+}
+
 private struct GlobalModelLoadFailureBanner: View {
     let failure: ModelLoadFailure
     let onOpenModels: () -> Void
@@ -595,6 +605,7 @@ struct ControlPanelView: View {
         } label: {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
+                    .labelStyle(SidebarNavigationLabelStyle())
                 if tab == .extensions, !isExtensionsBadgeDismissed {
                     Text("NEW")
                         .font(.caption2.weight(.semibold))
@@ -634,6 +645,7 @@ struct ControlPanelView: View {
             applySidebarSelection(selection)
         } label: {
             Label(contribution.title, systemImage: contribution.systemImage)
+                .labelStyle(SidebarNavigationLabelStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
         }
@@ -1708,6 +1720,7 @@ struct ControlPanelView: View {
             )
         case .settings:
             SettingsView(
+                model: model,
                 softwareUpdater: softwareUpdater,
                 launchAtLogin: launchAtLogin
             )

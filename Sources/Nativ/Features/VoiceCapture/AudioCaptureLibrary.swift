@@ -50,7 +50,7 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var phase: AudioCapturePhase = .idle
     @Published private(set) var activeKind: AudioRecordKind?
     @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var inputLevel: Float = 0
+    let meterState = AudioInputLevelState()
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
@@ -67,6 +67,7 @@ final class AudioCaptureLibrary: ObservableObject {
     private var shouldSummarizeCurrentCapture = false
     private var activeBackend: ActiveAudioCaptureBackend?
     private var activeTask: Task<Void, Never>?
+    private var lastMeterPublishAt = Date.distantPast
 
     init(analytics: AudioAnalyticsStore? = nil) {
         self.analytics = analytics ?? .shared
@@ -91,16 +92,13 @@ final class AudioCaptureLibrary: ObservableObject {
             guard let self else {
                 return
             }
-            self.inputLevel = level
-            self.elapsed = elapsed
-            self.updateRecordingOverlay(level: level, elapsed: elapsed)
+            self.publishMeter(level: level, elapsed: elapsed)
         }
         meetingRecorder.onMicrophoneLevelUpdate = { [weak self] level in
             guard let self else {
                 return
             }
-            self.inputLevel = level
-            self.updateRecordingOverlay(level: level, elapsed: self.elapsed)
+            self.publishMeter(level: level, elapsed: self.elapsed)
         }
     }
 
@@ -145,7 +143,8 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
         activeIncludesSystemAudio = kind == .meeting && includeSystemAudio
-        inputLevel = 0
+        meterState.update(0)
+        lastMeterPublishAt = .distantPast
 
         guard Self.hasMicrophoneAccess() else {
             fail(AudioCaptureLibraryError.microphonePermissionRequired)
@@ -617,11 +616,12 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .idle
         activeKind = nil
         elapsed = 0
-        inputLevel = 0
+        meterState.update(0)
         activeIncludesSystemAudio = false
         activeBackend = nil
         captureStartedAt = nil
         shouldSummarizeCurrentCapture = false
+        lastMeterPublishAt = .distantPast
         activeTask = nil
     }
 
@@ -634,7 +634,7 @@ final class AudioCaptureLibrary: ObservableObject {
                 }
                 self.elapsed = Date().timeIntervalSince(captureStartedAt)
                 self.updateRecordingOverlay(
-                    level: self.inputLevel,
+                    level: self.meterState.level,
                     elapsed: self.elapsed
                 )
             }
@@ -653,6 +653,17 @@ final class AudioCaptureLibrary: ObservableObject {
             return
         }
         recordingOverlay.update(level: level, elapsed: elapsed)
+    }
+
+    private func publishMeter(level: Float, elapsed: TimeInterval) {
+        let now = Date()
+        guard now.timeIntervalSince(lastMeterPublishAt) >= 1.0 / 15.0 else {
+            return
+        }
+        lastMeterPublishAt = now
+        meterState.update(level)
+        self.elapsed = elapsed
+        updateRecordingOverlay(level: level, elapsed: elapsed)
     }
 
     private static func hasMicrophoneAccess() -> Bool {

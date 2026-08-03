@@ -56,7 +56,10 @@ struct ModelsView: View {
     var speechModelDiscoveryRequest = 0
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
-    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+    // Keep download progress observation in the banner and individual rows.
+    // Observing the manager here invalidates the entire Models view for every
+    // progress tick, which makes Discover scroll janky during downloads.
+    private var downloadManager: HuggingFaceDownloadManager { .shared }
     @State private var section: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
@@ -144,24 +147,7 @@ struct ModelsView: View {
 
     @ViewBuilder
     private var activeDownloadBanner: some View {
-        if !downloadManager.downloads.isEmpty {
-            VStack(spacing: 0) {
-                ForEach(downloadManager.downloads) { download in
-                    ActiveDownloadBannerRow(
-                        download: download,
-                        onPauseResume: {
-                            if download.state == .paused {
-                                downloadManager.resumeDownload(download.modelID)
-                            } else {
-                                downloadManager.pauseDownload(download.modelID)
-                            }
-                        },
-                        onCancel: { downloadManager.removeDownload(download.modelID) }
-                    )
-                }
-            }
-            Divider()
-        }
+        ActiveDownloadBannerView()
     }
 
     private var pageHeader: some View {
@@ -369,17 +355,10 @@ struct ModelsView: View {
                             )
                         } else {
                             ForEach(filteredHubModels) { hubModel in
-                                HubModelRow(
+                                HubModelRowContainer(
                                     model: hubModel,
                                     isInstalled: installedModelIDs.contains(hubModel.id),
-                                    isDownloading: downloadManager.isDownloading(hubModel.id),
-                                    downloadProgress: downloadManager.progress(for: hubModel.id),
-                                    isDownloadPaused: downloadManager.isPaused(for: hubModel.id),
-                                    downloadBlockedReason: downloadManager.capacityBlocker(
-                                        sizeBytes: hubModel.sizeBytes,
-                                        cachePath: model.settings.modelSearchPath
-                                    ),
-                                    downloadError: downloadManager.errorByModelID[hubModel.id],
+                                    cachePath: model.settings.modelSearchPath,
                                     onDownload: {
                                         downloadManager.download(
                                             repoID: hubModel.id,
@@ -1152,7 +1131,33 @@ private struct ActiveDownloadBannerRow: View {
     }
 }
 
-private struct HubModelRow: View {
+private struct ActiveDownloadBannerView: View {
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+
+    @ViewBuilder
+    var body: some View {
+        if !downloadManager.downloads.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(downloadManager.downloads) { download in
+                    ActiveDownloadBannerRow(
+                        download: download,
+                        onPauseResume: {
+                            if download.state == .paused {
+                                downloadManager.resumeDownload(download.modelID)
+                            } else {
+                                downloadManager.pauseDownload(download.modelID)
+                            }
+                        },
+                        onCancel: { downloadManager.removeDownload(download.modelID) }
+                    )
+                }
+            }
+            Divider()
+        }
+    }
+}
+
+private struct HubModelRow: View, Equatable {
     let model: HuggingFaceModel
     let isInstalled: Bool
     let isDownloading: Bool
@@ -1163,6 +1168,18 @@ private struct HubModelRow: View {
     let onDownload: () -> Void
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
+
+    static func == (lhs: HubModelRow, rhs: HubModelRow) -> Bool {
+        // Actions are intentionally excluded: they do not affect rendering,
+        // while closures are recreated whenever the parent view is rebuilt.
+        lhs.model == rhs.model
+            && lhs.isInstalled == rhs.isInstalled
+            && lhs.isDownloading == rhs.isDownloading
+            && lhs.downloadProgress == rhs.downloadProgress
+            && lhs.isDownloadPaused == rhs.isDownloadPaused
+            && lhs.downloadBlockedReason == rhs.downloadBlockedReason
+            && lhs.downloadError == rhs.downloadError
+    }
 
     private var memoryFitWarning: String? {
         if let estimate = model.memoryEstimate, !estimate.isUsable {
@@ -1289,6 +1306,38 @@ private struct HubModelRow: View {
         return model.isGated
             ? "Gated models require Hugging Face authentication."
             : "Download to the configured cache"
+    }
+}
+
+/// Keeps download progress observation local to the affected row. The parent
+/// Discover view remains stable while a download reports progress.
+private struct HubModelRowContainer: View {
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+
+    let model: HuggingFaceModel
+    let isInstalled: Bool
+    let cachePath: String
+    let onDownload: () -> Void
+    let onPauseResume: () -> Void
+    let onRemoveDownload: () -> Void
+
+    var body: some View {
+        HubModelRow(
+            model: model,
+            isInstalled: isInstalled,
+            isDownloading: downloadManager.isDownloading(model.id),
+            downloadProgress: downloadManager.progress(for: model.id),
+            isDownloadPaused: downloadManager.isPaused(for: model.id),
+            downloadBlockedReason: downloadManager.capacityBlocker(
+                sizeBytes: model.sizeBytes,
+                cachePath: cachePath
+            ),
+            downloadError: downloadManager.errorByModelID[model.id],
+            onDownload: onDownload,
+            onPauseResume: onPauseResume,
+            onRemoveDownload: onRemoveDownload
+        )
+        .equatable()
     }
 }
 

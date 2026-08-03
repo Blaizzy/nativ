@@ -563,6 +563,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showMainWindow()
     }
 
+    func increaseChatFontSize() {
+        stepChatFontSize(by: 1)
+    }
+
+    func decreaseChatFontSize() {
+        stepChatFontSize(by: -1)
+    }
+
+    func resetChatFontSize() {
+        var settings = model.settings
+        settings.resetChatFontScale()
+        model.settings = settings.normalized()
+    }
+
+    private func stepChatFontSize(by delta: Int) {
+        var settings = model.settings
+        settings.stepChatFontScale(by: delta)
+        model.settings = settings.normalized()
+    }
+
     private func showMainWindow() {
         mainWindowOpener?()
         NSApplication.shared.activate(ignoringOtherApps: true)

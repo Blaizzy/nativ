@@ -374,6 +374,33 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(warning?.estimatedWorkingSetBytes, 90)
     }
 
+    func testChatFontScaleStepsClampAndReset() {
+        var settings = NativSettings()
+        XCTAssertEqual(settings.chatFontScale, 1.0)
+        settings.stepChatFontScale(by: 1)
+        XCTAssertEqual(settings.chatFontScale, 1.15)
+        settings.stepChatFontScale(by: -5)
+        XCTAssertEqual(settings.chatFontScale, NativSettings.minChatFontScale)
+        settings.stepChatFontScale(by: 99)
+        XCTAssertEqual(settings.chatFontScale, NativSettings.maxChatFontScale)
+        settings.resetChatFontScale()
+        XCTAssertEqual(settings.chatFontScale, 1.0)
+    }
+
+    func testChatFontScaleRoundTripsAndClamps() throws {
+        var settings = NativSettings()
+        settings.chatFontScale = 1.3
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.chatFontScale, 1.3)
+
+        var extreme = NativSettings()
+        extreme.chatFontScale = 9.0
+        XCTAssertEqual(extreme.normalized().chatFontScale, NativSettings.maxChatFontScale)
+    }
+
     func testRememberProfileCapturesCurrentModelSettings() throws {
         var settings = NativSettings()
         settings.thinkingEnabled = true

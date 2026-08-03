@@ -45,6 +45,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
+    @ObservedObject var model: NativModel
     let softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
@@ -126,6 +127,17 @@ struct SettingsView: View {
                     .padding(.leading, 52)
 
                 settingsRow(
+                    title: "Chat Text Size",
+                    description: "Resize chat message text. Press ⌘+ or ⌘− to adjust, ⌘0 to reset.",
+                    systemImage: "textformat.size"
+                ) {
+                    chatTextSizeControl
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
                     title: "Start at Login",
                     description: launchAtLogin.requiresApproval
                         ? "Approval is required in System Settings."
@@ -161,6 +173,53 @@ struct SettingsView: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
         }
+    }
+
+    private var chatTextSizeControl: some View {
+        HStack(spacing: 10) {
+            Text("A")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Slider(value: chatFontStepBinding, in: chatFontStepRange, step: 1)
+            Text("A")
+                .font(.system(size: 20))
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 220, alignment: .trailing)
+    }
+
+    private var chatFontStepRange: ClosedRange<Double> {
+        0...Double(NativSettings.chatFontScaleSteps.count - 1)
+    }
+
+    private var chatFontStepBinding: Binding<Double> {
+        Binding(
+            get: { chatFontStepIndex },
+            set: { setChatFontStepIndex($0) }
+        )
+    }
+
+    private var chatFontStepIndex: Double {
+        let steps = NativSettings.chatFontScaleSteps
+        let scale = model.settings.chatFontScale
+        var bestIndex = 0
+        var bestDistance = Double.greatestFiniteMagnitude
+        for index in steps.indices {
+            let distance = abs(steps[index] - scale)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+        return Double(bestIndex)
+    }
+
+    private func setChatFontStepIndex(_ value: Double) {
+        let steps = NativSettings.chatFontScaleSteps
+        let index = min(max(Int(value.rounded()), 0), steps.count - 1)
+        var settings = model.settings
+        settings.chatFontScale = steps[index]
+        model.settings = settings.normalized()
     }
 
     private func settingsRow<Accessory: View>(
