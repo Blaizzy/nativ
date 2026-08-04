@@ -916,9 +916,8 @@ private struct MLXChatTimings: Decodable {
     let predictedTokensPerSecond: Double?
     let peakMemoryGB: Double?
     let specDraftKind: String?
-    let specAcceptedTokens: Int?
     let specDraftedTokens: Int?
-    let specAcceptanceRate: Double?
+    let specAcceptedTokens: Int?
 
     var resolvedDecodeTokensPerSecond: Double? {
         guard let predictedTokensPerSecond,
@@ -931,9 +930,6 @@ private struct MLXChatTimings: Decodable {
     }
 
     var resolvedSpecAcceptanceRate: Double? {
-        if let specAcceptanceRate, specAcceptanceRate >= 0, specAcceptanceRate.isFinite {
-            return specAcceptanceRate
-        }
         guard let specAcceptedTokens,
               let specDraftedTokens,
               specDraftedTokens > 0
@@ -947,8 +943,7 @@ private struct MLXChatTimings: Decodable {
         case predictedTokensPerSecond = "predicted_per_second"
         case peakMemoryGB = "peak_memory"
         case specDraftKind = "draft_kind"
-        case specAcceptedTokens = "spec_accepted_tokens"
-        case specDraftedTokens = "spec_drafted_tokens"
-        case specAcceptanceRate = "spec_acceptance_rate"
+        case specDraftedTokens = "draft_n"
+        case specAcceptedTokens = "draft_n_accepted"
     }
 }
