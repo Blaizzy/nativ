@@ -119,7 +119,8 @@ struct RoutinesView: View {
                     routine: routine,
                     onToggleEnabled: { store.setEnabled($0, id: routine.id) },
                     onRunNow: { RoutineRunCoordinator.shared.run(routine, source: .manual) },
-                    onOpen: { detail = routine }
+                    onOpen: { detail = routine },
+                    onDelete: { store.delete(id: routine.id) }
                 )
             }
         }
@@ -162,6 +163,7 @@ private struct RoutineRow: View {
     let onToggleEnabled: (Bool) -> Void
     let onRunNow: () -> Void
     let onOpen: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -187,6 +189,9 @@ private struct RoutineRow: View {
         )
         .contentShape(.rect)
         .onTapGesture(perform: onOpen)
+        .contextMenu {
+            Button("Delete routine", role: .destructive, action: onDelete)
+        }
     }
 }
 
