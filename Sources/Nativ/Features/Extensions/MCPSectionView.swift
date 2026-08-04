@@ -25,14 +25,14 @@ struct MCPSectionView: View {
                 }
             }
         } content: {
-            if model.settings.mcpServers.isEmpty {
+            if visibleServers.isEmpty {
                 HubEmptyHint(
                     icon: "server.rack",
                     text: "No servers yet. Add your own, or browse the community catalog of approved servers."
                 )
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(model.settings.mcpServers.enumerated()), id: \.element.id) { index, server in
+                    ForEach(Array(visibleServers.enumerated()), id: \.element.id) { index, server in
                         if index > 0 { Divider() }
                         MCPServerRow(
                             server: server,
@@ -60,6 +60,14 @@ struct MCPSectionView: View {
             ) { entry in
                 save(entry.makeConfig())
             }
+        }
+    }
+
+    /// Servers with an actual command — a command-less entry can't launch, so
+    /// it's not shown as an option (it does nothing).
+    private var visibleServers: [MCPServerConfig] {
+        model.settings.mcpServers.filter {
+            !$0.command.trimmingCharacters(in: .whitespaces).isEmpty
         }
     }
 
@@ -291,7 +299,10 @@ private struct MCPServerEditor: View {
                     onSave(server)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(server.name.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(
+                    server.name.trimmingCharacters(in: .whitespaces).isEmpty
+                        || server.command.trimmingCharacters(in: .whitespaces).isEmpty
+                )
             }
         }
         .padding(20)
