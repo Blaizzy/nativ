@@ -12,6 +12,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case models = "Models"
     case integrations = "Integrations"
     case extensions = "Extensions"
+    case routines = "Routines"
     case developer = "Developer"
     case settings = "Settings"
 
@@ -25,6 +26,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             .models,
             .integrations,
             .extensions,
+            .routines,
             .developer,
         ]
     }
@@ -49,6 +51,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "puzzlepiece.extension"
         case .extensions:
             "point.3.filled.connected.trianglepath.dotted"
+        case .routines:
+            "bolt"
         case .developer:
             "hammer"
         case .settings:
@@ -1809,6 +1813,8 @@ struct ControlPanelView: View {
                 showsConfiguration: $isModelConfigurationVisible,
                 titleLeadingInset: detailTitleLeadingInset
             )
+        case .routines:
+            RoutinesView(model: model)
         case .settings:
             SettingsView(
                 model: model,
