@@ -12,6 +12,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case models = "Models"
     case integrations = "Integrations"
     case extensions = "Extensions"
+    case mcpServers = "MCP Servers"
     case developer = "Developer"
     case settings = "Settings"
 
@@ -25,6 +26,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             .models,
             .integrations,
             .extensions,
+            .mcpServers,
             .developer,
         ]
     }
@@ -49,6 +51,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "puzzlepiece.extension"
         case .extensions:
             "shippingbox"
+        case .mcpServers:
+            "server.rack"
         case .developer:
             "hammer"
         case .settings:
@@ -1231,7 +1235,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
+        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .mcpServers, .settings:
             false
         }
     }
@@ -1792,6 +1796,11 @@ struct ControlPanelView: View {
                 manager: extensionManager,
                 titleLeadingInset: detailTitleLeadingInset
             )
+        case .mcpServers:
+            MCPServersView(
+                model: model,
+                titleLeadingInset: detailTitleLeadingInset
+            )
         case .developer:
             DeveloperView(
                 model: model,
@@ -1888,7 +1897,7 @@ struct ControlPanelView: View {
             return true
         }
         switch selectedTab {
-        case .dashboard, .system, .models, .integrations, .extensions, .developer:
+        case .dashboard, .system, .models, .integrations, .extensions, .mcpServers, .developer:
             return true
         case .chat, .imageGeneration, .artifacts, .settings:
             return false

@@ -146,6 +146,7 @@
 		E4D299AADEA8470C37256DDE /* SystemMonitorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E540204DED30CFBDB0FE1AD /* SystemMonitorStore.swift */; };
 		E4D6CCEFDC2BA5A68FAE230A /* NativMCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F5AE12A6EA1216750AFED5E /* NativMCPClient.swift */; };
 		E64F3E5C624F0C949AE70C60 /* SoftwareUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822185ADAAC5DA3F034179B0 /* SoftwareUpdater.swift */; };
+		E6C6A47E0949A0087BCE08D8 /* MCPServersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DCD43578DBAFBEC2F0D651D /* MCPServersView.swift */; };
 		E96652149FDCCF65899280A8 /* IntegrationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41417C210BF817681A8C6D87 /* IntegrationsView.swift */; };
 		ED1F61AA671F9F65A2F34ADB /* NativSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594711E024396C78703CE05A /* NativSettings.swift */; };
 		EF3678F684519D8ADC625B20 /* MLXImageModelResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */; };
@@ -243,6 +244,7 @@
 /* Begin PBXFileReference section */
 		068ED8143814678E688A3A62 /* ChatServerStatsTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatServerStatsTool.swift; sourceTree = "<group>"; };
 		07E0B18D848E96DBF258FD8F /* NativMCPClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativMCPClientTests.swift; sourceTree = "<group>"; };
+		0DCD43578DBAFBEC2F0D651D /* MCPServersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPServersView.swift; sourceTree = "<group>"; };
 		0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexCLIProfile.swift; sourceTree = "<group>"; };
 		141A3E7402D8AE90971C374B /* ModelPrimaryTaskResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolver.swift; sourceTree = "<group>"; };
 		1573A2D88784C9D404156D25 /* VoiceDictationExtensionRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDictationExtensionRuntime.swift; sourceTree = "<group>"; };
@@ -530,6 +532,14 @@
 			path = SystemMonitor;
 			sourceTree = "<group>";
 		};
+		5CE0523415094EB82A398A6A /* MCP */ = {
+			isa = PBXGroup;
+			children = (
+				0DCD43578DBAFBEC2F0D651D /* MCPServersView.swift */,
+			);
+			path = MCP;
+			sourceTree = "<group>";
+		};
 		6FC4F77BDC88A365FD01B7C9 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
@@ -597,6 +607,7 @@
 				374FD298864C11262A44F37B /* ImageGeneration */,
 				28D631CB7BF8B65D28E11E43 /* Integrations */,
 				40D3B01A6A8BFAE6E98FDD3C /* IssueReport */,
+				5CE0523415094EB82A398A6A /* MCP */,
 				BAC9F35045D83344BC059CB2 /* Models */,
 				4D59C5326FE266C76E71C52A /* Settings */,
 				52ECEB1EB0B83451B1DE3C20 /* SystemMonitor */,
@@ -1012,6 +1023,7 @@
 				BE712AD5A19F62157BB8535C /* LaunchAtLoginController.swift in Sources */,
 				1423FD497A75A14770FCA9E1 /* LocalModelDiscovery.swift in Sources */,
 				482E08D2A8EFADD566FFDC4D /* LocalModelProvider.swift in Sources */,
+				E6C6A47E0949A0087BCE08D8 /* MCPServersView.swift in Sources */,
 				A1492AA9B1D71B4E57310EF6 /* MLXImageModelResolver.swift in Sources */,
 				DD9CAC7451574C4B05DF1EDB /* Main.swift in Sources */,
 				052BF04D854F36CDA740635F /* MarkdownFormatting.swift in Sources */,
