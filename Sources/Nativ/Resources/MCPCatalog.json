@@ -1,0 +1,63 @@
+[
+  {
+    "id": "filesystem",
+    "name": "filesystem",
+    "summary": "Read and write files in allowed folders.",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    "symbol": "folder.fill",
+    "tint": "blue",
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
+  },
+  {
+    "id": "git",
+    "name": "git",
+    "summary": "Inspect and operate on Git repositories.",
+    "command": "uvx",
+    "args": ["mcp-server-git"],
+    "symbol": "arrow.triangle.branch",
+    "tint": "orange",
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
+  },
+  {
+    "id": "github",
+    "name": "github",
+    "summary": "Search and manage GitHub issues, PRs, and code.",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "symbol": "chevron.left.forwardslash.chevron.right",
+    "tint": "primary",
+    "requiredEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/github"
+  },
+  {
+    "id": "fetch",
+    "name": "fetch",
+    "summary": "Fetch and read web pages as markdown.",
+    "command": "uvx",
+    "args": ["mcp-server-fetch"],
+    "symbol": "globe",
+    "tint": "teal",
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
+  },
+  {
+    "id": "memory",
+    "name": "memory",
+    "summary": "A persistent knowledge graph the model can recall.",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"],
+    "symbol": "brain.head.profile",
+    "tint": "purple",
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
+  },
+  {
+    "id": "sqlite",
+    "name": "sqlite",
+    "summary": "Query and edit a local SQLite database.",
+    "command": "uvx",
+    "args": ["mcp-server-sqlite", "--db-path", "database.db"],
+    "symbol": "cylinder.split.1x2",
+    "tint": "green",
+    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
+  }
+]
