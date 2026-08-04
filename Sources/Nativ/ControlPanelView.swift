@@ -48,7 +48,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         case .integrations:
             "puzzlepiece.extension"
         case .extensions:
-            "shippingbox"
+            "point.3.filled.connected.trianglepath.dotted"
         case .developer:
             "hammer"
         case .settings:
