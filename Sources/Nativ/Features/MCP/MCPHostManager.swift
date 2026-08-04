@@ -11,6 +11,9 @@ enum MCPServerConnectionState: Equatable {
 
 @MainActor
 final class MCPHostManager: ObservableObject {
+    nonisolated static let toolNamePrefix = "mcp__"
+    nonisolated static let toolNameSeparator = "__"
+
     @Published private(set) var states: [UUID: MCPServerConnectionState] = [:]
 
     private struct Connection {
@@ -188,7 +191,7 @@ final class MCPHostManager: ObservableObject {
 
     private func route(for name: String) -> (client: MCPClient, toolName: String)? {
         for connection in connections.values {
-            let prefix = "mcp__\(connection.slug)__"
+            let prefix = "\(Self.toolNamePrefix)\(connection.slug)\(Self.toolNameSeparator)"
             guard name.hasPrefix(prefix) else { continue }
             let toolName = String(name.dropFirst(prefix.count))
             if connection.tools.contains(where: { $0.name == toolName }) {
@@ -204,7 +207,7 @@ final class MCPHostManager: ObservableObject {
     }
 
     private static func toolName(slug: String, tool: String) -> String {
-        "mcp__\(slug)__\(tool)"
+        "\(toolNamePrefix)\(slug)\(toolNameSeparator)\(tool)"
     }
 
     private static func launchEquivalent(_ lhs: MCPServerConfig, _ rhs: MCPServerConfig) -> Bool {
