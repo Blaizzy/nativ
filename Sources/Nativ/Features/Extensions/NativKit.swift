@@ -1,3 +1,4 @@
+import NativServerKit
 import SwiftUI
 
 // A Kit is a ready-made setup: a curated bundle of MCP servers, their tools,
