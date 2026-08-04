@@ -60,6 +60,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     var onMenuStateChanged: (() -> Void)?
 
     private let server = NativProcessController()
+    let mcpServers = MCPServerManager()
+    private var resolvedMCPLaunchEnvironment: [String: String] = [:]
     private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
     private var metricsTimer: Timer?
@@ -85,7 +87,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         allTimeStats = NativAllTimeStats.load(from: currentAnalyticsDatabaseURL())
         configureServerCallbacks()
         isRunning = server.isRunning
+        mcpServers.configure(settings.mcpServers)
         resolveHuggingFaceEnvironmentFromLoginShell()
+        resolveMCPLaunchEnvironmentFromLoginShell()
         migrateCustomHuggingFaceCredentialIfNeeded()
     }
 
@@ -134,6 +138,41 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
                     in: effectiveEnvironment
                 )
             }
+        }
+    }
+
+    /// launchd's PATH is missing /opt/homebrew/bin, so `npx`/`uvx` only
+    /// resolve from Xcode/a terminal, not a real Finder launch. Same probe
+    /// as resolveHuggingFaceEnvironmentFromLoginShell, a different variable.
+    private func resolveMCPLaunchEnvironmentFromLoginShell() {
+        Task { [weak self] in
+            let resolved = await Task.detached(priority: .utility) {
+                ShellEnvironment.resolveFromLoginShell(names: ["PATH"])
+            }.value
+            guard !resolved.isEmpty else { return }
+            self?.resolvedMCPLaunchEnvironment = resolved
+        }
+    }
+
+    func addMCPServer(_ configuration: MCPServerConfiguration) {
+        settings.mcpServers.append(configuration)
+        mcpServers.configure(settings.mcpServers)
+    }
+
+    func removeMCPServer(_ id: MCPServerConfiguration.ID) {
+        settings.mcpServers.removeAll { $0.id == id }
+        mcpServers.configure(settings.mcpServers)
+    }
+
+    func startMCPServer(_ id: MCPServerConfiguration.ID) {
+        Task { [mcpServers, resolvedMCPLaunchEnvironment] in
+            await mcpServers.start(id, additionalEnvironment: resolvedMCPLaunchEnvironment)
+        }
+    }
+
+    func stopMCPServer(_ id: MCPServerConfiguration.ID) {
+        Task { [mcpServers] in
+            await mcpServers.stop(id)
         }
     }
 
@@ -675,6 +714,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func applicationWillTerminate() {
+        mcpServers.stopAllSynchronously()
         stopMetricsPolling(clearSession: true)
         if server.isRunning {
             try? server.stop(timeout: 2)
