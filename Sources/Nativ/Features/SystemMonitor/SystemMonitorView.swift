@@ -1823,9 +1823,14 @@ private struct SystemValueHistoryChart: View {
             } else {
                 Chart {
                     ForEach(samples) { sample in
+                        // Filled from the axis floor rather than the default of zero. On a
+                        // series that does not anchor at zero the baseline sits outside
+                        // the domain, and the area is then drawn past the bottom of the
+                        // plot and bleeds over whatever follows the chart.
                         AreaMark(
                             x: .value("Time", sample.recordedAt),
-                            y: .value(seriesName, sample.value)
+                            yStart: .value("Baseline", axisRange.lowerBound),
+                            yEnd: .value(seriesName, sample.value)
                         )
                         .foregroundStyle(
                             LinearGradient(
@@ -1887,6 +1892,9 @@ private struct SystemValueHistoryChart: View {
                     range: .plotDimension(startPadding: 0, endPadding: 0)
                 )
                 .chartYScale(domain: axisRange)
+                // Catmull-Rom overshoots the data either side of a peak, so a value near
+                // the top of the domain can still draw slightly outside the plot.
+                .chartPlotStyle { $0.clipped() }
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 5)) { value in
                         AxisGridLine()
