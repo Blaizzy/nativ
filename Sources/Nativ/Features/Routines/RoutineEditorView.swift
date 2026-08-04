@@ -244,6 +244,7 @@ struct RoutineDetailView: View {
                     Image(systemName: "ellipsis")
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
             }
             .padding(16)

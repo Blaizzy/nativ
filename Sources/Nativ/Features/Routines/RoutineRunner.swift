@@ -8,7 +8,6 @@ final class RoutineRunner {
     private let sessionStore: ChatSessionStore
 
     var onRunCompleted: ((Routine, RoutineRun) -> Void)?
-    var onSessionSaved: (() -> Void)?
 
     private var queue: [(Routine, RoutineRunSource)] = []
     private var isExecuting = false
@@ -73,7 +72,7 @@ final class RoutineRunner {
             let completion = try await client.completeChat(request)
             let session = makeSession(routine: routine, completion: completion)
             sessionStore.saveSession(session)
-            onSessionSaved?()
+            NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
             run.sessionID = session.id
             finish(&run, routine: routine, status: .succeeded, summary: Self.summarize(completion.content))
         } catch {
@@ -168,4 +167,8 @@ final class RoutineRunner {
             .first { !$0.isEmpty } ?? ""
         return firstLine.count > 140 ? String(firstLine.prefix(139)) + "…" : firstLine
     }
+}
+
+extension Notification.Name {
+    static let routineDidSaveChatSession = Notification.Name("RoutineDidSaveChatSession")
 }
