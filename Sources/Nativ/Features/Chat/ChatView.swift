@@ -1426,7 +1426,8 @@ final class ChatViewModel: ObservableObject {
                         ?? message.responseMetrics?.generatedTokens,
                     decodeTokensPerSecond: metrics.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
-                    peakMemoryGB: message.responseMetrics?.peakMemoryGB
+                    peakMemoryGB: message.responseMetrics?.peakMemoryGB,
+                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
                 )
             }
         }
@@ -2425,6 +2426,12 @@ private struct ChatResponseMetricsRow: View {
             label: "Decode tok/s",
             value: NativFormatting.rate(metrics.decodeTokensPerSecond)
         )
+        if let acceptanceRate = metrics.specAcceptanceRate {
+            ChatResponseMetricPill(
+                label: "Draft acceptance",
+                value: acceptanceRate.formatted(.percent.precision(.fractionLength(0)))
+            )
+        }
         ChatResponseMetricPill(
             label: "Peak memory",
             value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? "--"

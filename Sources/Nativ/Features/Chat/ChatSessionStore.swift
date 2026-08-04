@@ -327,24 +327,28 @@ struct ChatResponseMetrics: Equatable, Codable {
     let generatedTokens: Int?
     let decodeTokensPerSecond: Double?
     let peakMemoryGB: Double?
+    let specAcceptanceRate: Double?
 
     var hasVisibleValues: Bool {
         totalTokens != nil
             || generatedTokens != nil
             || decodeTokensPerSecond != nil
             || peakMemoryGB != nil
+            || specAcceptanceRate != nil
     }
 
     init(
         totalTokens: Int? = nil,
         generatedTokens: Int? = nil,
         decodeTokensPerSecond: Double? = nil,
-        peakMemoryGB: Double? = nil
+        peakMemoryGB: Double? = nil,
+        specAcceptanceRate: Double? = nil
     ) {
         self.totalTokens = totalTokens
         self.generatedTokens = generatedTokens
         self.decodeTokensPerSecond = decodeTokensPerSecond
         self.peakMemoryGB = peakMemoryGB
+        self.specAcceptanceRate = specAcceptanceRate
     }
 
     init(completion: MLXChatCompletion) {
@@ -352,7 +356,8 @@ struct ChatResponseMetrics: Equatable, Codable {
             totalTokens: completion.usage?.resolvedTotalTokens,
             generatedTokens: completion.usage?.completionTokens,
             decodeTokensPerSecond: completion.resolvedDecodeTokensPerSecond,
-            peakMemoryGB: completion.usage?.peakMemoryGB
+            peakMemoryGB: completion.usage?.peakMemoryGB,
+            specAcceptanceRate: completion.usage?.specAcceptanceRate
         )
     }
 }
