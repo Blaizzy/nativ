@@ -5,6 +5,7 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
     case httpStatus(Int, String)
     case missingAssistantContent
     case malformedStreamEvent(String)
+    case serverError(String)
 
     public var description: String {
         switch self {
@@ -20,6 +21,9 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
             return "Chat response did not include assistant content"
         case .malformedStreamEvent(let event):
             return "Malformed chat stream event: \(event)"
+        case .serverError(let message):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "The server reported an error." : trimmed
         }
     }
 
@@ -643,6 +647,10 @@ public final class NativChatClient {
                 throw NativChatError.malformedStreamEvent(dataString)
             }
 
+            if let errorEvent = try? decoder.decode(ChatStreamErrorEvent.self, from: data) {
+                throw NativChatError.serverError(errorEvent.error.message)
+            }
+
             let chunk = try decoder.decode(ChatStreamChunk.self, from: data)
             responseModel = chunk.model ?? responseModel
             usage = chunk.usage ?? usage
@@ -810,6 +818,27 @@ private struct ChatCompletionResponse: Decodable {
 
         enum CodingKeys: String, CodingKey {
             case finishReason = "finish_reason"
+            case message
+        }
+    }
+}
+
+private struct ChatStreamErrorEvent: Decodable {
+    let error: Payload
+
+    struct Payload: Decodable {
+        let message: String
+
+        init(from decoder: Decoder) throws {
+            if let text = try? decoder.singleValueContainer().decode(String.self) {
+                message = text
+                return
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            message = try container.decode(String.self, forKey: .message)
+        }
+
+        enum CodingKeys: String, CodingKey {
             case message
         }
     }
