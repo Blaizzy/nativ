@@ -157,6 +157,9 @@ private final class ModelMenuRowView: NSView {
             case .tools:
                 symbolName = "hammer.fill"
                 description = capability.displayName
+            case .drafter:
+                symbolName = "hare.fill"
+                description = capability.displayName
             }
             let configuration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
             capabilityImage.image = NSImage(
