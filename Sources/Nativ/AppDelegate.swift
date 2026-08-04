@@ -627,8 +627,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        controlPanelNavigation.open(.chat)
-        showMainWindow()
+        DispatchQueue.main.async { [weak self] in
+            self?.controlPanelNavigation.open(.chat)
+            self?.showMainWindow()
+        }
         completionHandler()
     }
 

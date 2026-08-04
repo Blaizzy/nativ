@@ -94,10 +94,31 @@ final class RoutineRunner {
         onRunCompleted?(routine, run)
     }
 
-    private func waitForServer(timeout: TimeInterval = 25) async {
+    private func waitForServer(timeout: TimeInterval = 120) async {
         let deadline = Date().addingTimeInterval(timeout)
         while model.activeServerBaseURL == nil, Date() < deadline {
             try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        guard let baseURL = model.activeServerBaseURL else {
+            return
+        }
+        let healthURL = baseURL.appendingPathComponent("v1/models")
+        while Date() < deadline {
+            if await Self.isReachable(healthURL) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
+    private static func isReachable(_ url: URL) async -> Bool {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return response is HTTPURLResponse
+        } catch {
+            return false
         }
     }
 
