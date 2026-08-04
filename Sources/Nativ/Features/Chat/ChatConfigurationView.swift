@@ -300,10 +300,14 @@ struct ModelConfigurationView: View {
                 .configurationToggleStyle()
 
             if settings.thinkingEnabled {
-                Toggle("Limit thinking", isOn: $settings.thinkingBudgetEnabled)
+                Toggle("Limit thinking", isOn: thinkingBudgetBinding)
                     .configurationToggleStyle()
+                    .disabled(settings.speculativeDecodingActive)
 
-                if settings.thinkingBudgetEnabled {
+                if settings.speculativeDecodingActive {
+                    Text("Thinking limits are unavailable while speculative decoding is active.")
+                        .configurationHintStyle()
+                } else if settings.thinkingBudgetEnabled {
                     ConfigurationIntegerField(
                         title: "Budget",
                         value: $settings.thinkingBudget,
@@ -482,8 +486,16 @@ struct ModelConfigurationView: View {
                 settings.speculativeDecodingEnabled = enabled
                 if enabled {
                     settings.structuredOutputEnabled = false
+                    settings.thinkingBudgetEnabled = false
                 }
             }
+        )
+    }
+
+    private var thinkingBudgetBinding: Binding<Bool> {
+        Binding(
+            get: { settings.thinkingBudgetEnabled && !settings.speculativeDecodingActive },
+            set: { settings.thinkingBudgetEnabled = $0 }
         )
     }
 
