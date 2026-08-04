@@ -53,6 +53,7 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
     MLXChatToolCall(id: "1", function: MLXChatFunctionCall(name: name, arguments: arguments))
 }
 
+@MainActor
 final class ChatToolRegistryTests: XCTestCase {
     func testDefinitionsOmitImageToolsWithNoImageModelConfigured() {
         let names = ChatToolRegistry.definitions(context: makeContext(), canEditImage: false)

@@ -9,6 +9,7 @@ struct ChatToolExecutionContext {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
     var analyticsDatabaseURL: URL? = nil
+    var mcpBridge: ChatMCPToolBridge? = nil
 }
 
 struct ChatToolExecutionOutcome {
@@ -25,6 +26,7 @@ enum ChatToolRoundGate {
 }
 
 enum ChatToolRegistry {
+    @MainActor
     static func definitions(
         context: ChatToolExecutionContext,
         canEditImage: Bool
@@ -37,6 +39,7 @@ enum ChatToolRegistry {
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
         tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
+        tools.append(contentsOf: context.mcpBridge?.definitions() ?? [])
         return tools
     }
 }
@@ -70,21 +73,34 @@ enum ChatToolDispatcher {
         },
     ]
 
+    @MainActor
     static func execute(
         call: MLXChatToolCall,
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        guard let name = call.function?.name, let handler = handlers[name] else {
-            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        guard let name = call.function?.name else {
+            throw ChatImageToolError.unsupportedTool("unknown")
         }
-        return try await handler(call, context)
+        if let handler = handlers[name] {
+            return try await handler(call, context)
+        }
+        if context.mcpBridge?.canHandle(name) == true, let mcpBridge = context.mcpBridge {
+            return try await mcpBridge.execute(call: call)
+        }
+        throw ChatImageToolError.unsupportedTool(name)
     }
 
     static func failurePayload(toolName: String?, error: Error) -> String {
-        guard let toolName, let handler = failureHandlers[toolName] else {
-            return ChatImageToolExecutor().failurePayload(operation: toolName ?? "tool", error: error)
+        guard let toolName else {
+            return ChatImageToolExecutor().failurePayload(operation: "tool", error: error)
         }
-        return handler(toolName, error)
+        if let handler = failureHandlers[toolName] {
+            return handler(toolName, error)
+        }
+        if MCPToolNameQualifier.hasPrefix(toolName) {
+            return ChatMCPToolBridge.failurePayload(toolName: toolName, error: error)
+        }
+        return ChatImageToolExecutor().failurePayload(operation: toolName, error: error)
     }
 
     private static func executeImageTool(
@@ -180,6 +196,58 @@ enum ChatToolConsentRouter {
     }
 }
 
+enum ChatConsentGatedAction {
+    case switchModel(call: MLXChatToolCall)
+    case mcpTool(call: MLXChatToolCall, bridge: ChatMCPToolBridge)
+
+    @MainActor
+    static func detect(call: MLXChatToolCall, mcpBridge: ChatMCPToolBridge?) -> ChatConsentGatedAction? {
+        guard let name = call.function?.name else { return nil }
+        if name == ChatSwitchModelToolRegistry.toolName {
+            return .switchModel(call: call)
+        }
+        if let mcpBridge, mcpBridge.requiresConsent(name) {
+            return .mcpTool(call: call, bridge: mcpBridge)
+        }
+        return nil
+    }
+
+    @MainActor
+    func execute(appModel: NativModel?) async throws -> String {
+        switch self {
+        case .switchModel(let call):
+            guard let appModel else {
+                throw ChatSwitchModelToolError.appModelUnavailable
+            }
+            return try await ChatSwitchModelToolExecutor().execute(call: call, appModel: appModel)
+        case .mcpTool(let call, let bridge):
+            let outcome = try await bridge.execute(call: call)
+            return outcome.content
+        }
+    }
+
+    func declinedPayload() -> String {
+        switch self {
+        case .switchModel:
+            return ChatSwitchModelToolExecutor().declinedPayload()
+        case .mcpTool(let call, _):
+            return ChatMCPToolBridge.declinedPayload(toolName: call.function?.name ?? "tool")
+        }
+    }
+
+    func failurePayload(error: Error) -> String {
+        switch self {
+        case .switchModel(let call):
+            return ChatSwitchModelToolExecutor().failurePayload(
+                operation: call.function?.name ?? ChatSwitchModelToolRegistry.toolName,
+                error: error
+            )
+        case .mcpTool(let call, _):
+            return ChatMCPToolBridge.failurePayload(toolName: call.function?.name ?? "tool", error: error)
+        }
+    }
+}
+
 enum ChatToolPresentation {
     static func title(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch toolName {
@@ -193,6 +261,8 @@ enum ChatToolPresentation {
             return modelLibraryTitle(status: status)
         case ChatServerStatsToolRegistry.toolName:
             return serverStatsTitle(status: status)
+        case let name? where MCPToolNameQualifier.hasPrefix(name):
+            return mcpTitle(toolName: name, status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
         default:
@@ -218,6 +288,8 @@ enum ChatToolPresentation {
                 return "shippingbox"
             case ChatServerStatsToolRegistry.toolName:
                 return "chart.line.uptrend.xyaxis"
+            case let name? where MCPToolNameQualifier.hasPrefix(name):
+                return "puzzlepiece.extension"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
             default:
@@ -276,6 +348,27 @@ enum ChatToolPresentation {
         case nil:
             return "Server stats tool"
         }
+    }
+
+    private static func mcpTitle(toolName: String, status: ChatTranscriptMessage.ToolStatus?) -> String {
+        let name = mcpDisplayName(for: toolName) ?? toolName
+        switch status {
+        case .awaitingConsent:
+            return "Run \(name)?"
+        case .running:
+            return "Running \(name)…"
+        case .succeeded:
+            return "Ran \(name)"
+        case .declined:
+            return "\(name) declined"
+        case .failed, .cancelled, nil:
+            return name
+        }
+    }
+
+    private static func mcpDisplayName(for qualifiedName: String) -> String? {
+        guard let (server, tool) = MCPToolNameQualifier.unqualify(qualifiedName) else { return nil }
+        return "\(tool) (\(server))"
     }
 
     private static func switchModelTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
