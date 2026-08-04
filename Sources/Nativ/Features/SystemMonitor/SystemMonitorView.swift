@@ -1892,9 +1892,10 @@ private struct SystemValueHistoryChart: View {
                     range: .plotDimension(startPadding: 0, endPadding: 0)
                 )
                 .chartYScale(domain: axisRange)
-                // Catmull-Rom overshoots the data either side of a peak, so a value near
-                // the top of the domain can still draw slightly outside the plot.
-                .chartPlotStyle { $0.clipped() }
+                // Deliberately not clipping the plot area: the hover tooltip is an
+                // annotation anchored above the rule mark and is chart content too, so
+                // clipping truncates it. Bounding the area fill between the axis floor
+                // and the value is what actually keeps the fill inside the plot.
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 5)) { value in
                         AxisGridLine()
