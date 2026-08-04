@@ -325,6 +325,9 @@ struct NativSettings: Codable, Equatable {
     var modelSearchPath: String
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
+    var mcpServers: [MCPServerConfig]
+    var disabledToolNames: [String]
+    var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
@@ -372,6 +375,9 @@ struct NativSettings: Codable, Equatable {
         modelSearchPath: String = Self.defaultModelSearchPath,
         additionalModelSearchPaths: [String] = [],
         languageModelID: String? = nil,
+        mcpServers: [MCPServerConfig] = [],
+        disabledToolNames: [String] = [],
+        skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
         speechToTextModelID: String? = nil,
@@ -418,6 +424,9 @@ struct NativSettings: Codable, Equatable {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
         self.languageModelID = languageModelID
+        self.mcpServers = mcpServers
+        self.disabledToolNames = disabledToolNames
+        self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
@@ -466,6 +475,9 @@ struct NativSettings: Codable, Equatable {
         case modelSearchPath
         case additionalModelSearchPaths
         case languageModelID
+        case mcpServers
+        case disabledToolNames
+        case skills
         case imageGenerationModelID
         case textToSpeechModelID
         case speechToTextModelID
@@ -519,6 +531,9 @@ struct NativSettings: Codable, Equatable {
         modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
         additionalModelSearchPaths = try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths) ?? defaults.additionalModelSearchPaths
         languageModelID = try container.decodeIfPresent(String.self, forKey: .languageModelID) ?? legacySelectedModelID ?? defaults.languageModelID
+        mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
+        disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
+        skills = try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
         speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
@@ -568,6 +583,9 @@ struct NativSettings: Codable, Equatable {
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
+        try container.encode(mcpServers, forKey: .mcpServers)
+        try container.encode(disabledToolNames, forKey: .disabledToolNames)
+        try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
@@ -782,6 +800,9 @@ struct NativSettings: Codable, Equatable {
         let rhsSpeculativeDecodingActive = rhs.speculativeDecodingEnabled && !rhs.draftModelID.isEmpty
         return lhs.modelSearchPath == rhs.modelSearchPath
             && lhs.languageModelID == rhs.languageModelID
+            && lhs.mcpServers == rhs.mcpServers
+            && lhs.disabledToolNames == rhs.disabledToolNames
+            && lhs.skills == rhs.skills
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID

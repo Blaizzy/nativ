@@ -262,6 +262,7 @@ struct ControlPanelView: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
+    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
@@ -1788,9 +1789,10 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .extensions:
-            ExtensionsView(
+            ExtensionsHubView(
                 manager: extensionManager,
-                titleLeadingInset: detailTitleLeadingInset
+                host: mcpHost,
+                model: model
             )
         case .developer:
             DeveloperView(
