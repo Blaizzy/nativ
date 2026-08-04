@@ -934,6 +934,7 @@ final class ChatViewModel: ObservableObject {
             }
 
             var insertionAnchor = assistantMessageID
+            let mcpBridge = appModel.map { ChatMCPToolBridge(manager: $0.mcpServers) }
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
                 let toolMessageID = UUID()
@@ -947,7 +948,7 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
+                if let consentGatedAction = ChatConsentGatedAction.detect(call: toolCall, mcpBridge: mcpBridge) {
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -971,7 +972,7 @@ final class ChatViewModel: ObservableObject {
                             toolMessageID,
                             in: queuedRequest.sessionID,
                             status: .declined,
-                            content: ChatSwitchModelToolExecutor().declinedPayload(),
+                            content: consentGatedAction.declinedPayload(),
                             attachments: []
                         )
                         continue
@@ -984,7 +985,7 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                     }
-                    guard let appModel else {
+                    if case .switchModel = consentGatedAction, appModel == nil {
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -998,8 +999,10 @@ final class ChatViewModel: ObservableObject {
                         continue
                     }
                     do {
-                        let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
-                        activeSettings.languageModelID = appModel.settings.normalized().languageModelID
+                        let content = try await consentGatedAction.execute(appModel: appModel)
+                        if case .switchModel = consentGatedAction, let appModel {
+                            activeSettings.languageModelID = appModel.settings.normalized().languageModelID
+                        }
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1007,16 +1010,13 @@ final class ChatViewModel: ObservableObject {
                             content: content,
                             attachments: []
                         )
-                        appModel.refreshMetricsIfRunning(force: true)
+                        appModel?.refreshMetricsIfRunning(force: true)
                     } catch {
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
                             status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: error
-                            ),
+                            content: consentGatedAction.failurePayload(error: error),
                             attachments: []
                         )
                     }
@@ -1034,7 +1034,8 @@ final class ChatViewModel: ObservableObject {
                         apiKey: queuedRequest.settings.serverAPIKey,
                         imageReferences: references,
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
-                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        mcpBridge: mcpBridge
                     )
                     let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
                     updateToolMessage(
@@ -1122,7 +1123,8 @@ final class ChatViewModel: ObservableObject {
                     apiKey: settings.serverAPIKey,
                     imageReferences: [],
                     modelSearchPath: settings.expandedModelSearchPath,
-                    additionalModelSearchPaths: settings.additionalModelSearchPaths
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                    mcpBridge: appModel.map { ChatMCPToolBridge(manager: $0.mcpServers) }
                 ),
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
@@ -2060,9 +2062,7 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
+            Text(consentPromptText)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2080,6 +2080,21 @@ private struct ChatAgentStepCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 7)
+    }
+
+    private var consentPromptText: String {
+        if message.toolName == ChatSwitchModelToolRegistry.toolName {
+            return "The model wants to switch to **\(requestedModelID)**. The server restarts briefly; your session is kept."
+        }
+        if let toolName = message.toolName, MCPToolNameQualifier.hasPrefix(toolName) {
+            return "The model wants to run **\(mcpConsentDisplayName(for: toolName))**. This will change data outside Nativ."
+        }
+        return "The model wants to perform an action that needs your approval."
+    }
+
+    private func mcpConsentDisplayName(for qualifiedName: String) -> String {
+        guard let (server, tool) = MCPToolNameQualifier.unqualify(qualifiedName) else { return qualifiedName }
+        return "\(tool) (\(server))"
     }
 
     private var requestedModelID: String {
