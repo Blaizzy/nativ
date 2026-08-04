@@ -13,6 +13,7 @@ struct RoutinesView: View {
     @State private var draftText = ""
     @State private var designerModelID = ""
     @State private var isDrafting = false
+    @State private var draftError: String?
 
     private var availableModelIDs: [String] {
         localLibrary.models
@@ -54,6 +55,11 @@ struct RoutinesView: View {
             )
         }
         .onChange(of: localLibrary.models.count) { _, _ in
+            if designerModelID.isEmpty {
+                designerModelID = availableModelIDs.first ?? ""
+            }
+        }
+        .onAppear {
             if designerModelID.isEmpty {
                 designerModelID = availableModelIDs.first ?? ""
             }
@@ -137,7 +143,7 @@ struct RoutinesView: View {
                 Button("Draft routine", action: draftRoutine)
                     .buttonStyle(.borderedProminent)
                     .disabled(
-                        draftText.trimmingCharacters(in: .whitespaces).isEmpty
+                        draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || designerModelID.isEmpty
                             || isDrafting
                     )
@@ -149,6 +155,12 @@ struct RoutinesView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
+            }
+
+            if let draftError {
+                Text(draftError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
     }
@@ -163,6 +175,7 @@ struct RoutinesView: View {
         let text = draftText
         let designer = designerModelID
         isDrafting = true
+        draftError = nil
         Task { @MainActor in
             let routine = await RoutineDrafter.draft(
                 description: text,
@@ -173,6 +186,8 @@ struct RoutinesView: View {
             if let routine {
                 draftText = ""
                 editing = RoutineDraft(routine: routine)
+            } else {
+                draftError = "Couldn't draft a routine from that. Try rephrasing, or create one manually."
             }
         }
     }
