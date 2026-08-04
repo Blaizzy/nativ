@@ -21,6 +21,7 @@ struct WelcomeGateView: View {
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var mcpHost: MCPHostManager
     let softwareUpdater: SoftwareUpdater
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
 
@@ -32,6 +33,7 @@ struct WelcomeGateView: View {
                     navigation: navigation,
                     runtime: runtime,
                     extensionManager: extensionManager,
+                    mcpHost: mcpHost,
                     softwareUpdater: softwareUpdater
                 )
             } else {

@@ -260,9 +260,9 @@ struct ControlPanelView: View {
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var mcpHost: MCPHostManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
-    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
@@ -3923,6 +3923,7 @@ private extension View {
         navigation: .init(),
         runtime: .init(),
         extensionManager: .init(builtInExtensions: []),
+        mcpHost: .init(),
         softwareUpdater: .init()
     )
 }
