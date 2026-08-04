@@ -2,6 +2,19 @@ import NativExtensionSDK
 import NativServerKit
 import SwiftUI
 
+/// The badge shown on a kit card/header for its derived activation state.
+@ViewBuilder
+private func kitStateBadge(_ state: NativKitState) -> some View {
+    switch state {
+    case .enabled:
+        NativStatusBadge(text: "Enabled", tone: .success, symbol: "checkmark")
+    case .partial:
+        NativStatusBadge(text: "Partial", tone: .warning)
+    case .off:
+        EmptyView()
+    }
+}
+
 struct KitsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
@@ -21,7 +34,7 @@ struct KitsSectionView: View {
                 ForEach(NativKit.all) { kit in
                     KitCard(
                         kit: kit,
-                        isEnabled: NativKitActivation.isEnabled(kit, model: model),
+                        state: NativKitActivation.state(of: kit, model: model, manager: manager),
                         onOpen: { openKit = kit },
                         onEnable: { NativKitActivation.setEnabled(true, kit: kit, model: model, manager: manager) }
                     )
@@ -36,7 +49,7 @@ struct KitsSectionView: View {
 
 private struct KitCard: View {
     let kit: NativKit
-    let isEnabled: Bool
+    let state: NativKitState
     let onOpen: () -> Void
     let onEnable: () -> Void
 
@@ -45,9 +58,7 @@ private struct KitCard: View {
             HStack(spacing: 6) {
                 NativTintedIconTile(symbol: kit.symbol, tint: kit.tint)
                 Spacer(minLength: 0)
-                if isEnabled {
-                    NativStatusBadge(text: "Enabled", tone: .success, symbol: "checkmark")
-                }
+                kitStateBadge(state)
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(kit.name)
@@ -62,11 +73,7 @@ private struct KitCard: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             HStack(spacing: 8) {
-                if isEnabled {
-                    Button("Manage", action: onOpen)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                } else {
+                if state == .off {
                     Button("Enable", action: onEnable)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -74,6 +81,10 @@ private struct KitCard: View {
                         .buttonStyle(.plain)
                         .controlSize(.small)
                         .foregroundStyle(.secondary)
+                } else {
+                    Button("Manage", action: onOpen)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 }
                 Spacer(minLength: 0)
             }
@@ -101,7 +112,7 @@ private struct KitDetailView: View {
     @ObservedObject var model: NativModel
     @Environment(\.dismiss) private var dismiss
 
-    private var isEnabled: Bool { NativKitActivation.isEnabled(kit, model: model) }
+    private var state: NativKitState { NativKitActivation.state(of: kit, model: model, manager: manager) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -126,9 +137,7 @@ private struct KitDetailView: View {
                 HStack(spacing: 8) {
                     Text(kit.name)
                         .font(.system(size: 17, weight: .semibold))
-                    if isEnabled {
-                        NativStatusBadge(text: "Enabled", tone: .success, symbol: "checkmark")
-                    }
+                    kitStateBadge(state)
                 }
                 Text(kit.summary)
                     .font(.system(size: 12))
@@ -204,10 +213,15 @@ private struct KitDetailView: View {
     // MARK: Bindings
 
     private func mcpBinding(_ entry: MCPCatalogEntry) -> Binding<Bool> {
-        Binding(
-            get: { model.settings.mcpServers.first { $0.name == entry.name }?.isEnabled ?? false },
+        // Match by launch identity (command + arguments), not name, so the
+        // toggle never targets an unrelated server that shares a name.
+        func matches(_ server: MCPServerConfig) -> Bool {
+            server.command == entry.command && server.arguments == entry.arguments
+        }
+        return Binding(
+            get: { model.settings.mcpServers.first(where: matches)?.isEnabled ?? false },
             set: { newValue in
-                if let index = model.settings.mcpServers.firstIndex(where: { $0.name == entry.name }) {
+                if let index = model.settings.mcpServers.firstIndex(where: matches) {
                     model.settings.mcpServers[index].isEnabled = newValue
                 } else if newValue {
                     model.settings.mcpServers.append(entry.makeConfig())

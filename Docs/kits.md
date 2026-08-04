@@ -58,7 +58,8 @@ NativKit(
 
 Rules of thumb:
 
-- **`id`** is unique, lowercase, and stable (it's what "enabled" state is keyed on).
+- **`id`** is unique, lowercase, and stable. A kit's Enabled/Partial state is
+  derived live from whether its pieces are on, so it never drifts out of sync.
 - **`mcpServerIDs`** must match catalog entry `id`s. If your kit needs a server
   that isn't in the catalog yet, add it there first — it has to pass the
   [`Verify MCP Catalog`](../.github/workflows/verify-mcp-catalog.yml) check.

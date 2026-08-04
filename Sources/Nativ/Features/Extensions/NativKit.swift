@@ -156,6 +156,13 @@ extension NativKit {
 
 // MARK: - Activation
 
+/// How much of a kit is currently switched on, derived from its live pieces.
+enum NativKitState: Equatable {
+    case off
+    case partial
+    case enabled
+}
+
 /// Turns a kit's MCP servers, skills, and extensions on or off together, driving
 /// the same settings the individual sections do. Enabling appends any missing
 /// pieces; disabling switches them off without deleting the user's edits.
@@ -168,7 +175,7 @@ enum NativKitActivation {
         manager: NativExtensionManager
     ) {
         for entry in kit.mcpEntries {
-            if let index = model.settings.mcpServers.firstIndex(where: { $0.name == entry.name }) {
+            if let index = matchingServerIndex(for: entry, in: model.settings.mcpServers) {
                 model.settings.mcpServers[index].isEnabled = enabled
             } else if enabled {
                 model.settings.mcpServers.append(entry.makeConfig())
@@ -186,17 +193,44 @@ enum NativKitActivation {
         for extensionID in kit.extensionIDs {
             manager.setEnabled(enabled, extensionID: extensionID)
         }
-
-        if enabled {
-            if !model.settings.enabledKitIDs.contains(kit.id) {
-                model.settings.enabledKitIDs.append(kit.id)
-            }
-        } else {
-            model.settings.enabledKitIDs.removeAll { $0 == kit.id }
-        }
     }
 
-    static func isEnabled(_ kit: NativKit, model: NativModel) -> Bool {
-        model.settings.enabledKitIDs.contains(kit.id)
+    /// The kit's activation derived from the actual state of its pieces: enabled
+    /// when every piece is on, partial when some are, off when none — so the UI
+    /// can't drift out of sync with the individual switches.
+    static func state(of kit: NativKit, model: NativModel, manager: NativExtensionManager) -> NativKitState {
+        var total = 0
+        var active = 0
+
+        for entry in kit.mcpEntries {
+            total += 1
+            if isServerEnabled(entry, in: model) { active += 1 }
+        }
+        for skill in kit.skills {
+            total += 1
+            if model.settings.skills.first(where: { $0.id == skill.id })?.isEnabled == true { active += 1 }
+        }
+        for extensionID in kit.extensionIDs {
+            total += 1
+            if manager.isEnabled(extensionID: extensionID) { active += 1 }
+        }
+
+        guard total > 0, active > 0 else { return .off }
+        return active == total ? .enabled : .partial
+    }
+
+    /// Matches a catalog entry to a configured server by launch identity
+    /// (command + arguments), so a kit never toggles an unrelated server that
+    /// merely shares a name.
+    private static func matchingServerIndex(
+        for entry: MCPCatalogEntry,
+        in servers: [MCPServerConfig]
+    ) -> Int? {
+        servers.firstIndex { $0.command == entry.command && $0.arguments == entry.arguments }
+    }
+
+    private static func isServerEnabled(_ entry: MCPCatalogEntry, in model: NativModel) -> Bool {
+        guard let index = matchingServerIndex(for: entry, in: model.settings.mcpServers) else { return false }
+        return model.settings.mcpServers[index].isEnabled
     }
 }

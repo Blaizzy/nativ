@@ -126,9 +126,8 @@ final class MCPHostManager: ObservableObject {
         }.value
         guard generation == reloadGeneration else { return }
 
-        var usedSlugs = Set(connections.values.map(\.slug))
-        for config in toConnect {
-            guard connections[config.id] == nil else { continue }
+        var pending: [(config: MCPServerConfig, client: MCPClient)] = []
+        for config in toConnect where connections[config.id] == nil {
             guard let executable = Self.resolveExecutable(config.command, searchPath: searchPath) else {
                 states[config.id] = .failed("Couldn’t find “\(config.command)”")
                 continue
@@ -138,27 +137,52 @@ final class MCPHostManager: ObservableObject {
                 arguments: config.arguments,
                 environment: Self.childEnvironment(searchPath: searchPath, overrides: config.environment)
             )
-            do {
-                try await client.connect()
-                let tools = try await client.listTools()
-                guard generation == reloadGeneration else {
-                    await client.disconnect()
-                    return
+            pending.append((config, client))
+        }
+        guard !pending.isEmpty else { return }
+
+        // Connect every server concurrently so a slow or hung one can't hold up
+        // the rest; each has its own handshake deadline.
+        await withTaskGroup(of: ConnectOutcome.self) { group in
+            for item in pending {
+                group.addTask {
+                    do {
+                        let tools = try await item.client.connectAndListTools()
+                        return ConnectOutcome(config: item.config, tools: tools, error: nil, client: item.client)
+                    } catch {
+                        return ConnectOutcome(config: item.config, tools: nil, error: error.localizedDescription, client: item.client)
+                    }
                 }
-                let slug = Self.uniqueSlug(for: config, used: &usedSlugs)
-                connections[config.id] = Connection(
-                    config: config,
-                    client: client,
-                    slug: slug,
-                    tools: tools
-                )
-                states[config.id] = .connected(toolCount: tools.count)
-            } catch {
-                await client.disconnect()
-                guard generation == reloadGeneration else { return }
-                states[config.id] = .failed(error.localizedDescription)
+            }
+
+            var usedSlugs = Set(connections.values.map(\.slug))
+            for await outcome in group {
+                guard generation == reloadGeneration else {
+                    await outcome.client.disconnect()
+                    continue
+                }
+                if let tools = outcome.tools {
+                    let slug = Self.uniqueSlug(for: outcome.config, used: &usedSlugs)
+                    connections[outcome.config.id] = Connection(
+                        config: outcome.config,
+                        client: outcome.client,
+                        slug: slug,
+                        tools: tools
+                    )
+                    states[outcome.config.id] = .connected(toolCount: tools.count)
+                } else {
+                    await outcome.client.disconnect()
+                    states[outcome.config.id] = .failed(outcome.error ?? "Failed to connect")
+                }
             }
         }
+    }
+
+    private struct ConnectOutcome: Sendable {
+        let config: MCPServerConfig
+        let tools: [MCPToolInfo]?
+        let error: String?
+        let client: MCPClient
     }
 
     private func route(for name: String) -> (client: MCPClient, toolName: String)? {

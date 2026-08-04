@@ -1293,8 +1293,10 @@ final class ChatViewModel: ObservableObject {
             )
             : []
         if advertisesToolsForModel {
-            toolDefinitions += (mcpHost?.toolDefinitions() ?? [])
-                .filter { !settings.disabledToolNames.contains($0.function.name) }
+            toolDefinitions += mcpHost?.toolDefinitions() ?? []
+            // Honor the per-tool switches from the Tools section for every
+            // source, built-in and MCP alike.
+            toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
@@ -2353,7 +2355,9 @@ private struct ChatAgentStepCell: View {
     }
 
     private var title: String {
-        ChatToolPresentation.title(toolName: message.toolName, status: message.toolStatus)
+        // For MCP tools show the bare tool name, not the mcp__slug__ prefix.
+        let name = mcpToolParts?.tool ?? message.toolName
+        return ChatToolPresentation.title(toolName: name, status: message.toolStatus)
     }
 
     private var symbolName: String {
@@ -2374,12 +2378,19 @@ private struct ChatAgentStepCell: View {
         statusTone.color
     }
 
-    /// The MCP server slug for a namespaced (`slug.tool`) tool, else nil.
-    private var mcpServerSlug: String? {
-        guard let name = message.toolName, let dot = name.firstIndex(of: ".") else { return nil }
-        let slug = String(name[..<dot])
-        return slug.isEmpty ? nil : slug
+    /// Splits an MCP tool name (`mcp__<slug>__<tool>`) into its server slug and
+    /// bare tool name; nil for built-in tools.
+    private var mcpToolParts: (slug: String, tool: String)? {
+        guard let name = message.toolName, name.hasPrefix("mcp__") else { return nil }
+        let body = name.dropFirst("mcp__".count)
+        guard let separator = body.range(of: "__") else { return nil }
+        let slug = String(body[..<separator.lowerBound])
+        let tool = String(body[separator.upperBound...])
+        guard !slug.isEmpty, !tool.isEmpty else { return nil }
+        return (slug, tool)
     }
+
+    private var mcpServerSlug: String? { mcpToolParts?.slug }
 
     private var accessibilityStatus: String {
         switch message.toolStatus {

@@ -103,6 +103,15 @@ public actor MCPClient {
         self.client = client
     }
 
+    /// Connects and lists tools under a single deadline, so a server that hangs
+    /// during startup or the handshake fails fast instead of blocking forever.
+    public func connectAndListTools(timeout: TimeInterval = 60) async throws -> [MCPToolInfo] {
+        try await Self.withTimeout(timeout) {
+            try await self.connect()
+            return try await self.listTools()
+        }
+    }
+
     public func listTools() async throws -> [MCPToolInfo] {
         guard let client else { throw MCPClientError.notConnected }
 
