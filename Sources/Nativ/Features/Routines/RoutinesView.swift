@@ -22,12 +22,18 @@ struct RoutinesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
-                Picker("View", selection: $showsCalendar) {
-                    Text("List").tag(false)
-                    Text("Calendar").tag(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("View")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("View", selection: $showsCalendar) {
+                        Text("List").tag(false)
+                        Text("Calendar").tag(true)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 220)
 
                 if store.routines.isEmpty {
                     emptyState
