@@ -15,7 +15,7 @@ enum AudioCapturePreferences {
         UserDefaults.standard.register(defaults: [
             automaticallySummarizeKey: true,
             includeSystemAudioKey: true,
-            suggestMeetingTranscriptionKey: true,
+            suggestMeetingTranscriptionKey: false,
         ])
     }
 
