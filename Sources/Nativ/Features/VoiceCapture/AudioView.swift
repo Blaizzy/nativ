@@ -59,7 +59,7 @@ struct AudioView: View {
     @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
     @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
-    private var suggestMeetingTranscription = true
+    private var suggestMeetingTranscription = false
     @State private var searchText = ""
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
