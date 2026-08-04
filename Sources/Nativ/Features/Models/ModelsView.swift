@@ -1665,6 +1665,8 @@ extension LocalModelCapability {
             URLQueryItem(name: "other", value: "reasoning")
         case .tools:
             URLQueryItem(name: "other", value: "tool-calling")
+        case .drafter:
+            URLQueryItem(name: "other", value: "speculative-decoding")
         }
     }
 
@@ -1681,6 +1683,7 @@ extension LocalModelCapability {
         case .embeddings: "circle.grid.3x3"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
+        case .drafter: "hare"
         }
     }
 }
