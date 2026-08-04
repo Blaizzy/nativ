@@ -375,13 +375,15 @@ private struct MCPServerEditor: View {
 
 // MARK: - Community catalog
 //
-// A catalog entry mirrors an approved community `manifest.yaml` plus a logo.
-// A future community PR contributes a manifest + a logo image (dropped into
-// Assets.xcassets as `MCPLogo-<name>`); until an asset exists we render a
-// tinted glyph tile so the grid always looks complete.
+// A catalog entry is contributed to `Resources/MCPCatalog.json`, plus an
+// optional logo image (dropped into Assets.xcassets as `MCPLogo-<name>`).
+// Every entry must pass the `verify-mcp-catalog` CI check — the server is
+// launched over stdio and has to complete an MCP handshake and list at least
+// one tool — before it can merge. Until a logo asset exists we render a tinted
+// glyph tile so the grid always looks complete. See Docs/mcp-catalog.md.
 
-struct MCPCatalogEntry: Identifiable {
-    let id = UUID()
+struct MCPCatalogEntry: Identifiable, Decodable {
+    let id: String
     let name: String
     let summary: String
     let command: String
@@ -390,31 +392,55 @@ struct MCPCatalogEntry: Identifiable {
     let tint: Color
     var logoAssetName: String { "MCPLogo-\(name)" }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, name, summary, command
+        case arguments = "args"
+        case symbol, tint
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        summary = try c.decode(String.self, forKey: .summary)
+        command = try c.decode(String.self, forKey: .command)
+        arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
+        symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? "server.rack"
+        let tintName = try c.decodeIfPresent(String.self, forKey: .tint) ?? "accent"
+        tint = MCPCatalogEntry.color(named: tintName)
+    }
+
     func makeConfig() -> MCPServerConfig {
         MCPServerConfig(name: name, command: command, arguments: arguments, isEnabled: true)
     }
+
+    /// Maps a catalog tint name to a SwiftUI color, defaulting to the accent.
+    private static func color(named name: String) -> Color {
+        switch name.lowercased() {
+        case "blue": return .blue
+        case "orange": return .orange
+        case "teal": return .teal
+        case "purple": return .purple
+        case "green": return .green
+        case "red": return .red
+        case "pink": return .pink
+        case "yellow": return .yellow
+        case "indigo": return .indigo
+        case "mint": return .mint
+        case "primary": return .primary
+        default: return .accentColor
+        }
+    }
 }
 
-private let mcpCatalog: [MCPCatalogEntry] = [
-    .init(name: "filesystem", summary: "Read and write files in allowed folders.",
-          command: "npx", arguments: ["-y", "@modelcontextprotocol/server-filesystem", "."],
-          symbol: "folder.fill", tint: .blue),
-    .init(name: "git", summary: "Inspect and operate on Git repositories.",
-          command: "uvx", arguments: ["mcp-server-git"],
-          symbol: "arrow.triangle.branch", tint: .orange),
-    .init(name: "github", summary: "Search and manage GitHub issues, PRs, and code.",
-          command: "npx", arguments: ["-y", "@modelcontextprotocol/server-github"],
-          symbol: "chevron.left.forwardslash.chevron.right", tint: .primary),
-    .init(name: "fetch", summary: "Fetch and read web pages as markdown.",
-          command: "uvx", arguments: ["mcp-server-fetch"],
-          symbol: "globe", tint: .teal),
-    .init(name: "memory", summary: "A persistent knowledge graph the model can recall.",
-          command: "npx", arguments: ["-y", "@modelcontextprotocol/server-memory"],
-          symbol: "brain.head.profile", tint: .purple),
-    .init(name: "sqlite", summary: "Query and edit a local SQLite database.",
-          command: "uvx", arguments: ["mcp-server-sqlite", "--db-path", "database.db"],
-          symbol: "cylinder.split.1x2", tint: .green),
-]
+/// The community catalog, decoded once from the bundled `MCPCatalog.json`.
+private let mcpCatalog: [MCPCatalogEntry] = {
+    guard let url = Bundle.main.url(forResource: "MCPCatalog", withExtension: "json"),
+          let data = try? Data(contentsOf: url),
+          let entries = try? JSONDecoder().decode([MCPCatalogEntry].self, from: data)
+    else { return [] }
+    return entries
+}()
 
 /// A square logo: the bundled `MCPLogo-<name>` image if present, otherwise a
 /// tinted rounded tile with the entry's glyph.
