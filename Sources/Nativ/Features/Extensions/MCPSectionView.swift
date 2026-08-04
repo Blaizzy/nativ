@@ -395,40 +395,24 @@ struct MCPCatalogEntry: Identifiable, Decodable {
         arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
         symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? "server.rack"
         let tintName = try c.decodeIfPresent(String.self, forKey: .tint) ?? "accent"
-        tint = MCPCatalogEntry.color(named: tintName)
+        tint = .nativTint(tintName)
     }
 
     func makeConfig() -> MCPServerConfig {
         MCPServerConfig(name: name, command: command, arguments: arguments, isEnabled: true)
     }
 
-    /// Maps a catalog tint name to a SwiftUI color, defaulting to the accent.
-    private static func color(named name: String) -> Color {
-        switch name.lowercased() {
-        case "blue": return .blue
-        case "orange": return .orange
-        case "teal": return .teal
-        case "purple": return .purple
-        case "green": return .green
-        case "red": return .red
-        case "pink": return .pink
-        case "yellow": return .yellow
-        case "indigo": return .indigo
-        case "mint": return .mint
-        case "primary": return .primary
-        default: return .accentColor
-        }
-    }
+    /// The community catalog, decoded once from the bundled `MCPCatalog.json`.
+    static let catalog: [MCPCatalogEntry] = {
+        guard let url = Bundle.main.url(forResource: "MCPCatalog", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let entries = try? JSONDecoder().decode([MCPCatalogEntry].self, from: data)
+        else { return [] }
+        return entries
+    }()
 }
 
-/// The community catalog, decoded once from the bundled `MCPCatalog.json`.
-private let mcpCatalog: [MCPCatalogEntry] = {
-    guard let url = Bundle.main.url(forResource: "MCPCatalog", withExtension: "json"),
-          let data = try? Data(contentsOf: url),
-          let entries = try? JSONDecoder().decode([MCPCatalogEntry].self, from: data)
-    else { return [] }
-    return entries
-}()
+private let mcpCatalog = MCPCatalogEntry.catalog
 
 private struct MCPCatalogView: View {
     let installedNames: Set<String>

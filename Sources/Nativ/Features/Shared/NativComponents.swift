@@ -1,5 +1,25 @@
 import SwiftUI
 
+extension Color {
+    /// Resolves a catalog/kit tint name to a color, defaulting to the accent.
+    static func nativTint(_ name: String) -> Color {
+        switch name.lowercased() {
+        case "blue": return .blue
+        case "orange": return .orange
+        case "teal": return .teal
+        case "purple": return .purple
+        case "green": return .green
+        case "red": return .red
+        case "pink": return .pink
+        case "yellow": return .yellow
+        case "indigo": return .indigo
+        case "mint": return .mint
+        case "primary": return .primary
+        default: return .accentColor
+        }
+    }
+}
+
 // Shared, flat UI primitives used across Nativ. These favor whitespace and a
 // single tint over nested filled tiles, so a surface reads as one calm plane
 // rather than a stack of boxes. Prefer these over re-rolling a pill/badge/dot.
