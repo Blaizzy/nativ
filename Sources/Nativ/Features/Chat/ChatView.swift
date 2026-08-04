@@ -12,6 +12,11 @@ struct ChatQueuedPrompt: Identifiable, Equatable {
     let position: Int
 }
 
+struct ChatPromptEditContext: Equatable {
+    let messageID: UUID
+    let discardedMessageCount: Int
+}
+
 private struct ChatSessionBootstrap {
     let sessions: [ChatSession]
 }
@@ -106,8 +111,13 @@ private struct ChatTranscriptView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
+                        let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
                         ChatMessageRow(
                             message: message,
+                            canEditUserMessage: editUnavailableReason == nil,
+                            editUserMessageUnavailableReason: editUnavailableReason,
+                            isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
+                            onEditUserMessage: chat.beginEditingUserMessage,
                             onConfirmToolConsent: chat.confirmToolConsent,
                             onDenyToolConsent: chat.denyToolConsent
                         )
@@ -183,6 +193,30 @@ private struct ChatTranscriptView: View {
     private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
         geometry.visibleRect.maxY >= geometry.contentSize.height - 8
     }
+
+    private func userPromptEditingUnavailableReason(
+        for message: ChatTranscriptMessage
+    ) -> String? {
+        guard message.role == .user else {
+            return "Only user prompts can be edited"
+        }
+        guard chat.canEditUserMessage(message.id) else {
+            return "Stop the response and remove queued prompts before editing"
+        }
+        guard model.isRunning else {
+            return "Start the server before editing a prompt"
+        }
+        guard !model.isModelLoading else {
+            return "Wait for the model to finish loading"
+        }
+        guard selectedModelID?.isEmpty == false else {
+            return "Select a language model before editing a prompt"
+        }
+        if let validationError = model.settings.structuredOutputValidationError {
+            return validationError
+        }
+        return nil
+    }
 }
 
 private struct ChatComposerContainer: View {
@@ -241,12 +275,19 @@ final class ChatViewModel: ObservableObject {
         let languageModelSupportsTools: Bool
     }
 
+    private struct ComposerSnapshot {
+        let draft: String
+        let attachments: [ChatImageAttachment]
+    }
+
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
     @Published var draft = ""
+    @Published private(set) var promptEditContext: ChatPromptEditContext?
+    @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
@@ -269,6 +310,7 @@ final class ChatViewModel: ObservableObject {
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
+    private var composerSnapshot: ComposerSnapshot?
 
     init() {
         folders = sessionStore.loadFolders()
@@ -352,6 +394,58 @@ final class ChatViewModel: ObservableObject {
                 || !pendingImageAttachments.isEmpty)
     }
 
+    func canEditUserMessage(_ messageID: UUID) -> Bool {
+        guard let currentSessionID,
+              !isSessionBusy(currentSessionID),
+              let message = messages.first(where: { $0.id == messageID })
+        else {
+            return false
+        }
+        return message.role == .user
+    }
+
+    func beginEditingUserMessage(_ messageID: UUID) {
+        guard canEditUserMessage(messageID),
+              let message = messages.first(where: { $0.id == messageID }),
+              let discardedMessageCount = ChatPromptRevision.discardedMessageCount(
+                after: messageID,
+                in: messages
+              )
+        else {
+            return
+        }
+
+        if promptEditContext?.messageID == messageID {
+            composerFocusToken += 1
+            return
+        }
+
+        cancelPromptEditing()
+        composerSnapshot = ComposerSnapshot(
+            draft: draft,
+            attachments: pendingImageAttachments
+        )
+        promptEditContext = ChatPromptEditContext(
+            messageID: messageID,
+            discardedMessageCount: discardedMessageCount
+        )
+        draft = message.content
+        pendingImageAttachments = message.imageAttachments
+        composerFocusToken += 1
+    }
+
+    func cancelPromptEditing() {
+        guard promptEditContext != nil else {
+            return
+        }
+        if let composerSnapshot {
+            draft = composerSnapshot.draft
+            pendingImageAttachments = composerSnapshot.attachments
+        }
+        promptEditContext = nil
+        composerSnapshot = nil
+    }
+
     func unavailableReason(isRunning: Bool, selectedModelID: String?) -> String? {
         if !isRunning {
             return "Server is stopped."
@@ -386,6 +480,7 @@ final class ChatViewModel: ObservableObject {
         storedSessions.append(session)
         pruneRedundantEmptySessions()
         sessionStore.saveSession(session)
+        discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
         applyCurrentSession(session)
@@ -424,6 +519,7 @@ final class ChatViewModel: ObservableObject {
 
         if let session = storedSessions.first(where: { $0.id == sessionID }) {
             persistCurrentSession(updateTimestamp: false)
+            discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
             applyCurrentSession(session)
@@ -433,6 +529,7 @@ final class ChatViewModel: ObservableObject {
         if let session = sessionStore.loadSession(id: sessionID) {
             persistCurrentSession(updateTimestamp: false)
             upsertStoredSession(session)
+            discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
             applyCurrentSession(session)
@@ -605,6 +702,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
+        discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
 
@@ -671,10 +769,36 @@ final class ChatViewModel: ObservableObject {
         else {
             return
         }
-        appModel.clearModelLoadFailure(for: modelID)
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
+
+        if let promptEditContext {
+            guard canEditUserMessage(promptEditContext.messageID),
+                  let revision = ChatPromptRevision.make(
+                    messageID: promptEditContext.messageID,
+                    content: prompt,
+                    attachments: imageAttachments,
+                    modelID: modelID,
+                    in: messages
+                  )
+            else {
+                return
+            }
+
+            messages = revision.messages
+            restoreComposerAfterPromptEditing()
+            persistCurrentSession(updateTimestamp: true)
+            enqueueGeneration(
+                for: promptEditContext.messageID,
+                in: currentSession.id,
+                settings: settings,
+                languageModelSupportsTools: languageModelSupportsTools,
+                appModel: appModel
+            )
+            return
+        }
+
         draft = ""
         pendingImageAttachments.removeAll()
 
@@ -686,11 +810,30 @@ final class ChatViewModel: ObservableObject {
         )
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
+        enqueueGeneration(
+            for: userMessage.id,
+            in: currentSession.id,
+            settings: settings,
+            languageModelSupportsTools: languageModelSupportsTools,
+            appModel: appModel
+        )
+    }
+
+    private func enqueueGeneration(
+        for userMessageID: UUID,
+        in sessionID: UUID,
+        settings: NativSettings,
+        languageModelSupportsTools: Bool,
+        appModel: NativModel
+    ) {
+        if let modelID = settings.languageModelID {
+            appModel.clearModelLoadFailure(for: modelID)
+        }
         self.appModel = appModel
         requestQueue.append(QueuedChatRequest(
             id: UUID(),
-            sessionID: currentSession.id,
-            userMessageID: userMessage.id,
+            sessionID: sessionID,
+            userMessageID: userMessageID,
             assistantMessageID: UUID(),
             settings: settings,
             languageModelSupportsTools: languageModelSupportsTools
@@ -818,11 +961,29 @@ final class ChatViewModel: ObservableObject {
         activeRequestSessionID = nil
         requestQueue.removeAll()
         sendingStartedAt = nil
+        discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
+    }
+
+    private func restoreComposerAfterPromptEditing() {
+        if let composerSnapshot {
+            draft = composerSnapshot.draft
+            pendingImageAttachments = composerSnapshot.attachments
+        } else {
+            draft = ""
+            pendingImageAttachments.removeAll()
+        }
+        promptEditContext = nil
+        composerSnapshot = nil
+    }
+
+    private func discardPromptEditing() {
+        promptEditContext = nil
+        composerSnapshot = nil
     }
 
     private func startNextRequestIfNeeded() {
@@ -1708,13 +1869,20 @@ private struct ChatMessageRow: View, Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
+    let canEditUserMessage: Bool
+    let editUserMessageUnavailableReason: String?
+    let isEditingUserMessage: Bool
+    let onEditUserMessage: (UUID) -> Void
     let onConfirmToolConsent: (UUID) -> Void
     let onDenyToolConsent: (UUID) -> Void
-    @State private var didCopyResponse = false
+    @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
+            && lhs.canEditUserMessage == rhs.canEditUserMessage
+            && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
+            && lhs.isEditingUserMessage == rhs.isEditingUserMessage
     }
 
     var body: some View {
@@ -1762,20 +1930,36 @@ private struct ChatMessageRow: View, Equatable {
                 ChatResponseMetricsRow(metrics: responseMetrics)
             }
 
-            if showsCopyAction {
+            if showsMessageActions {
                 HStack(spacing: 8) {
-                    ChatCopyResponseButton(
-                        didCopy: didCopyResponse,
-                        onCopy: copyResponse
-                    )
+                    HStack(spacing: 0) {
+                        if canCopyMessage {
+                            ChatCopyMessageButton(
+                                didCopy: didCopyMessage,
+                                messageKind: message.role == .user ? "prompt" : "response",
+                                onCopy: copyMessage
+                            )
+                        }
+
+                        if message.role == .user {
+                            ChatMessageActionButton(
+                                systemImage: "square.and.pencil",
+                                title: editActionTitle,
+                                isActive: isEditingUserMessage,
+                                isEnabled: canEditUserMessage
+                            ) {
+                                onEditUserMessage(message.id)
+                            }
+                        }
+                    }
 
                     Text(message.createdAt, format: .dateTime.hour().minute())
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
                 }
-                .opacity(isHoveringMessage || didCopyResponse ? 1 : 0)
-                .accessibilityHidden(!isHoveringMessage && !didCopyResponse)
+                .opacity(isHoveringMessage || didCopyMessage || isEditingUserMessage ? 1 : 0)
+                .accessibilityHidden(!isHoveringMessage && !didCopyMessage && !isEditingUserMessage)
             }
         }
         .frame(maxWidth: .infinity, alignment: rowAlignment)
@@ -1791,7 +1975,8 @@ private struct ChatMessageRow: View, Equatable {
                 ChatMessageText(
                     content: displayContent,
                     rendersMarkdown: rendersMarkdown,
-                    isStreaming: message.isStreaming
+                    isStreaming: message.isStreaming,
+                    isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
                 .fixedSize(horizontal: true, vertical: false)
@@ -1799,7 +1984,8 @@ private struct ChatMessageRow: View, Equatable {
                 ChatMessageText(
                     content: displayContent,
                     rendersMarkdown: rendersMarkdown,
-                    isStreaming: message.isStreaming
+                    isStreaming: message.isStreaming,
+                    isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
                 .multilineTextAlignment(textAlignment)
@@ -1941,25 +2127,39 @@ private struct ChatMessageRow: View, Equatable {
         return responseMetrics
     }
 
-    private var showsCopyAction: Bool {
-        message.role == .assistant
+    private var canCopyMessage: Bool {
+        (message.role == .user || message.role == .assistant)
             && !message.isStreaming
             && !message.content.isEmpty
     }
 
-    private func copyResponse() {
+    private var showsMessageActions: Bool {
+        message.role == .user || canCopyMessage
+    }
+
+    private var editActionTitle: String {
+        if isEditingUserMessage {
+            return "Editing prompt"
+        }
+        if canEditUserMessage {
+            return "Edit prompt"
+        }
+        return editUserMessageUnavailableReason ?? "Prompt editing is temporarily unavailable"
+    }
+
+    private func copyMessage() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(message.content, forType: .string)
 
         withAnimation(.easeInOut(duration: 0.15)) {
-            didCopyResponse = true
+            didCopyMessage = true
         }
 
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation(.easeInOut(duration: 0.15)) {
-                didCopyResponse = false
+                didCopyMessage = false
             }
         }
     }
@@ -2226,8 +2426,9 @@ private struct ChatLiveDecodeMetricsBadge: View, Equatable {
     }
 }
 
-private struct ChatCopyResponseButton: View {
+private struct ChatCopyMessageButton: View {
     let didCopy: Bool
+    let messageKind: String
     let onCopy: () -> Void
     @State private var isHovering = false
 
@@ -2244,11 +2445,37 @@ private struct ChatCopyResponseButton: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help(didCopy ? "Copied" : "Copy response")
-        .accessibilityLabel(didCopy ? "Response copied" : "Copy response")
+        .help(didCopy ? "Copied" : "Copy \(messageKind)")
+        .accessibilityLabel(didCopy ? "\(messageKind.capitalized) copied" : "Copy \(messageKind)")
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: didCopy)
+    }
+}
+
+private struct ChatMessageActionButton: View {
+    let systemImage: String
+    let title: String
+    let isActive: Bool
+    let isEnabled: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
+                .frame(width: 30, height: 28)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help(title)
+        .accessibilityLabel(title)
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+        .animation(.easeInOut(duration: 0.15), value: isActive)
     }
 }
 
@@ -2610,11 +2837,17 @@ private struct ChatMessageText: View {
     let content: String
     let rendersMarkdown: Bool
     let isStreaming: Bool
+    var isUserPrompt = false
     @Environment(\.chatFontScale) private var chatFontScale
 
     @ViewBuilder
     var body: some View {
-        if rendersMarkdown && !isStreaming {
+        if isUserPrompt {
+            ChatSelectablePromptText(
+                content: content,
+                fontScale: chatFontScale
+            )
+        } else if rendersMarkdown && !isStreaming {
             StructuredText(
                 markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
@@ -2640,6 +2873,71 @@ private struct ChatMessageText: View {
         }
 
         return Text(attributed)
+    }
+}
+
+private struct ChatSelectablePromptText: NSViewRepresentable {
+    let content: String
+    let fontScale: Double
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField(wrappingLabelWithString: content)
+        textField.isSelectable = true
+        textField.isEditable = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.maximumNumberOfLines = 0
+        textField.lineBreakMode = .byWordWrapping
+        textField.cell?.wraps = true
+        textField.cell?.isScrollable = false
+        textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textField.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        update(textField)
+        return textField
+    }
+
+    func updateNSView(_ textField: NSTextField, context: Context) {
+        update(textField)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textField: NSTextField,
+        context: Context
+    ) -> CGSize? {
+        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
+        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
+        let bounds = (content as NSString).boundingRect(
+            with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: textAttributes(font: font)
+        )
+        let measuredWidth = max(1, ceil(bounds.width))
+        let width = proposal.width.map { min($0, measuredWidth) } ?? measuredWidth
+        return CGSize(width: width, height: max(1, ceil(bounds.height)))
+    }
+
+    private func update(_ textField: NSTextField) {
+        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
+        if textField.stringValue != content || textField.font != font {
+            textField.attributedStringValue = NSAttributedString(
+                string: content,
+                attributes: textAttributes(font: font)
+            )
+        }
+        textField.setAccessibilityLabel(content)
+    }
+
+    private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        paragraphStyle.lineSpacing = 2
+        return [
+            .font: font,
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraphStyle
+        ]
     }
 }
 
