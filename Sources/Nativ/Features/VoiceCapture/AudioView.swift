@@ -1823,7 +1823,13 @@ struct AudioView: View {
                             record: record,
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
-                            onPlay: { captureLibrary.openAudio(for: record) },
+                            isPlaying: captureLibrary.playingRecordID == record.id
+                                && !captureLibrary.isPlaybackPaused,
+                            isPaused: captureLibrary.playingRecordID == record.id
+                                && captureLibrary.isPlaybackPaused,
+                            onPlay: { captureLibrary.togglePlayback(for: record) },
+                            onStop: { captureLibrary.stopPlayback() },
+                            onReveal: { captureLibrary.revealAudio(for: record) },
                             onTranscribe: { captureLibrary.retryTranscription(record) },
                             onSummarize: { captureLibrary.summarize(record) },
                             onRename: { analytics.updateTitle($0, for: record.id) },
@@ -2039,6 +2045,7 @@ struct AudioView: View {
     }
 
     private func deleteDictation(_ record: AudioTranscriptionRecord) {
+        captureLibrary.stopPlaybackIfPlaying(record.id)
         analytics.deleteDictation(
             withID: record.id,
             recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
@@ -2420,7 +2427,11 @@ private struct AudioCaptureRecordRow: View {
     let record: AudioTranscriptionRecord
     let audioIsAvailable: Bool
     let isProcessing: Bool
+    let isPlaying: Bool
+    let isPaused: Bool
     let onPlay: () -> Void
+    let onStop: () -> Void
+    let onReveal: () -> Void
     let onTranscribe: () -> Void
     let onSummarize: () -> Void
     let onRename: (String) -> Void
@@ -2505,11 +2516,24 @@ private struct AudioCaptureRecordRow: View {
                 }
 
                 Button(action: onPlay) {
-                    Label("Play", systemImage: "play.fill")
+                    Label(
+                        isPlaying ? "Pause" : (isPaused ? "Resume" : "Play"),
+                        systemImage: isPlaying ? "pause.fill" : "play.fill"
+                    )
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(!audioIsAvailable)
+
+                if isPlaying || isPaused {
+                    Button(action: onStop) {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .labelStyle(.iconOnly)
+                    .help("Stop playback")
+                }
 
                 if record.transcript.isEmpty && !isProcessing {
                     Button("Transcribe", action: onTranscribe)
@@ -2535,6 +2559,8 @@ private struct AudioCaptureRecordRow: View {
                         .disabled(isProcessing)
                     }
                     Divider()
+                    Button("Reveal in Finder", action: onReveal)
+                        .disabled(!audioIsAvailable)
                     Button("Delete recording", role: .destructive, action: onDelete)
                 } label: {
                     Image(systemName: "ellipsis")
