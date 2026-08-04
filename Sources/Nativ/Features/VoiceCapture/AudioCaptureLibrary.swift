@@ -46,10 +46,10 @@ enum AudioCaptureLibraryError: LocalizedError {
 }
 
 private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
-    var onFinish: (() -> Void)?
+    var onFinish: ((AVAudioPlayer) -> Void)?
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        onFinish?()
+        onFinish?(player)
     }
 }
 
@@ -71,8 +71,8 @@ final class AudioCaptureLibrary: ObservableObject {
     private var audioPlayer: AVAudioPlayer?
     private lazy var playbackDelegate: AudioPlaybackDelegate = {
         let delegate = AudioPlaybackDelegate()
-        delegate.onFinish = { [weak self] in
-            Task { @MainActor in self?.stopPlayback() }
+        delegate.onFinish = { [weak self] player in
+            Task { @MainActor in self?.playbackDidFinish(player) }
         }
         return delegate
     }()
@@ -369,14 +369,6 @@ final class AudioCaptureLibrary: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func openAudio(for record: AudioTranscriptionRecord) {
-        guard let url = audioURL(for: record) else {
-            lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
-            return
-        }
-        NSWorkspace.shared.open(url)
-    }
-
     func revealAudio(for record: AudioTranscriptionRecord) {
         guard let url = audioURL(for: record) else {
             lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
@@ -388,8 +380,11 @@ final class AudioCaptureLibrary: ObservableObject {
     func togglePlayback(for record: AudioTranscriptionRecord) {
         if playingRecordID == record.id {
             if isPlaybackPaused {
-                audioPlayer?.play()
-                isPlaybackPaused = false
+                if audioPlayer?.play() == true {
+                    isPlaybackPaused = false
+                } else {
+                    lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+                }
             } else {
                 audioPlayer?.pause()
                 isPlaybackPaused = true
@@ -431,6 +426,13 @@ final class AudioCaptureLibrary: ObservableObject {
         if playingRecordID == recordID {
             stopPlayback()
         }
+    }
+
+    private func playbackDidFinish(_ player: AVAudioPlayer) {
+        guard audioPlayer === player else {
+            return
+        }
+        stopPlayback()
     }
 
     func revealLibrary() {
