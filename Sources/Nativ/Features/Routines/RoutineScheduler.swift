@@ -46,6 +46,48 @@ final class RoutineScheduler {
             }
             onFire(routine, .scheduled)
         }
+        processAPITriggers()
+    }
+
+    private func processAPITriggers() {
+        guard let directory = Self.triggersDirectory,
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+              )
+        else {
+            return
+        }
+        for file in files where file.pathExtension == "json" {
+            defer { try? FileManager.default.removeItem(at: file) }
+            guard let data = try? Data(contentsOf: file),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let routineID = object["routineID"] as? String,
+                  let routine = store.routine(id: routineID),
+                  routine.isEnabled
+            else {
+                continue
+            }
+            onFire(routine, .api)
+        }
+    }
+
+    static var triggersDirectory: URL? {
+        let base = (try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? FileManager.default.homeDirectoryForCurrentUser
+        let directory = base
+            .appendingPathComponent("Nativ", isDirectory: true)
+            .appendingPathComponent("Routines", isDirectory: true)
+            .appendingPathComponent("triggers", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
     }
 
     private func dueScheduledDate(for routine: Routine, now: Date) -> Date? {
