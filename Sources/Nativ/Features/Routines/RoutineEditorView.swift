@@ -55,59 +55,50 @@ struct RoutineEditor: View {
 
             Divider()
 
-            Form {
-                Section("Name") {
-                    TextField("Routine name", text: $name)
-                }
-                Section("Instructions") {
-                    TextEditor(text: $instructions)
-                        .frame(minHeight: 120)
-                        .font(.body)
-                }
-                Section("Model") {
-                    Picker("Model", selection: $modelID) {
-                        Text("Select a model").tag("")
-                        ForEach(availableModelIDs, id: \.self) { id in
-                            Text(NativFormatting.truncateModelName(id, maxLength: 42)).tag(id)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    field("Name") {
+                        TextField("Routine name", text: $name)
+                            .textFieldStyle(.plain)
+                    }
+                    field("Instructions") {
+                        TextEditor(text: $instructions)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 130)
+                            .font(.body)
+                    }
+                    field("Model") {
+                        Picker("Model", selection: $modelID) {
+                            Text("Select a model").tag("")
+                            ForEach(availableModelIDs, id: \.self) { id in
+                                Text(NativFormatting.truncateModelName(id, maxLength: 42)).tag(id)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    field("Trigger") { triggerContent }
+                    field("Capabilities") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Picker("Kit", selection: $kitID) {
+                                Text("None").tag(String?.none)
+                                ForEach(NativKit.all) { kit in
+                                    Text(kit.name).tag(String?.some(kit.id))
+                                }
+                            }
+                            .labelsHidden()
+                            if let kitID, let kit = NativKit.all.first(where: { $0.id == kitID }) {
+                                Text(kit.inventory)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
-                    .labelsHidden()
-                }
-                Section("Trigger") {
-                    Picker("Trigger", selection: $triggerKind) {
-                        Text("Schedule").tag(RoutineTriggerKind.schedule)
-                        Text("API request").tag(RoutineTriggerKind.api)
-                    }
-                    .pickerStyle(.segmented)
-                    if triggerKind == .schedule {
-                        DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
-                        weekdayPicker
-                    } else {
-                        Text("Trigger with POST /v1/routines/\(draft.routine.id)/run")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                    box {
+                        Toggle("Notify me when this routine finishes", isOn: $notifyOnFinish)
                     }
                 }
-                Section("Capabilities") {
-                    Picker("Kit", selection: $kitID) {
-                        Text("None").tag(String?.none)
-                        ForEach(NativKit.all) { kit in
-                            Text(kit.name).tag(String?.some(kit.id))
-                        }
-                    }
-                    .labelsHidden()
-                    if let kitID, let kit = NativKit.all.first(where: { $0.id == kitID }) {
-                        Text(kit.inventory)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Section {
-                    Toggle("Notify me when this routine finishes", isOn: $notifyOnFinish)
-                }
+                .padding(20)
             }
-            .formStyle(.grouped)
 
             Divider()
 
@@ -123,6 +114,61 @@ struct RoutineEditor: View {
             .padding(16)
         }
         .frame(minWidth: 540, minHeight: 620)
+    }
+
+    @ViewBuilder
+    private var triggerContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("Trigger", selection: $triggerKind) {
+                Text("Schedule").tag(RoutineTriggerKind.schedule)
+                Text("API request").tag(RoutineTriggerKind.api)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if triggerKind == .schedule {
+                Divider()
+                HStack {
+                    Text("Time")
+                    Spacer()
+                    DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                }
+                weekdayPicker
+            } else {
+                Divider()
+                Text("Runs when this routine's endpoint receives a POST request.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            box { content() }
+        }
+    }
+
+    @ViewBuilder
+    private func box<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(nsColor: .controlBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 10)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
     }
 
     private var weekdayPicker: some View {
@@ -211,6 +257,15 @@ struct RoutineDetailView: View {
                             .font(.callout)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if routine.triggerKind == .api {
+                        section("Endpoint") {
+                            Text("POST /v1/routines/\(routine.id)/run")
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                     runsSection("Scheduled", scheduledRuns)
                     runsSection("Manual", manualRuns)
