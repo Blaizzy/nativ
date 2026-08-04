@@ -330,7 +330,9 @@ struct ChatComposer: View {
         guard model.settings.thinkingEnabled else {
             return .off
         }
-        guard model.settings.thinkingBudgetEnabled else {
+        guard model.settings.thinkingBudgetEnabled,
+              !model.settings.speculativeDecodingActive
+        else {
             return .max
         }
 
@@ -359,7 +361,7 @@ struct ChatComposer: View {
             title: "Reasoning",
             selectedID: reasoningLevel.rawValue,
             selectedLabel: reasoningLevel.rawValue,
-            options: ChatReasoningLevel.allCases.map {
+            options: availableReasoningLevels.map {
                 ComposerModelPickerSecondaryOption(
                     id: $0.rawValue,
                     title: $0.rawValue,
@@ -398,6 +400,13 @@ struct ChatComposer: View {
         ) {}
     }
 
+    private var availableReasoningLevels: [ChatReasoningLevel] {
+        guard model.settings.speculativeDecodingActive else {
+            return ChatReasoningLevel.allCases
+        }
+        return ChatReasoningLevel.allCases.filter { $0.tokenBudget == nil }
+    }
+
     private func applyReasoningLevel(_ level: ChatReasoningLevel) {
         switch level {
         case .off:
@@ -407,8 +416,12 @@ struct ChatComposer: View {
             model.settings.thinkingBudgetEnabled = false
         case .low, .medium, .high:
             model.settings.thinkingEnabled = true
-            model.settings.thinkingBudgetEnabled = true
-            model.settings.thinkingBudget = level.tokenBudget ?? model.settings.thinkingBudget
+            if model.settings.speculativeDecodingActive {
+                model.settings.thinkingBudgetEnabled = false
+            } else {
+                model.settings.thinkingBudgetEnabled = true
+                model.settings.thinkingBudget = level.tokenBudget ?? model.settings.thinkingBudget
+            }
         }
     }
 
