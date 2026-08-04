@@ -10,6 +10,7 @@ private enum VoiceIslandLayoutMetrics {
 
 private let voiceCaptureDismissalDuration: TimeInterval = 0.38
 private let voiceCaptureMinimumLoadingDuration: TimeInterval = 0.65
+private let meetingTranscriptionSuggestionDuration: TimeInterval = 10
 
 private func voiceCaptureFinishProgress(
     state: VoiceCaptureOverlayModel.State,
@@ -2571,5 +2572,231 @@ struct VoiceVerticalLiveWaveform: View {
             maximumWidth,
             max(7, maximumWidth * CGFloat(normalizedWidth))
         )
+    }
+}
+
+@MainActor
+final class MeetingTranscriptionSuggestionController {
+    var onStart: (() -> Void)?
+
+    private let model: MeetingTranscriptionSuggestionModel
+    private let panel: MeetingTranscriptionSuggestionPanel
+    private var dismissalTask: Task<Void, Never>?
+
+    init() {
+        let model = MeetingTranscriptionSuggestionModel()
+        self.model = model
+        panel = MeetingTranscriptionSuggestionPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 72),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = NSHostingView(
+            rootView: MeetingTranscriptionSuggestionView(model: model)
+        )
+        model.onStart = { [weak self] in
+            guard let self else {
+                return
+            }
+            self.dismiss()
+            self.onStart?()
+        }
+        model.onDismiss = { [weak self] in
+            self?.dismiss()
+        }
+
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.level = .floating
+        panel.collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .ignoresCycle,
+        ]
+    }
+
+    func show(for applicationName: String) {
+        dismissalTask?.cancel()
+        model.applicationName = applicationName
+        model.secondsRemaining = Int(meetingTranscriptionSuggestionDuration)
+        model.progress = 1
+        positionPanel()
+        panel.makeKeyAndOrderFront(nil)
+
+        dismissalTask = Task { [weak self] in
+            let deadline = Date().addingTimeInterval(meetingTranscriptionSuggestionDuration)
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(50))
+                } catch {
+                    return
+                }
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+
+                let remaining = max(0, deadline.timeIntervalSinceNow)
+                self.model.secondsRemaining = Int(ceil(remaining))
+                self.model.progress = CGFloat(
+                    min(
+                        1,
+                        max(0, remaining / meetingTranscriptionSuggestionDuration)
+                    )
+                )
+
+                if remaining <= 0 {
+                    self.dismiss()
+                    return
+                }
+            }
+        }
+    }
+
+    func dismiss() {
+        dismissalTask?.cancel()
+        dismissalTask = nil
+        panel.orderOut(nil)
+    }
+
+    private func positionPanel() {
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first {
+            NSMouseInRect(mouseLocation, $0.frame, false)
+        } ?? NSScreen.main ?? NSScreen.screens[0]
+        let visibleFrame = screen.visibleFrame
+        let topInset: CGFloat = 8
+        panel.setFrameOrigin(
+            NSPoint(
+                x: visibleFrame.midX - (panel.frame.width / 2),
+                y: visibleFrame.maxY - panel.frame.height - topInset
+            )
+        )
+    }
+}
+
+@MainActor
+private final class MeetingTranscriptionSuggestionModel: ObservableObject {
+    @Published var applicationName = "the meeting app"
+    @Published var secondsRemaining = Int(meetingTranscriptionSuggestionDuration)
+    @Published var progress: CGFloat = 1
+    var onStart: (() -> Void)?
+    var onDismiss: (() -> Void)?
+}
+
+private final class MeetingTranscriptionSuggestionPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+@MainActor
+private struct MeetingTranscriptionSuggestionView: View {
+    @ObservedObject var model: MeetingTranscriptionSuggestionModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 11) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 30, height: 30)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Start AI Meeting Notes")
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(model.applicationName) detected")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.76))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 6)
+
+                Divider()
+                    .overlay(.white.opacity(0.22))
+                    .frame(height: 30)
+
+                HStack(spacing: 7) {
+                    Button(action: { model.onStart?() }) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color(red: 0.10, green: 0.44, blue: 0.80))
+                            .frame(width: 31, height: 31)
+                            .background(.white, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Start AI meeting notes")
+                    .accessibilityHint("Starts local meeting transcription")
+                    .help("Start transcription")
+
+                    Button(action: { model.onDismiss?() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .frame(width: 31, height: 31)
+                            .background(.white.opacity(0.16), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Decline meeting transcription")
+                    .accessibilityHint("Dismisses this suggestion")
+                    .help("Not now")
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .frame(height: 60)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.white.opacity(0.18))
+                    Capsule()
+                        .fill(.white.opacity(0.92))
+                        .frame(width: geometry.size.width * model.progress)
+                        .animation(.linear(duration: 0.05), value: model.progress)
+                }
+            }
+            .frame(width: 380, height: 4)
+            .padding(.bottom, 8)
+        }
+        .frame(width: 440, height: 72)
+        .background {
+            ZStack(alignment: .leading) {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.04, green: 0.07, blue: 0.12),
+                        Color(red: 0.07, green: 0.18, blue: 0.31),
+                        Color(red: 0.05, green: 0.11, blue: 0.20),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                LinearGradient(
+                    colors: [.white.opacity(0.10), .white.opacity(0.035), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 220)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 21, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.22), .blue.opacity(0.28)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .padding(1)
     }
 }
