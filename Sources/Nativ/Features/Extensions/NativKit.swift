@@ -159,6 +159,7 @@ extension NativKit {
 /// Turns a kit's MCP servers, skills, and extensions on or off together, driving
 /// the same settings the individual sections do. Enabling appends any missing
 /// pieces; disabling switches them off without deleting the user's edits.
+@MainActor
 enum NativKitActivation {
     static func setEnabled(
         _ enabled: Bool,
