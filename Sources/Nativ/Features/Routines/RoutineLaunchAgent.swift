@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum RoutineLaunchAgent {
@@ -102,30 +103,44 @@ enum RoutineLaunchAgent {
 
 enum RoutineHeadlessRun {
     private static var retainedRunner: RoutineRunner?
+    private static var retainedModel: NativModel?
 
     static func execute(routineID: String) {
         MainActor.assumeIsolated {
+            if anotherInstanceRunning() {
+                exit(EXIT_SUCCESS)
+            }
             guard RoutineScheduler.hasSufficientBattery(),
                   let routine = RoutineStore.shared.routine(id: routineID)
             else {
                 exit(EXIT_SUCCESS)
             }
+            let model = NativModel()
             let runner = RoutineRunner(
-                model: NativModel(),
+                model: model,
                 store: RoutineStore.shared,
                 sessionStore: ChatSessionStore()
             )
+            retainedModel = model
             retainedRunner = runner
             runner.onRunCompleted = { _, _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    exit(EXIT_SUCCESS)
-                }
+                model.stopServer()
+                exit(EXIT_SUCCESS)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
+                MainActor.assumeIsolated { retainedModel?.stopServer() }
                 exit(EXIT_SUCCESS)
             }
             runner.run(routine, source: .scheduled)
         }
         RunLoop.main.run()
+    }
+
+    private static func anotherInstanceRunning() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else {
+            return false
+        }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
     }
 }
