@@ -589,7 +589,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]
         ) { _, _ in }
+        routineStore.onRoutinesChanged = { [weak self] in
+            self?.refreshRoutineAgents()
+        }
+        refreshRoutineAgents()
         routineScheduler.start()
+    }
+
+    private func refreshRoutineAgents() {
+        RoutineLaunchAgent.refresh(routines: routineStore.routines)
     }
 
     private func postRoutineNotification(routine: Routine, run: RoutineRun) {
