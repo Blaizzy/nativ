@@ -2,6 +2,8 @@ import Foundation
 
 @MainActor
 final class RoutineStore: ObservableObject {
+    static let shared = RoutineStore()
+
     @Published private(set) var routines: [Routine] = []
     @Published private(set) var runs: [RoutineRun] = []
 
