@@ -2046,11 +2046,10 @@ private struct ChatAgentStepCell: View {
 
                 Text(title)
                     .font(.callout.weight(.medium))
-                if let statusCaption {
-                    Text(statusCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let mcpServerSlug {
+                    NativStatusBadge(text: mcpServerSlug, tone: .neutral, symbol: "puzzlepiece.extension")
                 }
+                statusBadge
 
                 Spacer(minLength: 12)
 
@@ -2071,16 +2070,19 @@ private struct ChatAgentStepCell: View {
         .contentShape(.rect)
     }
 
-    private var statusCaption: String? {
+    @ViewBuilder
+    private var statusBadge: some View {
         switch message.toolStatus {
-        case .cancelled:
-            "Cancelled"
+        case .succeeded:
+            NativStatusBadge(text: "Done", tone: .success)
         case .failed:
-            "Failed"
+            NativStatusBadge(text: "Failed", tone: .danger)
+        case .cancelled:
+            NativStatusBadge(text: "Cancelled", tone: .neutral)
         case .declined:
-            "Declined"
-        case .running, .succeeded, .awaitingConsent, nil:
-            nil
+            NativStatusBadge(text: "Declined", tone: .neutral)
+        case .running, .awaitingConsent, nil:
+            EmptyView()
         }
     }
 
@@ -2121,24 +2123,18 @@ private struct ChatAgentStepCell: View {
     @ViewBuilder
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Arguments")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(formattedArguments)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                NativCodeBlock(raw: formattedArguments)
             }
             if !message.content.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Result")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(message.content)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(6)
+                    NativCodeBlock(raw: message.content, lineLimit: 12)
                 }
             }
         }
@@ -2161,8 +2157,25 @@ private struct ChatAgentStepCell: View {
         ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
     }
 
+    private var statusTone: NativStatusTone {
+        switch message.toolStatus {
+        case .running: return .active
+        case .succeeded: return .success
+        case .failed: return .danger
+        case .awaitingConsent: return .warning
+        case .cancelled, .declined, nil: return .neutral
+        }
+    }
+
     private var tintColor: Color {
-        message.toolStatus == .failed ? .red : .secondary
+        statusTone.color
+    }
+
+    /// The MCP server slug for a namespaced (`slug.tool`) tool, else nil.
+    private var mcpServerSlug: String? {
+        guard let name = message.toolName, let dot = name.firstIndex(of: ".") else { return nil }
+        let slug = String(name[..<dot])
+        return slug.isEmpty ? nil : slug
     }
 
     private var accessibilityStatus: String {

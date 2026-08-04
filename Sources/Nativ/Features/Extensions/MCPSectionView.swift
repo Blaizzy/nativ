@@ -91,21 +91,9 @@ private struct MCPServerRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
-    @State private var pulse = false
-
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 7, height: 7)
-                .opacity(isConnecting && pulse ? 0.35 : 1)
-                .animation(
-                    isConnecting
-                        ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true)
-                        : .default,
-                    value: pulse
-                )
-                .onAppear { pulse = true }
+            NativStatusDot(tone: statusTone, pulsing: isConnecting)
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.name.isEmpty ? "Untitled server" : server.name)
                     .font(.system(size: 13, weight: .medium))
@@ -151,12 +139,12 @@ private struct MCPServerRow: View {
         return false
     }
 
-    private var statusColor: Color {
+    private var statusTone: NativStatusTone {
         switch state {
-        case .connected: .green
-        case .connecting: .orange
-        case .failed: .red
-        case .disabled, .none: Color(nsColor: .tertiaryLabelColor)
+        case .connected: .success
+        case .connecting: .warning
+        case .failed: .danger
+        case .disabled, .none: .neutral
         }
     }
 
@@ -442,35 +430,10 @@ private let mcpCatalog: [MCPCatalogEntry] = {
     return entries
 }()
 
-/// A square logo: the bundled `MCPLogo-<name>` image if present, otherwise a
-/// tinted rounded tile with the entry's glyph.
-private struct MCPLogoTile: View {
-    let entry: MCPCatalogEntry
-    var size: CGFloat = 44
-
-    var body: some View {
-        Group {
-            if let nsImage = NSImage(named: entry.logoAssetName) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(size * 0.16)
-            } else {
-                Image(systemName: entry.symbol)
-                    .font(.system(size: size * 0.42, weight: .semibold))
-                    .foregroundStyle(entry.tint)
-            }
-        }
-        .frame(width: size, height: size)
-        .background(entry.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
-    }
-}
-
 private struct MCPCatalogView: View {
     let installedNames: Set<String>
     let onAdd: (MCPCatalogEntry) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var hoveringClose = false
 
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 300), spacing: 14)]
 
@@ -486,7 +449,7 @@ private struct MCPCatalogView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 16)
-                closeButton
+                NativHoverCloseButton { dismiss() }
             }
             .padding(24)
 
@@ -506,22 +469,6 @@ private struct MCPCatalogView: View {
         }
         .frame(width: 720, height: 560)
     }
-
-    private var closeButton: some View {
-        Button(action: { dismiss() }) {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 26)
-                .background(
-                    Circle().fill(Color.primary.opacity(hoveringClose ? 0.10 : 0))
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hoveringClose = $0 }
-        .help("Close")
-    }
 }
 
 private struct MCPCatalogCard: View {
@@ -533,7 +480,7 @@ private struct MCPCatalogCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                MCPLogoTile(entry: entry)
+                NativTintedIconTile(symbol: entry.symbol, tint: entry.tint, logoAssetName: entry.logoAssetName)
                 Spacer(minLength: 0)
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 12))
