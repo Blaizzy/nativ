@@ -7,10 +7,11 @@ struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
-    @State private var section: HubSection = .extensions
+    @State private var section: HubSection = .kits
     @State private var didLaunch = false
 
     enum HubSection: String, CaseIterable, Identifiable {
+        case kits = "Kits"
         case extensions = "Extensions"
         case mcp = "MCP"
         case tools = "Tools"
@@ -20,6 +21,7 @@ struct ExtensionsHubView: View {
 
         var systemImage: String {
             switch self {
+            case .kits: "shippingbox"
             case .extensions: "square.stack.3d.up"
             case .mcp: "server.rack"
             case .tools: "hammer"
@@ -85,6 +87,8 @@ struct ExtensionsHubView: View {
     @ViewBuilder
     private var detail: some View {
         switch section {
+        case .kits:
+            KitsSectionView(manager: manager, host: host, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:
