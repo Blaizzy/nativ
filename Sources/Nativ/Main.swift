@@ -51,6 +51,11 @@ enum Main {
             }
         }
 
+        if let index = CommandLine.arguments.firstIndex(of: "--run-routine"),
+           index + 1 < CommandLine.arguments.count {
+            RoutineHeadlessRun.execute(routineID: CommandLine.arguments[index + 1])
+        }
+
         NativApplication.main()
     }
 
