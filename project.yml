@@ -151,6 +151,7 @@ targets:
     sources:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
+      - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
