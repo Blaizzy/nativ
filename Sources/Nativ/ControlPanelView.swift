@@ -1236,7 +1236,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
+        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .routines, .settings:
             false
         }
     }
@@ -1899,7 +1899,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .dashboard, .system, .models, .integrations, .extensions, .developer:
             return true
-        case .chat, .imageGeneration, .artifacts, .settings:
+        case .chat, .imageGeneration, .artifacts, .routines, .settings:
             return false
         }
     }
