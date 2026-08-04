@@ -10,10 +10,6 @@ struct RoutinesView: View {
     @State private var showsCalendar = false
     @State private var editing: RoutineDraft?
     @State private var detail: Routine?
-    @State private var draftText = ""
-    @State private var designerModelID = ""
-    @State private var isDrafting = false
-    @State private var draftError: String?
 
     private var availableModelIDs: [String] {
         localLibrary.models
@@ -26,7 +22,6 @@ struct RoutinesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
-                designerSection
                 Picker("View", selection: $showsCalendar) {
                     Text("List").tag(false)
                     Text("Calendar").tag(true)
@@ -53,16 +48,6 @@ struct RoutinesView: View {
                 path: model.settings.modelSearchPath,
                 additionalPaths: model.settings.normalized().additionalModelSearchPaths
             )
-        }
-        .onChange(of: localLibrary.models.count) { _, _ in
-            if designerModelID.isEmpty {
-                designerModelID = availableModelIDs.first ?? ""
-            }
-        }
-        .onAppear {
-            if designerModelID.isEmpty {
-                designerModelID = availableModelIDs.first ?? ""
-            }
         }
         .sheet(item: $editing) { draft in
             RoutineEditor(
@@ -109,86 +94,6 @@ struct RoutinesView: View {
                 Label("New routine", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var designerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("What do you want to automate?", text: $draftText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .padding(10)
-                .background(
-                    Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 10)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-                )
-
-            HStack(spacing: 8) {
-                Picker("Designer model", selection: $designerModelID) {
-                    Text("Model").tag("")
-                    ForEach(availableModelIDs, id: \.self) { id in
-                        Text(NativFormatting.truncateModelName(id, maxLength: 28)).tag(id)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 220)
-                Spacer()
-                if isDrafting {
-                    ProgressView().controlSize(.small)
-                }
-                Button("Draft routine", action: draftRoutine)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || designerModelID.isEmpty
-                            || isDrafting
-                    )
-            }
-
-            HStack(spacing: 8) {
-                ForEach(Self.suggestions, id: \.self) { suggestion in
-                    Button(suggestion) { draftText = suggestion }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
-            }
-
-            if let draftError {
-                Text(draftError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        }
-    }
-
-    private static let suggestions = [
-        "Summarize my unread notes every weekday morning",
-        "Give me five dinner ideas every evening",
-        "Draft a daily standup update at 9am",
-    ]
-
-    private func draftRoutine() {
-        let text = draftText
-        let designer = designerModelID
-        isDrafting = true
-        draftError = nil
-        Task { @MainActor in
-            let routine = await RoutineDrafter.draft(
-                description: text,
-                designerModelID: designer,
-                model: model
-            )
-            isDrafting = false
-            if let routine {
-                draftText = ""
-                editing = RoutineDraft(routine: routine)
-            } else {
-                draftError = "Couldn't draft a routine from that. Try rephrasing, or create one manually."
-            }
         }
     }
 

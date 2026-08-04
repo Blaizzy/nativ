@@ -46,8 +46,10 @@ struct RoutineEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(draft.routine.name.isEmpty ? "New routine" : "Edit routine")
+            Text(name.trimmingCharacters(in: .whitespaces).isEmpty ? "New routine" : name)
                 .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
 
