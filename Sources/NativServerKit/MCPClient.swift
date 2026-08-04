@@ -36,6 +36,31 @@ public enum MCPClientError: LocalizedError {
     }
 }
 
+/// Holds the spawned process somewhere a nonisolated caller can reach it.
+///
+/// `MCPClient.disconnect()` is async, so it cannot run during app
+/// termination — the app exits before the task is ever scheduled. Terminating
+/// the child needs a handle usable synchronously from outside the actor.
+private final class MCPProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+
+    func store(_ process: Process?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.process = process
+    }
+
+    func terminate() {
+        lock.lock()
+        defer { lock.unlock() }
+        if let process, process.isRunning {
+            process.terminate()
+        }
+        process = nil
+    }
+}
+
 public actor MCPClient {
     private let executableURL: URL
     private let arguments: [String]
@@ -49,6 +74,7 @@ public actor MCPClient {
     private var outputPipe: Pipe?
     private var transport: StdioTransport?
     private var client: Client?
+    private let liveProcess = MCPProcessBox()
 
     public init(
         executableURL: URL,
@@ -111,6 +137,15 @@ public actor MCPClient {
         self.process = process
         self.transport = transport
         self.client = client
+        liveProcess.store(process)
+    }
+
+    /// Terminates the server process without waiting on the actor.
+    ///
+    /// The only option that works during app termination: `disconnect()` is
+    /// async, so the app exits before it runs and the child is left behind.
+    public nonisolated func terminateImmediately() {
+        liveProcess.terminate()
     }
 
     /// Connects and lists tools under a single deadline, so a server that hangs
@@ -174,6 +209,7 @@ public actor MCPClient {
         process = nil
         inputPipe = nil
         outputPipe = nil
+        liveProcess.store(nil)
     }
 
     private static func withTimeout<T: Sendable>(
