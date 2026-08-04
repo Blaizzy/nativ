@@ -454,8 +454,9 @@ private struct SystemSensorsPage: View {
                 color: SystemMonitorPalette.red,
                 seriesName: "Die temperature",
                 format: { SystemMonitorFormat.celsius($0) },
-                axisStep: 20,
-                axisMinimum: 60
+                axisStep: 10,
+                axisMinimum: 60,
+                anchorsAtZero: false
             )
 
             SystemValueHistoryChart(
@@ -1790,10 +1791,18 @@ private struct SystemValueHistoryChart: View {
     /// Row label shown in the hover tooltip.
     let seriesName: String
     let format: (Double) -> String
-    /// The y-axis rounds up to the next multiple of this, never below `axisMinimum`,
-    /// so the plot does not rescale on every sample.
+    /// The y-axis snaps to multiples of this, so the plot does not rescale on every sample.
     let axisStep: Double
+    /// Smallest upper bound, so a quiet chart does not zoom into noise.
     let axisMinimum: Double
+    /// Whether zero is a meaningful floor for this quantity.
+    ///
+    /// Frame rate and watts genuinely start at zero, and anchoring there makes their
+    /// magnitude readable. Temperature does not — a die never approaches 0 °C, so a
+    /// zero-anchored axis squeezes the entire useful range into the top of the plot and
+    /// renders real drift as a flat line, which is precisely the signal this chart exists
+    /// to show. Those series anchor just below the observed minimum instead.
+    var anchorsAtZero = true
     @State private var hoveredSample: SystemHistorySample?
 
     var body: some View {
@@ -1877,7 +1886,7 @@ private struct SystemValueHistoryChart: View {
                     domain: systemChartTimeDomain(for: [samples]),
                     range: .plotDimension(startPadding: 0, endPadding: 0)
                 )
-                .chartYScale(domain: 0...axisMaximum)
+                .chartYScale(domain: axisRange)
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 5)) { value in
                         AxisGridLine()
@@ -1917,9 +1926,15 @@ private struct SystemValueHistoryChart: View {
         .systemMonitorPanel()
     }
 
-    private var axisMaximum: Double {
-        let observedMaximum = samples.map(\.value).max() ?? 0
-        return max(axisMinimum, ceil(observedMaximum / axisStep) * axisStep)
+    private var axisRange: ClosedRange<Double> {
+        let values = samples.map(\.value)
+        let upper = max(axisMinimum, ceil((values.max() ?? 0) / axisStep) * axisStep)
+        guard !anchorsAtZero else { return 0...upper }
+
+        let lower = max(0, floor((values.min() ?? 0) / axisStep) * axisStep)
+        // A run flat enough to land inside one step would otherwise produce an empty
+        // domain, so always keep at least one step of height.
+        return lower < upper ? lower...upper : lower...(lower + axisStep)
     }
 }
 

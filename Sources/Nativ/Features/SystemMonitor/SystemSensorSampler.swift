@@ -67,6 +67,11 @@ struct SystemPowerMetrics: Equatable, Sendable {
     var socWatts: Double?
     /// Whole-machine input power from the battery controller. Portables only, but it
     /// survives on hardware where the SoC energy counters have gone away.
+    ///
+    /// The controller refreshes this on its own schedule — tens of seconds, not once a
+    /// second — so a history chart of it holds a value and then steps. That is the source
+    /// cadence rather than a sampling artefact, and it is why the SoC rails are preferred
+    /// as the headline figure wherever they exist.
     var systemInputWatts: Double?
 
     var hasAnyReading: Bool {
