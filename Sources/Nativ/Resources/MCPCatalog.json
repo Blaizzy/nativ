@@ -14,7 +14,7 @@
     "name": "git",
     "summary": "Inspect and operate on Git repositories.",
     "command": "uvx",
-    "args": ["mcp-server-git"],
+    "args": ["--with", "mcp==1.12.0", "mcp-server-git"],
     "symbol": "arrow.triangle.branch",
     "tint": "orange",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
@@ -35,7 +35,7 @@
     "name": "fetch",
     "summary": "Fetch and read web pages as markdown.",
     "command": "uvx",
-    "args": ["mcp-server-fetch"],
+    "args": ["--with", "mcp==1.12.0", "mcp-server-fetch"],
     "symbol": "globe",
     "tint": "teal",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
@@ -55,7 +55,7 @@
     "name": "sqlite",
     "summary": "Query and edit a local SQLite database.",
     "command": "uvx",
-    "args": ["mcp-server-sqlite", "--db-path", "database.db"],
+    "args": ["--with", "mcp==1.12.0", "mcp-server-sqlite", "--db-path", "database.db"],
     "symbol": "cylinder.split.1x2",
     "tint": "green",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"

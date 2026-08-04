@@ -36,6 +36,11 @@ Append an object to `MCPCatalog.json`:
 | `tint` | no | Card tint: `blue`, `orange`, `teal`, `purple`, `green`, `red`, `pink`, `yellow`, `indigo`, `mint`, `primary`. |
 | `sourceURL` | no | Link to the server's source. |
 
+> **Pin Python servers.** A `uvx` server resolves its own dependencies at launch,
+> so a new MCP SDK release can break an older server. Pin it in `args` — e.g.
+> `["--with", "mcp==1.12.0", "mcp-server-fetch"]` — so both the app and CI launch
+> a known-good combination.
+
 ### CI-only fields
 
 These are read by the verifier, not the app:
