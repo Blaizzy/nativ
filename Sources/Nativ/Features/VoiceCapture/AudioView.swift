@@ -268,7 +268,6 @@ struct AudioView: View {
                 maxContentWidth: 1_120
             ) {
                 audioInputPanel
-                meetingSuggestionPanel
                 captureControls
                 capturePrivacyPanel
             }
@@ -622,53 +621,60 @@ struct AudioView: View {
     private var unifiedCaptureCard: some View {
         let tint = Color.blue
 
-        return HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "waveform.badge.mic")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 42, height: 42)
-                .background(
-                    tint.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                )
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("New recording")
-                    .font(.headline)
-                Text("Capture audio, then transcribe it locally when you finish.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 16)
-
-            HStack(spacing: 9) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(Color.white)
-                Text("Auto-summary")
-                    .font(.callout.weight(.medium))
-                Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
-            .disabled(captureLibrary.isBusy)
-
-            Button {
-                inputLevelMonitor.stop()
-                Task {
-                    await captureLibrary.start(
-                        .meeting,
-                        automaticallySummarize: automaticallySummarize,
-                        includeSystemAudio: includeSystemAudio
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        tint.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
                     )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("New recording")
+                        .font(.headline)
+                    Text("Capture audio, then transcribe it locally when you finish.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } label: {
-                Label("Start recording", systemImage: "record.circle")
-                    .padding(.horizontal, 8)
+
+                Spacer(minLength: 16)
+
+                HStack(spacing: 9) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(Color.white)
+                    Text("Auto-summary")
+                        .font(.callout.weight(.medium))
+                    Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .disabled(captureLibrary.isBusy)
+
+                Button {
+                    inputLevelMonitor.stop()
+                    Task {
+                        await captureLibrary.start(
+                            .meeting,
+                            automaticallySummarize: automaticallySummarize,
+                            includeSystemAudio: includeSystemAudio
+                        )
+                    }
+                } label: {
+                    Label("Start recording", systemImage: "record.circle")
+                        .padding(.horizontal, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(tint)
-            .controlSize(.large)
+
+            Divider()
+                .padding(.vertical, 16)
+
+            meetingSuggestionRow(tint: tint)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -854,13 +860,22 @@ struct AudioView: View {
         .padding(.horizontal, 4)
     }
 
-    private var meetingSuggestionPanel: some View {
-        HStack(alignment: .center, spacing: 10) {
+    private func meetingSuggestionRow(tint: Color) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "person.2.wave.2.fill")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 42, height: 42)
+                .background(
+                    tint.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+
             VStack(alignment: .leading, spacing: 3) {
-                Text("Suggest transcription when a meeting starts")
-                    .font(.caption.weight(.medium))
-                Text("Nativ watches supported meeting apps for microphone activity. It never records unless you choose Start transcription.")
-                    .font(.caption2)
+                Text("Transcription suggestions")
+                    .font(.headline)
+                Text("Prompt me to start transcription when a supported meeting app begins using the microphone.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
@@ -872,7 +887,6 @@ struct AudioView: View {
             .toggleStyle(.switch)
             .accessibilityLabel("Suggest transcription when a meeting starts")
         }
-        .padding(.horizontal, 4)
     }
 
     private var modelConfigurationPanel: some View {
