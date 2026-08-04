@@ -19,6 +19,7 @@ private struct ChatSessionBootstrap {
 struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -46,6 +47,7 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .onAppear { chat.mcpHost = mcpHost }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
@@ -229,6 +231,8 @@ private struct ChatComposerContainer: View {
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
+    weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -1036,7 +1040,13 @@ final class ChatViewModel: ObservableObject {
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
                         additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths
                     )
-                    let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    let outcome: ChatToolExecutionOutcome
+                    if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
+                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else {
+                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    }
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -1106,15 +1116,9 @@ final class ChatViewModel: ObservableObject {
 
         let precedingMessages = sessionMessages[..<assistantIndex]
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !settings.systemPrompt.isEmpty {
-            requestMessages.insert(
-                MLXChatMessage(role: "system", content: settings.systemPrompt),
-                at: 0
-            )
-        }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        let toolDefinitions = advertisesToolsForModel
+        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
                 context: ChatToolExecutionContext(
                     imageGenerationModelID: settings.imageGenerationModelID,
@@ -1127,7 +1131,29 @@ final class ChatViewModel: ObservableObject {
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
+        if advertisesToolsForModel {
+            toolDefinitions += (mcpHost?.toolDefinitions() ?? [])
+                .filter { !settings.disabledToolNames.contains($0.function.name) }
+        }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
+
+        var systemParts: [String] = []
+        if !settings.systemPrompt.isEmpty {
+            systemParts.append(settings.systemPrompt)
+        }
+        // Inject the built-in tool-use skill when tools are available.
+        if !toolDefinitions.isEmpty {
+            systemParts.append(NativSkill.builtInToolGuide.instructions)
+        }
+        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+            systemParts.append(skill.instructions)
+        }
+        if !systemParts.isEmpty {
+            requestMessages.insert(
+                MLXChatMessage(role: "system", content: systemParts.joined(separator: "\n\n")),
+                at: 0
+            )
+        }
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -2710,6 +2736,7 @@ private struct ChatEmptyTranscriptView: View {
     ChatView(
         model: .init(),
         chat: ChatViewModel(),
+        mcpHost: MCPHostManager(),
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )

@@ -1732,6 +1732,7 @@ struct ControlPanelView: View {
             ChatView(
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
