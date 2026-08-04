@@ -54,10 +54,12 @@ struct AudioView: View {
     @StateObject private var inputDevices = AudioInputDevicePreferences.shared
     @StateObject private var inputLevelMonitor = AudioInputLevelMonitor()
     @StateObject private var inputVolume = AudioInputVolumeController()
-    @AppStorage("audio.capture.automaticallySummarize")
+    @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
-    @AppStorage("audio.capture.includeSystemAudio")
+    @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
+    @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
+    private var suggestMeetingTranscription = true
     @State private var searchText = ""
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
@@ -288,6 +290,7 @@ struct AudioView: View {
                 maxContentWidth: 1_120
             ) {
                 audioInputPanel
+                meetingSuggestionPanel
                 captureControls
                 capturePrivacyPanel
             }
@@ -869,6 +872,27 @@ struct AudioView: View {
             Text("Private by default")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.green)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var meetingSuggestionPanel: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Suggest transcription when a meeting starts")
+                    .font(.caption.weight(.medium))
+                Text("Nativ watches supported meeting apps for microphone activity. It never records unless you choose Start transcription.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Toggle(
+                "Suggest transcription when a meeting starts",
+                isOn: $suggestMeetingTranscription
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .accessibilityLabel("Suggest transcription when a meeting starts")
         }
         .padding(.horizontal, 4)
     }
