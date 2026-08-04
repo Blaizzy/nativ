@@ -9,4 +9,5 @@ DerivedData/
 __pycache__/
 .DS_Store
 AGENTS.md
+.playwright-mcp/
 /Configuration/Signing.local.xcconfig

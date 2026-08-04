@@ -653,6 +653,7 @@ public final class NativProcessController {
 
     private let lock = NSLock()
     private var process: Process?
+    private var inputPipe: Pipe?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
 
@@ -672,17 +673,50 @@ public final class NativProcessController {
         arguments: [String] = [],
         environment: [String: String] = [:]
     ) throws -> Process {
+        try launch(try Nativ.makeProcess(arguments: arguments, environment: environment))
+    }
+
+    @discardableResult
+    public func start(
+        executableURL: URL,
+        arguments: [String] = [],
+        environment: [String: String] = [:]
+    ) throws -> Process {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        var processEnvironment = ProcessInfo.processInfo.environment
+        processEnvironment.merge(environment) { _, newValue in newValue }
+        process.environment = processEnvironment
+        return try launch(process, wiresStandardInput: true)
+    }
+
+    public func write(_ data: Data) throws {
+        let pipe = try lock.withLock { () -> Pipe in
+            guard let inputPipe, process?.isRunning == true else {
+                throw NativError.notRunning
+            }
+            return inputPipe
+        }
+        try pipe.fileHandleForWriting.write(contentsOf: data)
+    }
+
+    private func launch(_ process: Process, wiresStandardInput: Bool = false) throws -> Process {
         try lock.withLock {
-            if process?.isRunning == true {
+            if self.process?.isRunning == true {
                 throw NativError.alreadyRunning
             }
 
-            let process = try Nativ.makeProcess(arguments: arguments, environment: environment)
+            let inputPipe = wiresStandardInput ? Pipe() : nil
             let outputPipe = Pipe()
             let errorPipe = Pipe()
+            if let inputPipe {
+                process.standardInput = inputPipe
+            }
             process.standardOutput = outputPipe
             process.standardError = errorPipe
 
+            self.inputPipe = inputPipe
             self.outputPipe = outputPipe
             self.errorPipe = errorPipe
             self.process = process
@@ -702,6 +736,7 @@ public final class NativProcessController {
                 try process.run()
             } catch {
                 self.process = nil
+                self.inputPipe = nil
                 self.outputPipe = nil
                 self.errorPipe = nil
                 throw error
@@ -751,6 +786,7 @@ public final class NativProcessController {
                 return
             }
             self.process = nil
+            self.inputPipe = nil
             self.outputPipe = nil
             self.errorPipe = nil
         }
