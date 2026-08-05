@@ -363,7 +363,7 @@ struct ModelsView: View {
                                         downloadManager.download(
                                             repoID: hubModel.id,
                                             sizeBytes: HubModelSizeResolver.shared
-                                                .resolvedSize(for: hubModel.id) ?? hubModel.sizeBytes,
+                                                .resolvedSize(for: hubModel.id) ?? hubModel.estimatedDownloadBytes,
                                             cachePath: model.settings.modelSearchPath,
                                             token: model.effectiveHuggingFaceToken
                                         ) {}
@@ -1326,7 +1326,7 @@ private struct HubModelRowContainer: View {
     let onRemoveDownload: () -> Void
 
     var body: some View {
-        let downloadSizeBytes = sizeResolver.resolvedSize(for: model.id) ?? model.sizeBytes
+        let downloadSizeBytes = sizeResolver.resolvedSize(for: model.id) ?? model.estimatedDownloadBytes
         HubModelRow(
             model: model,
             downloadSizeBytes: downloadSizeBytes,
