@@ -1,5 +1,6 @@
 import AppKit
 import NativServerKit
+import NativExtensionSDK
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case system = "System"
     case models = "Models"
     case integrations = "Integrations"
+    case extensions = "Extensions"
     case developer = "Developer"
     case settings = "Settings"
 
@@ -23,6 +25,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             .system,
             .models,
             .integrations,
+            .extensions,
             .developer,
         ]
     }
@@ -45,6 +48,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "cube.transparent"
         case .integrations:
             "puzzlepiece.extension"
+        case .extensions:
+            "shippingbox"
         case .developer:
             "hammer"
         case .settings:
@@ -56,13 +61,28 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
 @MainActor
 final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var requestedTab: ControlPanelTab?
+    @Published private(set) var requestedExtensionPageID: String?
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
+    @Published private(set) var speechModelDiscoveryRequest = 0
+    @Published private(set) var collapseAllSectionsRequest = 0
     private var consumedNewChatRequest = 0
     private var consumedToggleSidebarRequest = 0
+    private var consumedCollapseAllSectionsRequest = 0
 
     func open(_ tab: ControlPanelTab) {
+        requestedExtensionPageID = nil
         requestedTab = tab
+    }
+
+    func openExtensionPage(_ pageID: String) {
+        requestedTab = nil
+        requestedExtensionPageID = pageID
+    }
+
+    func openSpeechModelDiscovery() {
+        speechModelDiscoveryRequest += 1
+        requestedTab = .models
     }
 
     func createChat() {
@@ -71,6 +91,10 @@ final class ControlPanelNavigation: ObservableObject {
 
     func toggleSidebar() {
         toggleSidebarRequest += 1
+    }
+
+    func collapseAllSections() {
+        collapseAllSectionsRequest += 1
     }
 
     func consumeNewChatRequest() -> Bool {
@@ -86,6 +110,14 @@ final class ControlPanelNavigation: ObservableObject {
             return false
         }
         consumedToggleSidebarRequest = toggleSidebarRequest
+        return true
+    }
+
+    func consumeCollapseAllSectionsRequest() -> Bool {
+        guard consumedCollapseAllSectionsRequest < collapseAllSectionsRequest else {
+            return false
+        }
+        consumedCollapseAllSectionsRequest = collapseAllSectionsRequest
         return true
     }
 }
@@ -115,6 +147,11 @@ private enum ControlPanelLayout {
         windowControlsTopPadding + (windowControlsHeight / 2)
     static let sidebarTransitionDuration: TimeInterval = 0.2
     static let sidebarTransitionSettleDuration: Duration = .milliseconds(225)
+}
+
+private enum ControlPanelOnboarding {
+    static let extensionsBadgeDismissedKey =
+        "nativ.control-panel.extensions-new-badge-dismissed.v1"
 }
 
 extension Color {
@@ -161,6 +198,16 @@ private struct ModelsDownloadArrow: View {
 
     private var helpText: String {
         count == 1 ? "A model is downloading" : "\(count) models are downloading"
+    }
+}
+
+private struct SidebarNavigationLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+                .frame(width: 24, alignment: .center)
+            configuration.title
+        }
     }
 }
 
@@ -213,6 +260,7 @@ struct ControlPanelView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     @ObservedObject var runtime: SystemRuntimeMonitor
+    @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
@@ -265,6 +313,8 @@ struct ControlPanelView: View {
             }
         )
     }
+    @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
+    private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
@@ -279,6 +329,17 @@ struct ControlPanelView: View {
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
+    @State private var isSelectingRecents = false
+    @State private var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
+    @State private var selectedFolderIDs: Set<UUID> = []
+    @State private var isPinnedDropTargeted = false
+    @State private var isSessionsDropTargeted = false
+    @State private var reorderTargetID: ControlPanelRecentSession.ID?
+    @State private var reorderInsertAfter = false
+    @State private var isFoldersDropTargeted = false
+    @State private var pendingDeleteRecent: ControlPanelRecentSession?
+    @State private var pendingDeleteFolder: ChatFolder?
+    @State private var isConfirmingBulkDelete = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -372,11 +433,27 @@ struct ControlPanelView: View {
             guard let tab else { return }
             applySidebarSelection(.tab(tab))
         }
+        .onReceive(navigation.$requestedExtensionPageID) { pageID in
+            guard let pageID else { return }
+            applySidebarSelection(.extensionPage(pageID))
+        }
+        .onChange(of: extensionManager.records) { _, _ in
+            guard case .extensionPage(let pageID) = sidebarSelection,
+                  !extensionManager.enabledSidebarContributions.contains(
+                    where: { $0.id == pageID }
+                  ) else {
+                return
+            }
+            applySidebarSelection(.tab(.extensions))
+        }
         .onChange(of: navigation.newChatRequest) { _, _ in
             handleNewChatRequest()
         }
         .onChange(of: navigation.toggleSidebarRequest) { _, _ in
             handleToggleSidebarRequest()
+        }
+        .onChange(of: navigation.collapseAllSectionsRequest) { _, _ in
+            handleCollapseAllSectionsRequest()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -418,36 +495,23 @@ struct ControlPanelView: View {
 
             sidebarNavigation
                 .padding(.horizontal, 10)
-                .padding(.bottom, 10)
+                .padding(.bottom, 5)
+
+            if isSelectingRecents {
+                bulkSelectionBar
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+            } else {
+                sidebarActionBar
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+            }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    sidebarPinnedHeader
-                        .padding(.leading, 17)
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 4)
-
-                    if pinnedSessions.isEmpty {
-                        Label("Shift-click a chat to pin", systemImage: "pin")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary.opacity(0.6))
-                            .padding(.horizontal, 17)
-                            .padding(.vertical, 6)
-                    } else {
-                        ForEach(pinnedSessions) { recent in
-                            recentSessionRow(recent)
-                        }
-                    }
-
-                    sidebarRecentsHeader
-                        .padding(.leading, 17)
-                        .padding(.trailing, 10)
-                        .padding(.top, 12)
-                        .padding(.bottom, 4)
-
-                    ForEach(unpinnedSessions) { recent in
-                        recentSessionRow(recent)
-                    }
+                    pinnedSection
+                    foldersSection
+                    sessionsSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
@@ -474,6 +538,53 @@ struct ControlPanelView: View {
                 isFullScreen: isFullScreen
             )
         )
+        .alert(
+            "Delete chat?",
+            isPresented: Binding(
+                get: { pendingDeleteRecent != nil },
+                set: { if !$0 { pendingDeleteRecent = nil } }
+            ),
+            presenting: pendingDeleteRecent
+        ) { recent in
+            Button("Delete", role: .destructive) {
+                deleteRecentSession(recent)
+                pendingDeleteRecent = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteRecent = nil
+            }
+        } message: { recent in
+            Text("“\(recent.title)” will be permanently deleted.")
+        }
+        .alert(
+            "Delete folder?",
+            isPresented: Binding(
+                get: { pendingDeleteFolder != nil },
+                set: { if !$0 { pendingDeleteFolder = nil } }
+            ),
+            presenting: pendingDeleteFolder
+        ) { folder in
+            Button("Delete", role: .destructive) {
+                chat.deleteFolder(folder.id)
+                pendingDeleteFolder = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteFolder = nil
+            }
+        } message: { folder in
+            Text("“\(folder.name)” will be removed. Its chats will be moved out, not deleted.")
+        }
+        .alert(
+            "Delete \(selectedRecentIDs.count + selectedFolderIDs.count) items?",
+            isPresented: $isConfirmingBulkDelete
+        ) {
+            Button("Delete", role: .destructive) {
+                bulkDeleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
+        }
     }
 
     private var resizableSidebar: some View {
@@ -542,54 +653,426 @@ struct ControlPanelView: View {
     private var sidebarNavigation: some View {
         VStack(spacing: 0) {
             ForEach(ControlPanelTab.allCases) { tab in
-                let selection = ControlPanelSidebarSelection.tab(tab)
-                Button {
-                    applySidebarSelection(selection)
-                } label: {
-                    HStack(spacing: 8) {
-                        Label(tab.rawValue, systemImage: tab.systemImage)
-                        Spacer(minLength: 0)
-                        if tab == .models {
-                            HStack(spacing: 6) {
-                                if model.isModelLoading,
-                                   let percentage = model.modelLoadingPercentageText {
-                                    Text(percentage)
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 34, alignment: .trailing)
-                                }
-                                if downloads.activeCount > 0 {
-                                    ModelsDownloadArrow(count: downloads.activeCount)
-                                }
-                            }
-                        }
+                sidebarTabButton(tab)
+
+                if tab == .imageGeneration {
+                    ForEach(extensionManager.enabledSidebarContributions) { contribution in
+                        extensionSidebarButton(contribution)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(.rect)
                 }
-                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
-                .buttonStyle(.plain)
             }
         }
     }
 
-    private var sidebarPinnedHeader: some View {
-        HStack(spacing: 8) {
-            Text("Pinned")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
+    private func sidebarTabButton(_ tab: ControlPanelTab) -> some View {
+        let selection = ControlPanelSidebarSelection.tab(tab)
+        return Button {
+            applySidebarSelection(selection)
+        } label: {
+            HStack(spacing: 8) {
+                Label(tab.rawValue, systemImage: tab.systemImage)
+                    .labelStyle(SidebarNavigationLabelStyle())
+                if tab == .extensions, !isExtensionsBadgeDismissed {
+                    Text("NEW")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                }
+                Spacer(minLength: 0)
+                if tab == .models {
+                    HStack(spacing: 6) {
+                        if model.isModelLoading,
+                           let percentage = model.modelLoadingPercentageText {
+                            Text(percentage)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                        if downloads.activeCount > 0 {
+                            ModelsDownloadArrow(count: downloads.activeCount)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+        .buttonStyle(.plain)
+    }
 
-            Spacer(minLength: 0)
+    private func extensionSidebarButton(
+        _ contribution: NativSidebarContribution
+    ) -> some View {
+        let selection = ControlPanelSidebarSelection.extensionPage(contribution.id)
+        return Button {
+            applySidebarSelection(selection)
+        } label: {
+            Label(contribution.title, systemImage: contribution.systemImage)
+                .labelStyle(SidebarNavigationLabelStyle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+        .buttonStyle(.plain)
+    }
+
+    private var pinnedSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarPinnedHeader
+                .padding(.leading, 8)
+                .padding(.trailing, 10)
+                .padding(.bottom, 4)
+
+            headerDivider
+
+            if !model.settings.sidebarPinnedCollapsed {
+                if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
+                    emptyPinnedHint
+                } else {
+                    ForEach(pinnedFolders) { folder in
+                        folderView(folder, dropTargeted: isPinnedDropTargeted)
+                    }
+                    ForEach(pinnedSessions) { recent in
+                        draggableRow(recent, isPinnedRow: true)
+                            .overlay(alignment: .top) {
+                                pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                            }
+                            .overlay(alignment: .bottom) {
+                                pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                            }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dropHighlight(isTargeted: isPinnedDropTargeted))
+        .onDrop(of: [.text], isTargeted: $isPinnedDropTargeted) { providers in
+            loadDropString(providers) { payload in
+                revealSidebarSection(\.sidebarPinnedCollapsed)
+                handlePinnedDrop(payload)
+            }
         }
     }
 
-    private var sidebarRecentsHeader: some View {
-        HStack(spacing: 8) {
-            Text("Sessions")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
+    private var sessionsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarRecentsHeader
+                .padding(.leading, 8)
+                .padding(.trailing, 10)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
 
+            headerDivider
+
+            if !model.settings.sidebarSessionsCollapsed {
+                ForEach(ungroupedSessions) { recent in
+                    draggableRow(recent, isPinnedRow: false)
+                        .overlay(alignment: .top) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
+                        }
+                        .overlay(alignment: .bottom) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isSessionsDropTargeted)
+                        }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dropHighlight(isTargeted: isSessionsDropTargeted))
+        .onDrop(of: [.text], isTargeted: $isSessionsDropTargeted) { providers in
+            loadDropString(providers) { payload in
+                revealSidebarSection(\.sidebarSessionsCollapsed)
+                _ = handleSessionsDrop([payload])
+            }
+        }
+    }
+
+    private var foldersSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarFoldersHeader
+                .padding(.leading, 8)
+                .padding(.trailing, 10)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+
+            headerDivider
+
+            if !model.settings.sidebarFoldersCollapsed {
+                if chat.folders.isEmpty {
+                    emptyFoldersHint
+                } else {
+                    ForEach(unpinnedFolders) { folder in
+                        folderView(folder, dropTargeted: isFoldersDropTargeted)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dropHighlight(isTargeted: isFoldersDropTargeted))
+        .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
+    }
+
+    private var emptyFoldersHint: some View {
+        Label("No folders yet — tap + to add one", systemImage: "folder")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary.opacity(0.6))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 17)
+            .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func folderView(_ folder: ChatFolder, dropTargeted: Bool) -> some View {
+        ControlPanelFolderHeaderView(
+            folder: folder,
+            count: sessions(inFolder: folder.id).count,
+            isSelecting: isSelectingRecents,
+            isChecked: selectedFolderIDs.contains(folder.id),
+            onToggleCollapse: {
+                chat.setFolderCollapsed(folder.id, collapsed: !folder.isCollapsed)
+            },
+            onRename: { chat.renameFolder(folder.id, to: $0) },
+            onTogglePin: {
+                chat.setFolderPinned(folder.id, pinned: !folder.isPinned)
+            },
+            onToggleSelect: {
+                toggleFolderSelection(folder.id)
+            },
+            onExport: {
+                exportFolder(folder)
+            },
+            onDelete: {
+                pendingDeleteFolder = folder
+            }
+        )
+        .padding(.leading, 9)
+        .padding(.trailing, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+        .onDrag {
+            NSItemProvider(object: "folder:\(folder.id.uuidString)" as NSString)
+        }
+        .onDrop(of: [.text], delegate: FolderDropDelegate(
+            onChatDrop: { chatID in
+                chat.moveSession(chatID, toFolder: folder.id)
+            },
+            onFolderDrop: { draggedFolderID in
+                handleFolderReorder(dragged: draggedFolderID, target: folder.id)
+            }
+        ))
+
+        if !folder.isCollapsed {
+            ForEach(sessions(inFolder: folder.id)) { recent in
+                folderChatRow(recent, folderID: folder.id)
+                    .overlay(alignment: .top) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && dropTargeted)
+                    }
+                    .overlay(alignment: .bottom) {
+                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && dropTargeted)
+                    }
+                    .padding(.leading, 12)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func folderChatRow(_ recent: ControlPanelRecentSession, folderID: UUID) -> some View {
+        if let payload = recent.dragPayload, !isSelectingRecents {
+            recentSessionRow(recent)
+                .onDrag {
+                    NSItemProvider(object: payload as NSString)
+                } preview: {
+                    dragPreview(recent)
+                }
+                .onDrop(of: [.text], delegate: RowReorderDropDelegate(
+                    targetID: recent.id,
+                    setTarget: { id, after in
+                        if reorderTargetID != id || reorderInsertAfter != after {
+                            reorderTargetID = id
+                            reorderInsertAfter = after
+                        }
+                    },
+                    onDrop: { draggedPayload, after in
+                        handleFolderRowDrop(
+                            draggedPayload: draggedPayload,
+                            target: recent,
+                            insertAfter: after,
+                            folderID: folderID
+                        )
+                    }
+                ))
+        } else {
+            recentSessionRow(recent)
+        }
+    }
+
+    private var emptyPinnedHint: some View {
+        Label("Drag a chat here to pin", systemImage: "pin")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary.opacity(0.6))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 17)
+            .padding(.vertical, 10)
+            .contentShape(.rect)
+    }
+
+    private func dropHighlight(isTargeted: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.accentColor.opacity(isTargeted ? 0.08 : 0))
+    }
+
+    @ViewBuilder
+    private func draggableRow(
+        _ recent: ControlPanelRecentSession,
+        isPinnedRow: Bool
+    ) -> some View {
+        if let payload = recent.dragPayload, !isSelectingRecents {
+            recentSessionRow(recent)
+                .onDrag {
+                    NSItemProvider(object: payload as NSString)
+                } preview: {
+                    dragPreview(recent)
+                }
+                .onDrop(of: [.text], delegate: RowReorderDropDelegate(
+                    targetID: recent.id,
+                    setTarget: { id, after in
+                        if reorderTargetID != id || reorderInsertAfter != after {
+                            reorderTargetID = id
+                            reorderInsertAfter = after
+                        }
+                    },
+                    onDrop: { draggedPayload, after in
+                        handleRowDrop(
+                            draggedPayload: draggedPayload,
+                            target: recent,
+                            insertAfter: after,
+                            isPinnedRow: isPinnedRow
+                        )
+                    }
+                ))
+        } else {
+            recentSessionRow(recent)
+        }
+    }
+
+    private func handleRowDrop(
+        draggedPayload: String,
+        target: ControlPanelRecentSession,
+        insertAfter: Bool,
+        isPinnedRow: Bool
+    ) {
+        guard let draggedID = UUID(uuidString: draggedPayload),
+              chat.sessions.contains(where: { $0.id == draggedID }),
+              let targetID = target.chatID,
+              draggedID != targetID
+        else {
+            return
+        }
+        var order = (isPinnedRow ? pinnedSessions : unpinnedSessions).compactMap(\.chatID)
+        order.removeAll { $0 == draggedID }
+        if let index = order.firstIndex(of: targetID) {
+            order.insert(draggedID, at: insertAfter ? index + 1 : index)
+        } else {
+            order.append(draggedID)
+        }
+        reorderTargetID = nil
+        reorderInsertAfter = false
+        if isPinnedRow {
+            chat.applyPinnedOrder(order)
+        } else {
+            chat.applySessionOrder(order)
+        }
+    }
+
+    private func handleFolderRowDrop(
+        draggedPayload: String,
+        target: ControlPanelRecentSession,
+        insertAfter: Bool,
+        folderID: UUID
+    ) {
+        reorderTargetID = nil
+        reorderInsertAfter = false
+        guard let draggedID = UUID(uuidString: draggedPayload),
+              chat.sessions.contains(where: { $0.id == draggedID }),
+              let targetID = target.chatID,
+              draggedID != targetID
+        else {
+            return
+        }
+        var order = sessions(inFolder: folderID).compactMap(\.chatID)
+        order.removeAll { $0 == draggedID }
+        if let index = order.firstIndex(of: targetID) {
+            order.insert(draggedID, at: insertAfter ? index + 1 : index)
+        } else {
+            order.append(draggedID)
+        }
+        chat.moveSession(draggedID, toFolder: folderID)
+        chat.applySessionOrder(order)
+    }
+
+    @discardableResult
+    private func loadDropString(
+        _ providers: [NSItemProvider],
+        _ handler: @escaping (String) -> Void
+    ) -> Bool {
+        guard let provider = providers.first else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            if let string = object as? String, !string.isEmpty {
+                DispatchQueue.main.async { handler(string) }
+            }
+        }
+        return true
+    }
+
+    private func pinnedInsertionLine(visible: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(Color.accentColor)
+            .frame(height: 2)
+            .padding(.horizontal, 8)
+            .opacity(visible ? 1 : 0)
+    }
+
+    private func dragPreview(_ recent: ControlPanelRecentSession) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left")
+                .font(.system(size: 11))
+            Text(recent.title)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var sidebarActionBar: some View {
+        HStack(spacing: 8) {
             Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    enterSelectMode()
+                }
+            } label: {
+                Image(systemName: "checklist")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 26, height: 28)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
+            .help("Select multiple")
 
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
@@ -599,17 +1082,166 @@ struct ControlPanelView: View {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 15, weight: .medium))
                     .frame(width: 28, height: 28)
-                    .foregroundStyle(
-                        isNewChatHovering
-                            ? Color.primary
-                            : Color.secondary.opacity(0.7)
-                    )
+                    .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
             }
             .buttonStyle(.plain)
             .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
             .help(newRecentHelp)
-            .padding(.trailing, 4)
             .onHover { isNewChatHovering = $0 }
+        }
+    }
+
+    private var bulkSelectionBar: some View {
+        HStack(spacing: 6) {
+            Text(bulkSelectionTitle)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+
+            Button {
+                bulkTogglePinSelected()
+            } label: {
+                Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
+                    .frame(width: 24, height: 22)
+            }
+            .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
+            .disabled(!hasSelectedPinnable)
+
+            Button {
+                bulkExportSelected()
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .frame(width: 24, height: 22)
+            }
+            .help("Export selected")
+            .disabled(!hasSelectedChats)
+
+            Button(role: .destructive) {
+                isConfirmingBulkDelete = true
+            } label: {
+                Image(systemName: "trash")
+                    .frame(width: 24, height: 22)
+            }
+            .help("Delete selected")
+            .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
+
+            Button("Done") {
+                withAnimation(.snappy(duration: 0.2)) {
+                    exitSelectMode()
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
+    private var headerDivider: some View {
+        Divider()
+            .padding(.leading, 8)
+            .padding(.trailing, 10)
+            .padding(.bottom, 6)
+    }
+
+    private func sidebarSectionHeader<Trailing: View>(
+        title: String,
+        isCollapsed: Bool,
+        onToggle: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12)
+
+                Text(title)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.secondary.opacity(0.7))
+
+                Spacer(minLength: 0)
+            }
+            .contentShape(.rect)
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.2)) {
+                    onToggle()
+                }
+            }
+            .help(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
+
+            trailing()
+        }
+    }
+
+    private var sidebarPinnedHeader: some View {
+        sidebarSectionHeader(
+            title: "Pinned",
+            isCollapsed: model.settings.sidebarPinnedCollapsed,
+            onToggle: { model.settings.sidebarPinnedCollapsed.toggle() }
+        ) {
+            EmptyView()
+        }
+    }
+
+    private var sidebarFoldersHeader: some View {
+        sidebarSectionHeader(
+            title: "Folders",
+            isCollapsed: model.settings.sidebarFoldersCollapsed,
+            onToggle: { model.settings.sidebarFoldersCollapsed.toggle() }
+        ) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    model.settings.sidebarFoldersCollapsed = false
+                    _ = chat.createFolder(name: "New Folder")
+                }
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 24, height: 24)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help("New folder")
+        }
+    }
+
+    private var sidebarRecentsHeader: some View {
+        sidebarSectionHeader(
+            title: "Sessions",
+            isCollapsed: model.settings.sidebarSessionsCollapsed,
+            onToggle: { model.settings.sidebarSessionsCollapsed.toggle() }
+        ) {
+            EmptyView()
+        }
+    }
+
+    private var allSidebarSectionsCollapsed: Bool {
+        model.settings.allSidebarSectionsCollapsed
+            && !chat.folders.contains { !$0.isCollapsed }
+    }
+
+    private func revealSidebarSection(_ keyPath: WritableKeyPath<NativSettings, Bool>) {
+        guard model.settings[keyPath: keyPath] else {
+            return
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            model.settings[keyPath: keyPath] = false
+        }
+    }
+
+    private func toggleAllSidebarSections() {
+        let shouldCollapse = !allSidebarSectionsCollapsed
+        withAnimation(.snappy(duration: 0.2)) {
+            model.settings.setAllSidebarSectionsCollapsed(shouldCollapse)
+            chat.setAllFoldersCollapsed(shouldCollapse)
         }
     }
 
@@ -648,7 +1280,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .settings:
+        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
             false
         }
     }
@@ -789,11 +1421,37 @@ struct ControlPanelView: View {
     }
 
     private var pinnedSessions: [ControlPanelRecentSession] {
-        recentSessions.filter(\.pinned)
+        recentSessions
+            .filter(\.pinned)
+            .sorted(by: ControlPanelRecentSession.pinnedSort)
     }
 
     private var unpinnedSessions: [ControlPanelRecentSession] {
-        recentSessions.filter { !$0.pinned }
+        recentSessions.filter { !$0.pinned }.sorted(by: ControlPanelRecentSession.sessionSort)
+    }
+
+    private var ungroupedSessions: [ControlPanelRecentSession] {
+        let folderIDs = Set(chat.folders.map(\.id))
+        return unpinnedSessions.filter { recent in
+            guard let folderID = recent.folderID else {
+                return true
+            }
+            return !folderIDs.contains(folderID)
+        }
+    }
+
+    private var pinnedFolders: [ChatFolder] {
+        chat.folders.filter(\.isPinned)
+    }
+
+    private var unpinnedFolders: [ChatFolder] {
+        chat.folders.filter { !$0.isPinned }
+    }
+
+    private func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
+        recentSessions
+            .filter { !$0.pinned && $0.folderID == folderID }
+            .sorted(by: ControlPanelRecentSession.sessionSort)
     }
 
     @ViewBuilder
@@ -805,11 +1463,16 @@ struct ControlPanelView: View {
             isSelectionDisabled: isRecentSelectionDisabled(recent),
             isDeleteDisabled: isRecentDeleteDisabled(recent),
             canExport: canExportRecent(recent),
+            isSelecting: isSelectingRecents,
+            isChecked: selectedRecentIDs.contains(recent.id),
+            onToggleSelect: {
+                toggleRecentSelection(recent)
+            },
             onSelect: {
                 applySidebarSelection(recent.selection)
             },
             onDelete: {
-                deleteRecentSession(recent)
+                pendingDeleteRecent = recent
             },
             onCopyConversation: {
                 copyRecentConversation(recent)
@@ -828,6 +1491,13 @@ struct ControlPanelView: View {
             },
             onTogglePin: {
                 togglePinRecent(recent)
+            },
+            folders: chat.folders,
+            onMoveToFolder: { folderID in
+                moveRecentToFolder(recent, folderID: folderID)
+            },
+            onCreateFolderForSession: {
+                createFolderForRecent(recent)
             }
         )
     }
@@ -836,9 +1506,223 @@ struct ControlPanelView: View {
         guard case .chat(let sessionID) = recent.selection else {
             return
         }
-        withAnimation(.snappy(duration: 0.2)) {
-            chat.setPinned(sessionID, pinned: !recent.pinned)
+        chat.setPinned(sessionID, pinned: !recent.pinned)
+    }
+
+    private func moveRecentToFolder(_ recent: ControlPanelRecentSession, folderID: UUID?) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
         }
+        chat.moveSession(sessionID, toFolder: folderID)
+    }
+
+    private func createFolderForRecent(_ recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        let folderID = chat.createFolder(name: "New Folder")
+        chat.moveSession(sessionID, toFolder: folderID)
+    }
+
+    private func draggedChatID(from items: [String]) -> UUID? {
+        for item in items {
+            if let id = UUID(uuidString: item),
+               chat.sessions.contains(where: { $0.id == id }) {
+                return id
+            }
+        }
+        return nil
+    }
+
+    private func handlePinnedDrop(_ item: String) {
+        if item.hasPrefix("folder:") {
+            if let id = UUID(uuidString: String(item.dropFirst("folder:".count))) {
+                chat.setFolderPinned(id, pinned: true)
+            }
+            return
+        }
+        _ = handlePinDrop([item])
+    }
+
+    private func handlePinDrop(_ items: [String]) -> Bool {
+        guard let draggedID = draggedChatID(from: items) else {
+            return false
+        }
+        var order = pinnedSessions.compactMap(\.chatID)
+        guard !order.contains(draggedID) else {
+            return false
+        }
+        order.append(draggedID)
+        reorderTargetID = nil
+        reorderInsertAfter = false
+        chat.applyPinnedOrder(order)
+        return true
+    }
+
+    private func handleSessionsDrop(_ items: [String]) -> Bool {
+        guard let draggedID = draggedChatID(from: items) else {
+            return false
+        }
+        reorderTargetID = nil
+        reorderInsertAfter = false
+        if pinnedSessions.contains(where: { $0.chatID == draggedID }) {
+            chat.setPinned(draggedID, pinned: false)
+        }
+        chat.moveSession(draggedID, toFolder: nil)
+        return true
+    }
+
+    private func handleFolderReorder(dragged: UUID, target: UUID) {
+        guard dragged != target else {
+            return
+        }
+        var order = chat.folders.map(\.id)
+        order.removeAll { $0 == dragged }
+        if let index = order.firstIndex(of: target) {
+            order.insert(dragged, at: index)
+        } else {
+            order.append(dragged)
+        }
+        chat.applyFolderOrder(order)
+    }
+
+    private func enterSelectMode() {
+        selectedRecentIDs = []
+        selectedFolderIDs = []
+        isSelectingRecents = true
+    }
+
+    private func exitSelectMode() {
+        isSelectingRecents = false
+        selectedRecentIDs = []
+        selectedFolderIDs = []
+    }
+
+    private func toggleRecentSelection(_ recent: ControlPanelRecentSession) {
+        if selectedRecentIDs.contains(recent.id) {
+            selectedRecentIDs.remove(recent.id)
+        } else {
+            selectedRecentIDs.insert(recent.id)
+        }
+    }
+
+    private func toggleFolderSelection(_ folderID: UUID) {
+        if selectedFolderIDs.contains(folderID) {
+            selectedFolderIDs.remove(folderID)
+        } else {
+            selectedFolderIDs.insert(folderID)
+        }
+    }
+
+    private var selectedChats: [ControlPanelRecentSession] {
+        recentSessions.filter { $0.isChat && selectedRecentIDs.contains($0.id) }
+    }
+
+    private var hasSelectedChats: Bool {
+        !selectedChats.isEmpty
+    }
+
+    private var selectedFolders: [ChatFolder] {
+        chat.folders.filter { selectedFolderIDs.contains($0.id) }
+    }
+
+    private var hasSelectedPinnable: Bool {
+        !selectedChats.isEmpty || !selectedFolders.isEmpty
+    }
+
+    private var allSelectedPinned: Bool {
+        hasSelectedPinnable
+            && selectedChats.allSatisfy(\.pinned)
+            && selectedFolders.allSatisfy(\.isPinned)
+    }
+
+    private var bulkSelectionTitle: String {
+        let count = selectedRecentIDs.count + selectedFolderIDs.count
+        return count == 0 ? "Select items" : "\(count) selected"
+    }
+
+    private func bulkTogglePinSelected() {
+        let shouldPin = !allSelectedPinned
+        let chatIDs = selectedChats.compactMap(\.chatID)
+        let folderIDs = selectedFolders.map(\.id)
+        guard !chatIDs.isEmpty || !folderIDs.isEmpty else {
+            return
+        }
+        for id in chatIDs {
+            chat.setPinned(id, pinned: shouldPin)
+        }
+        for id in folderIDs {
+            chat.setFolderPinned(id, pinned: shouldPin)
+        }
+        exitSelectMode()
+    }
+
+    private func bulkExportSelected() {
+        let chats = selectedChats
+        guard !chats.isEmpty else {
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let directory = panel.url else {
+            return
+        }
+        for recent in chats {
+            guard case .chat(let sessionID) = recent.selection,
+                  let text = chat.conversationText(for: sessionID) else {
+                continue
+            }
+            let url = uniqueExportURL(in: directory, title: recent.title)
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        exitSelectMode()
+    }
+
+    private func uniqueExportURL(in directory: URL, title: String) -> URL {
+        let separators = CharacterSet(charactersIn: "/:")
+        let sanitized = title.components(separatedBy: separators).joined(separator: "-")
+        let base = sanitized.isEmpty ? "Chat" : sanitized
+        var candidate = directory.appendingPathComponent("\(base).txt")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = directory.appendingPathComponent("\(base) \(counter).txt")
+            counter += 1
+        }
+        return candidate
+    }
+
+    private func bulkDeleteSelected() {
+        let targets = recentSessions.filter { selectedRecentIDs.contains($0.id) }
+        let folderTargets = selectedFolderIDs
+        guard !targets.isEmpty || !folderTargets.isEmpty else {
+            return
+        }
+        let affectsDisplayed = targets.contains { isDisplayedRecent($0) }
+        let removedIDs = selectedRecentIDs
+        withAnimation(.snappy(duration: 0.2)) {
+            for recent in targets {
+                switch recent.selection {
+                case .chat(let sessionID):
+                    chat.deleteSession(sessionID)
+                case .imageGeneration(let sessionID):
+                    imageGeneration.deleteSession(sessionID)
+                case .tab, .extensionPage:
+                    break
+                }
+            }
+            for folderID in folderTargets {
+                chat.deleteFolder(folderID)
+            }
+            exitSelectMode()
+        }
+        guard affectsDisplayed else {
+            return
+        }
+        let survivor = recentSessions.first { !removedIDs.contains($0.id) }
+        applySidebarSelection(survivor?.selection ?? .tab(selectedTab))
     }
 
     private func renameRecentSession(_ recent: ControlPanelRecentSession, to newTitle: String) {
@@ -851,79 +1735,10 @@ struct ControlPanelView: View {
     private var detail: some View {
         VStack(spacing: 0) {
             Group {
-                switch selectedTab {
-                case .chat:
-                    ChatView(
-                        model: model,
-                        chat: chat,
-                        showsConfiguration: $isModelConfigurationVisible,
-                        conversationWidthReduction: isFullScreen
-                            ? 0
-                            : ControlPanelLayout.titlebarHeight
-                    )
-                case .imageGeneration:
-                    ImageGenerationView(model: model, viewModel: imageGeneration)
-                case .artifacts:
-                    ArtifactsView(
-                        store: artifacts,
-                        semanticSearch: artifactSemanticSearch,
-                        onOpenChat: { artifact in
-                            switch artifact.source {
-                            case .uploaded:
-                                applySidebarSelection(.chat(artifact.sessionID))
-                                chat.scrollTargetMessageID = artifact.messageID
-                            case .generated:
-                                applySidebarSelection(.imageGeneration(artifact.sessionID))
-                            }
-                        },
-                        onUseInChat: { artifact in
-                            if let attachment = artifacts.chatAttachment(for: artifact) {
-                                chat.stageAttachment(attachment)
-                            }
-                            applySidebarSelection(.tab(.chat))
-                        },
-                        onUseAsReference: { artifact in
-                            if let attachment = artifacts.chatAttachment(for: artifact) {
-                                imageGeneration.useAsReference(attachment)
-                            }
-                            applySidebarSelection(.tab(.imageGeneration))
-                        }
-                    )
-                case .dashboard:
-                    StatsView(
-                        model: model,
-                        dashboard: dashboard,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .system:
-                    SystemMonitorView(
-                        store: systemMonitor,
-                        menuBarPreferences: .shared,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .models:
-                    ModelsView(
-                        model: model,
-                        showsConfiguration: $isModelConfigurationVisible,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .integrations:
-                    IntegrationsView(
-                        model: model,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .developer:
-                    DeveloperView(
-                        model: model,
-                        runtime: runtime,
-                        showsConfiguration: $isModelConfigurationVisible,
-                        titleLeadingInset: detailTitleLeadingInset
-                    )
-                case .settings:
-                    SettingsView(
-                        softwareUpdater: softwareUpdater,
-                        launchAtLogin: launchAtLogin
-                    )
+                if case .extensionPage(let pageID) = sidebarSelection {
+                    extensionPage(pageID)
+                } else {
+                    corePage
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -958,9 +1773,123 @@ struct ControlPanelView: View {
         }
     }
 
+    @ViewBuilder
+    private var corePage: some View {
+        switch selectedTab {
+        case .chat:
+            ChatView(
+                model: model,
+                chat: chat,
+                showsConfiguration: $isModelConfigurationVisible,
+                conversationWidthReduction: isFullScreen
+                    ? 0
+                    : ControlPanelLayout.titlebarHeight
+            )
+        case .imageGeneration:
+            ImageGenerationView(model: model, viewModel: imageGeneration)
+        case .artifacts:
+            ArtifactsView(
+                store: artifacts,
+                semanticSearch: artifactSemanticSearch,
+                onOpenChat: { artifact in
+                    switch artifact.source {
+                    case .uploaded:
+                        applySidebarSelection(.chat(artifact.sessionID))
+                        chat.scrollTargetMessageID = artifact.messageID
+                    case .generated:
+                        applySidebarSelection(.imageGeneration(artifact.sessionID))
+                    }
+                },
+                onUseInChat: { artifact in
+                    if let attachment = artifacts.chatAttachment(for: artifact) {
+                        chat.stageAttachment(attachment)
+                    }
+                    applySidebarSelection(.tab(.chat))
+                },
+                onUseAsReference: { artifact in
+                    if let attachment = artifacts.chatAttachment(for: artifact) {
+                        imageGeneration.useAsReference(attachment)
+                    }
+                    applySidebarSelection(.tab(.imageGeneration))
+                }
+            )
+        case .dashboard:
+            StatsView(
+                model: model,
+                dashboard: dashboard,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .system:
+            SystemMonitorView(
+                store: systemMonitor,
+                menuBarPreferences: .shared,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .models:
+            ModelsView(
+                model: model,
+                showsConfiguration: $isModelConfigurationVisible,
+                titleLeadingInset: detailTitleLeadingInset,
+                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
+            )
+        case .integrations:
+            IntegrationsView(
+                model: model,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .extensions:
+            ExtensionsView(
+                manager: extensionManager,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .developer:
+            DeveloperView(
+                model: model,
+                runtime: runtime,
+                showsConfiguration: $isModelConfigurationVisible,
+                titleLeadingInset: detailTitleLeadingInset
+            )
+        case .settings:
+            SettingsView(
+                model: model,
+                softwareUpdater: softwareUpdater,
+                launchAtLogin: launchAtLogin
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func extensionPage(_ pageID: String) -> some View {
+        if let page = extensionManager.makePage(
+            id: pageID,
+            context: NativExtensionPageContext(
+                model: model,
+                titleLeadingInset: detailTitleLeadingInset,
+                openSpeechModels: {
+                    navigation.openSpeechModelDiscovery()
+                }
+            )
+        ) {
+            page
+        } else {
+            ContentUnavailableView {
+                Label("Extension Unavailable", systemImage: "puzzlepiece.extension")
+            } description: {
+                Text("Enable or restore this extension from the Extensions page.")
+            } actions: {
+                Button("Open Extensions") {
+                    applySidebarSelection(.tab(.extensions))
+                }
+            }
+        }
+    }
+
     private func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
         switch selection {
         case .tab(let tab):
+            if tab == .extensions {
+                isExtensionsBadgeDismissed = true
+            }
             if tab == .chat, chat.currentSessionID == nil {
                 chat.createSession()
             } else if tab == .imageGeneration,
@@ -969,6 +1898,16 @@ struct ControlPanelView: View {
             }
             sidebarSelection = selection
             selectedTab = tab
+        case .extensionPage(let pageID):
+            guard extensionManager.enabledSidebarContributions.contains(
+                where: { $0.id == pageID }
+            ) else {
+                sidebarSelection = .tab(.extensions)
+                selectedTab = .extensions
+                return
+            }
+            sidebarSelection = selection
+            selectedTab = .extensions
         case .chat(let sessionID):
             if chat.sessions.contains(where: { $0.id == sessionID }) {
                 chat.selectSession(sessionID)
@@ -995,11 +1934,14 @@ struct ControlPanelView: View {
     }
 
     private var detailExtendsIntoTitlebar: Bool {
+        if case .extensionPage = sidebarSelection {
+            return true
+        }
         switch selectedTab {
-        case .dashboard, .system, .models, .integrations, .developer:
-            true
+        case .dashboard, .system, .models, .integrations, .extensions, .developer:
+            return true
         case .chat, .imageGeneration, .artifacts, .settings:
-            false
+            return false
         }
     }
 
@@ -1027,6 +1969,13 @@ struct ControlPanelView: View {
             return
         }
         toggleSidebarVisibility()
+    }
+
+    private func handleCollapseAllSectionsRequest() {
+        guard navigation.consumeCollapseAllSectionsRequest() else {
+            return
+        }
+        toggleAllSidebarSections()
     }
 
     private func canExportRecent(_ recent: ControlPanelRecentSession) -> Bool {
@@ -1061,6 +2010,49 @@ struct ControlPanelView: View {
         try? text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    private func exportFolder(_ folder: ChatFolder) {
+        let chatIDs = sessions(inFolder: folder.id).compactMap(\.chatID)
+        guard !chatIDs.isEmpty else {
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let directory = panel.url else {
+            return
+        }
+        let root = directory.appendingPathComponent(sanitizedFileName(folder.name), isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        var usedNames: Set<String> = []
+        for sessionID in chatIDs {
+            guard let text = chat.conversationText(for: sessionID) else {
+                continue
+            }
+            let title = chat.sessions.first { $0.id == sessionID }?.title ?? sessionID.uuidString
+            let base = sanitizedFileName(title)
+            var candidate = base
+            var suffix = 2
+            while usedNames.contains(candidate.lowercased()) {
+                candidate = "\(base) \(suffix)"
+                suffix += 1
+            }
+            usedNames.insert(candidate.lowercased())
+            let fileURL = root.appendingPathComponent("\(candidate).txt")
+            try? text.write(to: fileURL, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([root])
+    }
+
+    private func sanitizedFileName(_ name: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+
     private func revealRecentSession(_ recent: ControlPanelRecentSession) {
         let fileURL: URL?
         switch recent.selection {
@@ -1068,7 +2060,7 @@ struct ControlPanelView: View {
             fileURL = chat.sessionDataFileURL(for: sessionID)
         case .imageGeneration(let sessionID):
             fileURL = imageGeneration.sessionDataFileURL(for: sessionID)
-        case .tab:
+        case .tab, .extensionPage:
             fileURL = nil
         }
         guard let fileURL else {
@@ -1088,7 +2080,7 @@ struct ControlPanelView: View {
             chat.deleteSession(sessionID)
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
-        case .tab:
+        case .tab, .extensionPage:
             break
         }
 
@@ -1141,6 +2133,8 @@ struct ControlPanelView: View {
             .tab(.imageGeneration)
         case .tab(let tab):
             .tab(tab)
+        case .extensionPage(let pageID):
+            .extensionPage(pageID)
         }
     }
 
@@ -1150,7 +2144,7 @@ struct ControlPanelView: View {
             return sessionID == chat.currentSessionID
         case .imageGeneration(let sessionID):
             return sessionID == imageGeneration.currentSessionID
-        case .tab:
+        case .tab, .extensionPage:
             return false
         }
     }
@@ -1161,7 +2155,7 @@ struct ControlPanelView: View {
             return chat.isSessionBusy(sessionID)
         case .imageGeneration:
             return imageGeneration.isGenerating
-        case .tab:
+        case .tab, .extensionPage:
             return false
         }
     }
@@ -1172,7 +2166,7 @@ struct ControlPanelView: View {
             return false
         case .imageGeneration:
             return imageGeneration.isGenerating
-        case .tab:
+        case .tab, .extensionPage:
             return false
         }
     }
@@ -2403,8 +3397,75 @@ private struct ControlPanelDetailSafeArea: ViewModifier {
 
 private enum ControlPanelSidebarSelection: Hashable {
     case tab(ControlPanelTab)
+    case extensionPage(String)
     case chat(UUID)
     case imageGeneration(UUID)
+}
+
+private struct RowReorderDropDelegate: DropDelegate {
+    let targetID: ControlPanelRecentSession.ID
+    let setTarget: (ControlPanelRecentSession.ID?, Bool) -> Void
+    let onDrop: (String, Bool) -> Void
+    private let rowHeight: CGFloat = 30
+
+    func dropEntered(info: DropInfo) {
+        setTarget(targetID, info.location.y > rowHeight / 2)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        setTarget(targetID, info.location.y > rowHeight / 2)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        setTarget(nil, false)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let insertAfter = info.location.y > rowHeight / 2
+        setTarget(nil, false)
+        guard let provider = info.itemProviders(for: [.text]).first else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            if let string = object as? String, !string.isEmpty {
+                DispatchQueue.main.async {
+                    onDrop(string, insertAfter)
+                }
+            }
+        }
+        return true
+    }
+}
+
+private struct FolderDropDelegate: DropDelegate {
+    let onChatDrop: (UUID) -> Void
+    let onFolderDrop: (UUID) -> Void
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.text]).first else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let string = object as? String, !string.isEmpty else {
+                return
+            }
+            DispatchQueue.main.async {
+                if string.hasPrefix("folder:") {
+                    if let id = UUID(uuidString: String(string.dropFirst("folder:".count))) {
+                        onFolderDrop(id)
+                    }
+                } else if let id = UUID(uuidString: string) {
+                    onChatDrop(id)
+                }
+            }
+        }
+        return true
+    }
 }
 
 private struct ControlPanelRecentSession: Identifiable, Equatable {
@@ -2418,6 +3479,9 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let createdAt: Date
     let updatedAt: Date
     let pinned: Bool
+    let pinnedOrder: Int?
+    let sessionOrder: Int?
+    let folderID: UUID?
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
@@ -2425,6 +3489,9 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         createdAt = session.createdAt
         updatedAt = session.updatedAt
         pinned = session.isPinned
+        pinnedOrder = session.pinnedOrder
+        sessionOrder = session.sessionOrder
+        folderID = session.folderID
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -2433,6 +3500,20 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         createdAt = session.createdAt
         updatedAt = session.updatedAt
         pinned = false
+        pinnedOrder = nil
+        sessionOrder = nil
+        folderID = nil
+    }
+
+    var chatID: UUID? {
+        if case .chat(let sessionID) = id {
+            return sessionID
+        }
+        return nil
+    }
+
+    var dragPayload: String? {
+        chatID?.uuidString
     }
 
     var selection: ControlPanelSidebarSelection {
@@ -2466,6 +3547,32 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         }
         return lhs.updatedAt > rhs.updatedAt
     }
+
+    static func pinnedSort(_ lhs: ControlPanelRecentSession, _ rhs: ControlPanelRecentSession) -> Bool {
+        switch (lhs.pinnedOrder, rhs.pinnedOrder) {
+        case let (left?, right?):
+            return left == right ? recencySort(lhs, rhs) : left < right
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        case (nil, nil):
+            return recencySort(lhs, rhs)
+        }
+    }
+
+    static func sessionSort(_ lhs: ControlPanelRecentSession, _ rhs: ControlPanelRecentSession) -> Bool {
+        switch (lhs.sessionOrder, rhs.sessionOrder) {
+        case let (left?, right?):
+            return left == right ? recencySort(lhs, rhs) : left < right
+        case (nil, _?):
+            return true
+        case (_?, nil):
+            return false
+        case (nil, nil):
+            return recencySort(lhs, rhs)
+        }
+    }
 }
 
 private struct ControlPanelRecentSessionRow: View {
@@ -2475,6 +3582,9 @@ private struct ControlPanelRecentSessionRow: View {
     let isSelectionDisabled: Bool
     let isDeleteDisabled: Bool
     let canExport: Bool
+    let isSelecting: Bool
+    let isChecked: Bool
+    let onToggleSelect: () -> Void
     let onSelect: () -> Void
     let onDelete: () -> Void
     let onCopyConversation: () -> Void
@@ -2483,6 +3593,9 @@ private struct ControlPanelRecentSessionRow: View {
     let onRename: (String) -> Void
     let onNewChat: () -> Void
     let onTogglePin: () -> Void
+    let folders: [ChatFolder]
+    let onMoveToFolder: (UUID?) -> Void
+    let onCreateFolderForSession: () -> Void
     @State private var isHovering = false
     @State private var isDeleteHovering = false
     @State private var isRenaming = false
@@ -2511,8 +3624,8 @@ private struct ControlPanelRecentSessionRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Button {
-                    if NSEvent.modifierFlags.contains(.shift), recent.isChat {
-                        onTogglePin()
+                    if isSelecting {
+                        onToggleSelect()
                     } else if isSelected, recent.isChat {
                         beginRename()
                     } else {
@@ -2520,10 +3633,17 @@ private struct ControlPanelRecentSessionRow: View {
                     }
                 } label: {
                     HStack(spacing: 7) {
-                        Circle()
-                            .fill(isCurrent ? Color.accentColor : Color.clear)
-                            .frame(width: 5, height: 5)
-                            .accessibilityHidden(true)
+                        if isSelecting {
+                            Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 13))
+                                .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
+                                .accessibilityLabel(isChecked ? "Selected" : "Not selected")
+                        } else {
+                            Circle()
+                                .fill(isCurrent ? Color.accentColor : Color.clear)
+                                .frame(width: 5, height: 5)
+                                .accessibilityHidden(true)
+                        }
 
                         if let badgeSystemImage = recent.badgeSystemImage {
                             Image(systemName: badgeSystemImage)
@@ -2548,82 +3668,252 @@ private struct ControlPanelRecentSessionRow: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .disabled(isSelectionDisabled)
+                .disabled(isSelectionDisabled && !isSelecting)
                 .help(recent.title)
             }
 
-            if isHovering {
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .frame(width: 26, height: 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(isDeleteHovering ? Color.red.opacity(0.13) : Color.clear)
-                        )
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
-                .disabled(isDeleteDisabled)
-                .help("Delete \(recent.title)")
-                .opacity(isHovering && !isDeleteDisabled ? 1 : 0)
-                .allowsHitTesting(isHovering && !isDeleteDisabled)
-                .onHover { isDeleteHovering = $0 }
+            Menu {
+                rowMenuContents
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.caption)
+                    .frame(width: 24, height: 20)
+                    .contentShape(.rect)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Actions")
+            .opacity(isHovering && !isSelecting ? 1 : 0)
+            .allowsHitTesting(isHovering && !isSelecting)
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.caption)
+                    .frame(width: 26, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(isDeleteHovering ? Color.red.opacity(0.13) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
+            .disabled(isDeleteDisabled)
+            .help("Delete \(recent.title)")
+            .opacity(isHovering && !isSelecting && !isDeleteDisabled ? 1 : 0)
+            .allowsHitTesting(isHovering && !isSelecting && !isDeleteDisabled)
+            .onHover { isDeleteHovering = $0 }
         }
-        .sidebarRowSelectionStyle(isSelected: isSelected)
-        .opacity(isSelectionDisabled && !isCurrent ? 0.55 : 1)
+        .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
+        .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
         .onHover { isHovering = $0 }
         .animation(.easeInOut, value: isHovering)
         .contextMenu {
-            Button {
-                onNewChat()
-            } label: {
-                Label("New", systemImage: "square.and.pencil")
-            }
+            rowMenuContents
+        }
+    }
 
-            if recent.isChat {
-                Divider()
+    @ViewBuilder
+    private var rowMenuContents: some View {
+        Button {
+            onNewChat()
+        } label: {
+            Label("New", systemImage: "square.and.pencil")
+        }
 
-                Button {
-                    beginRename()
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-
-                Button {
-                    onTogglePin()
-                } label: {
-                    Label(
-                        recent.pinned ? "Unpin" : "Pin",
-                        systemImage: recent.pinned ? "pin.slash" : "pin"
-                    )
-                }
-            }
-
+        if recent.isChat {
             Divider()
 
-            if canExport {
-                Button {
-                    onExportFile()
-                } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                }
+            Button {
+                beginRename()
+            } label: {
+                Label("Rename", systemImage: "pencil")
             }
 
-            Button(role: .destructive) {
-                onDelete()
+            Button {
+                onTogglePin()
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label(
+                    recent.pinned ? "Unpin" : "Pin",
+                    systemImage: recent.pinned ? "pin.slash" : "pin"
+                )
             }
-            .disabled(isDeleteDisabled)
+
+            Menu {
+                if recent.folderID != nil {
+                    Button {
+                        onMoveToFolder(nil)
+                    } label: {
+                        Label("Remove from Folder", systemImage: "folder.badge.minus")
+                    }
+                    Divider()
+                }
+                ForEach(folders) { folder in
+                    Button {
+                        onMoveToFolder(folder.id)
+                    } label: {
+                        if folder.id == recent.folderID {
+                            Label(folder.name, systemImage: "checkmark")
+                        } else {
+                            Text(folder.name)
+                        }
+                    }
+                }
+                if !folders.isEmpty {
+                    Divider()
+                }
+                Button {
+                    onCreateFolderForSession()
+                } label: {
+                    Label("New Folder", systemImage: "folder.badge.plus")
+                }
+            } label: {
+                Label("Move to Folder", systemImage: "folder")
+            }
         }
+
+        Divider()
+
+        if canExport {
+            Button {
+                onExportFile()
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+        }
+
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .disabled(isDeleteDisabled)
     }
 
     private func beginRename() {
         renameDraft = recent.title
         isRenaming = true
-        renameFieldFocused = true
+        DispatchQueue.main.async {
+            renameFieldFocused = true
+        }
+    }
+
+    private func commitRename() {
+        isRenaming = false
+        onRename(renameDraft)
+    }
+}
+
+private struct ControlPanelFolderHeaderView: View {
+    let folder: ChatFolder
+    let count: Int
+    let isSelecting: Bool
+    let isChecked: Bool
+    let onToggleCollapse: () -> Void
+    let onRename: (String) -> Void
+    let onTogglePin: () -> Void
+    let onToggleSelect: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+    @State private var isRenaming = false
+    @State private var renameDraft = ""
+    @FocusState private var renameFieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if isSelecting {
+                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
+                    .frame(width: 12)
+            } else {
+                Button(action: onToggleCollapse) {
+                    Image(systemName: folder.isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Image(systemName: "folder")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            if isRenaming {
+                TextField("Name", text: $renameDraft)
+                    .textFieldStyle(.plain)
+                    .focused($renameFieldFocused)
+                    .onSubmit {
+                        commitRename()
+                    }
+                    .onExitCommand {
+                        isRenaming = false
+                    }
+            } else {
+                Text(folder.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary.opacity(0.7))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .contentShape(.rect)
+        .onTapGesture(count: 2) {
+            if !isSelecting {
+                beginRename()
+            }
+        }
+        .onTapGesture {
+            if isSelecting {
+                onToggleSelect()
+            }
+        }
+        .contextMenu {
+            Button {
+                beginRename()
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+
+            Button {
+                onTogglePin()
+            } label: {
+                Label(
+                    folder.isPinned ? "Unpin" : "Pin",
+                    systemImage: folder.isPinned ? "pin.slash" : "pin"
+                )
+            }
+
+            Button {
+                onExport()
+            } label: {
+                Label("Export Folder", systemImage: "square.and.arrow.up")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete Folder", systemImage: "trash")
+            }
+        }
+    }
+
+    private func beginRename() {
+        renameDraft = folder.name
+        isRenaming = true
+        DispatchQueue.main.async {
+            renameFieldFocused = true
+        }
     }
 
     private func commitRename() {
@@ -2655,7 +3945,6 @@ private struct SidebarRowSelectionStyle: ViewModifier {
             .foregroundStyle(Color.primary)
             .contentShape(.rect)
             .onHover { isHovering = $0 }
-            .animation(.easeInOut, value: isHovering)
     }
 
     private var backgroundColor: Color {
@@ -2680,6 +3969,7 @@ private extension View {
         model: .init(),
         navigation: .init(),
         runtime: .init(),
+        extensionManager: .init(builtInExtensions: []),
         softwareUpdater: .init()
     )
 }

@@ -113,10 +113,28 @@ final class IntegrationsViewModel: ObservableObject {
     func refreshStatuses() {
         guard !isRefreshingStatuses else { return }
         isRefreshingStatuses = true
+        let baseURL = integrationServerBaseURL
+        let apiKey = serverAPIKey
         Task {
-            var refreshed: [IntegrationTool: IntegrationToolStatus] = [:]
-            for tool in IntegrationTool.allCases {
-                refreshed[tool] = await profiles.status(for: tool)
+            let refreshed = await withTaskGroup(
+                of: (IntegrationTool, IntegrationToolStatus).self,
+                returning: [IntegrationTool: IntegrationToolStatus].self
+            ) { group in
+                for tool in IntegrationTool.allCases {
+                    group.addTask {
+                        let profile = IntegrationProfileManager(
+                            serverBaseURL: baseURL,
+                            serverAPIKey: apiKey
+                        )
+                        return (tool, await profile.status(for: tool))
+                    }
+                }
+
+                var statuses: [IntegrationTool: IntegrationToolStatus] = [:]
+                for await (tool, status) in group {
+                    statuses[tool] = status
+                }
+                return statuses
             }
             statuses = refreshed
             isRefreshingStatuses = false

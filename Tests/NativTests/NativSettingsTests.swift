@@ -7,7 +7,8 @@ final class NativSettingsTests: XCTestCase {
             languageModelID: "org/language",
             imageGenerationModelID: "org/image",
             textToSpeechModelID: "org/tts",
-            speechToTextModelID: "org/stt"
+            speechToTextModelID: "org/stt",
+            embeddingModelID: "org/embed"
         )
 
         XCTAssertEqual(
@@ -27,6 +28,16 @@ final class NativSettingsTests: XCTestCase {
                 "org/stt"
             )
         )
+        if NativSettings.serverSupportsEmbeddingModelArgument {
+            XCTAssertTrue(
+                settings.launchArguments.containsAdjacent(
+                    "--embedding-model",
+                    "org/embed"
+                )
+            )
+        } else {
+            XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
+        }
     }
 
     func testEmptyPreloadSelectionsAreOmitted() {
@@ -34,13 +45,29 @@ final class NativSettingsTests: XCTestCase {
             languageModelID: " ",
             imageGenerationModelID: "",
             textToSpeechModelID: "\n",
-            speechToTextModelID: nil
+            speechToTextModelID: nil,
+            embeddingModelID: "  "
         )
 
         XCTAssertFalse(settings.launchArguments.contains("--model"))
         XCTAssertFalse(settings.launchArguments.contains("--image-model"))
         XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
+        XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
+    }
+
+    func testEmbeddingModelSlotRoundTripsAndRequiresRestart() throws {
+        var settings = NativSettings()
+        settings.setModelID("org/embed", for: .embeddings)
+        XCTAssertEqual(settings.modelID(for: .embeddings), "org/embed")
+        XCTAssertEqual(settings.embeddingModelID, "org/embed")
+
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.embeddingModelID, "org/embed")
+        XCTAssertFalse(settings.hasSameLaunchConfiguration(as: NativSettings()))
     }
 
     func testImageEditModelIsNotPassedToGenerationPreloadFlag() {
@@ -345,6 +372,164 @@ final class NativSettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(warning?.estimatedWorkingSetBytes, 90)
+    }
+
+    func testChatFontScaleStepsClampAndReset() {
+        var settings = NativSettings()
+        XCTAssertEqual(settings.chatFontScale, 1.0)
+        settings.stepChatFontScale(by: 1)
+        XCTAssertEqual(settings.chatFontScale, 1.15)
+        settings.stepChatFontScale(by: -5)
+        XCTAssertEqual(settings.chatFontScale, NativSettings.minChatFontScale)
+        settings.stepChatFontScale(by: 99)
+        XCTAssertEqual(settings.chatFontScale, NativSettings.maxChatFontScale)
+        settings.resetChatFontScale()
+        XCTAssertEqual(settings.chatFontScale, 1.0)
+    }
+
+    func testChatFontScaleRoundTripsAndClamps() throws {
+        var settings = NativSettings()
+        settings.chatFontScale = 1.3
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.chatFontScale, 1.3)
+
+        var extreme = NativSettings()
+        extreme.chatFontScale = 9.0
+        XCTAssertEqual(extreme.normalized().chatFontScale, NativSettings.maxChatFontScale)
+    }
+
+    func testSidebarSectionCollapseRoundTrips() throws {
+        var settings = NativSettings()
+        XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarFoldersCollapsed)
+        XCTAssertFalse(settings.sidebarSessionsCollapsed)
+        XCTAssertFalse(settings.allSidebarSectionsCollapsed)
+
+        settings.sidebarPinnedCollapsed = true
+        settings.sidebarSessionsCollapsed = true
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertTrue(decoded.sidebarPinnedCollapsed)
+        XCTAssertFalse(decoded.sidebarFoldersCollapsed)
+        XCTAssertTrue(decoded.sidebarSessionsCollapsed)
+        XCTAssertFalse(decoded.allSidebarSectionsCollapsed)
+    }
+
+    func testSetAllSidebarSectionsCollapsedTogglesEveryFlag() {
+        var settings = NativSettings()
+        settings.setAllSidebarSectionsCollapsed(true)
+        XCTAssertTrue(settings.sidebarPinnedCollapsed)
+        XCTAssertTrue(settings.sidebarFoldersCollapsed)
+        XCTAssertTrue(settings.sidebarSessionsCollapsed)
+        XCTAssertTrue(settings.allSidebarSectionsCollapsed)
+
+        settings.setAllSidebarSectionsCollapsed(false)
+        XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarFoldersCollapsed)
+        XCTAssertFalse(settings.sidebarSessionsCollapsed)
+        XCTAssertFalse(settings.allSidebarSectionsCollapsed)
+    }
+
+    func testSidebarSectionCollapseDefaultsToExpandedForExistingInstalls() throws {
+        let legacyJSON = Data(#"{"serverHost":"127.0.0.1","serverPort":8080}"#.utf8)
+        let decoded = try JSONDecoder().decode(NativSettings.self, from: legacyJSON)
+        XCTAssertFalse(decoded.sidebarPinnedCollapsed)
+        XCTAssertFalse(decoded.sidebarFoldersCollapsed)
+        XCTAssertFalse(decoded.sidebarSessionsCollapsed)
+    }
+
+    func testRememberProfileCapturesCurrentModelSettings() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.thinkingBudgetEnabled = true
+        settings.thinkingBudget = 1_024
+        settings.speculativeDecodingEnabled = true
+        settings.draftModelID = "org/drafter"
+        settings.draftKind = "mtp"
+
+        settings.rememberProfile(forModel: "org/main")
+
+        let profile = try XCTUnwrap(settings.modelProfile(for: "org/main"))
+        XCTAssertTrue(profile.thinkingEnabled)
+        XCTAssertTrue(profile.thinkingBudgetEnabled)
+        XCTAssertEqual(profile.thinkingBudget, 1_024)
+        XCTAssertTrue(profile.speculativeDecodingEnabled)
+        XCTAssertEqual(profile.draftModelID, "org/drafter")
+        XCTAssertEqual(profile.draftKind, "mtp")
+    }
+
+    func testApplyProfileRestoresSavedValues() {
+        var settings = NativSettings()
+        settings.applyProfile(
+            ModelConfigProfile(
+                thinkingEnabled: false,
+                thinkingBudgetEnabled: true,
+                thinkingBudget: 2_048,
+                speculativeDecodingEnabled: true,
+                draftModelID: "org/drafter",
+                draftKind: "ngram"
+            )
+        )
+
+        XCTAssertFalse(settings.thinkingEnabled)
+        XCTAssertTrue(settings.thinkingBudgetEnabled)
+        XCTAssertEqual(settings.thinkingBudget, 2_048)
+        XCTAssertTrue(settings.speculativeDecodingEnabled)
+        XCTAssertEqual(settings.draftModelID, "org/drafter")
+        XCTAssertEqual(settings.draftKind, "ngram")
+    }
+
+    func testModelConfigsRoundTripThroughCoding() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.draftModelID = "org/drafter"
+        settings.rememberProfile(forModel: "org/main")
+
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        let profile = try XCTUnwrap(decoded.modelProfile(for: "org/main"))
+        XCTAssertTrue(profile.thinkingEnabled)
+        XCTAssertEqual(profile.draftModelID, "org/drafter")
+    }
+
+    func testModelProfileIsNilForUnconfiguredModel() {
+        XCTAssertNil(NativSettings().modelProfile(for: "org/never-configured"))
+    }
+
+    func testRememberProfileIgnoresEmptyModelID() {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.rememberProfile(forModel: "")
+
+        XCTAssertTrue(settings.modelConfigs.isEmpty)
+    }
+
+    func testModelConfigsAreExportedToServerLaunchEnvironment() throws {
+        var settings = NativSettings()
+        settings.thinkingEnabled = true
+        settings.thinkingBudgetEnabled = true
+        settings.thinkingBudget = 1_024
+        settings.rememberProfile(forModel: "org/main")
+
+        let json = try XCTUnwrap(settings.launchEnvironment["NATIV_MODEL_CONFIGS"])
+        let decoded = try JSONDecoder().decode(
+            [String: ModelConfigProfile].self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(decoded["org/main"]?.thinkingEnabled, true)
+        XCTAssertEqual(decoded["org/main"]?.thinkingBudget, 1_024)
+    }
+
+    func testLaunchEnvironmentOmitsModelConfigsWhenEmpty() {
+        XCTAssertNil(NativSettings().launchEnvironment["NATIV_MODEL_CONFIGS"])
     }
 
     private func temporarySettingsURL() -> URL {

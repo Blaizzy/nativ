@@ -616,11 +616,24 @@ struct ArtifactsView: View {
             }
 
             Menu {
-                Picker("", selection: $groupByChat) {
-                    Text("By Chat").tag(true)
-                    Text("By Date").tag(false)
+                Button {
+                    groupByChat = true
+                } label: {
+                    if groupByChat {
+                        Label("By Chat", systemImage: "checkmark")
+                    } else {
+                        Text("By Chat")
+                    }
                 }
-                .pickerStyle(.inline)
+                Button {
+                    groupByChat = false
+                } label: {
+                    if !groupByChat {
+                        Label("By Date", systemImage: "checkmark")
+                    } else {
+                        Text("By Date")
+                    }
+                }
                 if !groupByChat {
                     Divider()
                     Picker("Sort", selection: $sort) {
@@ -1336,7 +1349,7 @@ struct ArtifactInspector: View {
 
                     VStack(spacing: 8) {
                         action("Open Preview", "arrow.up.left.and.arrow.down.right", onOpenPreview)
-                        action("Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
+                        action(artifact.source == .generated ? "Go to Image Session" : "Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
                         action("Reveal in Finder", "folder", { store.revealInFinder(artifact) })
                         action("Export…", "square.and.arrow.down", { store.export(artifact) })
                         action("Copy", "doc.on.doc", { store.copyToPasteboard(artifact) })

@@ -16,6 +16,7 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case embeddings
     case reasoning
     case tools
+    case drafter
 
     var displayName: String {
         switch self {
@@ -41,6 +42,8 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
             "Reasoning"
         case .tools:
             "Tool Calling"
+        case .drafter:
+            "Drafter"
         }
     }
 }
@@ -70,6 +73,8 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     let contextSize: Int?
     let provider: LocalModelProvider?
     let capabilities: Set<LocalModelCapability>
+    let drafterKind: String?
+    let hiddenSize: Int?
     var source: LocalModelSource = .huggingFaceCache
 
     var displayName: String {
@@ -87,8 +92,24 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     var isEligibleForLanguageModelPicker: Bool {
         // Any text-generative model qualifies (chat + omni), even if it also carries an
         // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
-        capabilities.contains(.text)
+        guard !capabilities.contains(.drafter) else {
+            return false
+        }
+        return capabilities.contains(.text)
             || (capabilities.contains(.vision) && !capabilities.contains(.imageGeneration))
+    }
+
+    var drafterKindLabel: String? {
+        switch drafterKind {
+        case "mtp":
+            "MTP"
+        case "eagle3":
+            "EAGLE3"
+        case "dflash":
+            "DFlash"
+        default:
+            nil
+        }
     }
 
     var parameterSizeLabel: String? {
@@ -228,26 +249,84 @@ struct LocalModelMemoryEstimate: Equatable, Sendable {
 struct LocalModelConfigurationMetadata: Equatable, Sendable {
     let contextSize: Int?
     let defaultSystemPrompt: String?
+    let hiddenSize: Int?
 }
 
 enum LocalModelDiscovery {
+    private actor ScanCache {
+        struct Key: Hashable, Sendable {
+            let path: String
+            let additionalPaths: [String]
+        }
+
+        private struct Entry: Sendable {
+            let models: [LocalModel]
+            let expiresAt: Date
+        }
+
+        private var entries: [Key: Entry] = [:]
+        private var inFlight: [Key: Task<[LocalModel], Error>] = [:]
+
+        func scan(key: Key) async throws -> [LocalModel] {
+            let now = Date()
+            entries = entries.filter { $0.value.expiresAt > now }
+            if let entry = entries[key] {
+                return entry.models
+            }
+
+            if let task = inFlight[key] {
+                return try await task.value
+            }
+
+            let task = Task.detached(priority: .userInitiated) {
+                try LocalModelDiscovery.performScan(
+                    path: key.path,
+                    additionalPaths: key.additionalPaths
+                )
+            }
+            inFlight[key] = task
+
+            do {
+                let models = try await task.value
+                entries[key] = Entry(
+                    models: models,
+                    expiresAt: Date().addingTimeInterval(2)
+                )
+                inFlight.removeValue(forKey: key)
+                return models
+            } catch {
+                inFlight.removeValue(forKey: key)
+                throw error
+            }
+        }
+    }
+
+    private static let scanCache = ScanCache()
+
     static func scan(path: String, additionalPaths: [String] = []) async throws -> [LocalModel] {
         let expandedPath = Self.expandedPath(path)
         let expandedAdditionalPaths = additionalPaths.map(Self.expandedPath)
-        return try await Task.detached(priority: .userInitiated) {
-            let externalModels = Self.scanAdditionalPathsSynchronously(
-                expandedAdditionalPaths,
-                fileManager: FileManager.default
-            )
-            do {
-                return Self.sortedByDisplayName(try Self.scanSynchronously(path: expandedPath) + externalModels)
-            } catch {
-                guard !externalModels.isEmpty else {
-                    throw error
-                }
-                return Self.sortedByDisplayName(externalModels)
+        return try await scanCache.scan(
+            key: ScanCache.Key(path: expandedPath, additionalPaths: expandedAdditionalPaths)
+        )
+    }
+
+    private static func performScan(
+        path: String,
+        additionalPaths: [String]
+    ) throws -> [LocalModel] {
+        let externalModels = Self.scanAdditionalPathsSynchronously(
+            additionalPaths,
+            fileManager: FileManager.default
+        )
+        do {
+            return Self.sortedByDisplayName(try Self.scanSynchronously(path: path) + externalModels)
+        } catch {
+            guard !externalModels.isEmpty else {
+                throw error
             }
-        }.value
+            return Self.sortedByDisplayName(externalModels)
+        }
     }
 
     static func delete(repoID: String, path: String) async throws {
@@ -327,6 +406,10 @@ enum LocalModelDiscovery {
                 snapshotURL: snapshotURL,
                 fileManager: fileManager
             )
+            let speculativeMetadata = speculativeMetadata(
+                at: snapshotURL,
+                fileManager: fileManager
+            )
             return LocalModel(
                 repoID: repoID,
                 snapshotURL: snapshotURL,
@@ -345,7 +428,9 @@ enum LocalModelDiscovery {
                     model: repoID,
                     at: snapshotURL,
                     fileManager: fileManager
-                )
+                ),
+                drafterKind: speculativeMetadata.drafterKind,
+                hiddenSize: speculativeMetadata.hiddenSize
             )
         }
 
@@ -430,6 +515,10 @@ enum LocalModelDiscovery {
             snapshotURL: modelURL,
             fileManager: fileManager
         )
+        let speculativeMetadata = speculativeMetadata(
+            at: modelURL,
+            fileManager: fileManager
+        )
         return LocalModel(
             repoID: standardizedPath,
             snapshotURL: modelURL,
@@ -449,6 +538,8 @@ enum LocalModelDiscovery {
                 at: modelURL,
                 fileManager: fileManager
             ),
+            drafterKind: speculativeMetadata.drafterKind,
+            hiddenSize: speculativeMetadata.hiddenSize,
             source: .external
         )
     }
@@ -466,7 +557,8 @@ enum LocalModelDiscovery {
             }
             return LocalModelConfigurationMetadata(
                 contextSize: contextSizeFromConfig(at: directURL, fileManager: fileManager),
-                defaultSystemPrompt: defaultSystemPrompt(at: directURL, fileManager: fileManager)
+                defaultSystemPrompt: defaultSystemPrompt(at: directURL, fileManager: fileManager),
+                hiddenSize: speculativeMetadata(at: directURL, fileManager: fileManager).hiddenSize
             )
         }
 
@@ -489,7 +581,11 @@ enum LocalModelDiscovery {
             defaultSystemPrompt: defaultSystemPrompt(
                 at: snapshotURL,
                 fileManager: fileManager
-            )
+            ),
+            hiddenSize: speculativeMetadata(
+                at: snapshotURL,
+                fileManager: fileManager
+            ).hiddenSize
         )
     }
 
@@ -950,6 +1046,10 @@ enum LocalModelDiscovery {
         )
         var capabilities = Set<LocalModelCapability>()
 
+        if drafterKind(fromModelType: drafterModelType(in: config)) != nil {
+            capabilities.insert(.drafter)
+        }
+
         let textDescriptors = [
             "causallm", "conditionalgeneration", "language", "llm", "gpt",
             "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
@@ -1040,9 +1140,30 @@ enum LocalModelDiscovery {
             capabilities.insert(.textToSpeech)
         }
 
-        if fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
-            || descriptors.contains("embedding") {
-            capabilities.insert(.embeddings)
+        if let embeddingStamp = config["mlx_embeddings"] as? [String: Any],
+            (embeddingStamp["kind"] as? String) == "embedding" {
+            if (embeddingStamp["modality"] as? String) != "vision" {
+                capabilities.insert(.embeddings)
+            }
+        } else {
+            let embeddingModelType = ((config["model_type"] as? String) ?? "")
+                .lowercased()
+                .replacingOccurrences(of: "-", with: "_")
+            let textEmbeddingModelTypes: Set<String> = [
+                "bert", "modernbert", "xlm_roberta", "llama_bidirec"
+            ]
+            let hasSentenceTransformerLayout =
+                fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
+                || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("1_Pooling/config.json").path)
+                || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("sentence_bert_config.json").path)
+            let isEmbeddingModel =
+                hasSentenceTransformerLayout
+                || (!generativeArchitectures.contains(where: descriptors.contains)
+                    && (textEmbeddingModelTypes.contains(embeddingModelType)
+                        || descriptors.contains("embedding")))
+            if isEmbeddingModel && !capabilities.contains(.vision) {
+                capabilities.insert(.embeddings)
+            }
         }
 
         if capabilities.contains(.text)
@@ -1170,6 +1291,74 @@ enum LocalModelDiscovery {
         return normalized.contains("tool_calls") || normalized.contains("tool_call")
     }
 
+    static func drafterKind(fromModelType modelType: String?) -> String? {
+        guard let modelType = modelType?.lowercased(), !modelType.isEmpty else {
+            return nil
+        }
+        let exactKinds: [String: String] = [
+            "deepseek_v4_mtp": "mtp",
+            "eagle3": "eagle3",
+            "gemma4_assistant": "mtp",
+            "gemma4_unified_assistant": "mtp",
+            "glm4_moe_lite_mtp": "mtp",
+            "inkling_mtp": "mtp",
+            "qwen3_5_mtp": "mtp"
+        ]
+        if let kind = exactKinds[modelType] {
+            return kind
+        }
+        if modelType.contains("mtp") {
+            return "mtp"
+        }
+        if modelType.contains("dflash") {
+            return "dflash"
+        }
+        if modelType.contains("eagle") {
+            return "eagle3"
+        }
+        return nil
+    }
+
+    private static func drafterModelType(in config: [String: Any]) -> String? {
+        (config["model_type"] as? String) ?? (config["speculators_model_type"] as? String)
+    }
+
+    private static func hiddenSize(in config: [String: Any]) -> Int? {
+        for key in ["backbone_hidden_size", "target_hidden_size"] {
+            if let number = config[key] as? NSNumber, number.intValue > 0 {
+                return number.intValue
+            }
+        }
+        for nestedKey in ["text_config", "llm_config", "language_config"] {
+            if let nested = config[nestedKey] as? [String: Any],
+               let number = nested["hidden_size"] as? NSNumber,
+               number.intValue > 0 {
+                return number.intValue
+            }
+        }
+        if let number = config["hidden_size"] as? NSNumber, number.intValue > 0 {
+            return number.intValue
+        }
+        return nil
+    }
+
+    private static func speculativeMetadata(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> (drafterKind: String?, hiddenSize: Int?) {
+        let configURL = snapshotURL.appendingPathComponent("config.json")
+        guard fileManager.fileExists(atPath: configURL.path),
+              let data = try? Data(contentsOf: configURL),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return (nil, nil)
+        }
+        return (
+            drafterKind(fromModelType: drafterModelType(in: config)),
+            hiddenSize(in: config)
+        )
+    }
+
     private static func modelProvider(
         repoID: String,
         snapshotURL: URL,
@@ -1253,6 +1442,25 @@ enum LocalModelDiscovery {
     private static func isDirectoryURL(_ url: URL, fileManager: FileManager) -> Bool {
         var isDirectory: ObjCBool = false
         return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+}
+
+extension LocalModelDiscovery {
+    static func speechToTextModelID(
+        in models: [LocalModel],
+        selectedModelID: String?
+    ) -> String? {
+        let speechModels = models.filter {
+            $0.capabilities.contains(.speechToText)
+        }
+        if let selectedModelID,
+           speechModels.contains(where: { $0.repoID == selectedModelID }) {
+            return selectedModelID
+        }
+
+        return speechModels.sorted {
+            $0.repoID.localizedCaseInsensitiveCompare($1.repoID) == .orderedAscending
+        }.first?.repoID
     }
 }
 

@@ -50,6 +50,98 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertFalse(model.capabilities.contains(.imageGeneration))
     }
 
+    func testClassifiesEncoderWithPoolingAsEmbeddingModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/xlm-roberta-embed",
+            modelType: "xlm_roberta",
+            architectures: ["XLMRobertaModel"],
+            sentenceTransformer: true
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertTrue(model.capabilities.contains(.embeddings))
+    }
+
+    func testDoesNotClassifyCausalLanguageModelAsEmbeddingModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/qwen3-chat",
+            modelType: "qwen3",
+            architectures: ["Qwen3ForCausalLM"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertFalse(model.capabilities.contains(.embeddings))
+        XCTAssertTrue(model.capabilities.contains(.text))
+    }
+
+    func testClassifiesLLMBasedEmbedderWithPoolingAsEmbeddingModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/qwen3-embedding",
+            modelType: "qwen3",
+            architectures: ["Qwen3ForCausalLM"],
+            sentenceTransformer: true
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertTrue(model.capabilities.contains(.embeddings))
+    }
+
+    func testClassifiesStampedModelAsEmbeddingModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/stamped-embedding",
+            modelType: "qwen3",
+            architectures: ["Qwen3ForCausalLM"],
+            sentenceTransformer: false,
+            stamp: ["kind": "embedding", "modality": "text"]
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertTrue(model.capabilities.contains(.embeddings))
+    }
+
+    func testSelectsAnyInstalledSpeechToTextModelWithoutKnownModelNames() {
+        let models = [
+            makeModel(repoID: "owner/text-only", capabilities: [.text]),
+            makeModel(repoID: "owner/zeta-custom-listener", capabilities: [.speechToText]),
+            makeModel(repoID: "owner/alpha-custom-listener", capabilities: [.speechToText]),
+        ]
+
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(
+                in: models,
+                selectedModelID: nil
+            ),
+            "owner/alpha-custom-listener"
+        )
+    }
+
+    func testUsesSelectedSpeechModelOnlyWhenItIsInstalledAndCompatible() {
+        let models = [
+            makeModel(repoID: "owner/alpha-listener", capabilities: [.speechToText]),
+            makeModel(repoID: "owner/user-choice", capabilities: [.speechToText]),
+        ]
+
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(
+                in: models,
+                selectedModelID: "owner/user-choice"
+            ),
+            "owner/user-choice"
+        )
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(
+                in: models,
+                selectedModelID: "owner/not-installed"
+            ),
+            "owner/alpha-listener"
+        )
+    }
+
     private func makeMageFlowSnapshot(repoID: String) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
@@ -100,6 +192,40 @@ final class LocalModelDiscoveryTests: XCTestCase {
         )
     }
 
+    private func makeTextModelSnapshot(
+        repoID: String,
+        modelType: String,
+        architectures: [String],
+        sentenceTransformer: Bool,
+        stamp: [String: String]? = nil
+    ) throws {
+        let repository = temporaryCache.appendingPathComponent(
+            "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
+            isDirectory: true
+        )
+        let revision = "text-model-test-revision"
+        let snapshot =
+            repository
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent(revision, isDirectory: true)
+
+        try write(revision, to: repository.appendingPathComponent("refs/main"))
+        var config: [String: Any] = [
+            "model_type": modelType, "architectures": architectures,
+        ]
+        if let stamp {
+            config["mlx_embeddings"] = stamp
+        }
+        try writeJSON(config, to: snapshot.appendingPathComponent("config.json"))
+        try write("", to: snapshot.appendingPathComponent("model.safetensors"))
+        if sentenceTransformer {
+            try writeJSON(
+                ["pooling_mode_mean_tokens": true, "word_embedding_dimension": 768],
+                to: snapshot.appendingPathComponent("1_Pooling/config.json")
+            )
+        }
+    }
+
     private func writeJSON(_ object: Any, to url: URL) throws {
         let data = try JSONSerialization.data(
             withJSONObject: object,
@@ -112,11 +238,55 @@ final class LocalModelDiscoveryTests: XCTestCase {
         try data.write(to: url)
     }
 
+    func testDrafterKindDetection() {
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_5_mtp"), "mtp")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "gemma4_assistant"), "mtp")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "eagle3"), "eagle3")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_dflash"), "dflash")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "llama_eagle"), "eagle3")
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_5"))
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: nil))
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: ""))
+    }
+
+    func testDrafterExcludedFromLanguageModelPicker() {
+        let drafter = makeModel(
+            repoID: "mlx-community/Qwen3.5-4B-MTP-4bit",
+            capabilities: [.text, .drafter]
+        )
+        let chatModel = makeModel(
+            repoID: "mlx-community/Qwen3.5-4B-MLX-4bit",
+            capabilities: [.text]
+        )
+        XCTAssertFalse(drafter.isEligibleForLanguageModelPicker)
+        XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
+    }
+
     private func write(_ string: String, to url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         try Data(string.utf8).write(to: url)
+    }
+
+    private func makeModel(
+        repoID: String,
+        capabilities: Set<LocalModelCapability>
+    ) -> LocalModel {
+        LocalModel(
+            repoID: repoID,
+            snapshotURL: nil,
+            modifiedAt: nil,
+            sizeBytes: nil,
+            parameterCount: nil,
+            quantizationBits: nil,
+            quantizationGroupSize: nil,
+            contextSize: nil,
+            provider: nil,
+            capabilities: capabilities,
+            drafterKind: nil,
+            hiddenSize: nil
+        )
     }
 }

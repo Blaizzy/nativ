@@ -59,6 +59,13 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let isPrivate: Bool
     let isGated: Bool
     let safetensors: HuggingFaceSafetensors?
+    // These values are used by every visible row. Resolve them once while the
+    // response is decoded instead of repeating string parsing, provider lookup,
+    // and memory estimation during every SwiftUI body pass while scrolling.
+    let provider: LocalModelProvider?
+    let sizeBytes: Int64?
+    let capabilities: Set<LocalModelCapability>
+    let memoryEstimate: LocalModelMemoryEstimate?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -90,27 +97,38 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         } else {
             isGated = false
         }
+
+        provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
+        sizeBytes = safetensors?.sizeBytes
+        capabilities = Self.resolveCapabilities(
+            pipelineTag: pipelineTag,
+            libraryName: libraryName,
+            tags: tags
+        )
+        memoryEstimate = Self.resolveMemoryEstimate(
+            repoID: id,
+            safetensors: safetensors,
+            sizeBytes: sizeBytes,
+            capabilities: capabilities
+        )
     }
 
-    var provider: LocalModelProvider? {
-        LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
-    }
-
-    var sizeBytes: Int64? {
-        safetensors?.sizeBytes
-    }
-
-    var memoryEstimate: LocalModelMemoryEstimate? {
+    private static func resolveMemoryEstimate(
+        repoID: String,
+        safetensors: HuggingFaceSafetensors?,
+        sizeBytes: Int64?,
+        capabilities: Set<LocalModelCapability>
+    ) -> LocalModelMemoryEstimate? {
         guard let safetensors,
               safetensors.hasOnlyKnownDataTypes,
-              let sizeBytes = safetensors.sizeBytes,
+              let sizeBytes,
               sizeBytes > 0
         else {
             return nil
         }
 
-        let parameterCount = LocalModelDiscovery.parameterCount(from: id)
-        let quantizationBits = LocalModelDiscovery.quantizationBits(from: id)
+        let parameterCount = LocalModelDiscovery.parameterCount(from: repoID)
+        let quantizationBits = LocalModelDiscovery.quantizationBits(from: repoID)
         var estimatedModelBytes = Double(sizeBytes)
 
         // Packed integer summaries and explicitly quantized repositories need a
@@ -154,7 +172,11 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         )
     }
 
-    var capabilities: Set<LocalModelCapability> {
+    private static func resolveCapabilities(
+        pipelineTag: String?,
+        libraryName: String?,
+        tags: [String]
+    ) -> Set<LocalModelCapability> {
         let pipeline = pipelineTag?.lowercased() ?? ""
         let descriptors = ([pipelineTag, libraryName].compactMap { $0 } + tags)
             .joined(separator: " ")
@@ -587,6 +609,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
     @Published private(set) var errorByModelID: [String: String] = [:]
 
     private var contexts: [String: DownloadContext] = [:]
+    private var progressUpdateTimes: [String: Date] = [:]
+    private var freeDiskCache: [String: (timestamp: Date, bytes: Int64?)] = [:]
 
     deinit {
         contexts.values.forEach { $0.task?.cancel() }
@@ -622,7 +646,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func capacityBlocker(sizeBytes: Int64?, cachePath: String) -> String? {
         guard let sizeBytes, sizeBytes > 0 else { return nil }
         let path = LocalModelDiscovery.expandedPath(cachePath)
-        guard let freeBytes = Self.freeDiskBytes(atPath: path) else { return nil }
+        guard let freeBytes = cachedFreeDiskBytes(atPath: path) else { return nil }
         let availableBytes = max(freeBytes - reservedBytes, 0)
         guard sizeBytes > availableBytes else { return nil }
         let needed = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
@@ -805,7 +829,22 @@ final class HuggingFaceDownloadManager: ObservableObject {
         else {
             return
         }
-        downloads[index].progress = progress
+        let clampedProgress = min(max(progress, 0), 1)
+        let previousProgress = downloads[index].progress
+        let now = Date()
+        let lastUpdate = progressUpdateTimes[modelID] ?? .distantPast
+
+        // Python reports byte progress frequently. Coalesce those reports on
+        // the main actor so a download does not invalidate every visible row
+        // (and the scroll view) for tiny, visually indistinguishable changes.
+        guard clampedProgress >= 1
+            || clampedProgress - previousProgress >= 0.01
+            || now.timeIntervalSince(lastUpdate) >= 0.10
+        else {
+            return
+        }
+        downloads[index].progress = clampedProgress
+        progressUpdateTimes[modelID] = now
     }
 
     private func setState(_ modelID: String, _ state: DownloadState) {
@@ -816,6 +855,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private func removeContext(_ modelID: String) {
         contexts.removeValue(forKey: modelID)
         downloads.removeAll { $0.modelID == modelID }
+        progressUpdateTimes.removeValue(forKey: modelID)
     }
 
     private func cancelWaiter(_ waiterID: UUID, modelID: String) {
@@ -830,6 +870,16 @@ final class HuggingFaceDownloadManager: ObservableObject {
             return nil
         }
         return freeBytes
+    }
+
+    private func cachedFreeDiskBytes(atPath path: String) -> Int64? {
+        let now = Date()
+        if let cached = freeDiskCache[path], now.timeIntervalSince(cached.timestamp) < 1 {
+            return cached.bytes
+        }
+        let bytes = Self.freeDiskBytes(atPath: path)
+        freeDiskCache[path] = (timestamp: now, bytes: bytes)
+        return bytes
     }
 }
 
@@ -917,7 +967,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 total = float(expected_bytes or self.total or 0)
                 value = float(self.n or 0)
                 progress = min(max(value / total, 0.0), 1.0) if total > 0 else 0.0
-                if abs(progress - self._mlx_last_progress) >= 0.002 or progress >= 1.0:
+                if abs(progress - self._mlx_last_progress) >= 0.01 or progress >= 1.0:
                     self._mlx_last_progress = progress
                     print(f"__MLX_PROGRESS__:{progress:.6f}", flush=True)
 

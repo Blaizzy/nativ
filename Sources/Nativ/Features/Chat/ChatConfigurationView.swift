@@ -82,6 +82,7 @@ struct ModelConfigurationView: View {
     @State private var modelConfiguration: LocalModelConfigurationMetadata?
     @State private var isLoadingModelConfiguration = false
     @State private var modelConfigurationRevision = 0
+    @StateObject private var draftModelLibrary = LocalModelLibrary()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -110,9 +111,32 @@ struct ModelConfigurationView: View {
         .task(id: modelConfigurationLookupID) {
             await loadModelConfiguration(for: modelConfigurationLookupID)
         }
+        .task(id: draftModelScanKey) {
+            scanDraftModelLibraryIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             modelConfigurationRevision += 1
+            scanDraftModelLibraryIfNeeded()
         }
+    }
+
+    private var draftModelScanKey: String {
+        let normalizedSettings = settings.normalized()
+        return ([
+            String(normalizedSettings.speculativeDecodingEnabled),
+            normalizedSettings.modelSearchPath
+        ] + normalizedSettings.additionalModelSearchPaths)
+            .joined(separator: "\u{0}")
+    }
+
+    private func scanDraftModelLibraryIfNeeded() {
+        guard settings.speculativeDecodingEnabled else {
+            return
+        }
+        draftModelLibrary.scan(
+            path: settings.modelSearchPath,
+            additionalPaths: settings.normalized().additionalModelSearchPaths
+        )
     }
 
     private var header: some View {
@@ -300,10 +324,14 @@ struct ModelConfigurationView: View {
                 .configurationToggleStyle()
 
             if settings.thinkingEnabled {
-                Toggle("Limit thinking", isOn: $settings.thinkingBudgetEnabled)
+                Toggle("Limit thinking", isOn: thinkingBudgetBinding)
                     .configurationToggleStyle()
+                    .disabled(settings.speculativeDecodingActive)
 
-                if settings.thinkingBudgetEnabled {
+                if settings.speculativeDecodingActive {
+                    Text("Thinking limits are unavailable while speculative decoding is active.")
+                        .configurationHintStyle()
+                } else if settings.thinkingBudgetEnabled {
                     ConfigurationIntegerField(
                         title: "Budget",
                         value: $settings.thinkingBudget,
@@ -358,7 +386,10 @@ struct ModelConfigurationView: View {
                 .configurationToggleStyle()
 
             if settings.speculativeDecodingEnabled {
-                ConfigurationTextField(title: "Draft model", text: $settings.draftModelID)
+                HStack(alignment: .bottom, spacing: 8) {
+                    ConfigurationTextField(title: "Draft model", text: $settings.draftModelID)
+                    draftModelMenu
+                }
 
                 HStack(spacing: 8) {
                     Text("Family")
@@ -381,14 +412,106 @@ struct ModelConfigurationView: View {
                     range: 0...1024
                 )
 
-                Text(settings.draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? "Enter a drafter model to activate speculative decoding."
-                    : "The drafter is loaded after the next server restart.")
-                    .configurationHintStyle(
-                        isError: settings.draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    )
+                Text(draftModelHint.text)
+                    .configurationHintStyle(isError: draftModelHint.isError)
             }
         }
+    }
+
+    private var draftModelMenu: some View {
+        Menu {
+            if !installedDrafters.isEmpty {
+                Section("Installed drafters") {
+                    ForEach(installedDrafters) { model in
+                        Button(draftMenuTitle(for: model)) {
+                            settings.draftModelID = model.repoID
+                        }
+                    }
+                }
+            }
+            if !otherDraftCandidates.isEmpty {
+                Section("Other installed models") {
+                    ForEach(otherDraftCandidates) { model in
+                        Button(model.displayName) {
+                            settings.draftModelID = model.repoID
+                        }
+                    }
+                }
+            }
+            if installedDrafters.isEmpty && otherDraftCandidates.isEmpty {
+                Button(draftModelLibrary.isScanning ? "Scanning models…" : "No installed models found") {}
+                    .disabled(true)
+            }
+            Divider()
+            Button("Refresh") {
+                scanDraftModelLibraryIfNeeded()
+            }
+        } label: {
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.footnote.weight(.semibold))
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Choose an installed model as the drafter")
+    }
+
+    private var installedDrafters: [LocalModel] {
+        draftModelLibrary.models.filter { $0.drafterKind != nil }
+    }
+
+    private var otherDraftCandidates: [LocalModel] {
+        draftModelLibrary.models.filter {
+            $0.drafterKind == nil
+                && $0.isEligibleForLanguageModelPicker
+                && $0.repoID != settings.normalized().languageModelID
+        }
+    }
+
+    private func draftMenuTitle(for model: LocalModel) -> String {
+        var title = model.displayName
+        if let kindLabel = model.drafterKindLabel {
+            title += " (\(kindLabel))"
+        }
+        if isDrafterIncompatible(model) {
+            title += " — different target"
+        }
+        return title
+    }
+
+    private func isDrafterIncompatible(_ model: LocalModel) -> Bool {
+        guard let drafterHiddenSize = model.hiddenSize,
+              let targetHiddenSize = modelConfiguration?.hiddenSize
+        else {
+            return false
+        }
+        return drafterHiddenSize != targetHiddenSize
+    }
+
+    private var draftModelHint: (text: String, isError: Bool) {
+        let trimmedID = settings.draftModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedID.isEmpty {
+            return ("Enter or choose a drafter model to activate speculative decoding.", true)
+        }
+        guard let selected = draftModelLibrary.models.first(where: {
+            $0.repoID == trimmedID
+        }) else {
+            return ("The drafter is loaded after the next server restart.", false)
+        }
+        if isDrafterIncompatible(selected),
+           let drafterHiddenSize = selected.hiddenSize,
+           let targetHiddenSize = modelConfiguration?.hiddenSize {
+            return (
+                "This drafter was built for a different target model (hidden size \(drafterHiddenSize) vs \(targetHiddenSize)). The server will reject it.",
+                true
+            )
+        }
+        if let kindLabel = selected.drafterKindLabel {
+            return ("Detected \(kindLabel) drafter. Loaded after the next server restart.", false)
+        }
+        return (
+            "No drafter metadata found in this model. Speculative decoding may fall back to DFlash or fail to load.",
+            false
+        )
     }
 
     private var structuredOutputSection: some View {
@@ -482,8 +605,16 @@ struct ModelConfigurationView: View {
                 settings.speculativeDecodingEnabled = enabled
                 if enabled {
                     settings.structuredOutputEnabled = false
+                    settings.thinkingBudgetEnabled = false
                 }
             }
+        )
+    }
+
+    private var thinkingBudgetBinding: Binding<Bool> {
+        Binding(
+            get: { settings.thinkingBudgetEnabled && !settings.speculativeDecodingActive },
+            set: { settings.thinkingBudgetEnabled = $0 }
         )
     }
 

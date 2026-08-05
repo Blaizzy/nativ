@@ -122,6 +122,26 @@ private struct NativApplication: App {
                 .keyboardShortcut("s", modifiers: [.control, .command])
             }
 
+            CommandGroup(after: .sidebar) {
+                Button("Collapse All Sections") {
+                    appDelegate.toggleAllSidebarSections()
+                }
+                .keyboardShortcut(".", modifiers: [.command, .option])
+
+                Button("Increase Chat Font Size") {
+                    appDelegate.increaseChatFontSize()
+                }
+                .keyboardShortcut("+", modifiers: .command)
+                Button("Decrease Chat Font Size") {
+                    appDelegate.decreaseChatFontSize()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+                Button("Reset Chat Font Size") {
+                    appDelegate.resetChatFontSize()
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
+
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
                     appDelegate.openSettings()
