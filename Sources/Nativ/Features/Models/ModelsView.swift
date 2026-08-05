@@ -362,7 +362,8 @@ struct ModelsView: View {
                                     onDownload: {
                                         downloadManager.download(
                                             repoID: hubModel.id,
-                                            sizeBytes: hubModel.sizeBytes,
+                                            sizeBytes: HubModelSizeResolver.shared
+                                                .resolvedSize(for: hubModel.id) ?? hubModel.sizeBytes,
                                             cachePath: model.settings.modelSearchPath,
                                             token: model.effectiveHuggingFaceToken
                                         ) {}
@@ -1159,6 +1160,7 @@ private struct ActiveDownloadBannerView: View {
 
 private struct HubModelRow: View, Equatable {
     let model: HuggingFaceModel
+    let downloadSizeBytes: Int64?
     let isInstalled: Bool
     let isDownloading: Bool
     let downloadProgress: Double
@@ -1173,6 +1175,7 @@ private struct HubModelRow: View, Equatable {
         // Actions are intentionally excluded: they do not affect rendering,
         // while closures are recreated whenever the parent view is rebuilt.
         lhs.model == rhs.model
+            && lhs.downloadSizeBytes == rhs.downloadSizeBytes
             && lhs.isInstalled == rhs.isInstalled
             && lhs.isDownloading == rhs.isDownloading
             && lhs.downloadProgress == rhs.downloadProgress
@@ -1225,7 +1228,7 @@ private struct HubModelRow: View, Equatable {
                         ModelPill(
                             title: compactCount(model.downloads), systemImage: "arrow.down.circle")
                         ModelPill(title: compactCount(model.likes), systemImage: "heart")
-                        if let sizeBytes = model.sizeBytes {
+                        if let sizeBytes = downloadSizeBytes {
                             ModelPill(
                                 title: ByteCountFormatter.string(
                                     fromByteCount: sizeBytes, countStyle: .file),
@@ -1313,6 +1316,7 @@ private struct HubModelRow: View, Equatable {
 /// Discover view remains stable while a download reports progress.
 private struct HubModelRowContainer: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+    @ObservedObject private var sizeResolver = HubModelSizeResolver.shared
 
     let model: HuggingFaceModel
     let isInstalled: Bool
@@ -1322,14 +1326,16 @@ private struct HubModelRowContainer: View {
     let onRemoveDownload: () -> Void
 
     var body: some View {
+        let downloadSizeBytes = sizeResolver.resolvedSize(for: model.id) ?? model.sizeBytes
         HubModelRow(
             model: model,
+            downloadSizeBytes: downloadSizeBytes,
             isInstalled: isInstalled,
             isDownloading: downloadManager.isDownloading(model.id),
             downloadProgress: downloadManager.progress(for: model.id),
             isDownloadPaused: downloadManager.isPaused(for: model.id),
             downloadBlockedReason: downloadManager.capacityBlocker(
-                sizeBytes: model.sizeBytes,
+                sizeBytes: downloadSizeBytes,
                 cachePath: cachePath
             ),
             downloadError: downloadManager.errorByModelID[model.id],
@@ -1338,6 +1344,9 @@ private struct HubModelRowContainer: View {
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
+        .task(id: model.id) {
+            await sizeResolver.prefetch(model.id)
+        }
     }
 }
 
