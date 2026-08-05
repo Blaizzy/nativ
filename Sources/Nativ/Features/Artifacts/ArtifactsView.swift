@@ -849,7 +849,7 @@ struct ArtifactsView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
-        .background(.bar)
+        .background(Color.nativMainContentBackground)
     }
 
     @ViewBuilder
