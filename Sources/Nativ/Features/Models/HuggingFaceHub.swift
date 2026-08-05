@@ -99,18 +99,42 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         }
 
         provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
-        sizeBytes = safetensors?.sizeBytes
         capabilities = Self.resolveCapabilities(
             pipelineTag: pipelineTag,
             libraryName: libraryName,
             tags: tags
         )
+        let parameterBytes = safetensors?.sizeBytes
+        sizeBytes = Self.calibratedDownloadBytes(parameterBytes, capabilities: capabilities)
         memoryEstimate = Self.resolveMemoryEstimate(
             repoID: id,
             safetensors: safetensors,
-            sizeBytes: sizeBytes,
+            sizeBytes: parameterBytes,
             capabilities: capabilities
         )
+    }
+
+    // The safetensors parameter summary only covers the diffusion transformer.
+    // Image-generation repos also ship a text encoder, VAE, and other components
+    // that get downloaded, so the raw estimate lands well under the real download.
+    // Scale it up for those models until we can sum the repo's actual file sizes.
+    private static func calibratedDownloadBytes(
+        _ parameterBytes: Int64?,
+        capabilities: Set<LocalModelCapability>
+    ) -> Int64? {
+        guard let parameterBytes else {
+            return nil
+        }
+        let isImageModel = capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+        guard isImageModel else {
+            return parameterBytes
+        }
+        let scaled = Double(parameterBytes) * 2.0
+        guard scaled <= Double(Int64.max) else {
+            return parameterBytes
+        }
+        return Int64(scaled.rounded(.up))
     }
 
     private static func resolveMemoryEstimate(
