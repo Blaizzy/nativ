@@ -1,6 +1,10 @@
 import Foundation
 import NativServerKit
 
+typealias ChatImageModelSelectionHandler = @MainActor @Sendable (
+    ChatImageModelSelectionRequest
+) async throws -> String
+
 struct ChatToolExecutionContext {
     let imageGenerationModelID: String?
     let baseURL: URL
@@ -9,6 +13,8 @@ struct ChatToolExecutionContext {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
     var analyticsDatabaseURL: URL? = nil
+    var imageModelSelection: ChatImageModelSelectionHandler? = nil
+    var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
 
 struct ChatToolExecutionOutcome {
@@ -29,10 +35,7 @@ enum ChatToolRegistry {
         context: ChatToolExecutionContext,
         canEditImage: Bool
     ) -> [MLXChatToolDefinition] {
-        var tools: [MLXChatToolDefinition] = []
-        if context.imageGenerationModelID?.isEmpty == false {
-            tools.append(contentsOf: ChatImageToolRegistry.definitions(canEdit: canEditImage))
-        }
+        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
@@ -91,17 +94,49 @@ enum ChatToolDispatcher {
         call: MLXChatToolCall,
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        guard let imageModelID = context.imageGenerationModelID else {
-            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "image")
-        }
-        let result = try await ChatImageToolExecutor().execute(
+        let imageRequest = try ChatImageToolRequest(
             call: call,
+            hasImageReference: !context.imageReferences.isEmpty
+        )
+        let installedModels = try await ChatImageModelSelection.installedOptions(
+            modelSearchPath: context.modelSearchPath,
+            additionalModelSearchPaths: context.additionalModelSearchPaths
+        )
+        let imageModelID: String
+        switch ChatImageModelSelection.resolve(
+            operation: imageRequest.operation,
+            selectedModelID: context.imageGenerationModelID,
+            installedModels: installedModels
+        ) {
+        case .selected(let model):
+            imageModelID = model.modelID
+        case .selectionRequired(let selectionRequest):
+            guard let requestSelection = context.imageModelSelection else {
+                throw ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
+            }
+            let selectedModelID = try await requestSelection(selectionRequest)
+            guard let selectedModel = ChatImageModelSelection.selectedModel(
+                withID: selectedModelID,
+                from: selectionRequest
+            ) else {
+                throw ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
+            }
+            imageModelID = selectedModel.modelID
+        case .installationRequired:
+            throw ChatImageToolError.noCompatibleModels(imageRequest.operation)
+        }
+        await context.imageExecutionWillStart?(imageModelID)
+        let result = try await ChatImageToolExecutor().execute(
+            request: imageRequest,
             modelID: imageModelID,
             baseURL: context.baseURL,
             apiKey: context.apiKey,
             references: context.imageReferences
         )
-        return ChatToolExecutionOutcome(content: result.content, attachments: result.attachments)
+        return ChatToolExecutionOutcome(
+            content: result.content,
+            attachments: result.attachments
+        )
     }
 
     private static func executeSystemMonitorTool(
@@ -202,6 +237,10 @@ enum ChatToolPresentation {
 
     static func symbolName(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch status {
+        case .preparing:
+            return "magnifyingglass"
+        case .awaitingImageModelSelection:
+            return "photo.badge.checkmark"
         case .failed:
             return "exclamationmark.triangle.fill"
         case .cancelled, .declined:
@@ -228,6 +267,10 @@ enum ChatToolPresentation {
 
     private static func imageTitle(isEdit: Bool, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch status {
+        case .preparing:
+            return "Checking image model…"
+        case .awaitingImageModelSelection:
+            return "Choose image model"
         case .running:
             return isEdit ? "Editing image…" : "Generating image…"
         case .succeeded:
@@ -241,11 +284,11 @@ enum ChatToolPresentation {
 
     private static func systemMonitorTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch status {
-        case .running:
+        case .preparing, .running:
             return "Checking system stats…"
         case .succeeded:
             return "Checked system stats"
-        case .failed, .cancelled, .awaitingConsent, .declined:
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
             return "System stats"
         case nil:
             return "System tool"
@@ -254,11 +297,11 @@ enum ChatToolPresentation {
 
     private static func modelLibraryTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch status {
-        case .running:
+        case .preparing, .running:
             return "Listing downloaded models…"
         case .succeeded:
             return "Listed downloaded models"
-        case .failed, .cancelled, .awaitingConsent, .declined:
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
             return "Model library"
         case nil:
             return "Model library tool"
@@ -267,11 +310,11 @@ enum ChatToolPresentation {
 
     private static func serverStatsTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch status {
-        case .running:
+        case .preparing, .running:
             return "Checking server stats…"
         case .succeeded:
             return "Checked server stats"
-        case .failed, .cancelled, .awaitingConsent, .declined:
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
             return "Server stats"
         case nil:
             return "Server stats tool"
@@ -282,7 +325,9 @@ enum ChatToolPresentation {
         switch status {
         case .awaitingConsent:
             return "Switch model?"
-        case .running:
+        case .awaitingImageModelSelection:
+            return "Model switch"
+        case .preparing, .running:
             return "Switching model…"
         case .succeeded:
             return "Switched model"
@@ -298,11 +343,11 @@ enum ChatToolPresentation {
     private static func genericTitle(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         let name = toolName ?? "tool"
         switch status {
-        case .running:
+        case .preparing, .running:
             return "Running \(name)…"
         case .succeeded:
             return "Ran \(name)"
-        case .failed, .cancelled, .awaitingConsent, .declined, nil:
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined, nil:
             return name
         }
     }

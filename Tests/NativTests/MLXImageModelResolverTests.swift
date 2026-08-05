@@ -58,6 +58,14 @@ final class MLXImageModelResolverTests: XCTestCase {
                 fileManager: .default
             )
         )
+        XCTAssertTrue(
+            resolver().isImageEditingModel(
+                model: "black-forest-labs/FLUX.2-klein-9B-kv",
+                at: temporaryRoot,
+                fileManager: .default
+            ),
+            "the bundled FLUX.2 backend supports reference-image editing"
+        )
     }
 
     func testFlux2RequiresLoadableLocalLayout() throws {
