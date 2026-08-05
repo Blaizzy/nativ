@@ -30,7 +30,7 @@ miniaudio==1.71
 mlx-audio>=0.4.7
 mlx-lm==0.31.3
 mlx-metal>=0.32.0
-mlx-vlm @ git+https://github.com/Lazarus-931/mlx-vlm.git@a8312ff9e696d386c6e09deb07f3015872281b1a
+mlx-vlm>=0.6.10
 mlx>=0.32.0
 multidict==6.7.1
 numpy==2.4.4

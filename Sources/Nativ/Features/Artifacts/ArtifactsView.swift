@@ -90,7 +90,7 @@ struct ArtifactsView: View {
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var inspectorArtifact: Artifact?
-    @State private var groupByChat = true
+    @State private var groupByChat = false
     @State private var albumSessionID: UUID?
     @State private var favoritesOnly = false
     @State private var dateFilter: ArtifactDateFilter = .all
@@ -99,6 +99,14 @@ struct ArtifactsView: View {
     @State private var cursorID: Artifact.ID?
     @FocusState private var gridFocused: Bool
     @FocusState private var searchFocused: Bool
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var showingByChat: Bool {
+        groupByChat && !isSearching
+    }
 
     private var filtered: [Artifact] {
         var result = store.artifacts
@@ -118,7 +126,7 @@ struct ArtifactsView: View {
         if query.isEmpty {
             return result.sorted(by: sort.comparator)
         }
-        if let semanticMatches {
+        if let semanticMatches, semanticSearch?.isModelInstalled == true {
             var rank: [UUID: Int] = [:]
             for (position, id) in semanticMatches.enumerated() {
                 rank[id] = position
@@ -157,7 +165,7 @@ struct ArtifactsView: View {
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Search your artifacts by content")
+                    Text("Turn on Smart search")
                         .font(.system(size: 12, weight: .semibold))
                     Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the gear menu.")
                         .font(.system(size: 11))
@@ -189,15 +197,20 @@ struct ArtifactsView: View {
         } label: {
             Image(systemName: "gearshape")
         }
-        .help("Content search settings")
+        .help("Smart search settings")
         .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Content search", systemImage: "sparkle.magnifyingglass")
+                Label("Smart search", systemImage: "sparkle.magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
                 if config.isModelInstalled {
                     Text("On — searching by image, video and document contents.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                    Button("Turn off & remove model", role: .destructive) {
+                        config.onRemove()
+                        showsSemanticPopover = false
+                    }
+                    .controlSize(.small)
                 } else if config.isDownloading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
@@ -488,7 +501,7 @@ struct ArtifactsView: View {
             )
         } else if filtered.isEmpty {
             emptyState(title: "Nothing matches", message: "Try a different filter or search term.")
-        } else if groupByChat {
+        } else if showingByChat {
             deckGrid
         } else {
             ScrollView {
@@ -545,8 +558,8 @@ struct ArtifactsView: View {
 
     private func grid(_ artifacts: [Artifact]) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 172, maximum: 220), spacing: 18)],
-            spacing: 18
+            columns: [GridItem(.adaptive(minimum: 180, maximum: 220), spacing: 24)],
+            spacing: 24
         ) {
             ForEach(artifacts) { artifact in
                 ArtifactTile(
@@ -615,40 +628,26 @@ struct ArtifactsView: View {
                 }
             }
 
-            Menu {
-                Button {
-                    groupByChat = true
-                } label: {
-                    if groupByChat {
-                        Label("By Chat", systemImage: "checkmark")
-                    } else {
-                        Text("By Chat")
-                    }
-                }
-                Button {
-                    groupByChat = false
-                } label: {
-                    if !groupByChat {
-                        Label("By Date", systemImage: "checkmark")
-                    } else {
-                        Text("By Date")
-                    }
-                }
-                if !groupByChat {
-                    Divider()
+            Toggle(isOn: Binding(get: { showingByChat }, set: { groupByChat = $0 })) {
+                Label("By Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            .toggleStyle(.button)
+            .disabled(isSearching)
+            .help(isSearching ? "Grouping is off while searching" : "Group artifacts by chat")
+
+            if !showingByChat {
+                Menu {
                     Picker("Sort", selection: $sort) {
                         ForEach(ArtifactSort.allCases) { option in
                             Text(option.rawValue).tag(option)
                         }
                     }
                     .pickerStyle(.inline)
+                } label: {
+                    Text(sort.rawValue)
                 }
-            } label: {
-                Text(groupByChat ? "By Chat" : "By Date · \(sort.rawValue)")
-            }
-            .fixedSize()
+                .fixedSize()
 
-            if !groupByChat {
                 Picker("", selection: $layout) {
                     Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
                     Image(systemName: "list.bullet").tag(ArtifactLayout.list)

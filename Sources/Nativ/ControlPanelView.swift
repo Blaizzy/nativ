@@ -271,8 +271,8 @@ struct ControlPanelView: View {
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
     @StateObject private var embeddingLibrary = LocalModelLibrary()
 
-    private static let embeddingModelID = "arthurcollet/Qwen3-VL-Embedding-2B-mlx-4bit"
-    private static let embeddingModelSize: Int64 = 1_800_000_000
+    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
+    private static let embeddingModelSize: Int64 = 4_300_000_000
 
     private var artifactSemanticSearch: ArtifactSemanticSearchConfig {
         let settings = model.settings.normalized()
@@ -310,6 +310,19 @@ struct ControlPanelView: View {
                     NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
                 }
                 navigation.open(.models)
+            },
+            onRemove: {
+                Task {
+                    try? await LocalModelDiscovery.delete(
+                        repoID: modelID,
+                        path: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
             }
         )
     }
