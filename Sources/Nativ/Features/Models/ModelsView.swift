@@ -46,6 +46,8 @@ private struct HubSearchTaskID: Hashable {
     let section: ModelsPageSection
     let query: String
     let sort: HuggingFaceModelSort
+    let capabilities: Set<LocalModelCapability>
+    let access: HubAccessFilter
     let authenticationToken: String?
 }
 
@@ -108,6 +110,8 @@ struct ModelsView: View {
             hubLibrary.search(
                 query: hubQuery,
                 sort: hubSort,
+                capabilities: hubCapabilityFilters,
+                predicate: hubVisibilityPredicate,
                 token: model.effectiveHuggingFaceToken
             )
         }
@@ -334,17 +338,15 @@ struct ModelsView: View {
                             title: hubQuery.isEmpty
                                 ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
                     } else if hubLibrary.models.isEmpty {
-                        ModelsEmptyState(
-                            systemImage: "magnifyingglass",
-                            title: "No Safetensors models found",
-                            message: "Try a model family, provider, or repository name.",
-                            actionTitle: nil,
-                            action: {}
-                        )
-                    } else {
-                        discoverResultsHeader
-
-                        if filteredHubModels.isEmpty {
+                        if hubCapabilityFilters.isEmpty && hubAccessFilter == .all {
+                            ModelsEmptyState(
+                                systemImage: "magnifyingglass",
+                                title: "No Safetensors models found",
+                                message: "Try a model family, provider, or repository name.",
+                                actionTitle: nil,
+                                action: {}
+                            )
+                        } else {
                             ModelsEmptyState(
                                 systemImage: "line.3.horizontal.decrease.circle",
                                 title: "No models match these filters",
@@ -353,33 +355,35 @@ struct ModelsView: View {
                                 actionTitle: nil,
                                 action: {}
                             )
-                        } else {
-                            ForEach(filteredHubModels) { hubModel in
-                                HubModelRowContainer(
-                                    model: hubModel,
-                                    isInstalled: installedModelIDs.contains(hubModel.id),
-                                    cachePath: model.settings.modelSearchPath,
-                                    onDownload: {
-                                        downloadManager.download(
-                                            repoID: hubModel.id,
-                                            sizeBytes: HubModelSizeResolver.shared
-                                                .resolvedSize(for: hubModel.id) ?? hubModel.estimatedDownloadBytes,
-                                            cachePath: model.settings.modelSearchPath,
-                                            token: model.effectiveHuggingFaceToken
-                                        ) {}
-                                    },
-                                    onPauseResume: {
-                                        if downloadManager.isPaused(for: hubModel.id) {
-                                            downloadManager.resumeDownload(hubModel.id)
-                                        } else {
-                                            downloadManager.pauseDownload(hubModel.id)
-                                        }
-                                    },
-                                    onRemoveDownload: {
-                                        downloadManager.removeDownload(hubModel.id)
+                        }
+                    } else {
+                        discoverResultsHeader
+
+                        ForEach(filteredHubModels) { hubModel in
+                            HubModelRowContainer(
+                                model: hubModel,
+                                isInstalled: installedModelIDs.contains(hubModel.id),
+                                cachePath: model.settings.modelSearchPath,
+                                onDownload: {
+                                    downloadManager.download(
+                                        repoID: hubModel.id,
+                                        sizeBytes: HubModelSizeResolver.shared
+                                            .resolvedSize(for: hubModel.id) ?? hubModel.estimatedDownloadBytes,
+                                        cachePath: model.settings.modelSearchPath,
+                                        token: model.effectiveHuggingFaceToken
+                                    ) {}
+                                },
+                                onPauseResume: {
+                                    if downloadManager.isPaused(for: hubModel.id) {
+                                        downloadManager.resumeDownload(hubModel.id)
+                                    } else {
+                                        downloadManager.pauseDownload(hubModel.id)
                                     }
-                                )
-                            }
+                                },
+                                onRemoveDownload: {
+                                    downloadManager.removeDownload(hubModel.id)
+                                }
+                            )
                         }
 
                         HStack(spacing: 12) {
@@ -734,13 +738,15 @@ struct ModelsView: View {
         .fixedSize()
     }
 
-    private var filteredHubModels: [HuggingFaceModel] {
-        hubLibrary.models.filter { hubModel in
-            let matchesCapability = hubCapabilityFilters.allSatisfy {
+    private var hubVisibilityPredicate: (HuggingFaceModel) -> Bool {
+        let capabilities = hubCapabilityFilters
+        let access = hubAccessFilter
+        return { hubModel in
+            let matchesCapability = capabilities.allSatisfy {
                 hubModel.capabilities.contains($0)
             }
             let matchesAccess: Bool
-            switch hubAccessFilter {
+            switch access {
             case .all:
                 matchesAccess = true
             case .open:
@@ -750,6 +756,10 @@ struct ModelsView: View {
             }
             return matchesCapability && matchesAccess
         }
+    }
+
+    private var filteredHubModels: [HuggingFaceModel] {
+        hubLibrary.models
     }
 
     private var installedFilterIsActive: Bool {
@@ -825,6 +835,8 @@ struct ModelsView: View {
             section: section,
             query: hubQuery,
             sort: hubSort,
+            capabilities: hubCapabilityFilters,
+            access: hubAccessFilter,
             authenticationToken: model.effectiveHuggingFaceToken
         )
     }
