@@ -1447,7 +1447,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
-        if textView.string != text {
+        if !textView.hasMarkedText(), textView.string != text {
             textView.string = text
         }
         context.coordinator.reportContentHeight()
@@ -1486,6 +1486,11 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else {
+                return
+            }
+
+            guard !textView.hasMarkedText() else {
+                reportContentHeight()
                 return
             }
 
