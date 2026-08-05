@@ -376,6 +376,35 @@ private struct HuggingFaceHubClient: Sendable {
         return try await page(at: url, token: token)
     }
 
+    func model(id: String, token: String?) async throws -> HuggingFaceModel {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/api/models/\(id)"
+        components.queryItems = [
+            "downloads", "likes", "pipeline_tag", "library_name", "tags",
+            "private", "gated", "safetensors"
+        ].map { URLQueryItem(name: "expand[]", value: $0) }
+
+        guard let url = components.url else {
+            throw HuggingFaceHubError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("MLXPlatform/1.0", forHTTPHeaderField: "User-Agent")
+        HuggingFaceAuthentication.authorize(&request, token: token)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw HuggingFaceHubError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = (try? JSONDecoder().decode(HubErrorPayload.self, from: data))?.error ?? ""
+            throw HuggingFaceHubError.requestFailed(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
+    }
+
     func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
 
         var request = URLRequest(url: url)
@@ -473,6 +502,45 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             guard !Task.isCancelled else { return }
+            self.isSearching = false
+        }
+    }
+
+    func loadCurated(ids: [String], token: String?) {
+        searchTask?.cancel()
+        isSearching = true
+        error = nil
+        models = []
+        buffer = []
+        nextPageURL = nil
+        pageNumber = 1
+        activeSort = .downloads
+
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            var fetched: [String: HuggingFaceModel] = [:]
+            await withTaskGroup(of: (String, HuggingFaceModel?).self) { group in
+                let client = self.client
+                for id in ids {
+                    group.addTask {
+                        do {
+                            return (id, try await client.model(id: id, token: token))
+                        } catch {
+                            return (id, nil)
+                        }
+                    }
+                }
+                for await (id, model) in group where model != nil {
+                    fetched[id] = model
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let ordered = ids.compactMap { fetched[$0] }
+            self.buffer = ordered
+            self.models = ordered
+            self.error = ordered.isEmpty
+                ? HuggingFaceHubError.invalidResponse.errorDescription
+                : nil
             self.isSearching = false
         }
     }
@@ -662,6 +730,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
         onCompletion: @escaping () -> Void
     ) {
         guard contexts[repoID] == nil else { return }
+        if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
+            errorByModelID[repoID] = blocker
+            return
+        }
         do {
             try enqueue(
                 repoID: repoID,
