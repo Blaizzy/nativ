@@ -78,6 +78,7 @@ struct ArtifactsView: View {
     @State private var searchDebounce: Task<Void, Never>?
     @State private var showsSemanticPopover = false
     @AppStorage("artifactSemanticSearchOffered") private var semanticSearchOffered = false
+    @AppStorage("smartSearchEnabled") private var smartSearchEnabled = true
 
     @State private var search = ""
     @State private var kindFilter: ArtifactKind?
@@ -108,6 +109,10 @@ struct ArtifactsView: View {
         groupByChat && !isSearching
     }
 
+    private var smartSearchActive: Bool {
+        smartSearchEnabled && (semanticSearch?.isModelInstalled == true)
+    }
+
     private var filtered: [Artifact] {
         var result = store.artifacts
         if let kindFilter {
@@ -126,7 +131,7 @@ struct ArtifactsView: View {
         if query.isEmpty {
             return result.sorted(by: sort.comparator)
         }
-        if let semanticMatches, semanticSearch?.isModelInstalled == true {
+        if let semanticMatches, smartSearchActive {
             var rank: [UUID: Int] = [:]
             for (position, id) in semanticMatches.enumerated() {
                 rank[id] = position
@@ -203,14 +208,24 @@ struct ArtifactsView: View {
                 Label("Smart search", systemImage: "sparkle.magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
                 if config.isModelInstalled {
-                    Text("On — searching by image, video and document contents.")
+                    Toggle("Enabled", isOn: $smartSearchEnabled)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                    Text(smartSearchEnabled
+                        ? "Searching by image, video and document contents."
+                        : "Turned off. The model stays installed.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Button("Turn off & remove model", role: .destructive) {
+                    Text("Runs on-device — results are fastest when your Mac isn't busy generating.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Divider()
+                    Button("Remove model", role: .destructive) {
                         config.onRemove()
                         showsSemanticPopover = false
                     }
                     .controlSize(.small)
+                    .help("Deletes the model and turns Smart search off")
                 } else if config.isDownloading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
@@ -243,7 +258,7 @@ struct ArtifactsView: View {
 
     private func scheduleSemanticSearch() {
         searchDebounce?.cancel()
-        guard let config = semanticSearch, config.isModelInstalled else {
+        guard smartSearchEnabled, let config = semanticSearch, config.isModelInstalled else {
             semanticMatches = nil
             return
         }
@@ -407,6 +422,9 @@ struct ArtifactsView: View {
         .focused($gridFocused)
         .onKeyPress(action: handleKey)
         .onChange(of: search) { _, _ in
+            scheduleSemanticSearch()
+        }
+        .onChange(of: smartSearchEnabled) { _, _ in
             scheduleSemanticSearch()
         }
         .overlay {
@@ -788,6 +806,12 @@ struct ArtifactsView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                if smartSearchActive {
+                    Circle()
+                        .fill(Color.green.opacity(0.7))
+                        .frame(width: 7, height: 7)
+                        .help("Smart search is on")
+                }
                 TextField("Search name or prompt", text: $search)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
@@ -1232,13 +1256,17 @@ private struct ArtifactThumbnail: View {
             if isTextDocument, let textPreview {
                 textCard(textPreview)
             } else if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
+                Color.clear
+                    .overlay {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
             } else {
                 placeholder
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .task(id: artifact.id) {
             if isTextDocument {
