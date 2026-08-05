@@ -421,11 +421,13 @@ final class VoiceCaptureCoordinator {
     }
 
     private func showRecentRecordingUnavailable() {
+        let preferences = VoiceShortcutPreferences.shared
         showTranscriptionError(
             title: "No Recent Recording",
             message: """
-            Audio is available for five minutes after recording. Hold Fn + Control \
-            to record again, then press Fn + R before the audio expires.
+            Audio is available for five minutes after recording. Use \
+            \(preferences.recordShortcut.displayName) to record again, then use \
+            \(preferences.retryShortcut.displayName) before the audio expires.
             """
         )
     }
