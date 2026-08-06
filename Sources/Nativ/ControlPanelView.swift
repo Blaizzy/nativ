@@ -274,19 +274,18 @@ struct ControlPanelView: View {
     private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
     private static let embeddingModelSize: Int64 = 4_300_000_000
 
-    private var artifactSemanticSearch: ArtifactSemanticSearchConfig {
+    private var artifactSemanticSearch: ArtifactSemanticSearchConfig? {
+        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
+            return nil
+        }
         let settings = model.settings.normalized()
         let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
             ?? URL(string: "http://127.0.0.1:8080")!
         let modelID = Self.embeddingModelID
-        let hasEnoughMemory = ProcessInfo.processInfo.physicalMemory >= 16_000_000_000
-        let diskBlocker = downloads.capacityBlocker(
+        let insufficientReason = downloads.capacityBlocker(
             sizeBytes: Self.embeddingModelSize,
             cachePath: settings.modelSearchPath
         )
-        let insufficientReason: String? = !hasEnoughMemory
-            ? "Requires 16 GB or more of memory"
-            : diskBlocker
         return ArtifactSemanticSearchConfig(
             modelID: modelID,
             sizeBytes: Self.embeddingModelSize,

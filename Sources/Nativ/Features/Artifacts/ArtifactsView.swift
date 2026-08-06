@@ -272,6 +272,19 @@ struct ArtifactsView: View {
             if Task.isCancelled {
                 return
             }
+            let matches = await searchIndex.search(query: query, model: config.modelID, client: config.client)
+            if Task.isCancelled {
+                return
+            }
+            semanticMatches = matches
+        }
+    }
+
+    private func warmSemanticIndex() {
+        guard smartSearchEnabled, let config = semanticSearch, config.isModelInstalled else {
+            return
+        }
+        Task {
             await searchIndex.index(
                 artifacts: store.artifacts,
                 model: config.modelID,
@@ -279,14 +292,6 @@ struct ArtifactsView: View {
                 visualURLs: visualDataURLs(for:),
                 textChunks: documentTextChunks(for:)
             )
-            if Task.isCancelled {
-                return
-            }
-            let matches = await searchIndex.search(query: query, model: config.modelID, client: config.client)
-            if Task.isCancelled {
-                return
-            }
-            semanticMatches = matches
         }
     }
 
@@ -421,10 +426,20 @@ struct ArtifactsView: View {
         .focusEffectDisabled()
         .focused($gridFocused)
         .onKeyPress(action: handleKey)
+        .task {
+            warmSemanticIndex()
+        }
         .onChange(of: search) { _, _ in
             scheduleSemanticSearch()
         }
-        .onChange(of: smartSearchEnabled) { _, _ in
+        .onChange(of: smartSearchActive) { _, _ in
+            warmSemanticIndex()
+            scheduleSemanticSearch()
+        }
+        .onChange(of: store.artifacts.count) { _, _ in
+            warmSemanticIndex()
+        }
+        .onChange(of: searchIndex.indexedCount) { _, _ in
             scheduleSemanticSearch()
         }
         .overlay {
