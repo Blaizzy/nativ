@@ -70,9 +70,9 @@ struct SystemMonitorView: View {
     private var header: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("System Monitor")
+                Text("System")
                     .font(.title2.weight(.semibold))
-                Text("Live performance and hardware health for this Mac")
+                Text("Live performance monitoring and hardware health for this Mac")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
