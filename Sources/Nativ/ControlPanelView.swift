@@ -1741,6 +1741,7 @@ struct ControlPanelView: View {
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
+                titleLeadingInset: detailTitleLeadingInset,
                 onOpenChat: { artifact in
                     switch artifact.source {
                     case .uploaded:
