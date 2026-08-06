@@ -331,17 +331,19 @@ struct ControlPanelView: View {
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .top) {
-            if selectedTab != .models, let failure = model.modelLoadFailure {
-                GlobalModelLoadFailureBanner(
-                    failure: failure,
-                    onOpenModels: { navigation.open(.models) },
-                    onDismiss: { model.clearModelLoadFailure() }
-                )
-                .padding(.top, 10)
-                .padding(.horizontal, 16)
+            Group {
+                if selectedTab != .models, let failure = model.modelLoadFailure {
+                    GlobalModelLoadFailureBanner(
+                        failure: failure,
+                        onOpenModels: { navigation.open(.models) },
+                        onDismiss: { model.clearModelLoadFailure() }
+                    )
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: selectedTab)
         }
-        .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
             ZStack {
                 ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
@@ -451,17 +453,23 @@ struct ControlPanelView: View {
             if isSelectingRecents {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             } else {
                 sidebarActionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    pinnedSection
-                    foldersSection
+                    if showsPinnedSection {
+                        pinnedSection
+                    }
+                    if showsFoldersSection {
+                        foldersSection
+                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
@@ -677,25 +685,26 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            headerDivider
-
             if !model.settings.sidebarPinnedCollapsed {
-                if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
-                    emptyPinnedHint
-                } else {
-                    ForEach(pinnedFolders) { folder in
-                        folderView(folder, dropTargeted: isPinnedDropTargeted)
-                    }
-                    ForEach(pinnedSessions) { recent in
-                        draggableRow(recent, isPinnedRow: true)
-                            .overlay(alignment: .top) {
-                                pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
-                            }
-                            .overlay(alignment: .bottom) {
-                                pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
-                            }
+                Group {
+                    if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
+                        emptyPinnedHint
+                    } else {
+                        ForEach(pinnedFolders) { folder in
+                            folderView(folder, dropTargeted: isPinnedDropTargeted)
+                        }
+                        ForEach(pinnedSessions) { recent in
+                            draggableRow(recent, isPinnedRow: true)
+                                .overlay(alignment: .top) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                                .overlay(alignment: .bottom) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                        }
                     }
                 }
+                .transition(.slide)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -708,15 +717,17 @@ struct ControlPanelView: View {
         }
     }
 
+    private var showsPinnedSection: Bool {
+        isSelectingRecents || !pinnedSessions.isEmpty || !pinnedFolders.isEmpty
+    }
+
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarRecentsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
-                .padding(.top, 12)
+                .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
-
-            headerDivider
 
             if !model.settings.sidebarSessionsCollapsed {
                 ForEach(ungroupedSessions) { recent in
@@ -748,10 +759,8 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            headerDivider
-
             if !model.settings.sidebarFoldersCollapsed {
-                if chat.folders.isEmpty {
+                if unpinnedFolders.isEmpty {
                     emptyFoldersHint
                 } else {
                     ForEach(unpinnedFolders) { folder in
@@ -763,6 +772,10 @@ struct ControlPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isFoldersDropTargeted))
         .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
+    }
+
+    private var showsFoldersSection: Bool {
+        isSelectingRecents || !unpinnedFolders.isEmpty
     }
 
     private var emptyFoldersHint: some View {
@@ -1094,13 +1107,6 @@ struct ControlPanelView: View {
         )
     }
 
-    private var headerDivider: some View {
-        Divider()
-            .padding(.leading, 8)
-            .padding(.trailing, 10)
-            .padding(.bottom, 6)
-    }
-
     private func sidebarSectionHeader<Trailing: View>(
         title: String,
         isCollapsed: Bool,
@@ -1108,15 +1114,15 @@ struct ControlPanelView: View {
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 12)
-
+            HStack(spacing: 4) {
                 Text(title)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(.secondary.opacity(0.7))
+
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .frame(width: 12)
 
                 Spacer(minLength: 0)
             }
