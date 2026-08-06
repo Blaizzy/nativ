@@ -135,7 +135,8 @@ final class MCPHostManager: ObservableObject {
             let client = MCPClient(
                 executableURL: executable,
                 arguments: config.arguments,
-                environment: Self.childEnvironment(searchPath: searchPath, overrides: config.environment)
+                environment: Self.childEnvironment(searchPath: searchPath, overrides: config.environment),
+                workingDirectory: Self.workingDirectory(for: config.id.uuidString)
             )
             pending.append((config, client))
         }
@@ -240,6 +241,19 @@ final class MCPHostManager: ObservableObject {
             environment[key] = value
         }
         return environment
+    }
+
+    private static func workingDirectory(for id: String) -> URL? {
+        guard let support = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+        return support
+            .appendingPathComponent("Nativ", isDirectory: true)
+            .appendingPathComponent("MCP", isDirectory: true)
+            .appendingPathComponent(slug(id), isDirectory: true)
     }
 
     private static func slug(_ raw: String) -> String {

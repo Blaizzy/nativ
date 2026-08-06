@@ -40,6 +40,7 @@ public actor MCPClient {
     private let executableURL: URL
     private let arguments: [String]
     private let environment: [String: String]
+    private let workingDirectory: URL?
     private let clientName: String
     private let clientVersion: String
 
@@ -53,12 +54,14 @@ public actor MCPClient {
         executableURL: URL,
         arguments: [String],
         environment: [String: String],
+        workingDirectory: URL? = nil,
         clientName: String = "Nativ",
         clientVersion: String = "1.0.0"
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
         self.environment = environment
+        self.workingDirectory = workingDirectory
         self.clientName = clientName
         self.clientVersion = clientVersion
     }
@@ -76,6 +79,13 @@ public actor MCPClient {
         process.executableURL = executableURL
         process.arguments = arguments
         process.environment = environment
+        if let workingDirectory {
+            try FileManager.default.createDirectory(
+                at: workingDirectory,
+                withIntermediateDirectories: true
+            )
+            process.currentDirectoryURL = workingDirectory
+        }
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = FileHandle.nullDevice
