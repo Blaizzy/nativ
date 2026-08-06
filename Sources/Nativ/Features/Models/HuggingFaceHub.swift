@@ -113,6 +113,27 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         )
     }
 
+    // Fallback download size shown until the real file sizes are fetched (and if
+    // that fetch fails). The safetensors parameter summary only covers the
+    // diffusion transformer, so for image models it lands well under the real
+    // download; scale it toward the components a modern image pipeline also ships
+    // (text encoder + VAE). This is a placeholder — the async fetch replaces it.
+    var estimatedDownloadBytes: Int64? {
+        guard let sizeBytes else {
+            return nil
+        }
+        let isImageModel = capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+        guard isImageModel else {
+            return sizeBytes
+        }
+        let scaled = Double(sizeBytes) * 2.5
+        guard scaled <= Double(Int64.max) else {
+            return sizeBytes
+        }
+        return Int64(scaled.rounded(.up))
+    }
+
     private static func resolveMemoryEstimate(
         repoID: String,
         safetensors: HuggingFaceSafetensors?,
