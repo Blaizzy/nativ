@@ -85,6 +85,7 @@
 		7936A52CFFF5AB09FC9CDDCD /* HuggingFaceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */; };
 		7A86AD9E2E640430F47B94D5 /* FileTypeIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677258B04E9BB7CA8B89E11E /* FileTypeIcon.swift */; };
 		802B1F569D3D9FBE951EC8EA /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADEC2FFE7F1CFAC59170AC63 /* DashboardViewModel.swift */; };
+		826AB68248F3DD8952284745 /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */; };
 		86C75AF5CF63104E397339FB /* ArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3387C33E274E567979F013 /* ArtifactsView.swift */; };
 		8B4DF732A8A6AA5FFBE11982 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64BBF79010B8120057237B52 /* StatsView.swift */; };
 		8B86659B490F58DEC1363135 /* NativServerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; };
@@ -147,6 +148,7 @@
 		F2D992CF4F2CDFF9BEA13C3B /* ServerPortProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330FEA0F4955A2486E0C3A22 /* ServerPortProbe.swift */; };
 		F3148D435BE180A3EB75EAC7 /* ModelPrimaryTaskResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 141A3E7402D8AE90971C374B /* ModelPrimaryTaskResolver.swift */; };
 		F32A65A75BCD6911505114F4 /* NativExtensionSDK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC94DCF581824C3B1FCADAB8 /* NativExtensionSDK.framework */; };
+		F58ED8B576ABBE02882D43D1 /* HubModelSizeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B412A48D040D2DE044FF083 /* HubModelSizeResolver.swift */; };
 		F5EB384AAC13043938A0A7EB /* IntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8DD9E277F67490B9744732 /* IntegrationTypes.swift */; };
 		F6BFEEE99336BB34E3194214 /* NativExtensionPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD28C5E1607C8E6025B7240 /* NativExtensionPlatform.swift */; };
 		FD18166B4B3FAEB77E0D8C69 /* CodexCLIProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */; };
@@ -240,8 +242,10 @@
 		0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexCLIProfile.swift; sourceTree = "<group>"; };
 		141A3E7402D8AE90971C374B /* ModelPrimaryTaskResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolver.swift; sourceTree = "<group>"; };
 		1573A2D88784C9D404156D25 /* VoiceDictationExtensionRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDictationExtensionRuntime.swift; sourceTree = "<group>"; };
+		1B412A48D040D2DE044FF083 /* HubModelSizeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModelSizeResolver.swift; sourceTree = "<group>"; };
 		1C30476FCFDB8FC736643EEB /* NativAnalyticsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativAnalyticsStore.swift; sourceTree = "<group>"; };
 		1D4B44C59153CB242FE92D3A /* ImageGenerationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageGenerationView.swift; sourceTree = "<group>"; };
+		219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
 		23155DB5E733D8887D83AFD0 /* VoiceTranscriptInserter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriptInserter.swift; sourceTree = "<group>"; };
 		239C5B241E83468B75C43E5A /* ImageGenerationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageGenerationViewModel.swift; sourceTree = "<group>"; };
 		27D63523BA62CC95FDD8D51E /* FnControlShortcutMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FnControlShortcutMonitor.swift; sourceTree = "<group>"; };
@@ -475,6 +479,7 @@
 		4879D4C4839E304DF0C779DC /* VoiceCapture */ = {
 			isa = PBXGroup;
 			children = (
+				219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */,
 				B7E0BD007DAD141D50E1BAA4 /* AudioAnalyticsStore.swift */,
 				820A7EF6D7E1FA0F171A5A59 /* AudioCaptureLibrary.swift */,
 				D23B2DDDCBC745B54A08174D /* AudioInputDevicePreferences.swift */,
@@ -612,6 +617,7 @@
 		BAC9F35045D83344BC059CB2 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				1B412A48D040D2DE044FF083 /* HubModelSizeResolver.swift */,
 				E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */,
 				7F7FC582B0E18D226E87A1FE /* HuggingFaceHub.swift */,
 				EE984320AE8CCF8783DD30CE /* LocalModelDiscovery.swift */,
@@ -866,11 +872,11 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				465C23BB3ADA415A5004AAD9 /* Nativ */,
 				ED4CB78AB93E015D0BE21F7B /* NativExtensionSDK */,
 				1622B274F4DF5A85C2FDB081 /* NativServerKit */,
-				465C23BB3ADA415A5004AAD9 /* Nativ */,
-				7082E254E8272A5E8D13E6F0 /* VoiceDictationExtensionRuntime */,
 				51AD42FA29E71F2450386688 /* NativTests */,
+				7082E254E8272A5E8D13E6F0 /* VoiceDictationExtensionRuntime */,
 			);
 		};
 /* End PBXProject section */
@@ -939,6 +945,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B15353CDE6204176664DB3B2 /* AppDelegate.swift in Sources */,
+				826AB68248F3DD8952284745 /* AppleSpeechTranscriber.swift in Sources */,
 				A9B82EFAD4FD8C57E045721B /* Artifact.swift in Sources */,
 				B63E4B683EE9CA383DBEFADA /* ArtifactPreview.swift in Sources */,
 				582B1E2A148EF3DEE78B11E2 /* ArtifactStore.swift in Sources */,
@@ -970,6 +977,7 @@
 				7A86AD9E2E640430F47B94D5 /* FileTypeIcon.swift in Sources */,
 				B5C7C76E37B11FF2A0A8F584 /* FnControlShortcutMonitor.swift in Sources */,
 				0B11412D6A9FB77B9A204E7C /* Formatting.swift in Sources */,
+				F58ED8B576ABBE02882D43D1 /* HubModelSizeResolver.swift in Sources */,
 				7936A52CFFF5AB09FC9CDDCD /* HuggingFaceCache.swift in Sources */,
 				B55A6BE5C7B03181E2CD03D6 /* HuggingFaceHub.swift in Sources */,
 				575DCB7EC96DAB35B415434C /* ImageGenerationView.swift in Sources */,
