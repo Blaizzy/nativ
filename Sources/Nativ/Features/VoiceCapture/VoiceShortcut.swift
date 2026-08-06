@@ -77,7 +77,7 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
     static let recordDefault = VoiceShortcut(
         keyCode: nil,
         keyDisplay: nil,
-        modifiers: [.function, .control]
+        modifiers: [.control, .option, .command]
     )
     static let retryDefault = VoiceShortcut(
         keyCode: UInt16(kVK_ANSI_R),
