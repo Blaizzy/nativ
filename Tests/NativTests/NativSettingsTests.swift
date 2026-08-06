@@ -292,6 +292,11 @@ final class NativSettingsTests: XCTestCase {
             request.value(forHTTPHeaderField: "Authorization"),
             "Bearer nativ_image_token"
         )
+        let body = try XCTUnwrap(request.httpBody)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(object["model"] as? String, "org/model")
     }
 
     func testEveryPreloadSelectionRequiresServerRestart() {

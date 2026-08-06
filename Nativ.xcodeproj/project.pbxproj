@@ -33,6 +33,7 @@
 		293A976A334DFC98CFED82A0 /* SystemMonitorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E540204DED30CFBDB0FE1AD /* SystemMonitorStore.swift */; };
 		2B89F9E09ABB37B82AC2FEB5 /* NativAudioClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B712CAFE08083D1679354E /* NativAudioClient.swift */; };
 		2B988CEEF0FD7FCCD3862AF6 /* NativExtensionStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27F42CEC1B39477AC13352E3 /* NativExtensionStateStore.swift */; };
+		2BF78B0A20ED752102326A38 /* ChatImageModelSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A4264A4B88B593ED47AF0E /* ChatImageModelSelection.swift */; };
 		2BF94914481EEA1A493F5926 /* VoiceDictationExtensionRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1573A2D88784C9D404156D25 /* VoiceDictationExtensionRuntime.swift */; };
 		2C9930764FCB1AF6B4C66363 /* NativExtensionSDK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC94DCF581824C3B1FCADAB8 /* NativExtensionSDK.framework */; };
 		2E732395142F22D4CDCA2227 /* IntegrationServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A221B9B5CCE60A43CC46AC /* IntegrationServices.swift */; };
@@ -80,6 +81,7 @@
 		6CFBB2F5B3720F1334BF3D47 /* UISFXMinimalStop.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 8B12071ED75397C8639954B7 /* UISFXMinimalStop.mp3 */; };
 		6E7B34D02D005C83C71A412F /* NativServerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		71659335E55225ABCBB4E993 /* IssueReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46B388273DDFAD7C6C0F4E1 /* IssueReport.swift */; };
+		76EF60E40F6CC404F4CF8F91 /* ChatImageModelSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A4264A4B88B593ED47AF0E /* ChatImageModelSelection.swift */; };
 		7748996AA574868ED694F974 /* AudioCaptureLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 820A7EF6D7E1FA0F171A5A59 /* AudioCaptureLibrary.swift */; };
 		77B9284EE48D020C2B5A2DF3 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DE77E6246A3E3A186C3E8F54 /* AppIcon.icon */; };
 		7936A52CFFF5AB09FC9CDDCD /* HuggingFaceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */; };
@@ -324,6 +326,7 @@
 		D0952EC469768D8775A2D188 /* VoiceAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAudioRecorder.swift; sourceTree = "<group>"; };
 		D1651E057CC5D05857CF1595 /* NativServerKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativServerKit.swift; sourceTree = "<group>"; };
 		D23B2DDDCBC745B54A08174D /* AudioInputDevicePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioInputDevicePreferences.swift; sourceTree = "<group>"; };
+		D7A4264A4B88B593ED47AF0E /* ChatImageModelSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatImageModelSelection.swift; sourceTree = "<group>"; };
 		D8EF4E95FDA6F6E337FC4C47 /* ExtensionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionsView.swift; sourceTree = "<group>"; };
 		D941186B3A4BA46FB90201DE /* NativExtensionMessaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativExtensionMessaging.swift; sourceTree = "<group>"; };
 		D97F637262DB138A253DEA6F /* ChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposer.swift; sourceTree = "<group>"; };
@@ -564,6 +567,7 @@
 		967B3678137E2B152FAC9838 /* Tools */ = {
 			isa = PBXGroup;
 			children = (
+				D7A4264A4B88B593ED47AF0E /* ChatImageModelSelection.swift */,
 				87EF3E0B4A9EEC293EFD5F8A /* ChatImageTool.swift */,
 				B598294F3FC3EA81BCD7A680 /* ChatListModelsTool.swift */,
 				068ED8143814678E688A3A62 /* ChatServerStatsTool.swift */,
@@ -959,6 +963,7 @@
 				A2606518E424E92625661281 /* ChatComposer.swift in Sources */,
 				61598EC22589683F1A54B047 /* ChatConfigurationView.swift in Sources */,
 				E1A4AA0C4AA32599FF2D54E7 /* ChatFontScale.swift in Sources */,
+				2BF78B0A20ED752102326A38 /* ChatImageModelSelection.swift in Sources */,
 				B426C6D2B2C1B7C7D2F831E2 /* ChatImageTool.swift in Sources */,
 				04E587A0A3714FD30ECFDE91 /* ChatListModelsTool.swift in Sources */,
 				902CD676AA3002459DF7ACAE /* ChatPromptRevision.swift in Sources */,
@@ -1030,6 +1035,7 @@
 				AB1C4B8494B46754E6E8BE24 /* AudioAnalyticsStore.swift in Sources */,
 				01A65582AEB5E196FDEFDBE8 /* AudioInputDevicePreferences.swift in Sources */,
 				4B66E72A9DCB833D700F7612 /* AudioTests.swift in Sources */,
+				76EF60E40F6CC404F4CF8F91 /* ChatImageModelSelection.swift in Sources */,
 				D51D08482F5C0E76ACFEFDB1 /* ChatImageTool.swift in Sources */,
 				39F8BACAF5377A5DA14581BA /* ChatListModelsTool.swift in Sources */,
 				A0D30C905A2788C3BD2149BF /* ChatScreenCapture.swift in Sources */,
