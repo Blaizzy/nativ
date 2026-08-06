@@ -2887,30 +2887,32 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
     let content: String
     let fontScale: Double
 
-    func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField(wrappingLabelWithString: content)
-        textField.isSelectable = true
-        textField.isEditable = false
-        textField.isBezeled = false
-        textField.drawsBackground = false
-        textField.focusRingType = .none
-        textField.maximumNumberOfLines = 0
-        textField.lineBreakMode = .byWordWrapping
-        textField.cell?.wraps = true
-        textField.cell?.isScrollable = false
-        textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textField.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        update(textField)
-        return textField
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        update(textView)
+        return textView
     }
 
-    func updateNSView(_ textField: NSTextField, context: Context) {
-        update(textField)
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        update(textView)
     }
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        nsView textField: NSTextField,
+        nsView textView: NSTextView,
         context: Context
     ) -> CGSize? {
         let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
@@ -2925,15 +2927,15 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
         return CGSize(width: width, height: max(1, ceil(bounds.height)))
     }
 
-    private func update(_ textField: NSTextField) {
+    private func update(_ textView: NSTextView) {
         let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        if textField.stringValue != content || textField.font != font {
-            textField.attributedStringValue = NSAttributedString(
+        if textView.string != content || textView.font != font {
+            textView.textStorage?.setAttributedString(NSAttributedString(
                 string: content,
                 attributes: textAttributes(font: font)
-            )
+            ))
         }
-        textField.setAccessibilityLabel(content)
+        textView.setAccessibilityLabel(content)
     }
 
     private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
