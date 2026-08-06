@@ -1,40 +1,37 @@
+import AVFoundation
 import Foundation
 import Speech
-import os
 
-/// On-device dictation through Apple's Speech framework.
+/// On-device dictation through macOS's `SpeechAnalyzer`.
 ///
 /// This exists so dictation works before any model has been downloaded. Nativ's normal
-/// path needs an installed speech-to-text model *and* a running server; until both are
-/// in place the shortcut records audio and then has nowhere to send it. Apple's
-/// recognizer ships with macOS, needs no weights, and answers in well under a second,
-/// so it covers first launch, a stopped server, and the moment a model is still
-/// downloading.
+/// path needs an installed speech-to-text model *and* a running server; until both are in
+/// place the shortcut records audio and then has nowhere to send it. macOS ships its own
+/// speech models, needs no server, and transcribes at roughly 40–70× realtime, so it
+/// covers first launch, a stopped server, and the moment a model is still downloading.
 ///
 /// It is deliberately a fallback rather than an alternative: the bundled MLX models are
 /// more accurate and support far more languages. This just removes the dead end.
 ///
-/// **Recognition is pinned on-device.** `SFSpeechRecognizer` will happily stream audio to
-/// Apple's servers when a locale has no local model, which would be the wrong default for
-/// an app whose whole premise is that nothing leaves the Mac. `requiresOnDeviceRecognition`
-/// is set unconditionally and the locale is rejected outright when it has no on-device
-/// support, so a missing local model produces an error rather than a silent upload.
+/// `SpeechAnalyzer` is the macOS 26 successor to `SFSpeechRecognizer`, which the app's
+/// deployment target lets us require outright. Two things follow. Recognition is on-device
+/// by construction — the framework has no server mode to opt out of, so there is no path
+/// in which audio leaves the Mac — and there is no one-minute ceiling on the audio, which
+/// the older interface enforced by silently transcribing only the tail of a longer
+/// recording and reporting success.
 enum AppleSpeechTranscriber {
     enum Failure: LocalizedError {
-        case notAuthorized
-        case onDeviceUnavailable(locale: String)
-        case recognizerUnavailable
+        case languageUnsupported(String)
+        case modelInstalling(String)
         case timedOut
         case empty
 
         var errorDescription: String? {
             switch self {
-            case .notAuthorized:
-                "Nativ is not allowed to use speech recognition."
-            case let .onDeviceUnavailable(locale):
-                "macOS has no on-device speech model for \(locale)."
-            case .recognizerUnavailable:
-                "The system speech recognizer is unavailable."
+            case let .languageUnsupported(language):
+                "macOS has no on-device speech model for \(language)."
+            case let .modelInstalling(language):
+                "macOS is still downloading its \(language) speech model."
             case .timedOut:
                 "The system speech recognizer did not respond."
             case .empty:
@@ -43,169 +40,42 @@ enum AppleSpeechTranscriber {
         }
     }
 
-    /// Dictation clips are short and on-device recognition is fast, so anything beyond
-    /// this is a stall rather than slow progress.
-    private static let timeoutSeconds: TimeInterval = 30
+    /// Model identifier recorded in dictation history, so a transcript produced by the
+    /// fallback is distinguishable from one produced by an MLX model.
+    static let modelIdentifier = "apple-speech (on-device)"
 
-    /// Keeps the in-flight recognition task alive and makes completion single-shot.
-    private final class RecognitionTaskHolder: @unchecked Sendable {
-        private let lock = OSAllocatedUnfairLock(initialState: false)
-        var task: SFSpeechRecognitionTask?
-
-        /// True for the first caller only.
-        func claimCompletion() -> Bool {
-            lock.withLock { completed in
-                defer { completed = true }
-                return !completed
-            }
-        }
-    }
-
-    /// Locale used for recognition: the closest supported match to the user's own that
-    /// actually has an on-device model.
-    ///
-    /// Two traps here. `supportedLocales()` returns an unordered `Set`, so picking with
-    /// `first(where:)` yields a different answer between runs — an en-GB user could get
-    /// en-ID one launch and en-AU the next. And `Locale.current.identifier` uses
-    /// underscores (`en_GB`) while the supported list uses hyphens (`en-GB`), so the exact
-    /// match silently never fires. Candidates are therefore normalized, ranked, and
-    /// tie-broken by identifier so the choice is stable.
-    ///
-    /// Ranking also skips locales macOS lists but has no downloaded asset for, because
-    /// on-device recognition is mandatory here — a supported-but-absent locale would fail
-    /// the whole transcription rather than quietly falling back to a neighbouring one.
-    static var preferredLocale: Locale {
-        let current = Locale.current
-        let currentID = normalizedIdentifier(current.identifier)
-        let currentLanguage = current.language.languageCode?.identifier
-        let currentRegion = current.region?.identifier
-
-        func rank(_ locale: Locale) -> Int? {
-            let identifier = normalizedIdentifier(locale.identifier)
-            if identifier == currentID { return 0 }
-            guard let currentLanguage,
-                  locale.language.languageCode?.identifier == currentLanguage
-            else { return identifier == "en-US" ? 3 : nil }
-            return locale.region?.identifier == currentRegion ? 1 : 2
-        }
-
-        let ranked = SFSpeechRecognizer.supportedLocales()
-            .compactMap { locale -> (Locale, Int)? in
-                rank(locale).map { (locale, $0) }
-            }
-            .sorted {
-                $0.1 == $1.1
-                    ? normalizedIdentifier($0.0.identifier) < normalizedIdentifier($1.0.identifier)
-                    : $0.1 < $1.1
-            }
-            .map(\.0)
-
-        return ranked.first(where: hasOnDeviceModel)
-            ?? ranked.first
-            ?? Locale(identifier: "en-US")
-    }
-
-    private static func normalizedIdentifier(_ identifier: String) -> String {
-        identifier.replacingOccurrences(of: "_", with: "-")
-    }
-
-    private static func hasOnDeviceModel(_ locale: Locale) -> Bool {
-        guard let recognizer = SFSpeechRecognizer(locale: locale) else { return false }
-        return recognizer.isAvailable && recognizer.supportsOnDeviceRecognition
-    }
-
-    /// Whether a fallback attempt is worth making.
-    ///
-    /// `notDetermined` counts as available: permission is requested by the first
-    /// transcription, and requiring `authorized` here would deadlock — the fallback would
-    /// never run, so the prompt would never appear, so the status would never leave
-    /// `notDetermined`. A denied or restricted status is permanent until the user changes
-    /// it in System Settings, so it returns false and the caller shows its normal alert
-    /// instead of prompting on every recording.
+    /// Whether a fallback attempt is worth making — that is, whether macOS transcribes the
+    /// user's language at all. Whether its model is on disk yet is settled later, once
+    /// there is a recording to transcribe.
     static var isAvailable: Bool {
-        switch SFSpeechRecognizer.authorizationStatus() {
-        case .authorized, .notDetermined:
-            break
-        case .denied, .restricted:
-            return false
-        @unknown default:
-            return false
-        }
-        return hasOnDeviceModel(preferredLocale)
-    }
-
-    /// Prompts for permission the first time. Safe to call repeatedly; macOS only shows
-    /// the dialog while the status is `notDetermined`.
-    static func requestAuthorization() async -> Bool {
-        if SFSpeechRecognizer.authorizationStatus() == .authorized { return true }
-        return await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
-        }
+        get async { await transcriber() != nil }
     }
 
     /// Transcribes a recorded file. Nativ already writes dictation to disk before
     /// transcribing, so this takes a URL rather than tapping the microphone — it slots
     /// into the existing flow without changing how audio is captured.
     static func transcribe(contentsOf url: URL) async throws -> String {
-        guard await requestAuthorization() else { throw Failure.notAuthorized }
-
-        let locale = preferredLocale
-        guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
-            throw Failure.recognizerUnavailable
+        guard let transcriber = await transcriber() else {
+            throw Failure.languageUnsupported(displayName(of: .current))
         }
-        guard recognizer.supportsOnDeviceRecognition else {
-            throw Failure.onDeviceUnavailable(
-                locale: locale.localizedString(forIdentifier: locale.identifier)
-                    ?? locale.identifier
-            )
+        guard await isModelInstalled(transcriber) else {
+            throw Failure.modelInstalling(displayName(of: transcriber.locale))
         }
 
-        let request = SFSpeechURLRecognitionRequest(url: url)
-        request.requiresOnDeviceRecognition = true   // never leaves the Mac
-        request.shouldReportPartialResults = false
-        request.addsPunctuation = true
-        request.taskHint = .dictation
-
-        let transcript: String = try await withCheckedThrowingContinuation { continuation in
-            // The task must be held for the duration of recognition. Discarding the
-            // returned object lets ARC release it, and the result handler then never
-            // fires — the call simply hangs. The holder is captured by both closures
-            // below, which keeps it alive exactly as long as it is needed.
-            let holder = RecognitionTaskHolder()
-
-            func finish(_ result: Result<String, Error>) {
-                // The handler fires for partial results and cancellations as well as the
-                // final result, so resuming must happen at most once.
-                guard holder.claimCompletion() else { return }
-                holder.task?.cancel()
-                holder.task = nil
-                continuation.resume(with: result)
+        let analyzer = SpeechAnalyzer(modules: [transcriber.module])
+        let transcript: String
+        do {
+            transcript = try await withTimeout(after: timeout(forAudioAt: url)) {
+                // The results have to be draining before analysis starts, otherwise they
+                // are produced with nothing collecting them.
+                async let collected = transcriber.transcript()
+                _ = try await analyzer.analyzeSequence(from: AVAudioFile(forReading: url))
+                try await analyzer.finalizeAndFinishThroughEndOfInput()
+                return try await collected
             }
-
-            // A stalled recognizer would otherwise leave dictation waiting forever, with
-            // the overlay spinning and no way back. Failing here surfaces the normal
-            // "no model / server stopped" alert instead.
-            let timeout = DispatchWorkItem { finish(.failure(Failure.timedOut)) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
-
-            holder.task = recognizer.recognitionTask(with: request) { result, error in
-                if let error {
-                    let code = (error as NSError).code
-                    // 216 is "cancelled", which arrives after a successful final result.
-                    if code == 216 { return }
-                    timeout.cancel()
-                    // 1110 is "no speech detected". It is a normal outcome for a recording
-                    // that caught only silence, so it is reported as `.empty` and gets the
-                    // usual no-speech feedback rather than an error alert.
-                    finish(.failure(code == 1110 ? Failure.empty : error))
-                    return
-                }
-                guard let result, result.isFinal else { return }
-                timeout.cancel()
-                finish(.success(result.bestTranscription.formattedString))
-            }
+        } catch {
+            await analyzer.cancelAndFinishNow()
+            throw error
         }
 
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -213,7 +83,153 @@ enum AppleSpeechTranscriber {
         return trimmed
     }
 
-    /// Model identifier recorded in dictation history, so a transcript produced by the
-    /// fallback is distinguishable from one produced by an MLX model.
-    static let modelIdentifier = "apple-speech (on-device)"
+    // MARK: - Choosing a transcriber
+
+    /// A transcription module paired with the code that drains its results.
+    private struct Transcriber {
+        let module: any SpeechModule
+        let locale: Locale
+        /// Collects the module's output. Must be running before analysis begins.
+        let transcript: @Sendable () async throws -> String
+    }
+
+    /// The module that covers the user's language, preferring quality over coverage.
+    ///
+    /// `SpeechTranscriber` is the better recognizer — on a 97 s clip it kept the sentence
+    /// casing and punctuation that `DictationTranscriber` lost — but it covers 45 locales
+    /// to the latter's 54. Dictation therefore picks up what it misses (Czech, Dutch,
+    /// Polish, Russian, Swedish, Arabic, Hebrew and others), which for those users is the
+    /// difference between a fallback and no fallback.
+    ///
+    /// `supportedLocale(equivalentTo:)` does the matching, and does it better than the
+    /// hand-rolled ranking this file used to carry: it is deterministic, and it resolves
+    /// regions macOS has no model for onto ones it does — `en-JP` to `en-GB`, `pt-AO` to
+    /// `pt-PT`, a bare `de` to `de-DE`. A language with no model at all returns nil and
+    /// the caller shows its usual alert, rather than transcribing, say, Welsh with an
+    /// English model and inserting the result at the cursor.
+    private static func transcriber() async -> Transcriber? {
+        if let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) {
+            let module = SpeechTranscriber(locale: locale, preset: .transcription)
+            return Transcriber(module: module, locale: locale) {
+                var text = AttributedString()
+                for try await result in module.results where result.isFinal {
+                    text += result.text
+                }
+                return String(text.characters)
+            }
+        }
+
+        if let locale = await DictationTranscriber.supportedLocale(equivalentTo: .current) {
+            let module = DictationTranscriber(locale: locale, preset: .longDictation)
+            return Transcriber(module: module, locale: locale) {
+                var text = AttributedString()
+                for try await result in module.results where result.isFinal {
+                    text += result.text
+                }
+                return String(text.characters)
+            }
+        }
+
+        return nil
+    }
+
+    // MARK: - Model assets
+
+    /// Whether the locale's model is ready to use, starting its download if it is not.
+    ///
+    /// macOS usually has the model already — system dictation draws on the same assets —
+    /// but it reports `.supported` rather than `.installed` until the locale is allocated
+    /// to this app, which is what `reserve` does. That call is the whole of the work in
+    /// the common case: nothing is downloaded and the recording transcribes immediately.
+    ///
+    /// When the model genuinely is absent the download runs in the background rather than
+    /// holding the dictation overlay open for an unknown length of time. This recording
+    /// gets the caller's alert; the next one transcribes.
+    private static func isModelInstalled(_ transcriber: Transcriber) async -> Bool {
+        if await AssetInventory.status(forModules: [transcriber.module]) == .installed {
+            return true
+        }
+
+        // Reservations are capped at five locales per app and Nativ only ever asks for the
+        // one being dictated in, so exhausting them would take a deliberate tour through
+        // five languages. Failing here is not fatal either: it costs the guarantee that
+        // macOS keeps the model on disk, not the ability to transcribe with it.
+        _ = try? await AssetInventory.reserve(locale: transcriber.locale)
+        if await AssetInventory.status(forModules: [transcriber.module]) == .installed {
+            return true
+        }
+
+        await ModelInstaller.shared.install(transcriber.module, locale: transcriber.locale)
+        return false
+    }
+
+    /// Downloads a missing speech model, one installation per locale at a time so that
+    /// repeated dictation attempts do not queue duplicate downloads.
+    private actor ModelInstaller {
+        static let shared = ModelInstaller()
+
+        private var installing: Set<String> = []
+
+        func install(_ module: any SpeechModule, locale: Locale) {
+            let key = locale.identifier
+            guard installing.insert(key).inserted else { return }
+
+            Task {
+                do {
+                    let request = try await AssetInventory.assetInstallationRequest(
+                        supporting: [module]
+                    )
+                    if let request {
+                        try await request.downloadAndInstall()
+                        NSLog("Nativ installed the macOS %@ speech model", key)
+                    }
+                } catch {
+                    NSLog(
+                        "Nativ could not install the macOS %@ speech model: %@",
+                        key,
+                        error.localizedDescription
+                    )
+                }
+                finished(key)
+            }
+        }
+
+        private func finished(_ key: String) {
+            installing.remove(key)
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Recognition runs far faster than realtime, so a budget of the audio's own duration
+    /// is generous while still ending a stalled recognizer rather than leaving the overlay
+    /// spinning with no way back.
+    private static func timeout(forAudioAt url: URL) -> TimeInterval {
+        guard let file = try? AVAudioFile(forReading: url),
+              file.processingFormat.sampleRate > 0
+        else { return 30 }
+        return max(30, Double(file.length) / file.processingFormat.sampleRate)
+    }
+
+    private static func withTimeout<Success: Sendable>(
+        after seconds: TimeInterval,
+        _ work: @escaping @Sendable () async throws -> Success
+    ) async throws -> Success {
+        try await withThrowingTaskGroup(of: Success.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw Failure.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw Failure.timedOut }
+            return first
+        }
+    }
+
+    private static func displayName(of locale: Locale) -> String {
+        Locale.current.localizedString(forIdentifier: locale.identifier)
+            ?? locale.language.languageCode?.identifier
+            ?? locale.identifier
+    }
 }

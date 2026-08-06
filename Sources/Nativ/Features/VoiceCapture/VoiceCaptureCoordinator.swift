@@ -389,7 +389,7 @@ final class VoiceCaptureCoordinator {
         overlayTranscriptionID: UUID?,
         unavailableReason: ServerUnavailableReason
     ) async {
-        guard AppleSpeechTranscriber.isAvailable else {
+        guard await AppleSpeechTranscriber.isAvailable else {
             finishOverlayTranscription(overlayTranscriptionID)
             showServerUnavailableAlert(unavailableReason)
             return
@@ -400,6 +400,19 @@ final class VoiceCaptureCoordinator {
             transcript = try await AppleSpeechTranscriber.transcribe(contentsOf: recordingURL)
         } catch AppleSpeechTranscriber.Failure.empty {
             handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
+            return
+        } catch let AppleSpeechTranscriber.Failure.modelInstalling(language) {
+            // The one failure worth its own message: macOS has the language but not the
+            // model yet, and is now fetching it. Saying so beats an alert about a server
+            // the user may not have been trying to use.
+            finishOverlayTranscription(overlayTranscriptionID)
+            showTranscriptionError(
+                title: "Preparing On-Device Dictation",
+                message: """
+                macOS is downloading its \(language) speech model. Your recording is saved \
+                in Audio — dictate again once it has finished.
+                """
+            )
             return
         } catch {
             NSLog(
