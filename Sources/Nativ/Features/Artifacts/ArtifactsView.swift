@@ -172,7 +172,7 @@ struct ArtifactsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Turn on Smart search")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the gear menu.")
+                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the settings.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
