@@ -106,11 +106,11 @@ struct NativPermissionsSummary: View {
         let outstanding = store.outstandingPermissions.count
         switch outstanding {
         case 0:
-            return "All set. Nativ has everything it needs."
+            return "All voice permissions are on."
         case 1:
-            return "1 permission still needed."
+            return "1 optional permission is off."
         default:
-            return "\(outstanding) permissions still needed."
+            return "\(outstanding) optional permissions are off."
         }
     }
 
