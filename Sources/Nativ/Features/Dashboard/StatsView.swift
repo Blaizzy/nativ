@@ -176,7 +176,7 @@ private struct DashboardContentView: View, Equatable {
     private var pageHeader: some View {
         HStack(alignment: .top, spacing: 20) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Analytics")
+                Text("Dashboard")
                     .font(.title2.weight(.semibold))
                 Text("Monitor token consumption, request volume, and model performance across this workspace.")
                     .font(.callout)
