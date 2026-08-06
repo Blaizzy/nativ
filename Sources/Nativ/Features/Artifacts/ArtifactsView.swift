@@ -65,6 +65,7 @@ struct ArtifactGroup: Identifiable {
 
 struct ArtifactsView: View {
     @ObservedObject var store: ArtifactStore
+    var titleLeadingInset: CGFloat = 0
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
     let onUseAsReference: (Artifact) -> Void
@@ -344,11 +345,11 @@ struct ArtifactsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Artifacts")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.title2.weight(.semibold))
                 Text("\(filtered.count) \(filtered.count == 1 ? "item" : "items")")
-                    .font(.system(size: 12))
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
@@ -411,9 +412,10 @@ struct ArtifactsView: View {
             }
             .help("Rescan chats for new artifacts")
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 22)
+        .padding(.leading, titleLeadingInset)
         .padding(.top, 20)
-        .padding(.bottom, 12)
+        .padding(.bottom, 16)
     }
 
     private var selectionBar: some View {

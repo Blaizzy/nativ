@@ -217,10 +217,10 @@ struct AudioView: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     private var destinationBar: some View {

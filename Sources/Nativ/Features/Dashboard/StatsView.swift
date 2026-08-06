@@ -126,8 +126,6 @@ private struct DashboardContentView: View, Equatable {
                     .padding(.horizontal, 22)
                     .padding(.top, 20)
                     .padding(.bottom, 16)
-                    .frame(maxWidth: 1500, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .center)
 
                 Divider()
 

@@ -69,7 +69,7 @@ struct SystemMonitorView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("System Monitor")
                     .font(.title2.weight(.semibold))
                 Text("Live performance and hardware health for this Mac")
@@ -112,10 +112,10 @@ struct SystemMonitorView: View {
             .buttonStyle(.borderless)
             .help("Refresh now")
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     private var menuBarControl: some View {
