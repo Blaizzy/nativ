@@ -6,9 +6,9 @@ enum ChatImageOperation: String, Equatable, Sendable {
 
     init(toolName: String?) throws {
         switch toolName {
-        case "generate_image":
+        case ChatImageToolRegistry.generateToolName:
             self = .generate
-        case "edit_image":
+        case ChatImageToolRegistry.editToolName:
             self = .edit
         default:
             throw ChatImageToolError.unsupportedTool(toolName ?? "unknown")

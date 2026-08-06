@@ -7,7 +7,7 @@ enum ChatModelLibraryToolRegistry {
     static func definitions() -> [MLXChatToolDefinition] {
         [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
             name: toolName,
-            description: "List all MLX models already downloaded on this Mac, including display name, exact repository ID, size, quantization, and capabilities.",
+            description: "List the MLX models already downloaded on this Mac, with size and quantization.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -19,7 +19,6 @@ enum ChatModelLibraryToolRegistry {
 
 struct ChatModelLibraryToolResultPayload: Encodable {
     struct Model: Encodable {
-        let displayName: String
         let repoID: String
         let sizeGB: Double?
         let parameterCount: Int64?
@@ -27,7 +26,6 @@ struct ChatModelLibraryToolResultPayload: Encodable {
         let capabilities: [String]
 
         enum CodingKeys: String, CodingKey {
-            case displayName = "display_name"
             case repoID = "repo_id"
             case sizeGB = "size_gb"
             case parameterCount = "parameter_count"
@@ -47,21 +45,14 @@ struct ChatModelLibraryToolExecutor {
             throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
         }
 
-        let models: [LocalModel]
-        do {
-            models = try await LocalModelDiscovery.scan(
-                path: context.modelSearchPath,
-                additionalPaths: context.additionalModelSearchPaths
-            )
-        } catch LocalModelDiscoveryError.pathNotFound {
-            models = []
-        }
+        let models = try await LocalModelDiscovery.scan(
+            path: context.modelSearchPath,
+            additionalPaths: context.additionalModelSearchPaths
+        )
         let payload = ChatModelLibraryToolResultPayload(
             ok: true,
             models: models.map { model in
                 ChatModelLibraryToolResultPayload.Model(
-                    displayName: model.repoID.split(separator: "/").last.map(String.init)
-                        ?? model.displayName,
                     repoID: model.repoID,
                     sizeGB: model.sizeBytes.map(gigabytes),
                     parameterCount: model.parameterCount,

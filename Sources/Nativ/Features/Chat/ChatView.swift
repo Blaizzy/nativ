@@ -750,7 +750,9 @@ final class ChatViewModel: ObservableObject {
             case .assistant:
                 speaker = message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 60) } ?? "Assistant"
             case .tool:
-                speaker = message.toolName == "edit_image" ? "Image edit" : "Image generation"
+                speaker = message.toolName == ChatImageToolRegistry.editToolName
+                    ? "Image edit"
+                    : "Image generation"
             case .error:
                 speaker = "Error"
             }
@@ -1103,8 +1105,7 @@ final class ChatViewModel: ObservableObject {
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
-                settings: activeSettings,
-                imageGenerationModelID: activeImageModelID
+                settings: activeSettings
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -1138,7 +1139,8 @@ final class ChatViewModel: ObservableObject {
                 try Task.checkCancellation()
                 let toolMessageID = UUID()
                 let initialToolStatus: ChatTranscriptMessage.ToolStatus = switch toolCall.function?.name {
-                case "generate_image", "edit_image": .preparing
+                case ChatImageToolRegistry.generateToolName,
+                     ChatImageToolRegistry.editToolName: .preparing
                 default: .running
                 }
                 guard insertToolMessage(
@@ -1266,14 +1268,10 @@ final class ChatViewModel: ObservableObject {
                         },
                         imageExecutionWillStart: { [weak self] selectedModelID in
                             activeImageModelID = selectedModelID
-                            self?.setImageGenerationModelID(
-                                selectedModelID,
-                                for: queuedRequest.sessionID
-                            )
-                            self?.setToolMessageStatus(
+                            self?.beginImageExecution(
                                 toolMessageID,
-                                in: queuedRequest.sessionID,
-                                status: .running
+                                modelID: selectedModelID,
+                                in: queuedRequest.sessionID
                             )
                         }
                     )
@@ -1336,8 +1334,7 @@ final class ChatViewModel: ObservableObject {
         for queuedRequest: QueuedChatRequest,
         before assistantMessageID: UUID,
         advertisesTools: Bool,
-        settings: NativSettings,
-        imageGenerationModelID: String?
+        settings: NativSettings
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
@@ -1358,14 +1355,6 @@ final class ChatViewModel: ObservableObject {
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         let toolDefinitions = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                context: ChatToolExecutionContext(
-                    imageGenerationModelID: imageGenerationModelID,
-                    baseURL: settings.serverBaseURL,
-                    apiKey: settings.serverAPIKey,
-                    imageReferences: [],
-                    modelSearchPath: settings.expandedModelSearchPath,
-                    additionalModelSearchPaths: settings.additionalModelSearchPaths
-                ),
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
@@ -1608,21 +1597,30 @@ final class ChatViewModel: ObservableObject {
             .imageGenerationModelID
     }
 
-    private func setImageGenerationModelID(_ modelID: String, for sessionID: UUID) {
+    private func beginImageExecution(
+        _ toolMessageID: UUID,
+        modelID: String,
+        in sessionID: UUID
+    ) {
         if currentSessionID == sessionID {
             currentSession?.imageGenerationModelID = modelID
-            persistCurrentSession(updateTimestamp: false)
-            return
+        } else {
+            guard let sessionIndex = storedSessions.firstIndex(where: {
+                $0.id == sessionID
+            }) else {
+                return
+            }
+            storedSessions[sessionIndex].imageGenerationModelID = modelID
         }
 
-        guard let sessionIndex = storedSessions.firstIndex(where: {
-            $0.id == sessionID
-        }) else {
-            return
+        updateMessage(toolMessageID, in: sessionID) { message in
+            message.toolStatus = .running
         }
-        storedSessions[sessionIndex].imageGenerationModelID = modelID
-        sessionStore.saveSession(storedSessions[sessionIndex])
-        refreshSessionList()
+        imageModelSelectionRequests.removeValue(forKey: toolMessageID)
+        persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
     }
 
     private func message(_ messageID: UUID, in sessionID: UUID) -> ChatTranscriptMessage? {

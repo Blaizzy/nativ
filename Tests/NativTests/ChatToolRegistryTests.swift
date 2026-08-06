@@ -12,6 +12,18 @@ private struct FakeToolError: Error, LocalizedError {
     var errorDescription: String? { "fake failure" }
 }
 
+private actor ImageToolExecutionRecorder {
+    private var modelID: String?
+
+    func record(modelID: String) {
+        self.modelID = modelID
+    }
+
+    func recordedModelID() -> String? {
+        modelID
+    }
+}
+
 @MainActor
 private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
     var settings: NativSettings
@@ -58,45 +70,32 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 
 final class ChatToolRegistryTests: XCTestCase {
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
-        let names = ChatToolRegistry.definitions(context: makeContext(), canEditImage: false)
+        let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
 
-        XCTAssertTrue(names.contains("generate_image"))
-        XCTAssertFalse(names.contains("edit_image"))
+        XCTAssertTrue(names.contains(ChatImageToolRegistry.generateToolName))
+        XCTAssertFalse(names.contains(ChatImageToolRegistry.editToolName))
         for toolName in nativeToolNames {
             XCTAssertTrue(names.contains(toolName), "\(toolName) should be advertised without an image model")
         }
     }
 
     func testDefinitionsOfferEditOnlyWhenAnImageIsAvailable() {
-        let withoutEdit = ChatToolRegistry.definitions(
-            context: makeContext(imageModelID: "org/image"),
-            canEditImage: false
-        ).map(\.function.name)
-        XCTAssertTrue(withoutEdit.contains("generate_image"))
-        XCTAssertFalse(withoutEdit.contains("edit_image"))
-
-        let withEdit = ChatToolRegistry.definitions(
-            context: makeContext(imageModelID: "org/image"),
-            canEditImage: true
-        ).map(\.function.name)
-        XCTAssertTrue(withEdit.contains("edit_image"))
-    }
-
-    func testDefinitionsTreatAnEmptyModelIDAsUnselectedButStillAdvertiseGuidance() {
-        let names = ChatToolRegistry.definitions(context: makeContext(imageModelID: ""), canEditImage: true)
+        let withoutEdit = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
+        XCTAssertTrue(withoutEdit.contains(ChatImageToolRegistry.generateToolName))
+        XCTAssertFalse(withoutEdit.contains(ChatImageToolRegistry.editToolName))
 
-        XCTAssertTrue(names.contains("generate_image"))
-        XCTAssertTrue(names.contains("edit_image"))
+        let withEdit = ChatToolRegistry.definitions(canEditImage: true)
+            .map(\.function.name)
+        XCTAssertTrue(withEdit.contains(ChatImageToolRegistry.editToolName))
     }
 
     func testDefinitionsNeverAdvertiseDuplicateToolNames() {
-        for imageModelID in [nil, "", "org/image"] {
-            let names = ChatToolRegistry.definitions(context: makeContext(imageModelID: imageModelID), canEditImage: true)
-                .map(\.function.name)
-            XCTAssertEqual(names.count, Set(names).count, "duplicate tool names advertised for imageModelID=\(String(describing: imageModelID))")
-        }
+        let names = ChatToolRegistry.definitions(canEditImage: true)
+            .map(\.function.name)
+
+        XCTAssertEqual(names.count, Set(names).count)
     }
 
     func testImageToolSchemasAreGoldenPinned() throws {
@@ -239,7 +238,7 @@ final class ChatToolRegistryTests: XCTestCase {
 
     func testInstallationFailurePayloadDoesNotExposeModelChoices() throws {
         let object = try decode(ChatImageToolExecutor().failurePayload(
-            operation: "generate_image",
+            operation: ChatImageToolRegistry.generateToolName,
             error: ChatImageToolError.noCompatibleModels(.generate)
         ))
 
@@ -250,19 +249,10 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     @MainActor
-    func testMissingModelCacheReturnsEmptyLibraryWithoutStartingGeneration() async throws {
+    func testMissingModelCacheDoesNotStartImageGeneration() async throws {
         let missingPath = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .path
-        let libraryContext = makeContext(modelSearchPath: missingPath)
-        let libraryResult = try await ChatModelLibraryToolExecutor().execute(
-            call: makeCall(name: ChatModelLibraryToolRegistry.toolName),
-            context: libraryContext
-        )
-        let libraryPayload = try decode(libraryResult)
-        XCTAssertEqual(libraryPayload["ok"] as? Bool, true)
-        XCTAssertEqual((libraryPayload["models"] as? [[String: Any]])?.count, 0)
-
         var didStartExecution = false
         var imageContext = makeContext(modelSearchPath: missingPath)
         imageContext.imageExecutionWillStart = { _ in
@@ -271,7 +261,7 @@ final class ChatToolRegistryTests: XCTestCase {
         do {
             _ = try await ChatToolDispatcher.execute(
                 call: makeCall(
-                    name: "generate_image",
+                    name: ChatImageToolRegistry.generateToolName,
                     arguments: #"{"prompt":"A lake"}"#
                 ),
                 context: imageContext
@@ -285,6 +275,49 @@ final class ChatToolRegistryTests: XCTestCase {
             XCTFail("expected ChatImageToolError, got \(error)")
         }
         XCTAssertFalse(didStartExecution)
+    }
+
+    @MainActor
+    func testNativeSelectionPropagatesExactModelIDToExecutionAndSessionCallback() async throws {
+        let selectedModel = ChatImageModelOption(
+            displayName: "Image Model",
+            modelID: "org/image-model",
+            capabilities: [.imageGeneration]
+        )
+        let languageModel = ChatImageModelOption(
+            displayName: "Language Model",
+            modelID: "org/language-model",
+            capabilities: [.text, .tools]
+        )
+        let recorder = ImageToolExecutionRecorder()
+        var sessionModelID: String?
+        var context = makeContext()
+        context.imageToolDependencies = ChatImageToolDependencies(
+            discoverModels: { _, _ in [selectedModel, languageModel] },
+            execute: { _, modelID, _, _, _ in
+                await recorder.record(modelID: modelID)
+                return ChatImageToolExecution(content: #"{"ok":true}"#, attachments: [])
+            }
+        )
+        context.imageModelSelection = { request in
+            XCTAssertEqual(request.models, [selectedModel])
+            return selectedModel.modelID
+        }
+        context.imageExecutionWillStart = { modelID in
+            sessionModelID = modelID
+        }
+
+        _ = try await ChatToolDispatcher.execute(
+            call: makeCall(
+                name: ChatImageToolRegistry.generateToolName,
+                arguments: #"{"prompt":"A lake"}"#
+            ),
+            context: context
+        )
+
+        let executedModelID = await recorder.recordedModelID()
+        XCTAssertEqual(sessionModelID, selectedModel.modelID)
+        XCTAssertEqual(executedModelID, selectedModel.modelID)
     }
 
     func testDispatchRoutesToRegisteredHandler() async throws {
@@ -540,6 +573,19 @@ final class ChatImageModelSelectionGateTests: XCTestCase {
         }
         await waitUntilPending(gate)
 
+        task.cancel()
+
+        let selectedModelID = await task.value
+        XCTAssertNil(selectedModelID)
+        XCTAssertEqual(gate.pendingCount, 0)
+    }
+
+    func testAlreadyCancelledTaskCannotLeaveASelectionPending() async {
+        let gate = ChatImageModelSelectionGate()
+        let requestID = UUID()
+        let task = Task<String?, Never> {
+            await gate.awaitSelection(for: requestID) {}
+        }
         task.cancel()
 
         let selectedModelID = await task.value

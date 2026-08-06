@@ -13,6 +13,7 @@ struct ChatToolExecutionContext {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
     var analyticsDatabaseURL: URL? = nil
+    var imageToolDependencies = ChatImageToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -31,10 +32,7 @@ enum ChatToolRoundGate {
 }
 
 enum ChatToolRegistry {
-    static func definitions(
-        context: ChatToolExecutionContext,
-        canEditImage: Bool
-    ) -> [MLXChatToolDefinition] {
+    static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
@@ -49,16 +47,16 @@ enum ChatToolDispatcher {
     private typealias FailureHandler = (String, Error) -> String
 
     private static let handlers: [String: Handler] = [
-        "generate_image": executeImageTool,
-        "edit_image": executeImageTool,
+        ChatImageToolRegistry.generateToolName: executeImageTool,
+        ChatImageToolRegistry.editToolName: executeImageTool,
         ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
         ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
         ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
-        "generate_image": failurePayloadForImageTool,
-        "edit_image": failurePayloadForImageTool,
+        ChatImageToolRegistry.generateToolName: failurePayloadForImageTool,
+        ChatImageToolRegistry.editToolName: failurePayloadForImageTool,
         ChatSystemMonitorToolRegistry.toolName: { name, error in
             ChatSystemMonitorToolExecutor().failurePayload(operation: name, error: error)
         },
@@ -98,9 +96,9 @@ enum ChatToolDispatcher {
             call: call,
             hasImageReference: !context.imageReferences.isEmpty
         )
-        let installedModels = try await ChatImageModelSelection.installedOptions(
-            modelSearchPath: context.modelSearchPath,
-            additionalModelSearchPaths: context.additionalModelSearchPaths
+        let installedModels = try await context.imageToolDependencies.discoverModels(
+            context.modelSearchPath,
+            context.additionalModelSearchPaths
         )
         let imageModelID: String
         switch ChatImageModelSelection.resolve(
@@ -126,12 +124,12 @@ enum ChatToolDispatcher {
             throw ChatImageToolError.noCompatibleModels(imageRequest.operation)
         }
         await context.imageExecutionWillStart?(imageModelID)
-        let result = try await ChatImageToolExecutor().execute(
-            request: imageRequest,
-            modelID: imageModelID,
-            baseURL: context.baseURL,
-            apiKey: context.apiKey,
-            references: context.imageReferences
+        let result = try await context.imageToolDependencies.execute(
+            imageRequest,
+            imageModelID,
+            context.baseURL,
+            context.apiKey,
+            context.imageReferences
         )
         return ChatToolExecutionOutcome(
             content: result.content,
@@ -218,9 +216,9 @@ enum ChatToolConsentRouter {
 enum ChatToolPresentation {
     static func title(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch toolName {
-        case "generate_image":
+        case ChatImageToolRegistry.generateToolName:
             return imageTitle(isEdit: false, status: status)
-        case "edit_image":
+        case ChatImageToolRegistry.editToolName:
             return imageTitle(isEdit: true, status: status)
         case ChatSystemMonitorToolRegistry.toolName:
             return systemMonitorTitle(status: status)
@@ -249,7 +247,8 @@ enum ChatToolPresentation {
             return "questionmark.circle"
         case .succeeded, .running, nil:
             switch toolName {
-            case "generate_image", "edit_image":
+            case ChatImageToolRegistry.generateToolName,
+                 ChatImageToolRegistry.editToolName:
                 return "photo"
             case ChatSystemMonitorToolRegistry.toolName:
                 return "cpu"

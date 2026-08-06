@@ -3,14 +3,17 @@ import Foundation
 import NativServerKit
 
 enum ChatImageToolRegistry {
+    static let generateToolName = "generate_image"
+    static let editToolName = "edit_image"
+
     static func definitions(canEdit: Bool) -> [MLXChatToolDefinition] {
         var tools = [tool(
-            name: "generate_image",
+            name: generateToolName,
             description: "Create one or more new images from a detailed text prompt. Image-model selection is handled by the app; do not ask for or provide a model identifier."
         )]
         if canEdit {
             tools.append(tool(
-                name: "edit_image",
+                name: editToolName,
                 description: "Edit the most recently attached or generated image using a text instruction. Image-model selection is handled by the app; do not ask for or provide a model identifier."
             ))
         }
@@ -128,9 +131,44 @@ struct ChatImageToolResultPayload: Encodable {
     }
 }
 
-struct ChatImageToolExecution {
+struct ChatImageToolExecution: Sendable {
     let content: String
     let attachments: [ChatImageAttachment]
+}
+
+struct ChatImageToolDependencies: Sendable {
+    typealias ModelDiscovery = @Sendable (
+        String,
+        [String]
+    ) async throws -> [ChatImageModelOption]
+    typealias Execution = @Sendable (
+        ChatImageToolRequest,
+        String,
+        URL,
+        String?,
+        [ChatImageAttachment]
+    ) async throws -> ChatImageToolExecution
+
+    let discoverModels: ModelDiscovery
+    let execute: Execution
+
+    static let live = Self(
+        discoverModels: { path, additionalPaths in
+            try await ChatImageModelSelection.installedOptions(
+                modelSearchPath: path,
+                additionalModelSearchPaths: additionalPaths
+            )
+        },
+        execute: { request, modelID, baseURL, apiKey, references in
+            try await ChatImageToolExecutor().execute(
+                request: request,
+                modelID: modelID,
+                baseURL: baseURL,
+                apiKey: apiKey,
+                references: references
+            )
+        }
+    )
 }
 
 enum ChatImageToolError: LocalizedError {
@@ -216,7 +254,7 @@ struct ChatImageToolExecutor {
         }
         let payload = ChatImageToolResultPayload(
             ok: false,
-            operation: operation == "edit_image" ? "edit" : "generate",
+            operation: operation == ChatImageToolRegistry.editToolName ? "edit" : "generate",
             images: nil,
             installationRequired: installationRequired,
             error: error.localizedDescription
