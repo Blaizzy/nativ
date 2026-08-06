@@ -790,11 +790,16 @@ struct NativSettings: Codable, Equatable {
         sidebarSessionsCollapsed = collapsed
     }
 
+    var speculativeDecodingActive: Bool {
+        speculativeDecodingEnabled
+            && !draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     func hasSameLaunchConfiguration(as other: Self) -> Bool {
         let lhs = normalized()
         let rhs = other.normalized()
-        let lhsSpeculativeDecodingActive = lhs.speculativeDecodingEnabled && !lhs.draftModelID.isEmpty
-        let rhsSpeculativeDecodingActive = rhs.speculativeDecodingEnabled && !rhs.draftModelID.isEmpty
+        let lhsSpeculativeDecodingActive = lhs.speculativeDecodingActive
+        let rhsSpeculativeDecodingActive = rhs.speculativeDecodingActive
         return lhs.modelSearchPath == rhs.modelSearchPath
             && lhs.languageModelID == rhs.languageModelID
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
@@ -913,7 +918,7 @@ struct NativSettings: Codable, Equatable {
             ])
         }
 
-        if settings.speculativeDecodingEnabled, !settings.draftModelID.isEmpty {
+        if settings.speculativeDecodingActive {
             arguments.append(contentsOf: ["--draft-model", settings.draftModelID])
             if settings.draftKind != "auto" {
                 arguments.append(contentsOf: ["--draft-kind", settings.draftKind])

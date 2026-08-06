@@ -274,55 +274,71 @@ final class FnRetryShortcutStateTests: XCTestCase {
 }
 
 final class VoiceModifierToggleShortcutStateTests: XCTestCase {
-    func testTogglesAfterModifierIsPressedAndReleasedAlone() {
-        var state = VoiceModifierToggleShortcutState()
+    private let origin = Date(timeIntervalSinceReferenceDate: 0)
 
-        XCTAssertFalse(
-            state.update(
-                activeModifiers: [.option],
-                shortcutModifiers: [.option]
-            )
-        )
-        XCTAssertTrue(state.isHeld)
-        XCTAssertTrue(
-            state.update(
-                activeModifiers: [],
-                shortcutModifiers: [.option]
-            )
-        )
+    @discardableResult
+    private func tap(
+        _ state: inout VoiceModifierToggleShortcutState,
+        shortcut: VoiceShortcutModifiers = [.option],
+        at time: Date
+    ) -> Bool {
+        _ = state.update(activeModifiers: shortcut, shortcutModifiers: shortcut, now: time)
+        return state.update(activeModifiers: [], shortcutModifiers: shortcut, now: time)
+    }
+
+    func testSingleTapDoesNotToggle() {
+        var state = VoiceModifierToggleShortcutState()
+        XCTAssertFalse(tap(&state, at: origin))
         XCTAssertFalse(state.isHeld)
     }
 
-    func testDoesNotToggleWhenModifierBecomesPartOfChord() {
+    func testDoubleTapWithinWindowToggles() {
+        var state = VoiceModifierToggleShortcutState()
+        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.2)))
+    }
+
+    func testSecondTapAfterWindowDoesNotToggle() {
+        var state = VoiceModifierToggleShortcutState()
+        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(1.0)))
+    }
+
+    func testChordTapDoesNotArmDoubleTap() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option],
-                shortcutModifiers: [.option]
+                shortcutModifiers: [.option],
+                now: origin
             )
         )
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option, .shift],
-                shortcutModifiers: [.option]
+                shortcutModifiers: [.option],
+                now: origin
             )
         )
         XCTAssertFalse(
             state.update(
                 activeModifiers: [],
-                shortcutModifiers: [.option]
+                shortcutModifiers: [.option],
+                now: origin
             )
         )
+        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
     }
 
-    func testDoesNotToggleWhenARegularKeyIsPressed() {
+    func testKeyPressDoesNotArmDoubleTap() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option],
-                shortcutModifiers: [.option]
+                shortcutModifiers: [.option],
+                now: origin
             )
         )
         state.noteKeyDown()
@@ -330,38 +346,20 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertFalse(
             state.update(
                 activeModifiers: [],
-                shortcutModifiers: [.option]
+                shortcutModifiers: [.option],
+                now: origin
             )
         )
+        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
     }
 
-    func testCanToggleAgainAfterCompletingGesture() {
+    func testCanToggleAgainAfterCompletingDoubleTap() {
         var state = VoiceModifierToggleShortcutState()
+        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.2)))
 
-        XCTAssertFalse(
-            state.update(
-                activeModifiers: [.option],
-                shortcutModifiers: [.option]
-            )
-        )
-        XCTAssertTrue(
-            state.update(
-                activeModifiers: [],
-                shortcutModifiers: [.option]
-            )
-        )
-        XCTAssertFalse(
-            state.update(
-                activeModifiers: [.option],
-                shortcutModifiers: [.option]
-            )
-        )
-        XCTAssertTrue(
-            state.update(
-                activeModifiers: [],
-                shortcutModifiers: [.option]
-            )
-        )
+        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(2)))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(2.2)))
     }
 }
 

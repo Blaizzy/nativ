@@ -45,6 +45,14 @@ enum AudioCaptureLibraryError: LocalizedError {
     }
 }
 
+private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
+    var onFinish: ((AVAudioPlayer) -> Void)?
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onFinish?(player)
+    }
+}
+
 @MainActor
 final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var phase: AudioCapturePhase = .idle
@@ -55,9 +63,19 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
     @Published private(set) var shouldOfferScreenCaptureSettings = false
+    @Published private(set) var playingRecordID: String?
+    @Published private(set) var isPlaybackPaused = false
 
     var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
 
+    private var audioPlayer: AVAudioPlayer?
+    private lazy var playbackDelegate: AudioPlaybackDelegate = {
+        let delegate = AudioPlaybackDelegate()
+        delegate.onFinish = { [weak self] player in
+            Task { @MainActor in self?.playbackDidFinish(player) }
+        }
+        return delegate
+    }()
     private let voiceRecorder = VoiceAudioRecorder()
     private let meetingRecorder = SystemAudioMeetingRecorder()
     private let recordingOverlay = VoiceCaptureOverlayController()
@@ -351,12 +369,70 @@ final class AudioCaptureLibrary: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func openAudio(for record: AudioTranscriptionRecord) {
+    func revealAudio(for record: AudioTranscriptionRecord) {
         guard let url = audioURL(for: record) else {
             lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
             return
         }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func togglePlayback(for record: AudioTranscriptionRecord) {
+        if playingRecordID == record.id {
+            if isPlaybackPaused {
+                if audioPlayer?.play() == true {
+                    isPlaybackPaused = false
+                } else {
+                    lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+                }
+            } else {
+                audioPlayer?.pause()
+                isPlaybackPaused = true
+            }
+            return
+        }
+        startPlayback(for: record)
+    }
+
+    private func startPlayback(for record: AudioTranscriptionRecord) {
+        stopPlayback()
+        guard let url = audioURL(for: record) else {
+            lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+            return
+        }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.delegate = playbackDelegate
+            guard player.play() else {
+                lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+                return
+            }
+            audioPlayer = player
+            playingRecordID = record.id
+            isPlaybackPaused = false
+        } catch {
+            lastErrorMessage = error.localizedDescription
+        }
+    }
+
+    func stopPlayback() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        playingRecordID = nil
+        isPlaybackPaused = false
+    }
+
+    func stopPlaybackIfPlaying(_ recordID: String) {
+        if playingRecordID == recordID {
+            stopPlayback()
+        }
+    }
+
+    private func playbackDidFinish(_ player: AVAudioPlayer) {
+        guard audioPlayer === player else {
+            return
+        }
+        stopPlayback()
     }
 
     func revealLibrary() {
@@ -370,6 +446,7 @@ final class AudioCaptureLibrary: ObservableObject {
         guard record.resolvedKind != .dictation else {
             return
         }
+        stopPlaybackIfPlaying(record.id)
         if let audioURL = audioURL(for: record) {
             try? FileManager.default.removeItem(at: audioURL)
         }

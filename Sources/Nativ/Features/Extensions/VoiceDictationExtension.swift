@@ -123,7 +123,7 @@ final class VoiceDictationExtension: NativHostExtension {
                 .init(
                     id: "com.nativ.voice-dictation.transcribe",
                     title: "Transcribe",
-                    defaultShortcut: "Fn+Control"
+                    defaultShortcut: "Control+Option+Command"
                 ),
                 .init(
                     id: "com.nativ.voice-dictation.retranscribe",

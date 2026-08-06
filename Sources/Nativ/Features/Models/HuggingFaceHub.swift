@@ -113,6 +113,27 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         )
     }
 
+    // Fallback download size shown until the real file sizes are fetched (and if
+    // that fetch fails). The safetensors parameter summary only covers the
+    // diffusion transformer, so for image models it lands well under the real
+    // download; scale it toward the components a modern image pipeline also ships
+    // (text encoder + VAE). This is a placeholder — the async fetch replaces it.
+    var estimatedDownloadBytes: Int64? {
+        guard let sizeBytes else {
+            return nil
+        }
+        let isImageModel = capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+        guard isImageModel else {
+            return sizeBytes
+        }
+        let scaled = Double(sizeBytes) * 2.5
+        guard scaled <= Double(Int64.max) else {
+            return sizeBytes
+        }
+        return Int64(scaled.rounded(.up))
+    }
+
     private static func resolveMemoryEstimate(
         repoID: String,
         safetensors: HuggingFaceSafetensors?,
@@ -346,6 +367,7 @@ private struct HuggingFaceHubClient: Sendable {
     func search(
         query: String,
         sort: HuggingFaceModelSort,
+        capabilities: Set<LocalModelCapability>,
         token: String?
     ) async throws -> HuggingFaceModelPage {
         var components = URLComponents()
@@ -359,6 +381,9 @@ private struct HuggingFaceHubClient: Sendable {
             URLQueryItem(name: "direction", value: "-1"),
             URLQueryItem(name: "limit", value: "50")
         ]
+        if let pipelineTag = Self.pipelineTag(for: capabilities) {
+            queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
+        }
         queryItems.append(contentsOf: [
             "downloads", "likes", "pipeline_tag", "library_name", "tags",
             "private", "gated", "safetensors"
@@ -374,6 +399,55 @@ private struct HuggingFaceHubClient: Sendable {
         }
 
         return try await page(at: url, token: token)
+    }
+
+    private static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
+        guard capabilities.count == 1, let capability = capabilities.first else {
+            return nil
+        }
+        switch capability {
+        case .imageGeneration:
+            return "text-to-image"
+        case .imageEditing:
+            return "image-to-image"
+        case .speechToText:
+            return "automatic-speech-recognition"
+        case .textToSpeech:
+            return "text-to-speech"
+        case .vision:
+            return "image-text-to-text"
+        case .text, .audio, .video, .embeddings, .reasoning, .tools, .drafter:
+            return nil
+        }
+    }
+
+    func model(id: String, token: String?) async throws -> HuggingFaceModel {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/api/models/\(id)"
+        components.queryItems = [
+            "downloads", "likes", "pipeline_tag", "library_name", "tags",
+            "private", "gated", "safetensors"
+        ].map { URLQueryItem(name: "expand[]", value: $0) }
+
+        guard let url = components.url else {
+            throw HuggingFaceHubError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("MLXPlatform/1.0", forHTTPHeaderField: "User-Agent")
+        HuggingFaceAuthentication.authorize(&request, token: token)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw HuggingFaceHubError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = (try? JSONDecoder().decode(HubErrorPayload.self, from: data))?.error ?? ""
+            throw HuggingFaceHubError.requestFailed(httpResponse.statusCode, message)
+        }
+        return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
     }
 
     func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
@@ -435,15 +509,23 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var buffer: [HuggingFaceModel] = []
     private var activeSort: HuggingFaceModelSort = .downloads
+    private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURL: URL?
     private let pageSize = 24
     private let maximumPageCount = 5
+    private let maximumFillFetches = 8
 
     deinit {
         searchTask?.cancel()
     }
 
-    func search(query: String, sort: HuggingFaceModelSort, token: String?) {
+    func search(
+        query: String,
+        sort: HuggingFaceModelSort,
+        capabilities: Set<LocalModelCapability>,
+        predicate: @escaping (HuggingFaceModel) -> Bool,
+        token: String?
+    ) {
         searchTask?.cancel()
         isSearching = true
         error = nil
@@ -452,11 +534,17 @@ final class HuggingFaceModelLibrary: ObservableObject {
         nextPageURL = nil
         pageNumber = 1
         activeSort = sort
+        visibilityPredicate = predicate
 
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await client.search(query: query, sort: sort, token: token)
+                let page = try await client.search(
+                    query: query,
+                    sort: sort,
+                    capabilities: capabilities,
+                    token: token
+                )
                 try Task.checkCancellation()
                 self.buffer = page.models
                 self.nextPageURL = page.nextPageURL
@@ -477,13 +565,53 @@ final class HuggingFaceModelLibrary: ObservableObject {
         }
     }
 
+    func loadCurated(ids: [String], token: String?) {
+        searchTask?.cancel()
+        isSearching = true
+        error = nil
+        models = []
+        buffer = []
+        nextPageURL = nil
+        pageNumber = 1
+        activeSort = .downloads
+        visibilityPredicate = { _ in true }
+
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            var fetched: [String: HuggingFaceModel] = [:]
+            await withTaskGroup(of: (String, HuggingFaceModel?).self) { group in
+                let client = self.client
+                for id in ids {
+                    group.addTask {
+                        do {
+                            return (id, try await client.model(id: id, token: token))
+                        } catch {
+                            return (id, nil)
+                        }
+                    }
+                }
+                for await (id, model) in group where model != nil {
+                    fetched[id] = model
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let ordered = ids.compactMap { fetched[$0] }
+            self.buffer = ordered
+            self.models = ordered
+            self.error = ordered.isEmpty
+                ? HuggingFaceHubError.invalidResponse.errorDescription
+                : nil
+            self.isSearching = false
+        }
+    }
+
     var canGoToPreviousPage: Bool {
         pageNumber > 1 && !isSearching
     }
 
     var canGoToNextPage: Bool {
         guard !isSearching, pageNumber < maximumPageCount else { return false }
-        return buffer.count > pageNumber * pageSize || nextPageURL != nil
+        return orderedVisible.count > pageNumber * pageSize || nextPageURL != nil
     }
 
     func goToPreviousPage() {
@@ -497,13 +625,12 @@ final class HuggingFaceModelLibrary: ObservableObject {
         guard canGoToNextPage else { return }
         let target = pageNumber + 1
 
-        if buffer.count >= target * pageSize || nextPageURL == nil {
+        if orderedVisible.count >= target * pageSize || nextPageURL == nil {
             pageNumber = target
             models = slice(forPage: target)
             error = nil
             return
         }
-        guard let nextPageURL else { return }
 
         searchTask?.cancel()
         isSearching = true
@@ -512,10 +639,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await client.page(at: nextPageURL, token: token)
+                try await self.fillBuffer(upTo: target * self.pageSize, token: token)
                 try Task.checkCancellation()
-                self.buffer.append(contentsOf: page.models)
-                self.nextPageURL = page.nextPageURL
                 let nextModels = self.slice(forPage: target)
                 if !nextModels.isEmpty {
                     self.pageNumber = target
@@ -535,7 +660,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     private func fillBuffer(upTo count: Int, token: String?) async throws {
         var fetches = 0
-        while buffer.count < count, let url = nextPageURL, fetches < 8 {
+        while orderedVisible.count < count, let url = nextPageURL, fetches < maximumFillFetches {
             let nextPage = try await client.page(at: url, token: token)
             try Task.checkCancellation()
             buffer.append(contentsOf: nextPage.models)
@@ -545,7 +670,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     }
 
     private func slice(forPage number: Int) -> [HuggingFaceModel] {
-        let ordered = orderedBuffer
+        let ordered = orderedVisible
         let start = (number - 1) * pageSize
         guard start < ordered.count else { return [] }
         return Array(ordered[start..<min(start + pageSize, ordered.count)])
@@ -561,6 +686,10 @@ final class HuggingFaceModelLibrary: ObservableObject {
             case (_, nil): return true
             }
         }
+    }
+
+    private var orderedVisible: [HuggingFaceModel] {
+        orderedBuffer.filter(visibilityPredicate)
     }
 
     func cancel() {
@@ -662,6 +791,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
         onCompletion: @escaping () -> Void
     ) {
         guard contexts[repoID] == nil else { return }
+        if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
+            errorByModelID[repoID] = blocker
+            return
+        }
         do {
             try enqueue(
                 repoID: repoID,

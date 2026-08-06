@@ -46,6 +46,8 @@ private struct HubSearchTaskID: Hashable {
     let section: ModelsPageSection
     let query: String
     let sort: HuggingFaceModelSort
+    let capabilities: Set<LocalModelCapability>
+    let access: HubAccessFilter
     let authenticationToken: String?
 }
 
@@ -110,6 +112,8 @@ struct ModelsView: View {
             hubLibrary.search(
                 query: hubQuery,
                 sort: hubSort,
+                capabilities: hubCapabilityFilters,
+                predicate: hubVisibilityPredicate,
                 token: model.effectiveHuggingFaceToken
             )
         }
@@ -347,17 +351,15 @@ struct ModelsView: View {
                             title: hubQuery.isEmpty
                                 ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
                     } else if hubLibrary.models.isEmpty {
-                        ModelsEmptyState(
-                            systemImage: "magnifyingglass",
-                            title: "No Safetensors models found",
-                            message: "Try a model family, provider, or repository name.",
-                            actionTitle: nil,
-                            action: {}
-                        )
-                    } else {
-                        discoverResultsHeader
-
-                        if filteredHubModels.isEmpty {
+                        if hubCapabilityFilters.isEmpty && hubAccessFilter == .all {
+                            ModelsEmptyState(
+                                systemImage: "magnifyingglass",
+                                title: "No Safetensors models found",
+                                message: "Try a model family, provider, or repository name.",
+                                actionTitle: nil,
+                                action: {}
+                            )
+                        } else {
                             ModelsEmptyState(
                                 systemImage: "line.3.horizontal.decrease.circle",
                                 title: "No models match these filters",
@@ -366,32 +368,35 @@ struct ModelsView: View {
                                 actionTitle: nil,
                                 action: {}
                             )
-                        } else {
-                            ForEach(filteredHubModels) { hubModel in
-                                HubModelRowContainer(
-                                    model: hubModel,
-                                    isInstalled: installedModelIDs.contains(hubModel.id),
-                                    cachePath: model.settings.modelSearchPath,
-                                    onDownload: {
-                                        downloadManager.download(
-                                            repoID: hubModel.id,
-                                            sizeBytes: hubModel.sizeBytes,
-                                            cachePath: model.settings.modelSearchPath,
-                                            token: model.effectiveHuggingFaceToken
-                                        ) {}
-                                    },
-                                    onPauseResume: {
-                                        if downloadManager.isPaused(for: hubModel.id) {
-                                            downloadManager.resumeDownload(hubModel.id)
-                                        } else {
-                                            downloadManager.pauseDownload(hubModel.id)
-                                        }
-                                    },
-                                    onRemoveDownload: {
-                                        downloadManager.removeDownload(hubModel.id)
+                        }
+                    } else {
+                        discoverResultsHeader
+
+                        ForEach(filteredHubModels) { hubModel in
+                            HubModelRowContainer(
+                                model: hubModel,
+                                isInstalled: installedModelIDs.contains(hubModel.id),
+                                cachePath: model.settings.modelSearchPath,
+                                onDownload: {
+                                    downloadManager.download(
+                                        repoID: hubModel.id,
+                                        sizeBytes: HubModelSizeResolver.shared
+                                            .resolvedSize(for: hubModel.id) ?? hubModel.estimatedDownloadBytes,
+                                        cachePath: model.settings.modelSearchPath,
+                                        token: model.effectiveHuggingFaceToken
+                                    ) {}
+                                },
+                                onPauseResume: {
+                                    if downloadManager.isPaused(for: hubModel.id) {
+                                        downloadManager.resumeDownload(hubModel.id)
+                                    } else {
+                                        downloadManager.pauseDownload(hubModel.id)
                                     }
-                                )
-                            }
+                                },
+                                onRemoveDownload: {
+                                    downloadManager.removeDownload(hubModel.id)
+                                }
+                            )
                         }
 
                         HStack(spacing: 12) {
@@ -755,13 +760,15 @@ struct ModelsView: View {
         .fixedSize()
     }
 
-    private var filteredHubModels: [HuggingFaceModel] {
-        hubLibrary.models.filter { hubModel in
-            let matchesCapability = hubCapabilityFilters.allSatisfy {
+    private var hubVisibilityPredicate: (HuggingFaceModel) -> Bool {
+        let capabilities = hubCapabilityFilters
+        let access = hubAccessFilter
+        return { hubModel in
+            let matchesCapability = capabilities.allSatisfy {
                 hubModel.capabilities.contains($0)
             }
             let matchesAccess: Bool
-            switch hubAccessFilter {
+            switch access {
             case .all:
                 matchesAccess = true
             case .open:
@@ -771,6 +778,10 @@ struct ModelsView: View {
             }
             return matchesCapability && matchesAccess
         }
+    }
+
+    private var filteredHubModels: [HuggingFaceModel] {
+        hubLibrary.models
     }
 
     private var installedFilterIsActive: Bool {
@@ -846,6 +857,8 @@ struct ModelsView: View {
             section: section,
             query: hubQuery,
             sort: hubSort,
+            capabilities: hubCapabilityFilters,
+            access: hubAccessFilter,
             authenticationToken: model.effectiveHuggingFaceToken
         )
     }
@@ -1201,6 +1214,7 @@ private struct ActiveDownloadBannerView: View {
 
 private struct HubModelRow: View, Equatable {
     let model: HuggingFaceModel
+    let downloadSizeBytes: Int64?
     let isInstalled: Bool
     let isDownloading: Bool
     let downloadProgress: Double
@@ -1215,6 +1229,7 @@ private struct HubModelRow: View, Equatable {
         // Actions are intentionally excluded: they do not affect rendering,
         // while closures are recreated whenever the parent view is rebuilt.
         lhs.model == rhs.model
+            && lhs.downloadSizeBytes == rhs.downloadSizeBytes
             && lhs.isInstalled == rhs.isInstalled
             && lhs.isDownloading == rhs.isDownloading
             && lhs.downloadProgress == rhs.downloadProgress
@@ -1267,7 +1282,7 @@ private struct HubModelRow: View, Equatable {
                         ModelPill(
                             title: compactCount(model.downloads), systemImage: "arrow.down.circle")
                         ModelPill(title: compactCount(model.likes), systemImage: "heart")
-                        if let sizeBytes = model.sizeBytes {
+                        if let sizeBytes = downloadSizeBytes {
                             ModelPill(
                                 title: ByteCountFormatter.string(
                                     fromByteCount: sizeBytes, countStyle: .file),
@@ -1355,6 +1370,7 @@ private struct HubModelRow: View, Equatable {
 /// Discover view remains stable while a download reports progress.
 private struct HubModelRowContainer: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+    @ObservedObject private var sizeResolver = HubModelSizeResolver.shared
 
     let model: HuggingFaceModel
     let isInstalled: Bool
@@ -1364,14 +1380,16 @@ private struct HubModelRowContainer: View {
     let onRemoveDownload: () -> Void
 
     var body: some View {
+        let downloadSizeBytes = sizeResolver.resolvedSize(for: model.id) ?? model.estimatedDownloadBytes
         HubModelRow(
             model: model,
+            downloadSizeBytes: downloadSizeBytes,
             isInstalled: isInstalled,
             isDownloading: downloadManager.isDownloading(model.id),
             downloadProgress: downloadManager.progress(for: model.id),
             isDownloadPaused: downloadManager.isPaused(for: model.id),
             downloadBlockedReason: downloadManager.capacityBlocker(
-                sizeBytes: model.sizeBytes,
+                sizeBytes: downloadSizeBytes,
                 cachePath: cachePath
             ),
             downloadError: downloadManager.errorByModelID[model.id],
@@ -1380,6 +1398,9 @@ private struct HubModelRowContainer: View {
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
+        .task(id: model.id) {
+            await sizeResolver.prefetch(model.id)
+        }
     }
 }
 
@@ -1707,6 +1728,8 @@ extension LocalModelCapability {
             URLQueryItem(name: "other", value: "reasoning")
         case .tools:
             URLQueryItem(name: "other", value: "tool-calling")
+        case .drafter:
+            URLQueryItem(name: "other", value: "speculative-decoding")
         }
     }
 
@@ -1723,6 +1746,7 @@ extension LocalModelCapability {
         case .embeddings: "circle.grid.3x3"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
+        case .drafter: "hare"
         }
     }
 }
