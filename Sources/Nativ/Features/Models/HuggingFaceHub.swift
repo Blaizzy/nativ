@@ -367,6 +367,7 @@ private struct HuggingFaceHubClient: Sendable {
     func search(
         query: String,
         sort: HuggingFaceModelSort,
+        capabilities: Set<LocalModelCapability>,
         token: String?
     ) async throws -> HuggingFaceModelPage {
         var components = URLComponents()
@@ -380,6 +381,9 @@ private struct HuggingFaceHubClient: Sendable {
             URLQueryItem(name: "direction", value: "-1"),
             URLQueryItem(name: "limit", value: "50")
         ]
+        if let pipelineTag = Self.pipelineTag(for: capabilities) {
+            queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
+        }
         queryItems.append(contentsOf: [
             "downloads", "likes", "pipeline_tag", "library_name", "tags",
             "private", "gated", "safetensors"
@@ -395,6 +399,26 @@ private struct HuggingFaceHubClient: Sendable {
         }
 
         return try await page(at: url, token: token)
+    }
+
+    private static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
+        guard capabilities.count == 1, let capability = capabilities.first else {
+            return nil
+        }
+        switch capability {
+        case .imageGeneration:
+            return "text-to-image"
+        case .imageEditing:
+            return "image-to-image"
+        case .speechToText:
+            return "automatic-speech-recognition"
+        case .textToSpeech:
+            return "text-to-speech"
+        case .vision:
+            return "image-text-to-text"
+        case .text, .audio, .video, .embeddings, .reasoning, .tools, .drafter:
+            return nil
+        }
     }
 
     func model(id: String, token: String?) async throws -> HuggingFaceModel {
@@ -485,15 +509,23 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var buffer: [HuggingFaceModel] = []
     private var activeSort: HuggingFaceModelSort = .downloads
+    private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURL: URL?
     private let pageSize = 24
     private let maximumPageCount = 5
+    private let maximumFillFetches = 8
 
     deinit {
         searchTask?.cancel()
     }
 
-    func search(query: String, sort: HuggingFaceModelSort, token: String?) {
+    func search(
+        query: String,
+        sort: HuggingFaceModelSort,
+        capabilities: Set<LocalModelCapability>,
+        predicate: @escaping (HuggingFaceModel) -> Bool,
+        token: String?
+    ) {
         searchTask?.cancel()
         isSearching = true
         error = nil
@@ -502,11 +534,17 @@ final class HuggingFaceModelLibrary: ObservableObject {
         nextPageURL = nil
         pageNumber = 1
         activeSort = sort
+        visibilityPredicate = predicate
 
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await client.search(query: query, sort: sort, token: token)
+                let page = try await client.search(
+                    query: query,
+                    sort: sort,
+                    capabilities: capabilities,
+                    token: token
+                )
                 try Task.checkCancellation()
                 self.buffer = page.models
                 self.nextPageURL = page.nextPageURL
@@ -536,6 +574,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         nextPageURL = nil
         pageNumber = 1
         activeSort = .downloads
+        visibilityPredicate = { _ in true }
 
         searchTask = Task { [weak self] in
             guard let self else { return }
@@ -572,7 +611,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     var canGoToNextPage: Bool {
         guard !isSearching, pageNumber < maximumPageCount else { return false }
-        return buffer.count > pageNumber * pageSize || nextPageURL != nil
+        return orderedVisible.count > pageNumber * pageSize || nextPageURL != nil
     }
 
     func goToPreviousPage() {
@@ -586,13 +625,12 @@ final class HuggingFaceModelLibrary: ObservableObject {
         guard canGoToNextPage else { return }
         let target = pageNumber + 1
 
-        if buffer.count >= target * pageSize || nextPageURL == nil {
+        if orderedVisible.count >= target * pageSize || nextPageURL == nil {
             pageNumber = target
             models = slice(forPage: target)
             error = nil
             return
         }
-        guard let nextPageURL else { return }
 
         searchTask?.cancel()
         isSearching = true
@@ -601,10 +639,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await client.page(at: nextPageURL, token: token)
+                try await self.fillBuffer(upTo: target * self.pageSize, token: token)
                 try Task.checkCancellation()
-                self.buffer.append(contentsOf: page.models)
-                self.nextPageURL = page.nextPageURL
                 let nextModels = self.slice(forPage: target)
                 if !nextModels.isEmpty {
                     self.pageNumber = target
@@ -624,7 +660,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     private func fillBuffer(upTo count: Int, token: String?) async throws {
         var fetches = 0
-        while buffer.count < count, let url = nextPageURL, fetches < 8 {
+        while orderedVisible.count < count, let url = nextPageURL, fetches < maximumFillFetches {
             let nextPage = try await client.page(at: url, token: token)
             try Task.checkCancellation()
             buffer.append(contentsOf: nextPage.models)
@@ -634,7 +670,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     }
 
     private func slice(forPage number: Int) -> [HuggingFaceModel] {
-        let ordered = orderedBuffer
+        let ordered = orderedVisible
         let start = (number - 1) * pageSize
         guard start < ordered.count else { return [] }
         return Array(ordered[start..<min(start + pageSize, ordered.count)])
@@ -650,6 +686,10 @@ final class HuggingFaceModelLibrary: ObservableObject {
             case (_, nil): return true
             }
         }
+    }
+
+    private var orderedVisible: [HuggingFaceModel] {
+        orderedBuffer.filter(visibilityPredicate)
     }
 
     func cancel() {
