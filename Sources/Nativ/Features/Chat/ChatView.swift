@@ -24,6 +24,7 @@ private struct ChatSessionBootstrap {
 struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -51,6 +52,7 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .onAppear { chat.mcpHost = mcpHost }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
@@ -268,6 +270,8 @@ private struct ChatComposerContainer: View {
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
+    weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -1275,7 +1279,13 @@ final class ChatViewModel: ObservableObject {
                             )
                         }
                     )
-                    let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    let outcome: ChatToolExecutionOutcome
+                    if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
+                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else {
+                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    }
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -1345,20 +1355,38 @@ final class ChatViewModel: ObservableObject {
 
         let precedingMessages = sessionMessages[..<assistantIndex]
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !settings.systemPrompt.isEmpty {
-            requestMessages.insert(
-                MLXChatMessage(role: "system", content: settings.systemPrompt),
-                at: 0
-            )
-        }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        let toolDefinitions = advertisesToolsForModel
+        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
+        if advertisesToolsForModel {
+            toolDefinitions += mcpHost?.toolDefinitions() ?? []
+            // Honor the per-tool switches from the Tools section for every
+            // source, built-in and MCP alike.
+            toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
+        }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
+
+        var systemParts: [String] = []
+        if !settings.systemPrompt.isEmpty {
+            systemParts.append(settings.systemPrompt)
+        }
+        // Inject the built-in tool-use skill when tools are available.
+        if !toolDefinitions.isEmpty {
+            systemParts.append(NativSkill.builtInToolGuide.instructions)
+        }
+        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+            systemParts.append(skill.instructions)
+        }
+        if !systemParts.isEmpty {
+            requestMessages.insert(
+                MLXChatMessage(role: "system", content: systemParts.joined(separator: "\n\n")),
+                at: 0
+            )
+        }
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -2371,11 +2399,10 @@ private struct ChatAgentStepCell: View {
 
                 Text(title)
                     .font(.callout.weight(.medium))
-                if let statusCaption {
-                    Text(statusCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let mcpServerSlug {
+                    NativStatusBadge(text: mcpServerSlug, tone: .neutral, symbol: "puzzlepiece.extension")
                 }
+                statusBadge
 
                 Spacer(minLength: 12)
 
@@ -2396,17 +2423,20 @@ private struct ChatAgentStepCell: View {
         .contentShape(.rect)
     }
 
-    private var statusCaption: String? {
+    @ViewBuilder
+    private var statusBadge: some View {
         switch message.toolStatus {
-        case .cancelled:
-            "Cancelled"
+        case .succeeded:
+            NativStatusBadge(text: "Done", tone: .success)
         case .failed:
-            "Failed"
+            NativStatusBadge(text: "Failed", tone: .danger)
+        case .cancelled:
+            NativStatusBadge(text: "Cancelled", tone: .neutral)
         case .declined:
-            "Declined"
-        case .preparing, .running, .succeeded, .awaitingConsent,
+            NativStatusBadge(text: "Declined", tone: .neutral)
+        case .preparing, .running, .awaitingConsent,
              .awaitingImageModelSelection, nil:
-            nil
+            EmptyView()
         }
     }
 
@@ -2506,24 +2536,18 @@ private struct ChatAgentStepCell: View {
     @ViewBuilder
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Arguments")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(formattedArguments)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                NativCodeBlock(raw: formattedArguments)
             }
             if !message.content.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Result")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(message.content)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(6)
+                    NativCodeBlock(raw: message.content, lineLimit: 12)
                 }
             }
         }
@@ -2539,16 +2563,42 @@ private struct ChatAgentStepCell: View {
     }
 
     private var title: String {
-        ChatToolPresentation.title(toolName: message.toolName, status: message.toolStatus)
+        // For MCP tools show the bare tool name, not the mcp__slug__ prefix.
+        let name = mcpToolParts?.tool ?? message.toolName
+        return ChatToolPresentation.title(toolName: name, status: message.toolStatus)
     }
 
     private var symbolName: String {
         ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
     }
 
-    private var tintColor: Color {
-        message.toolStatus == .failed ? .red : .secondary
+    private var statusTone: NativStatusTone {
+        switch message.toolStatus {
+        case .preparing, .running: return .active
+        case .succeeded: return .success
+        case .failed: return .danger
+        case .awaitingConsent, .awaitingImageModelSelection: return .warning
+        case .cancelled, .declined, nil: return .neutral
+        }
     }
+
+    private var tintColor: Color {
+        statusTone.color
+    }
+
+    /// Splits an MCP tool name (`mcp__<slug>__<tool>`) into its server slug and
+    /// bare tool name; nil for built-in tools.
+    private var mcpToolParts: (slug: String, tool: String)? {
+        guard let name = message.toolName, name.hasPrefix("mcp__") else { return nil }
+        let body = name.dropFirst("mcp__".count)
+        guard let separator = body.range(of: "__") else { return nil }
+        let slug = String(body[..<separator.lowerBound])
+        let tool = String(body[separator.upperBound...])
+        guard !slug.isEmpty, !tool.isEmpty else { return nil }
+        return (slug, tool)
+    }
+
+    private var mcpServerSlug: String? { mcpToolParts?.slug }
 
     private var accessibilityStatus: String {
         switch message.toolStatus {
@@ -3231,6 +3281,7 @@ private struct ChatEmptyTranscriptView: View {
     ChatView(
         model: .init(),
         chat: ChatViewModel(),
+        mcpHost: MCPHostManager(),
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )

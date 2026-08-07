@@ -48,7 +48,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         case .integrations:
             "puzzlepiece.extension"
         case .extensions:
-            "shippingbox"
+            "point.3.filled.connected.trianglepath.dotted"
         case .developer:
             "hammer"
         case .settings:
@@ -262,6 +262,7 @@ struct ControlPanelView: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
+    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
@@ -1737,6 +1738,7 @@ struct ControlPanelView: View {
             ChatView(
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
@@ -1795,9 +1797,10 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .extensions:
-            ExtensionsView(
+            ExtensionsHubView(
                 manager: extensionManager,
-                titleLeadingInset: detailTitleLeadingInset
+                host: mcpHost,
+                model: model
             )
         case .developer:
             DeveloperView(
