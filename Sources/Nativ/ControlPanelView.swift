@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
-    case imageGeneration = "Images"
     case artifacts = "Artifacts"
     case dashboard = "Dashboard"
     case system = "System"
@@ -19,7 +18,6 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     static var allCases: [ControlPanelTab] {
         [
             .chat,
-            .imageGeneration,
             .artifacts,
             .dashboard,
             .system,
@@ -36,8 +34,6 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .chat:
             "bubble.left.and.bubble.right"
-        case .imageGeneration:
-            "photo.on.rectangle"
         case .artifacts:
             "photo.on.rectangle.angled"
         case .dashboard:
@@ -264,7 +260,6 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
     @StateObject private var mcpHost = MCPHostManager()
-    @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
     @StateObject private var systemMonitor = SystemMonitorStore()
@@ -449,7 +444,7 @@ struct ControlPanelView: View {
                         attachmentID: artifact.id
                     )
                 case .generated:
-                    imageGeneration.removeOutput(
+                    ImageGenerationArtifactCatalog.removeOutput(
                         sessionID: artifact.sessionID,
                         turnID: artifact.messageID,
                         outputID: artifact.id
@@ -719,7 +714,7 @@ struct ControlPanelView: View {
             ForEach(ControlPanelTab.allCases) { tab in
                 sidebarTabButton(tab)
 
-                if tab == .imageGeneration {
+                if tab == .chat {
                     ForEach(extensionManager.enabledSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }
@@ -1165,7 +1160,6 @@ struct ControlPanelView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
         }
@@ -1353,7 +1347,7 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .chat, .models, .developer:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
+        case .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
             false
         }
     }
@@ -1486,10 +1480,8 @@ struct ControlPanelView: View {
     }
 
     private var recentSessions: [ControlPanelRecentSession] {
-        (
-            chat.sessions.map(ControlPanelRecentSession.init(chat:))
-                + imageGeneration.sessions.map(ControlPanelRecentSession.init(imageGeneration:))
-        )
+        chat.sessions
+            .map(ControlPanelRecentSession.init(chat:))
             .sorted(by: ControlPanelRecentSession.recencySort)
     }
 
@@ -1858,8 +1850,6 @@ struct ControlPanelView: View {
                 switch recent.selection {
                 case .chat(let sessionID):
                     chat.deleteSession(sessionID)
-                case .imageGeneration(let sessionID):
-                    imageGeneration.deleteSession(sessionID)
                 case .tab, .extensionPage:
                     break
                 }
@@ -1937,8 +1927,6 @@ struct ControlPanelView: View {
                     ? 0
                     : ControlPanelLayout.titlebarHeight
             )
-        case .imageGeneration:
-            ImageGenerationView(model: model, viewModel: imageGeneration)
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
@@ -1950,7 +1938,7 @@ struct ControlPanelView: View {
                         applySidebarSelection(.chat(artifact.sessionID))
                         chat.scrollTargetMessageID = artifact.messageID
                     case .generated:
-                        applySidebarSelection(.imageGeneration(artifact.sessionID))
+                        break
                     }
                 },
                 onUseInChat: { artifact in
@@ -1958,12 +1946,6 @@ struct ControlPanelView: View {
                         chat.stageAttachment(attachment)
                     }
                     applySidebarSelection(.tab(.chat))
-                },
-                onUseAsReference: { artifact in
-                    if let attachment = artifacts.chatAttachment(for: artifact) {
-                        imageGeneration.useAsReference(attachment)
-                    }
-                    applySidebarSelection(.tab(.imageGeneration))
                 }
             )
         case .dashboard:
@@ -2046,9 +2028,6 @@ struct ControlPanelView: View {
             }
             if tab == .chat, chat.currentSessionID == nil {
                 chat.createSession()
-            } else if tab == .imageGeneration,
-                      imageGeneration.currentSessionID == nil {
-                imageGeneration.createSession()
             }
             sidebarSelection = selection
             selectedTab = tab
@@ -2070,14 +2049,6 @@ struct ControlPanelView: View {
                 sidebarSelection = .tab(.chat)
             }
             selectedTab = .chat
-        case .imageGeneration(let sessionID):
-            if imageGeneration.sessions.contains(where: { $0.id == sessionID }) {
-                imageGeneration.selectSession(sessionID)
-                sidebarSelection = selection
-            } else {
-                sidebarSelection = .tab(.imageGeneration)
-            }
-            selectedTab = .imageGeneration
         }
     }
 
@@ -2094,21 +2065,13 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .dashboard, .system, .models, .integrations, .extensions, .developer:
             return true
-        case .chat, .imageGeneration, .artifacts, .settings:
+        case .chat, .artifacts, .settings:
             return false
         }
     }
 
     private func createRecentSession() {
-        if selectedTab == .imageGeneration {
-            imageGeneration.createSession()
-            applySidebarSelection(
-                imageGeneration.currentSessionID.map(ControlPanelSidebarSelection.imageGeneration)
-                    ?? .tab(.imageGeneration)
-            )
-        } else {
-            createChatSession()
-        }
+        createChatSession()
     }
 
     private func handleNewChatRequest() {
@@ -2212,8 +2175,6 @@ struct ControlPanelView: View {
         switch recent.selection {
         case .chat(let sessionID):
             fileURL = chat.sessionDataFileURL(for: sessionID)
-        case .imageGeneration(let sessionID):
-            fileURL = imageGeneration.sessionDataFileURL(for: sessionID)
         case .tab, .extensionPage:
             fileURL = nil
         }
@@ -2233,8 +2194,6 @@ struct ControlPanelView: View {
         case .chat(let sessionID):
             routineStore.deleteRoutine(forSession: sessionID)
             chat.deleteSession(sessionID)
-        case .imageGeneration(let sessionID):
-            imageGeneration.deleteSession(sessionID)
         case .tab, .extensionPage:
             break
         }
@@ -2271,8 +2230,6 @@ struct ControlPanelView: View {
         switch (sidebarSelection, recent.selection) {
         case (.tab(.chat), .chat(let sessionID)):
             return sessionID == chat.currentSessionID
-        case (.tab(.imageGeneration), .imageGeneration(let sessionID)):
-            return sessionID == imageGeneration.currentSessionID
         default:
             return false
         }
@@ -2284,8 +2241,6 @@ struct ControlPanelView: View {
         switch recent.selection {
         case .chat:
             .tab(.chat)
-        case .imageGeneration:
-            .tab(.imageGeneration)
         case .tab(let tab):
             .tab(tab)
         case .extensionPage(let pageID):
@@ -2297,8 +2252,6 @@ struct ControlPanelView: View {
         switch recent.selection {
         case .chat(let sessionID):
             return sessionID == chat.currentSessionID
-        case .imageGeneration(let sessionID):
-            return sessionID == imageGeneration.currentSessionID
         case .tab, .extensionPage:
             return false
         }
@@ -2308,8 +2261,6 @@ struct ControlPanelView: View {
         switch recent.selection {
         case .chat(let sessionID):
             return chat.isSessionBusy(sessionID)
-        case .imageGeneration:
-            return imageGeneration.isGenerating
         case .tab, .extensionPage:
             return false
         }
@@ -2319,15 +2270,13 @@ struct ControlPanelView: View {
         switch recent.selection {
         case .chat:
             return false
-        case .imageGeneration:
-            return imageGeneration.isGenerating
         case .tab, .extensionPage:
             return false
         }
     }
 
     private var newRecentHelp: String {
-        selectedTab == .imageGeneration ? "Create a new image conversation" : "Create a new chat"
+        "Create a new chat"
     }
 
     private func createChatSession() {
@@ -3554,7 +3503,6 @@ private enum ControlPanelSidebarSelection: Hashable {
     case tab(ControlPanelTab)
     case extensionPage(String)
     case chat(UUID)
-    case imageGeneration(UUID)
 }
 
 private struct RowReorderDropDelegate: DropDelegate {
@@ -3626,7 +3574,6 @@ private struct FolderDropDelegate: DropDelegate {
 private struct ControlPanelRecentSession: Identifiable, Equatable {
     enum ID: Hashable {
         case chat(UUID)
-        case imageGeneration(UUID)
     }
 
     let id: ID
@@ -3649,17 +3596,6 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         folderID = session.folderID
     }
 
-    init(imageGeneration session: ImageGenerationSessionSummary) {
-        id = .imageGeneration(session.id)
-        title = session.title
-        createdAt = session.createdAt
-        updatedAt = session.updatedAt
-        pinned = false
-        pinnedOrder = nil
-        sessionOrder = nil
-        folderID = nil
-    }
-
     var chatID: UUID? {
         if case .chat(let sessionID) = id {
             return sessionID
@@ -3675,8 +3611,6 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         switch id {
         case .chat(let sessionID):
             return .chat(sessionID)
-        case .imageGeneration(let sessionID):
-            return .imageGeneration(sessionID)
         }
     }
 
@@ -3691,8 +3625,6 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         switch id {
         case .chat:
             nil
-        case .imageGeneration:
-            "photo"
         }
     }
 

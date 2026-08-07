@@ -72,7 +72,6 @@ struct ArtifactsView: View {
     var titleLeadingInset: CGFloat = 0
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
-    let onUseAsReference: (Artifact) -> Void
 
     @StateObject private var searchIndex = ArtifactSearchIndex()
     @State private var semanticMatches: [UUID]?
@@ -886,9 +885,10 @@ struct ArtifactsView: View {
         Divider()
         if artifact.kind == .image {
             Button("Use in Chat") { onUseInChat(artifact) }
-            Button("Use as Image Reference") { onUseAsReference(artifact) }
         }
-        Button("Go to Chat") { onOpenChat(artifact) }
+        if artifact.source == .uploaded {
+            Button("Go to Chat") { onOpenChat(artifact) }
+        }
         Divider()
         Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)]) }
         Button("Reveal in Finder") { store.revealInFinder(artifact) }
@@ -1395,7 +1395,9 @@ struct ArtifactInspector: View {
 
                     VStack(spacing: 8) {
                         action("Open Preview", "arrow.up.left.and.arrow.down.right", onOpenPreview)
-                        action(artifact.source == .generated ? "Go to Image Session" : "Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
+                        if artifact.source == .uploaded {
+                            action("Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
+                        }
                         action("Reveal in Finder", "folder", { store.revealInFinder(artifact) })
                         action("Export…", "square.and.arrow.down", { store.export(artifact) })
                         action("Copy", "doc.on.doc", { store.copyToPasteboard(artifact) })
@@ -1538,7 +1540,7 @@ struct ArtifactAlbum: View {
                         .font(.system(size: 14, weight: .semibold))
                         .lineLimit(1)
                     Spacer()
-                    if let first = artifacts.first {
+                    if let first = artifacts.first, first.source == .uploaded {
                         Button("Go to Chat") { onGoToChat(first) }
                     }
                 }

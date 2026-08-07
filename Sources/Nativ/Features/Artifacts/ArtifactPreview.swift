@@ -67,11 +67,13 @@ struct ArtifactPreview: View {
             }
             Spacer(minLength: 0)
 
-            Button(action: { onOpenChat(artifact) }) {
-                Label("Open in chat", systemImage: "bubble.left.and.bubble.right")
+            if artifact.source == .uploaded {
+                Button(action: { onOpenChat(artifact) }) {
+                    Label("Open in chat", systemImage: "bubble.left.and.bubble.right")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
             }
-            .buttonStyle(.bordered)
-            .tint(.white)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
