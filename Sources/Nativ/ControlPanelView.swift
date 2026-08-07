@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import NativExtensionSDK
 import SwiftUI
 import UniformTypeIdentifiers
@@ -269,6 +270,62 @@ struct ControlPanelView: View {
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @StateObject private var embeddingLibrary = LocalModelLibrary()
+
+    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
+    private static let embeddingModelSize: Int64 = 4_300_000_000
+
+    private var artifactSemanticSearch: ArtifactSemanticSearchConfig? {
+        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
+            return nil
+        }
+        let settings = model.settings.normalized()
+        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
+            ?? URL(string: "http://127.0.0.1:8080")!
+        let modelID = Self.embeddingModelID
+        let insufficientReason = downloads.capacityBlocker(
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath
+        )
+        return ArtifactSemanticSearchConfig(
+            modelID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
+            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
+            isDownloading: downloads.isDownloading(modelID),
+            downloadProgress: downloads.progress(for: modelID),
+            canInstall: insufficientReason == nil,
+            insufficientReason: insufficientReason,
+            onEnable: {
+                downloads.download(
+                    repoID: modelID,
+                    sizeBytes: Self.embeddingModelSize,
+                    cachePath: settings.modelSearchPath,
+                    token: model.effectiveHuggingFaceToken
+                ) {
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+                navigation.open(.models)
+            },
+            onRemove: {
+                Task {
+                    try? await LocalModelDiscovery.delete(
+                        repoID: modelID,
+                        path: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+            }
+        )
+    }
     @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
@@ -366,6 +423,10 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
+            embeddingLibrary.scan(
+                path: model.settings.modelSearchPath,
+                additionalPaths: model.settings.normalized().additionalModelSearchPaths
+            )
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -1749,6 +1810,7 @@ struct ControlPanelView: View {
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
+                semanticSearch: artifactSemanticSearch,
                 titleLeadingInset: detailTitleLeadingInset,
                 onOpenChat: { artifact in
                     switch artifact.source {
