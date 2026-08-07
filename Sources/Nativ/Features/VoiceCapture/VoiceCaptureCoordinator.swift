@@ -281,19 +281,20 @@ final class VoiceCaptureCoordinator {
                 self.finishOverlayTranscription(overlayTranscriptionID)
                 return
             }
-            guard let modelID = LocalModelDiscovery.speechToTextModelID(
+            // Both of these are dead ends for the server path. Rather than discarding the
+            // recording, hand it to the on-device system recognizer when that is possible;
+            // the alert is only shown when there is genuinely nothing that can transcribe.
+            let modelID = LocalModelDiscovery.speechToTextModelID(
                 in: installedModels,
                 selectedModelID: requestConfiguration.selectedModelID
-            ) else {
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                self.showMissingSpeechModelAlert()
-                return
-            }
-            guard requestConfiguration.serverIsRunning else {
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                self.showTranscriptionError(
-                    title: "Nativ Server Is Not Running",
-                    message: "Start the Nativ server, then record again to transcribe the audio."
+            )
+            guard let modelID, requestConfiguration.serverIsRunning else {
+                await self.transcribeWithSystemRecognizer(
+                    recordingURL,
+                    target: target,
+                    durationSeconds: durationSeconds,
+                    overlayTranscriptionID: overlayTranscriptionID,
+                    unavailableReason: modelID == nil ? .noSpeechModel : .serverStopped
                 )
                 return
             }
@@ -367,6 +368,99 @@ final class VoiceCaptureCoordinator {
             }
         }
         transcriptionTasks[taskID] = task
+    }
+
+    /// Why the bundled server could not be used for this recording.
+    private enum ServerUnavailableReason {
+        case noSpeechModel
+        case serverStopped
+    }
+
+    /// Last-resort transcription through macOS's on-device recognizer.
+    ///
+    /// Mirrors the server path exactly — same transcript file, same analytics row, same
+    /// cursor insertion — so a fallback transcript behaves like any other. If the system
+    /// recognizer cannot help either, the original alert is shown, leaving the previous
+    /// behaviour intact for anyone it does not cover.
+    private func transcribeWithSystemRecognizer(
+        _ recordingURL: URL,
+        target: VoiceTranscriptInsertionTarget?,
+        durationSeconds: TimeInterval?,
+        overlayTranscriptionID: UUID?,
+        unavailableReason: ServerUnavailableReason
+    ) async {
+        guard await AppleSpeechTranscriber.isAvailable else {
+            finishOverlayTranscription(overlayTranscriptionID)
+            showServerUnavailableAlert(unavailableReason)
+            return
+        }
+
+        let transcript: String
+        do {
+            transcript = try await AppleSpeechTranscriber.transcribe(contentsOf: recordingURL)
+        } catch AppleSpeechTranscriber.Failure.empty {
+            handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
+            return
+        } catch let AppleSpeechTranscriber.Failure.modelInstalling(language) {
+            // The one failure worth its own message: macOS has the language but not the
+            // model yet, and is now fetching it. Saying so beats an alert about a server
+            // the user may not have been trying to use.
+            finishOverlayTranscription(overlayTranscriptionID)
+            showTranscriptionError(
+                title: "Preparing On-Device Dictation",
+                message: """
+                macOS is downloading its \(language) speech model. Your recording is saved \
+                in Audio — dictate again once it has finished.
+                """
+            )
+            return
+        } catch {
+            NSLog(
+                "Nativ on-device transcription failed for %@: %@",
+                recordingURL.lastPathComponent,
+                error.localizedDescription
+            )
+            finishOverlayTranscription(overlayTranscriptionID)
+            showServerUnavailableAlert(unavailableReason)
+            return
+        }
+
+        let transcriptURL = recordingURL
+            .deletingPathExtension()
+            .appendingPathExtension("txt")
+        try? transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        analytics.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: transcript,
+            durationSeconds: durationSeconds,
+            modelID: AppleSpeechTranscriber.modelIdentifier,
+            applicationName: target?.applicationName
+        )
+
+        let insertedAtCursor = await VoiceTranscriptInserter.insertAtCursor(
+            transcript,
+            target: target
+        )
+        NSLog(
+            "Nativ saved voice transcript to %@ using the on-device system recognizer",
+            transcriptURL.path
+        )
+        finishOverlayTranscription(overlayTranscriptionID)
+        if !insertedAtCursor {
+            showInsertionPermissionAlertIfNeeded()
+        }
+    }
+
+    private func showServerUnavailableAlert(_ reason: ServerUnavailableReason) {
+        switch reason {
+        case .noSpeechModel:
+            showMissingSpeechModelAlert()
+        case .serverStopped:
+            showTranscriptionError(
+                title: "Nativ Server Is Not Running",
+                message: "Start the Nativ server, then record again to transcribe the audio."
+            )
+        }
     }
 
     private func handleEmptyTranscription(

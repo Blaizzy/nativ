@@ -24,6 +24,7 @@ private struct ChatSessionBootstrap {
 struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -51,6 +52,7 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .onAppear { chat.mcpHost = mcpHost }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
@@ -114,12 +116,17 @@ private struct ChatTranscriptView: View {
                         let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
                         ChatMessageRow(
                             message: message,
+                            imageModelSelectionRequest: chat.imageModelSelectionRequest(
+                                for: message.id
+                            ),
                             canEditUserMessage: editUnavailableReason == nil,
                             editUserMessageUnavailableReason: editUnavailableReason,
                             isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
                             onEditUserMessage: chat.beginEditingUserMessage,
                             onConfirmToolConsent: chat.confirmToolConsent,
-                            onDenyToolConsent: chat.denyToolConsent
+                            onDenyToolConsent: chat.denyToolConsent,
+                            onSelectImageModel: chat.selectImageModel,
+                            onCancelImageModelSelection: chat.cancelImageModelSelection
                         )
                         .equatable()
                         .id(message.id)
@@ -263,6 +270,8 @@ private struct ChatComposerContainer: View {
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
+    weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -272,6 +281,7 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
     }
 
@@ -293,6 +303,9 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var scrollToken = 0
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
+    @Published private(set) var imageModelSelectionRequests: [
+        UUID: ChatImageModelSelectionRequest
+    ] = [:]
 
     private let sessionStore = ChatSessionStore()
     private var sessionLoadTask: Task<Void, Never>?
@@ -310,6 +323,7 @@ final class ChatViewModel: ObservableObject {
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
+    private let imageModelSelectionGate = ChatImageModelSelectionGate()
     private var composerSnapshot: ComposerSnapshot?
 
     init() {
@@ -740,7 +754,9 @@ final class ChatViewModel: ObservableObject {
             case .assistant:
                 speaker = message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 60) } ?? "Assistant"
             case .tool:
-                speaker = message.toolName == "edit_image" ? "Image edit" : "Image generation"
+                speaker = message.toolName == ChatImageToolRegistry.editToolName
+                    ? "Image edit"
+                    : "Image generation"
             case .error:
                 speaker = "Error"
             }
@@ -836,6 +852,8 @@ final class ChatViewModel: ObservableObject {
             userMessageID: userMessageID,
             assistantMessageID: UUID(),
             settings: settings,
+            imageGenerationModelID: imageGenerationModelID(for: sessionID)
+                ?? settings.imageGenerationModelID,
             languageModelSupportsTools: languageModelSupportsTools
         ))
         bumpScroll()
@@ -848,6 +866,31 @@ final class ChatViewModel: ObservableObject {
 
     func denyToolConsent(_ toolMessageID: UUID) {
         toolConsentGate.deny(toolMessageID)
+    }
+
+    func imageModelSelectionRequest(
+        for toolMessageID: UUID
+    ) -> ChatImageModelSelectionRequest? {
+        imageModelSelectionRequests[toolMessageID]
+    }
+
+    func selectImageModel(_ toolMessageID: UUID, _ modelID: String) {
+        guard let request = imageModelSelectionRequests[toolMessageID],
+              ChatImageModelSelection.selectedModel(
+                  withID: modelID,
+                  from: request
+              ) != nil
+        else {
+            return
+        }
+        imageModelSelectionGate.select(modelID: modelID, for: toolMessageID)
+    }
+
+    func cancelImageModelSelection(_ toolMessageID: UUID) {
+        guard imageModelSelectionRequests[toolMessageID] != nil else {
+            return
+        }
+        imageModelSelectionGate.cancel(toolMessageID)
     }
 
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
@@ -1057,6 +1100,7 @@ final class ChatViewModel: ObservableObject {
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
+        var activeImageModelID = queuedRequest.imageGenerationModelID
 
         while true {
             try Task.checkCancellation()
@@ -1098,11 +1142,17 @@ final class ChatViewModel: ObservableObject {
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
                 let toolMessageID = UUID()
+                let initialToolStatus: ChatTranscriptMessage.ToolStatus = switch toolCall.function?.name {
+                case ChatImageToolRegistry.generateToolName,
+                     ChatImageToolRegistry.editToolName: .preparing
+                default: .running
+                }
                 guard insertToolMessage(
                     id: toolMessageID,
                     call: toolCall,
                     after: insertionAnchor,
-                    in: queuedRequest.sessionID
+                    in: queuedRequest.sessionID,
+                    status: initialToolStatus
                 ) else {
                     throw NativChatError.invalidResponse
                 }
@@ -1190,14 +1240,52 @@ final class ChatViewModel: ObservableObject {
                         in: queuedRequest.sessionID
                     )
                     let context = ChatToolExecutionContext(
-                        imageGenerationModelID: queuedRequest.settings.imageGenerationModelID,
+                        imageGenerationModelID: activeImageModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
                         apiKey: queuedRequest.settings.serverAPIKey,
                         imageReferences: references,
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
-                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        imageModelSelection: { [weak self] request in
+                            guard let self else {
+                                throw CancellationError()
+                            }
+                            defer {
+                                self.imageModelSelectionRequests.removeValue(
+                                    forKey: toolMessageID
+                                )
+                            }
+
+                            let selectedModelID = await self.imageModelSelectionGate
+                                .awaitSelection(for: toolMessageID) {
+                                    self.imageModelSelectionRequests[toolMessageID] = request
+                                    self.setToolMessageStatus(
+                                        toolMessageID,
+                                        in: queuedRequest.sessionID,
+                                        status: .awaitingImageModelSelection
+                                    )
+                                }
+                            guard let selectedModelID else {
+                                throw CancellationError()
+                            }
+                            return selectedModelID
+                        },
+                        imageExecutionWillStart: { [weak self] selectedModelID in
+                            activeImageModelID = selectedModelID
+                            self?.beginImageExecution(
+                                toolMessageID,
+                                modelID: selectedModelID,
+                                in: queuedRequest.sessionID
+                            )
+                        }
                     )
-                    let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    let outcome: ChatToolExecutionOutcome
+                    if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
+                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else {
+                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    }
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -1267,28 +1355,38 @@ final class ChatViewModel: ObservableObject {
 
         let precedingMessages = sessionMessages[..<assistantIndex]
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !settings.systemPrompt.isEmpty {
-            requestMessages.insert(
-                MLXChatMessage(role: "system", content: settings.systemPrompt),
-                at: 0
-            )
-        }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        let toolDefinitions = advertisesToolsForModel
+        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                context: ChatToolExecutionContext(
-                    imageGenerationModelID: settings.imageGenerationModelID,
-                    baseURL: settings.serverBaseURL,
-                    apiKey: settings.serverAPIKey,
-                    imageReferences: [],
-                    modelSearchPath: settings.expandedModelSearchPath,
-                    additionalModelSearchPaths: settings.additionalModelSearchPaths
-                ),
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
+        if advertisesToolsForModel {
+            toolDefinitions += mcpHost?.toolDefinitions() ?? []
+            // Honor the per-tool switches from the Tools section for every
+            // source, built-in and MCP alike.
+            toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
+        }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
+
+        var systemParts: [String] = []
+        if !settings.systemPrompt.isEmpty {
+            systemParts.append(settings.systemPrompt)
+        }
+        // Inject the built-in tool-use skill when tools are available.
+        if !toolDefinitions.isEmpty {
+            systemParts.append(NativSkill.builtInToolGuide.instructions)
+        }
+        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+            systemParts.append(skill.instructions)
+        }
+        if !systemParts.isEmpty {
+            requestMessages.insert(
+                MLXChatMessage(role: "system", content: systemParts.joined(separator: "\n\n")),
+                at: 0
+            )
+        }
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -1346,7 +1444,8 @@ final class ChatViewModel: ObservableObject {
         id: UUID,
         call: MLXChatToolCall,
         after messageID: UUID,
-        in sessionID: UUID
+        in sessionID: UUID,
+        status: ChatTranscriptMessage.ToolStatus = .running
     ) -> Bool {
         insertMessage(
             ChatTranscriptMessage(
@@ -1356,7 +1455,7 @@ final class ChatViewModel: ObservableObject {
                 isStreaming: true,
                 toolCallID: call.id,
                 toolName: call.function?.name,
-                toolStatus: .running,
+                toolStatus: status,
                 toolArguments: call.function?.arguments
             ),
             after: messageID,
@@ -1430,6 +1529,26 @@ final class ChatViewModel: ObservableObject {
             message.toolStatus = status
             message.isStreaming = false
         }
+        if status != .awaitingImageModelSelection {
+            imageModelSelectionRequests.removeValue(forKey: id)
+        }
+        persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
+    }
+
+    private func setToolMessageStatus(
+        _ id: UUID,
+        in sessionID: UUID,
+        status: ChatTranscriptMessage.ToolStatus
+    ) {
+        updateMessage(id, in: sessionID) { message in
+            message.toolStatus = status
+        }
+        if status != .awaitingImageModelSelection {
+            imageModelSelectionRequests.removeValue(forKey: id)
+        }
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
             bumpScroll()
@@ -1496,6 +1615,40 @@ final class ChatViewModel: ObservableObject {
             return messages
         }
         return storedSessions.first(where: { $0.id == sessionID })?.messages
+    }
+
+    private func imageGenerationModelID(for sessionID: UUID) -> String? {
+        if currentSessionID == sessionID {
+            return currentSession?.imageGenerationModelID
+        }
+        return storedSessions.first(where: { $0.id == sessionID })?
+            .imageGenerationModelID
+    }
+
+    private func beginImageExecution(
+        _ toolMessageID: UUID,
+        modelID: String,
+        in sessionID: UUID
+    ) {
+        if currentSessionID == sessionID {
+            currentSession?.imageGenerationModelID = modelID
+        } else {
+            guard let sessionIndex = storedSessions.firstIndex(where: {
+                $0.id == sessionID
+            }) else {
+                return
+            }
+            storedSessions[sessionIndex].imageGenerationModelID = modelID
+        }
+
+        updateMessage(toolMessageID, in: sessionID) { message in
+            message.toolStatus = .running
+        }
+        imageModelSelectionRequests.removeValue(forKey: toolMessageID)
+        persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
     }
 
     private func message(_ messageID: UUID, in sessionID: UUID) -> ChatTranscriptMessage? {
@@ -1761,7 +1914,11 @@ final class ChatViewModel: ObservableObject {
     private func normalizedForLoad(_ messages: [ChatTranscriptMessage]) -> [ChatTranscriptMessage] {
         messages.map { message in
             var message = message
-            if message.toolStatus == .awaitingConsent || message.toolStatus == .running {
+            if message.toolStatus == .awaitingConsent
+                || message.toolStatus == .awaitingImageModelSelection
+                || message.toolStatus == .preparing
+                || message.toolStatus == .running
+            {
                 message.toolStatus = .cancelled
                 message.content = ChatToolDispatcher.failurePayload(
                     toolName: message.toolName,
@@ -1870,17 +2027,21 @@ private struct ChatMessageRow: View, Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
+    let imageModelSelectionRequest: ChatImageModelSelectionRequest?
     let canEditUserMessage: Bool
     let editUserMessageUnavailableReason: String?
     let isEditingUserMessage: Bool
     let onEditUserMessage: (UUID) -> Void
     let onConfirmToolConsent: (UUID) -> Void
     let onDenyToolConsent: (UUID) -> Void
+    let onSelectImageModel: (UUID, String) -> Void
+    let onCancelImageModelSelection: (UUID) -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
+            && lhs.imageModelSelectionRequest == rhs.imageModelSelectionRequest
             && lhs.canEditUserMessage == rhs.canEditUserMessage
             && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
             && lhs.isEditingUserMessage == rhs.isEditingUserMessage
@@ -1897,8 +2058,11 @@ private struct ChatMessageRow: View, Equatable {
             if message.role == .tool {
                 ChatAgentStepCell(
                     message: message,
+                    imageModelSelectionRequest: imageModelSelectionRequest,
                     onConfirm: onConfirmToolConsent,
-                    onDeny: onDenyToolConsent
+                    onDeny: onDenyToolConsent,
+                    onSelectImageModel: onSelectImageModel,
+                    onCancelImageModelSelection: onCancelImageModelSelection
                 )
             }
 
@@ -2168,12 +2332,20 @@ private struct ChatMessageRow: View, Equatable {
 
 private struct ChatAgentStepCell: View {
     let message: ChatTranscriptMessage
+    let imageModelSelectionRequest: ChatImageModelSelectionRequest?
     let onConfirm: (UUID) -> Void
     let onDeny: (UUID) -> Void
+    let onSelectImageModel: (UUID, String) -> Void
+    let onCancelImageModelSelection: (UUID) -> Void
     @State private var isExpanded = false
 
     private var isAwaitingConsent: Bool {
         message.toolStatus == .awaitingConsent
+    }
+
+    private var isAwaitingImageModelSelection: Bool {
+        message.toolStatus == .awaitingImageModelSelection
+            && imageModelSelectionRequest != nil
     }
 
     var body: some View {
@@ -2187,9 +2359,13 @@ private struct ChatAgentStepCell: View {
             }
             .buttonStyle(.plain)
             .help(isExpanded ? "Hide call details" : "Show call details")
-            .disabled(isAwaitingConsent)
+            .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
-            if isAwaitingConsent {
+            if isAwaitingImageModelSelection {
+                Divider()
+                    .padding(.top, 7)
+                imageModelSelectionPrompt
+            } else if isAwaitingConsent {
                 Divider()
                     .padding(.top, 7)
                 consentPrompt
@@ -2223,15 +2399,14 @@ private struct ChatAgentStepCell: View {
 
                 Text(title)
                     .font(.callout.weight(.medium))
-                if let statusCaption {
-                    Text(statusCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let mcpServerSlug {
+                    NativStatusBadge(text: mcpServerSlug, tone: .neutral, symbol: "puzzlepiece.extension")
                 }
+                statusBadge
 
                 Spacer(minLength: 12)
 
-                if !isAwaitingConsent {
+                if !isAwaitingConsent && !isAwaitingImageModelSelection {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -2248,16 +2423,20 @@ private struct ChatAgentStepCell: View {
         .contentShape(.rect)
     }
 
-    private var statusCaption: String? {
+    @ViewBuilder
+    private var statusBadge: some View {
         switch message.toolStatus {
-        case .cancelled:
-            "Cancelled"
+        case .succeeded:
+            NativStatusBadge(text: "Done", tone: .success)
         case .failed:
-            "Failed"
+            NativStatusBadge(text: "Failed", tone: .danger)
+        case .cancelled:
+            NativStatusBadge(text: "Cancelled", tone: .neutral)
         case .declined:
-            "Declined"
-        case .running, .succeeded, .awaitingConsent, nil:
-            nil
+            NativStatusBadge(text: "Declined", tone: .neutral)
+        case .preparing, .running, .awaitingConsent,
+             .awaitingImageModelSelection, nil:
+            EmptyView()
         }
     }
 
@@ -2285,6 +2464,65 @@ private struct ChatAgentStepCell: View {
         .padding(.top, 7)
     }
 
+    @ViewBuilder
+    private var imageModelSelectionPrompt: some View {
+        if let request = imageModelSelectionRequest {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Choose the model to use for \(request.operation.capabilityName).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(request.models) { model in
+                        Button {
+                            onSelectImageModel(message.id, model.modelID)
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.displayName)
+                                        .font(.callout.weight(.medium))
+                                        .foregroundStyle(.primary)
+                                    Text(model.modelID)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer(minLength: 12)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .contentShape(.rect)
+                            .background(
+                                Color(nsColor: .controlBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 7)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .stroke(
+                                        Color(nsColor: .separatorColor),
+                                        lineWidth: 0.5
+                                    )
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Use \(model.displayName)")
+                    }
+                }
+
+                Button("Cancel") {
+                    onCancelImageModelSelection(message.id)
+                }
+                .buttonStyle(.bordered)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 7)
+        }
+    }
+
     private var requestedModelID: String {
         guard let data = message.toolArguments?.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -2298,24 +2536,18 @@ private struct ChatAgentStepCell: View {
     @ViewBuilder
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Arguments")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(formattedArguments)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                NativCodeBlock(raw: formattedArguments)
             }
             if !message.content.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Result")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(message.content)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(6)
+                    NativCodeBlock(raw: message.content, lineLimit: 12)
                 }
             }
         }
@@ -2331,19 +2563,47 @@ private struct ChatAgentStepCell: View {
     }
 
     private var title: String {
-        ChatToolPresentation.title(toolName: message.toolName, status: message.toolStatus)
+        // For MCP tools show the bare tool name, not the mcp__slug__ prefix.
+        let name = mcpToolParts?.tool ?? message.toolName
+        return ChatToolPresentation.title(toolName: name, status: message.toolStatus)
     }
 
     private var symbolName: String {
         ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
     }
 
-    private var tintColor: Color {
-        message.toolStatus == .failed ? .red : .secondary
+    private var statusTone: NativStatusTone {
+        switch message.toolStatus {
+        case .preparing, .running: return .active
+        case .succeeded: return .success
+        case .failed: return .danger
+        case .awaitingConsent, .awaitingImageModelSelection: return .warning
+        case .cancelled, .declined, nil: return .neutral
+        }
     }
+
+    private var tintColor: Color {
+        statusTone.color
+    }
+
+    /// Splits an MCP tool name (`mcp__<slug>__<tool>`) into its server slug and
+    /// bare tool name; nil for built-in tools.
+    private var mcpToolParts: (slug: String, tool: String)? {
+        guard let name = message.toolName, name.hasPrefix("mcp__") else { return nil }
+        let body = name.dropFirst("mcp__".count)
+        guard let separator = body.range(of: "__") else { return nil }
+        let slug = String(body[..<separator.lowerBound])
+        let tool = String(body[separator.upperBound...])
+        guard !slug.isEmpty, !tool.isEmpty else { return nil }
+        return (slug, tool)
+    }
+
+    private var mcpServerSlug: String? { mcpToolParts?.slug }
 
     private var accessibilityStatus: String {
         switch message.toolStatus {
+        case .preparing:
+            "preparing"
         case .running:
             "running"
         case .succeeded:
@@ -2354,6 +2614,8 @@ private struct ChatAgentStepCell: View {
             "cancelled"
         case .awaitingConsent:
             "awaiting your confirmation"
+        case .awaitingImageModelSelection:
+            "awaiting image model selection"
         case .declined:
             "declined"
         case nil:
@@ -2887,30 +3149,32 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
     let content: String
     let fontScale: Double
 
-    func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField(wrappingLabelWithString: content)
-        textField.isSelectable = true
-        textField.isEditable = false
-        textField.isBezeled = false
-        textField.drawsBackground = false
-        textField.focusRingType = .none
-        textField.maximumNumberOfLines = 0
-        textField.lineBreakMode = .byWordWrapping
-        textField.cell?.wraps = true
-        textField.cell?.isScrollable = false
-        textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textField.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        update(textField)
-        return textField
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        update(textView)
+        return textView
     }
 
-    func updateNSView(_ textField: NSTextField, context: Context) {
-        update(textField)
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        update(textView)
     }
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        nsView textField: NSTextField,
+        nsView textView: NSTextView,
         context: Context
     ) -> CGSize? {
         let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
@@ -2925,15 +3189,15 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
         return CGSize(width: width, height: max(1, ceil(bounds.height)))
     }
 
-    private func update(_ textField: NSTextField) {
+    private func update(_ textView: NSTextView) {
         let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        if textField.stringValue != content || textField.font != font {
-            textField.attributedStringValue = NSAttributedString(
+        if textView.string != content || textView.font != font {
+            textView.textStorage?.setAttributedString(NSAttributedString(
                 string: content,
                 attributes: textAttributes(font: font)
-            )
+            ))
         }
-        textField.setAccessibilityLabel(content)
+        textView.setAccessibilityLabel(content)
     }
 
     private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
@@ -3017,6 +3281,7 @@ private struct ChatEmptyTranscriptView: View {
     ChatView(
         model: .init(),
         chat: ChatViewModel(),
+        mcpHost: MCPHostManager(),
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )

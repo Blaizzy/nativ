@@ -14,6 +14,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var pinnedOrder: Int?
     var sessionOrder: Int?
     var folderID: UUID?
+    var imageGenerationModelID: String?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -153,6 +154,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     }
 
     enum ToolStatus: String, Equatable, Codable {
+        case preparing
+        case awaitingImageModelSelection
         case running
         case succeeded
         case failed

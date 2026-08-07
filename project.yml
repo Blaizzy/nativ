@@ -17,6 +17,9 @@ packages:
   textual:
     url: https://github.com/gonzalezreal/textual.git
     exactVersion: 0.5.0
+  mcp-swift-sdk:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    exactVersion: 0.12.1
 schemes:
   Nativ:
     build:
@@ -58,6 +61,9 @@ targets:
       Release: Configuration/Signing.xcconfig
     sources:
       - path: Sources/NativServerKit
+    dependencies:
+      - package: mcp-swift-sdk
+        product: MCP
     postBuildScripts:
       - name: Build mlx-vlm-server resource
         basedOnDependencyAnalysis: false
@@ -145,6 +151,7 @@ targets:
     sources:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
+      - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
@@ -163,6 +170,7 @@ targets:
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatImageModelSelection.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSystemStatsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatListModelsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatServerStatsTool.swift

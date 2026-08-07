@@ -11,6 +11,10 @@ private enum EndpointEditorField: Hashable {
 
 struct DeveloperView: View {
     private static let configurationToggleClearance: CGFloat = 36
+    private static let contentSpacing: CGFloat = 18
+    private static let contentTopPadding: CGFloat = 18
+    private static let contentBottomPadding: CGFloat = 22
+    private static let logPanelMinimumHeight: CGFloat = 320
 
     @ObservedObject var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
@@ -20,6 +24,7 @@ struct DeveloperView: View {
     @State private var logLevelFilter: LogLevelFilter = .all
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
     @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
+    @State private var contentAboveLogHeight: CGFloat?
     @FocusState private var focusedEndpointField: EndpointEditorField?
 
     var body: some View {
@@ -36,18 +41,29 @@ struct DeveloperView: View {
 
                     Divider()
 
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            runtimeGrid
-                            serverEndpointsPanel
-                            authenticationPanels
-                            logPanel
-                                .frame(height: max(320, geometry.size.height - 550))
+                    GeometryReader { scrollViewport in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: Self.contentSpacing) {
+                                VStack(alignment: .leading, spacing: Self.contentSpacing) {
+                                    runtimeGrid
+                                    serverEndpointsPanel
+                                    authenticationPanels
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .onGeometryChange(for: CGFloat.self) { proxy in
+                                    proxy.size.height
+                                } action: { height in
+                                    contentAboveLogHeight = height
+                                }
+
+                                logPanel
+                                    .frame(height: logPanelHeight(in: scrollViewport.size.height))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 22)
+                            .padding(.top, Self.contentTopPadding)
+                            .padding(.bottom, Self.contentBottomPadding)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 22)
-                        .padding(.top, 18)
-                        .padding(.bottom, 22)
                     }
                 }
                 .frame(
@@ -58,6 +74,19 @@ struct DeveloperView: View {
                 .background(Color.nativMainContentBackground)
             }
         }
+    }
+
+    private func logPanelHeight(in viewportHeight: CGFloat) -> CGFloat {
+        guard let contentAboveLogHeight else {
+            return Self.logPanelMinimumHeight
+        }
+
+        let availableHeight = viewportHeight
+            - Self.contentTopPadding
+            - Self.contentBottomPadding
+            - Self.contentSpacing
+            - contentAboveLogHeight
+        return max(Self.logPanelMinimumHeight, availableHeight)
     }
 
     private var pageHeader: some View {
@@ -264,7 +293,6 @@ struct DeveloperView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(PanelHeaderAccent(tint: .blue))
 
             serverRestartIndicator
 
@@ -473,7 +501,6 @@ struct DeveloperView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(PanelHeaderAccent(tint: .blue))
     }
 
     private func visibleLogCount(_ output: LogOutput) -> some View {
@@ -579,39 +606,6 @@ struct DeveloperView: View {
     }
 }
 
-private struct PanelHeaderAccent: View {
-    let tint: Color
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                LinearGradient(
-                    colors: [tint.opacity(0.12), .clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(maxWidth: 420)
-
-                Spacer(minLength: 0)
-            }
-
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [tint.opacity(0.85), tint.opacity(0.25)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(width: 120, height: 3)
-                .padding(.top, 2)
-                .padding(.leading, 16)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
 private struct EditableFieldChrome: ViewModifier {
     let isFocused: Bool
 
@@ -669,7 +663,6 @@ private struct ServerAPIAuthenticationPanel: View {
             authenticationHeader
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(PanelHeaderAccent(tint: .blue))
 
             Divider()
 
@@ -1102,7 +1095,6 @@ private struct HuggingFaceAuthenticationPanel: View {
             authenticationHeader
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(PanelHeaderAccent(tint: .blue))
 
             Divider()
 

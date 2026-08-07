@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import NativExtensionSDK
 import SwiftUI
 import UniformTypeIdentifiers
@@ -48,7 +49,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         case .integrations:
             "puzzlepiece.extension"
         case .extensions:
-            "shippingbox"
+            "point.3.filled.connected.trianglepath.dotted"
         case .developer:
             "hammer"
         case .settings:
@@ -262,12 +263,69 @@ struct ControlPanelView: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
+    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @StateObject private var embeddingLibrary = LocalModelLibrary()
+
+    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
+    private static let embeddingModelSize: Int64 = 4_300_000_000
+
+    private var artifactSemanticSearch: ArtifactSemanticSearchConfig? {
+        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
+            return nil
+        }
+        let settings = model.settings.normalized()
+        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
+            ?? URL(string: "http://127.0.0.1:8080")!
+        let modelID = Self.embeddingModelID
+        let insufficientReason = downloads.capacityBlocker(
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath
+        )
+        return ArtifactSemanticSearchConfig(
+            modelID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
+            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
+            isDownloading: downloads.isDownloading(modelID),
+            downloadProgress: downloads.progress(for: modelID),
+            canInstall: insufficientReason == nil,
+            insufficientReason: insufficientReason,
+            onEnable: {
+                downloads.download(
+                    repoID: modelID,
+                    sizeBytes: Self.embeddingModelSize,
+                    cachePath: settings.modelSearchPath,
+                    token: model.effectiveHuggingFaceToken
+                ) {
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+                navigation.open(.models)
+            },
+            onRemove: {
+                Task {
+                    try? await LocalModelDiscovery.delete(
+                        repoID: modelID,
+                        path: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+            }
+        )
+    }
     @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
@@ -331,17 +389,19 @@ struct ControlPanelView: View {
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .top) {
-            if selectedTab != .models, let failure = model.modelLoadFailure {
-                GlobalModelLoadFailureBanner(
-                    failure: failure,
-                    onOpenModels: { navigation.open(.models) },
-                    onDismiss: { model.clearModelLoadFailure() }
-                )
-                .padding(.top, 10)
-                .padding(.horizontal, 16)
+            Group {
+                if selectedTab != .models, let failure = model.modelLoadFailure {
+                    GlobalModelLoadFailureBanner(
+                        failure: failure,
+                        onOpenModels: { navigation.open(.models) },
+                        onDismiss: { model.clearModelLoadFailure() }
+                    )
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: selectedTab)
         }
-        .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
             ZStack {
                 ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
@@ -363,6 +423,10 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
+            embeddingLibrary.scan(
+                path: model.settings.modelSearchPath,
+                additionalPaths: model.settings.normalized().additionalModelSearchPaths
+            )
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -451,17 +515,23 @@ struct ControlPanelView: View {
             if isSelectingRecents {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             } else {
                 sidebarActionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    pinnedSection
-                    foldersSection
+                    if showsPinnedSection {
+                        pinnedSection
+                    }
+                    if showsFoldersSection {
+                        foldersSection
+                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
@@ -677,25 +747,26 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            headerDivider
-
             if !model.settings.sidebarPinnedCollapsed {
-                if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
-                    emptyPinnedHint
-                } else {
-                    ForEach(pinnedFolders) { folder in
-                        folderView(folder, dropTargeted: isPinnedDropTargeted)
-                    }
-                    ForEach(pinnedSessions) { recent in
-                        draggableRow(recent, isPinnedRow: true)
-                            .overlay(alignment: .top) {
-                                pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
-                            }
-                            .overlay(alignment: .bottom) {
-                                pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
-                            }
+                Group {
+                    if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
+                        emptyPinnedHint
+                    } else {
+                        ForEach(pinnedFolders) { folder in
+                            folderView(folder, dropTargeted: isPinnedDropTargeted)
+                        }
+                        ForEach(pinnedSessions) { recent in
+                            draggableRow(recent, isPinnedRow: true)
+                                .overlay(alignment: .top) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                                .overlay(alignment: .bottom) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                        }
                     }
                 }
+                .transition(.slide)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -708,15 +779,17 @@ struct ControlPanelView: View {
         }
     }
 
+    private var showsPinnedSection: Bool {
+        isSelectingRecents || !pinnedSessions.isEmpty || !pinnedFolders.isEmpty
+    }
+
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarRecentsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
-                .padding(.top, 12)
+                .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
-
-            headerDivider
 
             if !model.settings.sidebarSessionsCollapsed {
                 ForEach(ungroupedSessions) { recent in
@@ -748,10 +821,8 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            headerDivider
-
             if !model.settings.sidebarFoldersCollapsed {
-                if chat.folders.isEmpty {
+                if unpinnedFolders.isEmpty {
                     emptyFoldersHint
                 } else {
                     ForEach(unpinnedFolders) { folder in
@@ -763,6 +834,10 @@ struct ControlPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isFoldersDropTargeted))
         .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
+    }
+
+    private var showsFoldersSection: Bool {
+        isSelectingRecents || !unpinnedFolders.isEmpty
     }
 
     private var emptyFoldersHint: some View {
@@ -1094,13 +1169,6 @@ struct ControlPanelView: View {
         )
     }
 
-    private var headerDivider: some View {
-        Divider()
-            .padding(.leading, 8)
-            .padding(.trailing, 10)
-            .padding(.bottom, 6)
-    }
-
     private func sidebarSectionHeader<Trailing: View>(
         title: String,
         isCollapsed: Bool,
@@ -1108,15 +1176,15 @@ struct ControlPanelView: View {
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 12)
-
+            HStack(spacing: 4) {
                 Text(title)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(.secondary.opacity(0.7))
+
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .frame(width: 12)
 
                 Spacer(minLength: 0)
             }
@@ -1731,6 +1799,7 @@ struct ControlPanelView: View {
             ChatView(
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
@@ -1741,6 +1810,8 @@ struct ControlPanelView: View {
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
+                semanticSearch: artifactSemanticSearch,
+                titleLeadingInset: detailTitleLeadingInset,
                 onOpenChat: { artifact in
                     switch artifact.source {
                     case .uploaded:
@@ -1788,9 +1859,10 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .extensions:
-            ExtensionsView(
+            ExtensionsHubView(
                 manager: extensionManager,
-                titleLeadingInset: detailTitleLeadingInset
+                host: mcpHost,
+                model: model
             )
         case .developer:
             DeveloperView(
