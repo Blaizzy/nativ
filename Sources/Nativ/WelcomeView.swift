@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import SwiftUI
 
 enum WelcomePreferences {
@@ -120,7 +119,7 @@ private struct WelcomeView: View {
     private enum Step: Equatable {
         case model
         case apiKey
-        case voiceDictation
+        case permissions
     }
 
     @ObservedObject var model: NativModel
@@ -134,9 +133,7 @@ private struct WelcomeView: View {
     @State private var showsAPIKeyEditor = false
     @State private var serverAPIKey: String
     @State private var configuredServerAPIKey: String?
-    @State private var microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio)
-    @State private var hasInsertTextAccess = false
-    @State private var isRequestingMicrophone = false
+    @StateObject private var permissions = NativPermissionStore()
     @FocusState private var isAPIKeyFieldFocused: Bool
 
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
@@ -168,8 +165,8 @@ private struct WelcomeView: View {
                         modelStep
                     case .apiKey:
                         apiKeyStep
-                    case .voiceDictation:
-                        voiceDictationStep
+                    case .permissions:
+                        permissionsStep
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -183,16 +180,16 @@ private struct WelcomeView: View {
             modelLibrary.scan(path: model.settings.modelSearchPath)
         }
         .task(id: step) {
-            guard step == .voiceDictation else { return }
-            refreshVoicePermissions()
+            guard step == .permissions else { return }
+            permissions.refresh()
         }
         .onReceive(
             NotificationCenter.default.publisher(
                 for: NSApplication.didBecomeActiveNotification
             )
         ) { _ in
-            guard step == .voiceDictation else { return }
-            refreshVoicePermissions()
+            guard step == .permissions else { return }
+            permissions.refresh()
         }
         .onChange(of: modelLibrary.isScanning) { _, isScanning in
             guard !isScanning else { return }
@@ -234,8 +231,8 @@ private struct WelcomeView: View {
                     .frame(width: 34, height: 1)
                 WelcomeStepIndicator(
                     number: 3,
-                    title: "Voice",
-                    isActive: step == .voiceDictation
+                    title: "Permissions",
+                    isActive: step == .permissions
                 )
             }
         }
@@ -248,8 +245,8 @@ private struct WelcomeView: View {
             "Choose how your local server should start."
         case .apiKey:
             "Optionally protect the server’s management endpoints."
-        case .voiceDictation:
-            "Set up private, local voice dictation."
+        case .permissions:
+            "Optional access for voice features — Nativ works fine without it."
         }
     }
 
@@ -567,12 +564,12 @@ private struct WelcomeView: View {
         }
     }
 
-    private var voiceDictationStep: some View {
+    private var permissionsStep: some View {
         VStack(spacing: 16) {
             WelcomeCard {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "mic.fill")
+                        Image(systemName: "lock.shield.fill")
                             .font(.system(size: 26))
                             .foregroundStyle(.blue)
                             .frame(width: 38, height: 38)
@@ -582,10 +579,10 @@ private struct WelcomeView: View {
                             )
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Dictate anywhere")
+                            Text("Optional permissions")
                                 .font(.headline)
                             Text(
-                                "Press \(VoiceShortcut.recordDefault.displayName) once to start and again to transcribe into the app you are using. Audio and transcription stay local to your Mac."
+                                "Nativ works fully without any of these. Enable them only if you want to dictate with \(VoiceShortcut.recordDefault.displayName), take voice notes, or capture meetings — audio and transcription stay local to your Mac."
                             )
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -595,29 +592,11 @@ private struct WelcomeView: View {
 
                     Divider()
 
-                    VStack(spacing: 12) {
-                        voicePermissionRow(
-                            title: "Microphone",
-                            detail: microphonePermissionDetail,
-                            systemImage: "mic.fill",
-                            isGranted: microphoneAccess == .authorized,
-                            actionTitle: microphoneActionTitle,
-                            action: handleMicrophonePermission
-                        )
+                    NativPermissionsCard(store: permissions)
 
-                        voicePermissionRow(
-                            title: "Text insertion",
-                            detail: hasInsertTextAccess
-                                ? "Nativ can paste transcripts into other apps."
-                                : "Needed to place transcripts at your cursor.",
-                            systemImage: "text.cursor",
-                            isGranted: hasInsertTextAccess,
-                            actionTitle: "Allow",
-                            action: requestInsertTextPermission
-                        )
-                    }
+                    NativPermissionsSummary(store: permissions)
 
-                    Text("You can skip this step and configure voice dictation later from Audio in the sidebar.")
+                    Text("You can change these any time from Settings.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -653,105 +632,18 @@ private struct WelcomeView: View {
         }
     }
 
-    private func voicePermissionRow(
-        title: String,
-        detail: String,
-        systemImage: String,
-        isGranted: Bool,
-        actionTitle: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .foregroundStyle(isGranted ? Color.green : Color.secondary)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.callout.weight(.medium))
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 12)
-
-            if isGranted {
-                Label("Ready", systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .fixedSize()
-            } else {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(isRequestingMicrophone && title == "Microphone")
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var microphonePermissionDetail: String {
-        switch microphoneAccess {
-        case .authorized:
-            "Nativ can capture your voice for dictation."
-        case .denied, .restricted:
-            "Allow access in System Settings to use dictation."
-        case .notDetermined:
-            isRequestingMicrophone ? "Waiting for your permission…" : "Needed to capture your voice."
-        @unknown default:
-            "Check your microphone permission in System Settings."
-        }
-    }
-
-    private var microphoneActionTitle: String {
-        switch microphoneAccess {
-        case .denied, .restricted:
-            "Open System Settings"
-        default:
-            isRequestingMicrophone ? "Requesting…" : "Allow"
-        }
-    }
-
-    private func handleMicrophonePermission() {
-        switch microphoneAccess {
-        case .denied, .restricted:
-            NativSystemPermissionController.openMicrophoneSettings()
-        default:
-            guard !isRequestingMicrophone else { return }
-            isRequestingMicrophone = true
-            NativSystemPermissionController.requestMicrophone { _ in
-                isRequestingMicrophone = false
-                refreshVoicePermissions()
-            }
-        }
-    }
-
-    private func requestInsertTextPermission() {
-        _ = NativSystemPermissionController.requestInsertTextAccess()
-        refreshVoicePermissions()
-    }
-
-    private func refreshVoicePermissions() {
-        microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio)
-        hasInsertTextAccess = NativSystemPermissionController.hasInsertTextAccess()
-    }
-
     private func continueFromAPIKey() {
         guard let normalizedAPIKey else { return }
         configuredServerAPIKey = normalizedAPIKey
         withAnimation(.easeInOut(duration: 0.2)) {
-            step = .voiceDictation
+            step = .permissions
         }
     }
 
     private func skipAPIKey() {
         configuredServerAPIKey = nil
         withAnimation(.easeInOut(duration: 0.2)) {
-            step = .voiceDictation
+            step = .permissions
         }
     }
 
