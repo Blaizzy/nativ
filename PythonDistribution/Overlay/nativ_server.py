@@ -1327,6 +1327,27 @@ def install_metrics_overlay() -> None:
             "loaded_models": snapshot.get("loaded_models", {}),
         }
 
+    @base.app.post("/routines/{routine_id}/run", include_in_schema=False)
+    @base.app.post("/v1/routines/{routine_id}/run")
+    def run_routine_endpoint(routine_id: str, request: Request):
+        """Queue a routine for the Nativ app to run."""
+        require_api_key = getattr(base, "_require_management_api_key", None)
+        if require_api_key is not None:
+            require_api_key(request)
+
+        if not routine_id.strip():
+            raise HTTPException(status_code=400, detail="A routine id is required.")
+
+        directory = os.path.expanduser(
+            "~/Library/Application Support/Nativ/Routines/triggers"
+        )
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{uuid.uuid4().hex}.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"routineID": routine_id, "requestedAt": time.time()}, handle)
+
+        return {"status": "queued", "routine_id": routine_id}
+
 
 def main() -> None:
     install_metrics_overlay()

@@ -53,6 +53,9 @@ struct ChatView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear { chat.mcpHost = mcpHost }
+        .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
+            chat.reloadPersistedSessions()
+        }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
@@ -1968,6 +1971,24 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
+    func reloadPersistedSessions() {
+        guard !isLoadingSessions else {
+            return
+        }
+        storedSessions = sessionStore.loadSessions()
+        if let currentSession,
+           !storedSessions.contains(where: { $0.id == currentSession.id }) {
+            upsertStoredSession(currentSession)
+        }
+        if let id = currentSessionID,
+           activeRequestSessionID != id,
+           let fresh = storedSessions.first(where: { $0.id == id }),
+           fresh.messages.count != messages.count {
+            applyCurrentSession(fresh)
+        }
+        refreshSessionList()
+    }
+
     private func upsertStoredSession(_ session: ChatSession) {
         if let index = storedSessions.firstIndex(where: { $0.id == session.id }) {
             storedSessions[index] = session
@@ -2006,6 +2027,10 @@ final class ChatViewModel: ObservableObject {
             }
 
             if session.messages.isEmpty {
+                if RoutineStore.shared.routine(forSession: session.id) != nil {
+                    keptSessions.append(session)
+                    continue
+                }
                 if keptEmptySession {
                     removedSessionIDs.append(session.id)
                     continue

@@ -1,6 +1,7 @@
 import AppKit
 import NativServerKit
 import SwiftUI
+import UserNotifications
 
 @MainActor
 private final class ModelMenuIconView: NSView {
@@ -339,7 +340,7 @@ private final class ModelMenuSectionHeaderView: NSView {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()
@@ -348,6 +349,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
+    private let routineStore = RoutineStore.shared
+    private lazy var routineRunner = RoutineRunner(
+        model: model,
+        store: routineStore,
+        sessionStore: ChatSessionStore()
+    )
+    private lazy var routineScheduler = RoutineScheduler(
+        store: routineStore,
+        onFire: { [weak self] routine, source in
+            self?.routineRunner.run(routine, source: source)
+        }
+    )
     private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
     private var mainWindowOpener: (() -> Void)?
     private var statusItem: NSStatusItem?
@@ -368,6 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.updateStatusItemButton()
         }
         runtime.start()
+        setUpRoutines()
         model.onMenuStateChanged = { [weak self] in
             guard let self else {
                 return
@@ -564,6 +578,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func toggleSidebar() {
         controlPanelNavigation.toggleSidebar()
         showMainWindow()
+    }
+
+    private func setUpRoutines() {
+        RoutineRunCoordinator.shared.configure(runner: routineRunner)
+        routineRunner.onRunCompleted = { [weak self] routine, run in
+            self?.postRoutineNotification(routine: routine, run: run)
+        }
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound]
+        ) { _, _ in }
+        routineStore.onRoutinesChanged = { [weak self] in
+            self?.refreshRoutineAgents()
+        }
+        refreshRoutineAgents()
+        routineScheduler.start()
+    }
+
+    private func refreshRoutineAgents() {
+        RoutineLaunchAgent.refresh(routines: routineStore.routines)
+    }
+
+    private func postRoutineNotification(routine: Routine, run: RoutineRun) {
+        guard routine.notifyOnFinish else {
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = routine.name.isEmpty ? "Routine" : routine.name
+        content.body = run.status == .failed
+            ? "Run failed. \(run.resultSummary)"
+            : (run.resultSummary.isEmpty ? "Run finished." : run.resultSummary)
+        if let sessionID = run.sessionID {
+            content.userInfo = ["sessionID": sessionID.uuidString]
+        }
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: run.id, content: content, trigger: nil)
+        )
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            self?.controlPanelNavigation.open(.chat)
+            self?.showMainWindow()
+        }
+        completionHandler()
     }
 
     func toggleAllSidebarSections() {
