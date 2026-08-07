@@ -75,15 +75,18 @@ final class MCPHostManager: ObservableObject {
         scheduleReload(servers: appliedServers, debounce: false)
     }
 
+    /// Stops every server process.
+    ///
+    /// Terminates synchronously rather than awaiting `disconnect()`: this runs
+    /// on app termination, and the app exits before a detached task gets to
+    /// run, which would leave every MCP server still running after quit.
     func shutdown() {
         reloadTask?.cancel()
         let previous = connections
         connections = [:]
         states = [:]
-        Task {
-            for connection in previous.values {
-                await connection.client.disconnect()
-            }
+        for connection in previous.values {
+            connection.client.terminateImmediately()
         }
     }
 

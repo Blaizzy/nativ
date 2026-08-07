@@ -347,6 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         builtInExtensions: [voiceDictationExtension]
     )
     private let controlPanelNavigation = ControlPanelNavigation()
+    private let mcpHost = MCPHostManager()
     private let runtime = SystemRuntimeMonitor()
     private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
     private var mainWindowOpener: (() -> Void)?
@@ -436,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
         extensionManager.shutdown()
+        mcpHost.shutdown()
         runtime.onUpdate = nil
         systemMenuBarPreferences.onChange = nil
         runtime.stop()
@@ -540,6 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             navigation: controlPanelNavigation,
             runtime: runtime,
             extensionManager: extensionManager,
+            mcpHost: mcpHost,
             softwareUpdater: softwareUpdater,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)
