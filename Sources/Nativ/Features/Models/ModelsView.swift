@@ -62,6 +62,7 @@ struct ModelsView: View {
     // Observing the manager here invalidates the entire Models view for every
     // progress tick, which makes Discover scroll janky during downloads.
     private var downloadManager: HuggingFaceDownloadManager { .shared }
+    @ObservedObject private var adapterCatalog = LoRAAdapterCatalog.shared
     @State private var section: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
@@ -70,6 +71,7 @@ struct ModelsView: View {
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
+    @State private var adapterModel: LocalModel?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -118,6 +120,13 @@ struct ModelsView: View {
         .onDisappear {
             localLibrary.cancel()
             hubLibrary.cancel()
+        }
+        .sheet(item: $adapterModel) { localModel in
+            LoRAAdapterSheet(
+                model: model,
+                catalog: adapterCatalog,
+                baseModelID: localModel.repoID
+            )
         }
     }
 
@@ -219,22 +228,26 @@ struct ModelsView: View {
 
                         ForEach(filteredLocalModels) { localModel in
                             let preloadSlots = preloadSlots(for: localModel)
+                            let selectedPreloadSlots = selectedPreloadSlots(
+                                for: localModel.repoID
+                            )
                             InstalledModelRow(
                                 localModel: localModel,
                                 preloadSlots: preloadSlots,
-                                selectedPreloadSlots: selectedPreloadSlots(
-                                    for: localModel.repoID
-                                ),
+                                selectedPreloadSlots: selectedPreloadSlots,
                                 preferredPreloadSlot: preferredPreloadSlot(
                                     among: preloadSlots
                                 ),
-                                isSelectionDisabled: model.modelSwitchInProgress,
+                                isSelectionDisabled: model.runtimeTransitionInProgress,
                                 isModelLoading: model.modelLoadingID
                                     == localModel.repoID,
                                 modelLoadingPercentage: model.modelLoadingPercentage,
+                                adapterName: selectedLanguageAdapterName(
+                                    for: localModel.repoID
+                                ),
                                 isDeleting: localLibrary.deletingModelIDs.contains(
                                     localModel.repoID),
-                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress
+                                canDelete: localModel.isDeletable && !model.runtimeTransitionInProgress
                                     && !isModelInUse(localModel.repoID),
                                 onSetPreload: { slot, isEnabled in
                                     if isEnabled {
@@ -247,6 +260,9 @@ struct ModelsView: View {
                                         model.switchPreloadedModel(to: nil, for: slot)
                                     }
                                 },
+                                onManageAdapters: localModel.capabilities.contains(.text)
+                                    ? { adapterModel = localModel }
+                                    : nil,
                                 onDelete: { deleteInstalledModel(localModel) }
                             )
                         }
@@ -462,6 +478,17 @@ struct ModelsView: View {
             ModelPreloadSlot.allCases.filter {
                 settings.modelID(for: $0) == repoID
             })
+    }
+
+    private func selectedLanguageAdapterName(for modelID: String) -> String? {
+        let settings = model.settings.normalized()
+        guard settings.languageModelID == modelID,
+              let reference = settings.languageAdapter(for: modelID),
+              adapterCatalog.localURL(for: reference, baseModelID: modelID) != nil
+        else {
+            return nil
+        }
+        return reference.displayName
     }
 
     private func preferredPreloadSlot(
@@ -916,9 +943,11 @@ private struct InstalledModelRow: View {
     let isSelectionDisabled: Bool
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
+    let adapterName: String?
     let isDeleting: Bool
     let canDelete: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
+    let onManageAdapters: (() -> Void)?
     let onDelete: () -> Void
 
     @State private var isHovered = false
@@ -993,6 +1022,13 @@ private struct InstalledModelRow: View {
                                     color: .accentColor
                                 )
                             }
+                            if let adapterName {
+                                ModelPill(
+                                    title: adapterName,
+                                    systemImage: "point.3.connected.trianglepath.dotted",
+                                    color: .blue
+                                )
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .clipped()
@@ -1043,6 +1079,17 @@ private struct InstalledModelRow: View {
             .help(rowHelp)
             .accessibilityLabel(rowHelp)
 
+            if let onManageAdapters {
+                Button(action: onManageAdapters) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSelectionDisabled)
+                .help("Manage LoRA adapters")
+                .accessibilityLabel("Manage LoRA adapters for \(localModel.repoID)")
+            }
+
             if isDeleting {
                 ProgressView()
                     .controlSize(.small)
@@ -1060,7 +1107,7 @@ private struct InstalledModelRow: View {
                 .accessibilityLabel("Show \(localModel.repoID) in Finder")
             }
 
-            ModelDownloadActionButton(
+            ModelRowActionButton(
                 title: canDelete
                     ? "Delete installed model"
                     : "Stop the server before deleting this model",
@@ -1374,14 +1421,14 @@ private struct ModelDownloadProgressControl: View {
         ZStack {
             if isHovering {
                 HStack(spacing: 6) {
-                    ModelDownloadActionButton(
+                    ModelRowActionButton(
                         title: isPaused ? "Resume download" : "Pause download",
                         systemImage: isPaused ? "play.fill" : "pause.fill",
                         tint: isPaused ? .green : .orange,
                         action: onPauseResume
                     )
 
-                    ModelDownloadActionButton(
+                    ModelRowActionButton(
                         title: "Remove download",
                         systemImage: "trash",
                         tint: .red,
@@ -1430,40 +1477,6 @@ private struct ModelDownloadProgressControl: View {
 
     private var displayedProgress: Double {
         min(max(progress, 0.025), 1)
-    }
-}
-
-private struct ModelDownloadActionButton: View {
-    let title: String
-    let systemImage: String
-    let tint: Color
-    var isDisabled = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(
-                    isDisabled
-                        ? Color.secondary.opacity(0.45) : (isHovering ? tint : Color.secondary)
-                )
-                .frame(width: 30, height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            isHovering && !isDisabled
-                                ? tint.opacity(0.13) : Color.secondary.opacity(0.10))
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .onHover { isHovering = $0 && !isDisabled }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .help(title)
-        .accessibilityLabel(title)
     }
 }
 
@@ -1609,53 +1622,6 @@ private struct ModelsEmptyState: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 260)
-    }
-}
-
-private struct ModelRowBackground: ViewModifier {
-    let isHighlighted: Bool
-    let isHovered: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(backgroundColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(borderColor, lineWidth: borderWidth)
-            )
-    }
-
-    private var backgroundColor: Color {
-        if isHighlighted {
-            return Color.accentColor.opacity(0.38)
-        }
-        if isHovered {
-            return Color.accentColor.opacity(0.08)
-        }
-        return Color(nsColor: .controlBackgroundColor)
-    }
-
-    private var borderColor: Color {
-        if isHighlighted {
-            return Color.accentColor.opacity(0.90)
-        }
-        if isHovered {
-            return Color.accentColor.opacity(0.40)
-        }
-        return Color(nsColor: .separatorColor)
-    }
-
-    private var borderWidth: CGFloat {
-        isHighlighted ? 1.5 : (isHovered ? 1 : 0.5)
-    }
-}
-
-extension View {
-    fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
-        modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
     }
 }
 

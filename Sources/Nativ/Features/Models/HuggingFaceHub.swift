@@ -1016,7 +1016,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 }
 
-private enum HuggingFaceSnapshotDownloader {
+enum HuggingFaceSnapshotDownloader {
     static func download(operation: HuggingFaceDownloadOperation) async throws {
         try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
@@ -1040,17 +1040,30 @@ private enum HuggingFaceSnapshotDownloader {
     }
 }
 
-private final class HuggingFaceDownloadOperation: @unchecked Sendable {
+struct HuggingFaceDownloadRetryEvent: Equatable, Sendable {
+    let attempt: Int
+    let maximumAttempts: Int
+    let delaySeconds: Int
+}
+
+final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private let process: Process
     private let progress: @Sendable (Double) -> Void
+    private let retry: @Sendable (HuggingFaceDownloadRetryEvent) -> Void
     private let lock = NSLock()
     private var wasCancelled = false
     private var isPaused = false
+    private var completedSnapshotPath: String?
 
     init(
         repoID: String,
         cachePath: String,
         token: String?,
+        revision: String? = nil,
+        allowPatterns: [String]? = nil,
+        expectedBytes: Int64? = nil,
+        progressChunkBytes: Int? = nil,
+        retry: @escaping @Sendable (HuggingFaceDownloadRetryEvent) -> Void = { _ in },
         progress: @escaping @Sendable (Double) -> Void
     ) throws {
         let distributionURL = try Nativ.distributionURL()
@@ -1060,72 +1073,174 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
 
         let script = """
+        import json
         import sys
+        import threading
+        import time
+        import httpx
         from tqdm.auto import tqdm
         from huggingface_hub import snapshot_download
+        from huggingface_hub import constants as hub_constants
+
+        revision = sys.argv[3] or None
+        allow_patterns = json.loads(sys.argv[4]) if sys.argv[4] else None
+        provided_expected_bytes = int(sys.argv[5]) if sys.argv[5] else 0
+        progress_chunk_bytes = int(sys.argv[6]) if sys.argv[6] else 0
+
+        if progress_chunk_bytes > 0:
+            hub_constants.DOWNLOAD_CHUNK_SIZE = min(
+                hub_constants.DOWNLOAD_CHUNK_SIZE,
+                progress_chunk_bytes,
+            )
 
         expected_bytes = 0
+        cached_bytes = 0
         try:
             pending_files = snapshot_download(
                 repo_id=sys.argv[1],
                 cache_dir=sys.argv[2],
+                revision=revision,
+                allow_patterns=allow_patterns,
                 dry_run=True,
             )
-            expected_bytes = sum(
-                item.file_size for item in pending_files if item.will_download
+            expected_bytes = sum(item.file_size for item in pending_files)
+            cached_bytes = sum(
+                item.file_size for item in pending_files if item.is_cached
             )
         except Exception:
             pass
 
-        class MLXProgressTqdm(tqdm):
-            def __init__(self, *args, **kwargs):
-                self._mlx_reports_bytes = kwargs.get("unit") == "B"
-                self._mlx_last_progress = -1.0
-                super().__init__(*args, **kwargs)
-                self._mlx_report()
+        if expected_bytes <= 0:
+            expected_bytes = provided_expected_bytes
 
-            def update(self, n=1):
-                result = super().update(n)
-                self._mlx_report()
+        class ProgressReporter:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._last_progress = -1.0
+
+            def report(self, progress, force=False):
+                progress = min(max(float(progress), 0.0), 1.0)
+                with self._lock:
+                    if progress < self._last_progress:
+                        return
+                    if not force and progress - self._last_progress < 0.002:
+                        return
+                    self._last_progress = progress
+                print(f"__MLX_PROGRESS__:{progress:.6f}", flush=True)
+
+        reporter = ProgressReporter()
+        if expected_bytes > 0:
+            reporter.report(cached_bytes / expected_bytes, force=True)
+
+        class MLXProgressTqdm(tqdm):
+            # The Hub creates one named aggregate bar and updates it from every
+            # file worker, including resumed bytes. Per-file bars are deliberately
+            # ignored so concurrent downloads cannot reset or over-count progress.
+
+            def __init__(self, *args, **kwargs):
+                progress_name = kwargs.pop("name", None)
+                self._nativ_is_snapshot_total = (
+                    progress_name == "huggingface_hub.snapshot_download"
+                    or kwargs.get("desc") == "Downloading (incomplete total...)"
+                )
+                super().__init__(*args, **kwargs)
+                self._nativ_report()
+
+            def update(self, amount=1):
+                result = super().update(amount)
+                self._nativ_report()
                 return result
 
             def refresh(self, *args, **kwargs):
                 result = super().refresh(*args, **kwargs)
-                self._mlx_report()
+                self._nativ_report()
                 return result
 
-            def _mlx_report(self):
-                if not self._mlx_reports_bytes:
-                    return
-                total = float(expected_bytes or self.total or 0)
-                value = float(self.n or 0)
-                progress = min(max(value / total, 0.0), 1.0) if total > 0 else 0.0
-                if abs(progress - self._mlx_last_progress) >= 0.01 or progress >= 1.0:
-                    self._mlx_last_progress = progress
-                    print(f"__MLX_PROGRESS__:{progress:.6f}", flush=True)
+            def _nativ_report(self):
+                if self._nativ_is_snapshot_total and expected_bytes > 0:
+                    reporter.report(
+                        (cached_bytes + getattr(self, "n", 0)) / expected_bytes
+                    )
 
-        snapshot_download(
-            repo_id=sys.argv[1],
-            cache_dir=sys.argv[2],
-            tqdm_class=MLXProgressTqdm,
-        )
+        maximum_retries = 5
+        try:
+            for attempt in range(maximum_retries + 1):
+                try:
+                    snapshot_path = snapshot_download(
+                        repo_id=sys.argv[1],
+                        cache_dir=sys.argv[2],
+                        revision=revision,
+                        allow_patterns=allow_patterns,
+                        tqdm_class=MLXProgressTqdm,
+                    )
+                    break
+                except (httpx.TimeoutException, httpx.NetworkError):
+                    if attempt >= maximum_retries:
+                        raise
+                    retry_number = attempt + 1
+                    delay_seconds = min(2 ** attempt, 16)
+                    print(
+                        f"__NATIV_DOWNLOAD_RETRY__:{retry_number}:"
+                        f"{maximum_retries}:{delay_seconds}",
+                        flush=True,
+                    )
+                    time.sleep(delay_seconds)
+        except httpx.TimeoutException:
+            print(
+                "__NATIV_DOWNLOAD_ERROR__:The connection to Hugging Face "
+                "timed out after 5 retries. The partial download was saved; "
+                "choose Install to resume.",
+                flush=True,
+            )
+            raise SystemExit(75)
+        except httpx.NetworkError:
+            print(
+                "__NATIV_DOWNLOAD_ERROR__:The connection to Hugging Face "
+                "was interrupted after 5 retries. The partial download was "
+                "saved; choose Install to resume.",
+                flush=True,
+            )
+            raise SystemExit(75)
+        reporter.report(1.0, force=True)
+        print(f"__NATIV_SNAPSHOT_PATH__:{snapshot_path}", flush=True)
         """
 
         let process = Process()
         process.executableURL = pythonURL
-        process.arguments = ["-c", script, repoID, cachePath]
+        let patternsJSON = allowPatterns.flatMap { patterns in
+            try? String(decoding: JSONEncoder().encode(patterns), as: UTF8.self)
+        } ?? ""
+        process.arguments = [
+            "-I",
+            "-c",
+            script,
+            repoID,
+            cachePath,
+            revision ?? "",
+            patternsJSON,
+            expectedBytes.map(String.init) ?? "",
+            progressChunkBytes.map(String.init) ?? "",
+        ]
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONHOME"] = distributionURL.appendingPathComponent("python").path
         environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
+        environment.removeValue(forKey: "PYTHONPATH")
         environment["HF_HUB_CACHE"] = cachePath
         environment["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        if progressChunkBytes != nil {
+            // Xet does not expose incremental byte progress. The regular Hub HTTP
+            // path remains resumable and lets the app report honest transfer state.
+            environment["HF_HUB_DISABLE_XET"] = "1"
+            environment["HF_HUB_DOWNLOAD_TIMEOUT"] = "30"
+        }
         if let token = HuggingFaceAuthentication.normalizedToken(token) {
             environment[HuggingFaceAuthentication.environmentVariableName] = token
         }
         process.environment = environment
         self.process = process
         self.progress = progress
+        self.retry = retry
     }
 
     func run() throws {
@@ -1144,8 +1259,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         let outputLock = NSLock()
         var output = Data()
         outputGroup.enter()
-        DispatchQueue.global(qos: .utility).async { [progress] in
+        DispatchQueue.global(qos: .utility).async { [progress, retry] in
             var lineBuffer = ""
+            var highestProgress = 0.0
             while true {
                 let data = pipe.fileHandleForReading.availableData
                 guard !data.isEmpty else { break }
@@ -1158,10 +1274,15 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 let lines = lineBuffer.components(separatedBy: "\n")
                 lineBuffer = lines.last ?? ""
                 for line in lines.dropLast() {
-                    guard let markerRange = line.range(of: "__MLX_PROGRESS__:") else { continue }
-                    let value = line[markerRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let fraction = Double(value) {
-                        progress(min(max(fraction, 0), 1))
+                    if let event = Self.retryEvent(from: line) {
+                        retry(event)
+                        continue
+                    }
+                    if let fraction = Self.progressFraction(from: line) {
+                        let boundedProgress = min(max(fraction, 0), 1)
+                        guard boundedProgress >= highestProgress else { continue }
+                        highestProgress = boundedProgress
+                        progress(boundedProgress)
                     }
                 }
             }
@@ -1197,12 +1318,85 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             outputLock.lock()
             let message = String(decoding: output, as: UTF8.self)
             outputLock.unlock()
-            let usefulMessage = message
+            let usefulMessage = Self.downloadError(from: message) ?? message
                 .split(separator: "\n")
                 .suffix(4)
                 .joined(separator: "\n")
             throw HuggingFaceHubError.downloadFailed(usefulMessage)
         }
+
+        outputLock.lock()
+        let completedOutput = String(decoding: output, as: UTF8.self)
+        outputLock.unlock()
+        if let path = Self.snapshotPath(from: completedOutput) {
+            lock.lock()
+            completedSnapshotPath = path
+            lock.unlock()
+        }
+    }
+
+    static func snapshotPath(from output: String) -> String? {
+        let marker = "__NATIV_SNAPSHOT_PATH__:"
+        guard let markerRange = output.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let path = output[markerRange.upperBound...]
+            .prefix { !$0.isNewline }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : path
+    }
+
+    static func progressFraction(from outputLine: String) -> Double? {
+        let marker = "__MLX_PROGRESS__:"
+        guard let markerRange = outputLine.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let value = outputLine[markerRange.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let fraction = Double(value), fraction.isFinite else {
+            return nil
+        }
+        return min(max(fraction, 0), 1)
+    }
+
+    static func retryEvent(from outputLine: String) -> HuggingFaceDownloadRetryEvent? {
+        let marker = "__NATIV_DOWNLOAD_RETRY__:"
+        guard let markerRange = outputLine.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let components = outputLine[markerRange.upperBound...].split(separator: ":")
+        guard components.count == 3,
+              let attempt = Int(components[0]),
+              let maximumAttempts = Int(components[1]),
+              let delaySeconds = Int(components[2]),
+              attempt > 0,
+              maximumAttempts >= attempt,
+              delaySeconds >= 0
+        else {
+            return nil
+        }
+        return HuggingFaceDownloadRetryEvent(
+            attempt: attempt,
+            maximumAttempts: maximumAttempts,
+            delaySeconds: delaySeconds
+        )
+    }
+
+    static func downloadError(from output: String) -> String? {
+        let marker = "__NATIV_DOWNLOAD_ERROR__:"
+        guard let markerRange = output.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let message = output[markerRange.upperBound...]
+            .prefix { !$0.isNewline }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? nil : message
+    }
+
+    var snapshotPath: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return completedSnapshotPath
     }
 
     func cancel() {

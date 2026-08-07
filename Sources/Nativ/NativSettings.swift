@@ -370,6 +370,7 @@ struct NativSettings: Codable, Equatable {
     var sidebarFoldersCollapsed: Bool
     var sidebarSessionsCollapsed: Bool
     var modelConfigs: [String: ModelConfigProfile]
+    var languageAdapterSelections: [String: HubLoRAAdapterReference]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
@@ -419,7 +420,8 @@ struct NativSettings: Codable, Equatable {
         sidebarPinnedCollapsed: Bool = false,
         sidebarFoldersCollapsed: Bool = false,
         sidebarSessionsCollapsed: Bool = false,
-        modelConfigs: [String: ModelConfigProfile] = [:]
+        modelConfigs: [String: ModelConfigProfile] = [:],
+        languageAdapterSelections: [String: HubLoRAAdapterReference] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
@@ -469,6 +471,7 @@ struct NativSettings: Codable, Equatable {
         self.sidebarFoldersCollapsed = sidebarFoldersCollapsed
         self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
         self.modelConfigs = modelConfigs
+        self.languageAdapterSelections = languageAdapterSelections
     }
 
     enum CodingKeys: String, CodingKey {
@@ -521,6 +524,7 @@ struct NativSettings: Codable, Equatable {
         case sidebarFoldersCollapsed
         case sidebarSessionsCollapsed
         case modelConfigs
+        case languageAdapterSelections
     }
 
     init(from decoder: Decoder) throws {
@@ -576,6 +580,10 @@ struct NativSettings: Codable, Equatable {
         sidebarFoldersCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed) ?? defaults.sidebarFoldersCollapsed
         sidebarSessionsCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed) ?? defaults.sidebarSessionsCollapsed
         modelConfigs = try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs) ?? defaults.modelConfigs
+        languageAdapterSelections = try container.decodeIfPresent(
+            [String: HubLoRAAdapterReference].self,
+            forKey: .languageAdapterSelections
+        ) ?? defaults.languageAdapterSelections
     }
 
     func encode(to encoder: Encoder) throws {
@@ -627,6 +635,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(sidebarFoldersCollapsed, forKey: .sidebarFoldersCollapsed)
         try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
         try container.encode(modelConfigs, forKey: .modelConfigs)
+        try container.encode(languageAdapterSelections, forKey: .languageAdapterSelections)
     }
 
     var currentModelProfile: ModelConfigProfile {
@@ -736,6 +745,12 @@ struct NativSettings: Codable, Equatable {
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
         settings.embeddingModelID = Self.normalizedModelID(settings.embeddingModelID)
+        var normalizedAdapterSelections: [String: HubLoRAAdapterReference] = [:]
+        for (modelID, reference) in settings.languageAdapterSelections {
+            guard let modelID = Self.normalizedModelID(modelID) else { continue }
+            normalizedAdapterSelections[modelID] = reference
+        }
+        settings.languageAdapterSelections = normalizedAdapterSelections
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
         settings.serverHost = Self.normalizedServerHost(settings.serverHost)
@@ -812,6 +827,7 @@ struct NativSettings: Codable, Equatable {
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID
             && lhs.embeddingModelID == rhs.embeddingModelID
+            && lhs.activeLanguageAdapter == rhs.activeLanguageAdapter
             && lhs.serverAPIKey == rhs.serverAPIKey
             && lhs.huggingFaceToken == rhs.huggingFaceToken
             && lhs.serverHost == rhs.serverHost
@@ -880,6 +896,10 @@ struct NativSettings: Codable, Equatable {
     }
 
     var launchArguments: [String] {
+        launchArguments(adapterPath: nil)
+    }
+
+    func launchArguments(adapterPath: String?) -> [String] {
         let settings = normalized()
         var arguments = [
             "--host", settings.serverHost,
@@ -889,6 +909,9 @@ struct NativSettings: Codable, Equatable {
 
         if let languageModelID = settings.languageModelID {
             arguments.append(contentsOf: ["--model", languageModelID])
+            if let adapterPath = Self.normalizedModelID(adapterPath) {
+                arguments.append(contentsOf: ["--adapter-path", adapterPath])
+            }
         }
         if let imageGenerationModelID = settings.imageGenerationModelID {
             arguments.append(contentsOf: ["--image-model", imageGenerationModelID])
@@ -927,6 +950,22 @@ struct NativSettings: Codable, Equatable {
         }
 
         return arguments
+    }
+
+    func languageAdapter(for modelID: String) -> HubLoRAAdapterReference? {
+        languageAdapterSelections[modelID]
+    }
+
+    private var activeLanguageAdapter: HubLoRAAdapterReference? {
+        languageModelID.flatMap { languageAdapter(for: $0) }
+    }
+
+    mutating func setLanguageAdapter(
+        _ reference: HubLoRAAdapterReference?,
+        for modelID: String
+    ) {
+        guard let modelID = Self.normalizedModelID(modelID) else { return }
+        languageAdapterSelections[modelID] = reference
     }
 
     func modelID(for slot: ModelPreloadSlot) -> String? {

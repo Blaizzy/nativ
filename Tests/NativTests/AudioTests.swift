@@ -657,7 +657,10 @@ final class VoiceAudioRetentionTests: XCTestCase {
 @MainActor
 final class VoiceShortcutPreferencesTests: XCTestCase {
     func testDefaultsMatchExistingVoiceCommands() {
-        XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Fn + Control")
+        XCTAssertEqual(
+            VoiceShortcut.recordDefault.displayName,
+            "Control + Option + Command"
+        )
         XCTAssertEqual(VoiceShortcut.retryDefault.displayName, "Fn + R")
 
         let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
