@@ -149,6 +149,7 @@ private struct ChatTranscriptView: View {
                         )
                         .equatable()
                         .id(message.id)
+                        .transition(.opacity)
                     }
                 }
             }
@@ -298,7 +299,14 @@ final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
+    /// Same constant `ChatAgentLoop` (ChatToolRegistry.swift) uses for its own,
+    /// independent stream-flush throttle -- defined on `ChatAgentStreamThrottle`
+    /// rather than here so the two capped cadences can't drift apart, and
+    /// referenced (not duplicated) in this direction because `ChatView.swift`
+    /// is only ever compiled together with `ChatToolRegistry.swift` (the
+    /// reverse isn't true: `NativTests` compiles `ChatToolRegistry.swift`
+    /// without this file).
+    private static let streamFlushInterval = ChatAgentStreamThrottle.flushInterval
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -352,6 +360,9 @@ final class ChatViewModel: ObservableObject {
     private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
     private var streamFlushDates: [UUID: Date] = [:]
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingSubMessages: [UUID: [ChatTranscriptMessage]] = [:]
+    private var subMessagesFlushDates: [UUID: Date] = [:]
+    private var subMessagesFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
     private let imageModelSelectionGate = ChatImageModelSelectionGate()
@@ -1767,20 +1778,26 @@ final class ChatViewModel: ObservableObject {
         in sessionID: UUID,
         status: ChatTranscriptMessage.ToolStatus = .running
     ) -> Bool {
-        insertMessage(
-            ChatTranscriptMessage(
-                id: id,
-                role: .tool,
-                content: "",
-                isStreaming: true,
-                toolCallID: call.id,
-                toolName: call.function?.name,
-                toolStatus: status,
-                toolArguments: call.function?.arguments
-            ),
-            after: messageID,
-            in: sessionID
-        )
+        // A spawn_agent cell is born already showing its details
+        // (`showsDetailsWhileRunning`), so its own `.animation(value:)`
+        // never fires — animating the insertion itself, paired with the
+        // details section's `.transition`, is what actually animates it in.
+        withAnimation(.snappy(duration: 0.2)) {
+            insertMessage(
+                ChatTranscriptMessage(
+                    id: id,
+                    role: .tool,
+                    content: "",
+                    isStreaming: true,
+                    toolCallID: call.id,
+                    toolName: call.function?.name,
+                    toolStatus: status,
+                    toolArguments: call.function?.arguments
+                ),
+                after: messageID,
+                in: sessionID
+            )
+        }
     }
 
     private func insertMessage(
@@ -1843,6 +1860,14 @@ final class ChatViewModel: ObservableObject {
         content: String,
         attachments: [ChatImageAttachment]
     ) {
+        // A spawn_agent tool message settling means no further
+        // updateToolMessageSubMessages calls are coming for it -- force-flush
+        // whatever nested transcript is still pending so the final state
+        // isn't stale, then clear its throttle bookkeeping. A no-op for
+        // every other tool, which never populates subMessages.
+        flushSubMessages(id, in: sessionID)
+        clearSubMessagesBuffers(id)
+
         updateMessage(id, in: sessionID) { message in
             message.content = content
             message.imageAttachments = attachments
@@ -1859,22 +1884,68 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Updates a `spawn_agent` tool message's nested transcript as the
-    /// sub-agent's own loop progresses. Called directly, with no
-    /// coalescing -- fine for now since `ChatAgentLoop` only reports back at
-    /// coarse points (message insertion, after a full completion, after each
-    /// tool round), not on every streamed token.
+    /// Live-updates a `spawn_agent` tool message's nested transcript as the
+    /// sub-agent's own loop progresses. Coalesced at the same capped cadence
+    /// as `append(event:)`'s token streaming (`streamFlushInterval`): with up
+    /// to `ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound` sub-agents
+    /// running concurrently, each firing this on every one of their own
+    /// tool-call status transitions with no rate limit would risk saturating
+    /// the main thread with synchronous SwiftUI diff/layout passes (the
+    /// nested detail renders live while a sub-agent cell shows
+    /// showsDetailsWhileRunning). Intentionally still skips persistSession
+    /// even on a coalesced flush; the parent's own settle-status
+    /// `updateToolMessage` call persists the final state.
     private func updateToolMessageSubMessages(
         _ id: UUID,
         in sessionID: UUID,
         subMessages: [ChatTranscriptMessage]
     ) {
+        pendingSubMessages[id] = subMessages
+
+        let now = Date()
+        if let lastFlush = subMessagesFlushDates[id],
+           now.timeIntervalSince(lastFlush) < Self.streamFlushInterval {
+            scheduleSubMessagesFlush(id, in: sessionID)
+            return
+        }
+        flushSubMessages(id, in: sessionID)
+    }
+
+    private func scheduleSubMessagesFlush(_ id: UUID, in sessionID: UUID) {
+        guard subMessagesFlushTasks[id] == nil else {
+            return
+        }
+        subMessagesFlushTasks[id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.streamFlushInterval * 1_000_000_000))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.subMessagesFlushTasks[id] = nil
+            self.flushSubMessages(id, in: sessionID)
+        }
+    }
+
+    private func flushSubMessages(_ id: UUID, in sessionID: UUID) {
+        subMessagesFlushTasks[id]?.cancel()
+        subMessagesFlushTasks[id] = nil
+
+        guard let subMessages = pendingSubMessages.removeValue(forKey: id) else {
+            return
+        }
         _ = updateMessage(id, in: sessionID) { message in
             message.subMessages = subMessages
         }
+        subMessagesFlushDates[id] = Date()
         if currentSessionID == sessionID {
             bumpScroll()
         }
+    }
+
+    private func clearSubMessagesBuffers(_ id: UUID) {
+        subMessagesFlushTasks[id]?.cancel()
+        subMessagesFlushTasks.removeValue(forKey: id)
+        pendingSubMessages.removeValue(forKey: id)
+        subMessagesFlushDates.removeValue(forKey: id)
     }
 
     /// Runs every pending `spawn_agent` call from one round concurrently via
@@ -2219,28 +2290,34 @@ final class ChatViewModel: ObservableObject {
         flushStream(id, in: sessionID)
         clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
-        updateMessage(id, in: sessionID) { message in
-            message.isStreaming = false
-            if message.content.isEmpty {
-                message.content = fallbackContent
+        // A round that settles into pure tool calls with no visible text
+        // drops out of `visibleMessages` the instant `toolCalls` is set
+        // below — animating this mutation turns that into a smooth fade
+        // rather than the row (and its model-name label) popping away.
+        withAnimation(.snappy(duration: 0.2)) {
+            updateMessage(id, in: sessionID) { message in
+                message.isStreaming = false
+                if message.content.isEmpty {
+                    message.content = fallbackContent
+                }
+                if message.reasoningContent.isEmpty,
+                   let fallbackReasoningContent {
+                    message.reasoningContent = fallbackReasoningContent
+                }
+                message.toolCalls = toolCalls
+                if !message.reasoningContent.isEmpty,
+                   message.thinkingDuration == nil {
+                    message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
+                }
+                if isCancelled,
+                   message.content == fallbackContent,
+                   message.reasoningContent.isEmpty {
+                    message.role = .error
+                }
+                message.responseMetrics = responseMetrics?.hasVisibleValues == true
+                    ? responseMetrics
+                    : nil
             }
-            if message.reasoningContent.isEmpty,
-               let fallbackReasoningContent {
-                message.reasoningContent = fallbackReasoningContent
-            }
-            message.toolCalls = toolCalls
-            if !message.reasoningContent.isEmpty,
-               message.thinkingDuration == nil {
-                message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
-            }
-            if isCancelled,
-               message.content == fallbackContent,
-               message.reasoningContent.isEmpty {
-                message.role = .error
-            }
-            message.responseMetrics = responseMetrics?.hasVisibleValues == true
-                ? responseMetrics
-                : nil
         }
         persistSession(sessionID, updateTimestamp: true)
     }
@@ -2674,8 +2751,12 @@ private struct ChatMessageRow: View, Equatable {
         guard message.role == .assistant else {
             return false
         }
-        return !message.reasoningContent.isEmpty
-            || (message.isThinkingEnabled && message.isStreaming && message.content.isEmpty)
+        return ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: message.reasoningContent,
+            isThinkingEnabled: message.isThinkingEnabled,
+            isStreaming: message.isStreaming,
+            content: message.content
+        )
     }
 
     private var rendersMarkdown: Bool {
@@ -2796,6 +2877,19 @@ private struct ChatAgentStepCell: View {
             && imageModelSelectionRequest != nil
     }
 
+    /// A `spawn_agent` cell's `subMessages` populate live while its sub-agent's
+    /// own loop runs -- auto-expanding while `.running` surfaces that live
+    /// progress instead of only the final collapsed result. Scoped to
+    /// `spawn_agent` specifically, since that's the only tool whose nested
+    /// detail is worth forcing open.
+    private var isRunningSubAgent: Bool {
+        ChatToolPresentation.showsDetailsWhileRunning(toolName: message.toolName, status: message.toolStatus)
+    }
+
+    private var showsDetails: Bool {
+        isExpanded || isRunningSubAgent
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -2806,7 +2900,7 @@ private struct ChatAgentStepCell: View {
                 header
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "Hide call details" : "Show call details")
+            .help(showsDetails ? "Hide call details" : "Show call details")
             .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
             if isAwaitingImageModelSelection {
@@ -2817,10 +2911,13 @@ private struct ChatAgentStepCell: View {
                 Divider()
                     .padding(.top, 7)
                 consentPrompt
-            } else if isExpanded {
-                Divider()
-                    .padding(.top, 7)
-                details
+            } else if showsDetails {
+                Group {
+                    Divider()
+                        .padding(.top, 7)
+                    details
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(.horizontal, 10)
@@ -2832,6 +2929,22 @@ private struct ChatAgentStepCell: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title), \(accessibilityStatus)")
+        // Covers both paths that can change `showsDetails`: the manual
+        // toggle button already wraps its own `isExpanded.toggle()` in
+        // `withAnimation`, but `isRunningSubAgent` flipping true (a
+        // spawn_agent cell auto-expanding the instant it starts running,
+        // driven by `message.toolStatus` alone) had no animation at all --
+        // full JSON arguments snapping into view in a single frame.
+        .animation(.snappy(duration: 0.2), value: showsDetails)
+        .onChange(of: message.toolStatus) { oldValue, newValue in
+            if ChatToolPresentation.shouldAutoExpandOnSettle(
+                toolName: message.toolName,
+                previousStatus: oldValue,
+                newStatus: newValue
+            ) {
+                isExpanded = true
+            }
+        }
     }
 
     private var header: some View {
@@ -2858,7 +2971,7 @@ private struct ChatAgentStepCell: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .rotationEffect(.degrees(showsDetails ? 90 : 0))
                 }
             }
             if message.toolStatus == .failed, let toolErrorMessage {
@@ -3029,17 +3142,40 @@ private struct ChatAgentStepCell: View {
                                 onCancelImageModelSelection: { _ in },
                                 onExploreImageModels: { _ in }
                             )
-                        } else if subMessage.role == .assistant, !subMessage.content.isEmpty {
-                            // The sub-agent's own round text -- reuses
-                            // ChatMessageText (the same markdown renderer the
-                            // coordinator's own bubble uses) rather than a new one.
-                            ChatMessageText(
-                                content: subMessage.content,
-                                rendersMarkdown: true,
-                                isStreaming: subMessage.isStreaming
-                            )
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
+                        } else if subMessage.role == .assistant,
+                                  !subMessage.content.isEmpty
+                                    || ChatToolPresentation.showsThinkingBubble(
+                                        reasoningContent: subMessage.reasoningContent,
+                                        isThinkingEnabled: subMessage.isThinkingEnabled,
+                                        isStreaming: subMessage.isStreaming,
+                                        content: subMessage.content
+                                    ) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if ChatToolPresentation.showsThinkingBubble(
+                                    reasoningContent: subMessage.reasoningContent,
+                                    isThinkingEnabled: subMessage.isThinkingEnabled,
+                                    isStreaming: subMessage.isStreaming,
+                                    content: subMessage.content
+                                ) {
+                                    ChatThinkingBubble(
+                                        content: subMessage.reasoningContent,
+                                        isThinking: subMessage.isStreaming && subMessage.content.isEmpty,
+                                        thinkingDuration: subMessage.thinkingDuration
+                                    )
+                                }
+                                if !subMessage.content.isEmpty {
+                                    // The sub-agent's own round text -- reuses
+                                    // ChatMessageText (the same markdown renderer the
+                                    // coordinator's own bubble uses) rather than a new one.
+                                    ChatMessageText(
+                                        content: subMessage.content,
+                                        rendersMarkdown: true,
+                                        isStreaming: subMessage.isStreaming
+                                    )
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                }
+                            }
                         }
                     }
                 }

@@ -511,6 +511,33 @@ enum ChatSpawnAgentToolError: LocalizedError {
     }
 }
 
+/// Decides whether an accumulating stream of text deltas should flush into the
+/// visible message now or wait, at a capped cadence. Pure and stateless --
+/// the caller tracks its own "time since last flush" and passes it in,
+/// rather than this type owning a `Date`, so it's trivially testable with
+/// fixed `TimeInterval` values instead of real-clock timing.
+///
+/// `flushInterval` lives here (not in `ChatViewModel`, which owns the
+/// coordinator's own equivalent, `append(event:)`'s token-stream throttle)
+/// specifically so `ChatToolRegistry.swift` doesn't need to reference
+/// `ChatView.swift` -- `NativTests` compiles this file on its own, without
+/// `ChatView.swift`, so a dependency in that direction wouldn't build.
+/// `ChatViewModel.streamFlushInterval` references this constant instead,
+/// the direction that *does* compile (`ChatView.swift` is only ever built
+/// as part of the full app target, together with this file) -- so the two
+/// cadences still can't drift apart, just via one shared constant read from
+/// the other direction.
+enum ChatAgentStreamThrottle {
+    static let flushInterval: TimeInterval = 1.0 / 15.0
+
+    static func shouldFlush(elapsedSinceLastFlush: TimeInterval?) -> Bool {
+        guard let elapsedSinceLastFlush else {
+            return true
+        }
+        return elapsedSinceLastFlush >= flushInterval
+    }
+}
+
 /// A sub-agent's own round-loop: same shape as the coordinator's, over a private,
 /// in-memory message array instead of a session-backed one. Deliberately NOT
 /// wired into `ChatViewModel.runChatLoop` -- reusing that method's
@@ -519,6 +546,16 @@ enum ChatSpawnAgentToolError: LocalizedError {
 /// higher regression risk than this focused reimplementation. `ChatCompletionRequestBuilder`
 /// and `ChatToolCallNormalizer` are shared so the two loops can't drift on request
 /// construction or tool-call normalization, the parts most worth not duplicating.
+///
+/// A sub-agent's assistant text streams token-by-token into its own message,
+/// mirroring the coordinator's UI, via `ChatAgentStreamThrottle` -- a second,
+/// independent throttle instance kept local to this loop rather than sharing
+/// `ChatViewModel`'s dictionary-based, per-message-ID machinery. That's
+/// deliberate, not an oversight: this loop only ever streams one message at a
+/// time (its current round), so a single pair of local buffer/timestamp
+/// variables is sufficient and doesn't need the coordinator's multi-message
+/// bookkeeping -- reusing that machinery would mean the exact refactor of the
+/// coordinator's proven loop the comment above already rejected.
 @MainActor
 struct ChatAgentLoop {
     struct Configuration {
@@ -565,14 +602,59 @@ struct ChatAgentLoop {
                 role: .assistant,
                 content: "",
                 modelID: configuration.modelID,
-                isStreaming: true
+                isStreaming: true,
+                isThinkingEnabled: configuration.settings.thinkingEnabled
             ))
             onMessagesChange(messages)
 
-            let completion = try await client.streamChat(request, onEvent: { _ in })
+            var pendingContent = ""
+            var pendingReasoning = ""
+            var lastFlushDate: Date?
+
+            let completion = try await client.streamChat(request, onEvent: { event in
+                await MainActor.run {
+                    if let content = event.content, !content.isEmpty {
+                        pendingContent += content
+                    }
+                    if let reasoning = event.reasoningContent, !reasoning.isEmpty {
+                        pendingReasoning += reasoning
+                    }
+                    guard !pendingContent.isEmpty || !pendingReasoning.isEmpty else {
+                        return
+                    }
+
+                    let elapsed = lastFlushDate.map { Date().timeIntervalSince($0) }
+                    guard ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: elapsed) else {
+                        return
+                    }
+                    lastFlushDate = Date()
+
+                    guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else {
+                        return
+                    }
+                    if !pendingContent.isEmpty, !messages[index].reasoningContent.isEmpty,
+                       messages[index].thinkingDuration == nil {
+                        messages[index].thinkingDuration = Date().timeIntervalSince(messages[index].createdAt)
+                    }
+                    messages[index].content += pendingContent
+                    messages[index].reasoningContent += pendingReasoning
+                    pendingContent = ""
+                    pendingReasoning = ""
+                    onMessagesChange(messages)
+                }
+            })
             let toolCalls = ChatToolCallNormalizer.normalize(completion.toolCalls)
 
+            // Finalize with the authoritative full content/reasoning, covering
+            // whatever was still sitting in the throttle's buffer when the
+            // stream ended -- the coalesced-but-unflushed remainder, plus
+            // anything the server only reports in the final envelope, not
+            // per-delta.
             if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
+                if !completion.content.isEmpty, !(completion.reasoningContent ?? "").isEmpty,
+                   messages[index].thinkingDuration == nil {
+                    messages[index].thinkingDuration = Date().timeIntervalSince(messages[index].createdAt)
+                }
                 messages[index].content = completion.content
                 messages[index].reasoningContent = completion.reasoningContent ?? ""
                 messages[index].isStreaming = false
@@ -967,6 +1049,15 @@ enum ChatConsentGatedAction {
 }
 
 enum ChatToolPresentation {
+    static func showsThinkingBubble(
+        reasoningContent: String,
+        isThinkingEnabled: Bool,
+        isStreaming: Bool,
+        content: String
+    ) -> Bool {
+        !reasoningContent.isEmpty || (isThinkingEnabled && isStreaming && content.isEmpty)
+    }
+
     static func title(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch toolName {
         case ChatImageToolRegistry.generateToolName:
@@ -1027,6 +1118,39 @@ enum ChatToolPresentation {
                 return "wrench.and.screwdriver"
             }
         }
+    }
+
+    /// Whether a step-cell should force its details open while its own tool
+    /// call is running, independent of the user's manual expand/collapse
+    /// toggle -- scoped to `spawn_agent` specifically, since that's the only
+    /// tool whose `subMessages` populate live mid-run; other tools have
+    /// nothing nested to force open and would just flicker for near-instant
+    /// calls.
+    static func showsDetailsWhileRunning(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> Bool {
+        toolName == ChatSpawnAgentToolRegistry.toolName && status == .running
+    }
+
+    /// Whether a step-cell should auto-expand itself the instant its own tool
+    /// call transitions into a settled state -- so the result the user was
+    /// just watching stream in doesn't vanish the moment it's ready, instead
+    /// of reverting to the manual toggle's default-collapsed state. Fires
+    /// only on the actual transition *into* `.succeeded`/`.failed` from
+    /// `.running` (not on every render while already settled), so a later
+    /// manual collapse sticks: `spawn_agent`'s coordinator-level tool message
+    /// is set to `.running` once on insert and its terminal status exactly
+    /// once via `updateToolMessage`, never revisited, so this genuinely can't
+    /// re-fire and undo a user's later explicit collapse. Doesn't cover
+    /// `.cancelled`/`.declined` -- succeeded/failed specifically; a
+    /// cancelled/declined run has no completed result worth force-revealing.
+    static func shouldAutoExpandOnSettle(
+        toolName: String?,
+        previousStatus: ChatTranscriptMessage.ToolStatus?,
+        newStatus: ChatTranscriptMessage.ToolStatus?
+    ) -> Bool {
+        guard toolName == ChatSpawnAgentToolRegistry.toolName, previousStatus == .running else {
+            return false
+        }
+        return newStatus == .succeeded || newStatus == .failed
     }
 
     private static func imageTitle(isEdit: Bool, status: ChatTranscriptMessage.ToolStatus?) -> String {

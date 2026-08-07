@@ -839,6 +839,42 @@ final class ChatToolPresentationTests: XCTestCase {
         .failed, .cancelled, .awaitingConsent, .declined,
     ]
 
+    func testShowsThinkingBubbleTrueOnceReasoningContentArrives() {
+        XCTAssertTrue(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "some reasoning",
+            isThinkingEnabled: false,
+            isStreaming: false,
+            content: "final answer"
+        ))
+    }
+
+    func testShowsThinkingBubbleTrueWhileStreamingWithNoContentYetIfThinkingEnabled() {
+        XCTAssertTrue(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "",
+            isThinkingEnabled: true,
+            isStreaming: true,
+            content: ""
+        ))
+    }
+
+    func testShowsThinkingBubbleFalseOnceContentArrivesWithoutThinkingEnabled() {
+        XCTAssertFalse(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "",
+            isThinkingEnabled: true,
+            isStreaming: true,
+            content: "already answering"
+        ))
+    }
+
+    func testShowsThinkingBubbleFalseWithNoReasoningAndThinkingDisabled() {
+        XCTAssertFalse(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "",
+            isThinkingEnabled: false,
+            isStreaming: true,
+            content: ""
+        ))
+    }
+
     func testTitlePinnedForEveryToolAndStatus() {
         let expected: [String: [ChatTranscriptMessage.ToolStatus?: String]] = [
             "generate_image": [
@@ -966,6 +1002,50 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatToolPresentation.mcpConsentDescription(toolName: "not_mcp_shaped"),
             "The model wants to run this tool."
         )
+    }
+
+    func testShowsDetailsWhileRunningIsTrueOnlyForARunningSpawnAgentCell() {
+        XCTAssertTrue(ChatToolPresentation.showsDetailsWhileRunning(toolName: ChatSpawnAgentToolRegistry.toolName, status: .running))
+    }
+
+    func testShowsDetailsWhileRunningIsFalseForOtherRunningTools() {
+        XCTAssertFalse(ChatToolPresentation.showsDetailsWhileRunning(toolName: ChatSpawnAgentToolRegistry.toolName, status: .succeeded))
+        XCTAssertFalse(ChatToolPresentation.showsDetailsWhileRunning(toolName: ChatSystemMonitorToolRegistry.toolName, status: .running))
+        XCTAssertFalse(ChatToolPresentation.showsDetailsWhileRunning(toolName: nil, status: .running))
+    }
+
+    func testShouldAutoExpandOnSettleTrueForSpawnAgentTransitioningFromRunningToSucceededOrFailed() {
+        XCTAssertTrue(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: .running, newStatus: .succeeded
+        ))
+        XCTAssertTrue(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: .running, newStatus: .failed
+        ))
+    }
+
+    func testShouldAutoExpandOnSettleFalseForEveryOtherNewStatus() {
+        for status: ChatTranscriptMessage.ToolStatus? in [nil, .preparing, .running, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined] {
+            XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+                toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: .running, newStatus: status
+            ), "should not auto-expand transitioning into \(String(describing: status))")
+        }
+    }
+
+    func testShouldAutoExpandOnSettleFalseWhenThePreviousStatusWasNotRunning() {
+        for previousStatus: ChatTranscriptMessage.ToolStatus? in [nil, .preparing, .succeeded, .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined] {
+            XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+                toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: previousStatus, newStatus: .succeeded
+            ), "should not auto-expand when the previous status was \(String(describing: previousStatus)), not .running")
+        }
+    }
+
+    func testShouldAutoExpandOnSettleFalseForOtherTools() {
+        XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: ChatSystemMonitorToolRegistry.toolName, previousStatus: .running, newStatus: .succeeded
+        ))
+        XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: nil, previousStatus: .running, newStatus: .succeeded
+        ))
     }
 }
 
@@ -1551,6 +1631,28 @@ final class ChatCompletionRequestBuilderTests: XCTestCase {
         )
         XCTAssertEqual(request.messages.count, 1)
         XCTAssertEqual(request.messages.first?.role, "user")
+    }
+}
+
+final class ChatAgentStreamThrottleTests: XCTestCase {
+    func testAlwaysFlushesWhenThereIsNoPriorFlush() {
+        XCTAssertTrue(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: nil))
+    }
+
+    func testDoesNotFlushImmediatelyAfterFlushing() {
+        XCTAssertFalse(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: 0))
+    }
+
+    func testDoesNotFlushBeforeTheIntervalElapses() {
+        XCTAssertFalse(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: ChatAgentStreamThrottle.flushInterval * 0.5))
+    }
+
+    func testFlushesExactlyAtTheInterval() {
+        XCTAssertTrue(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: ChatAgentStreamThrottle.flushInterval))
+    }
+
+    func testFlushesWellAfterTheInterval() {
+        XCTAssertTrue(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: ChatAgentStreamThrottle.flushInterval * 10))
     }
 }
 
