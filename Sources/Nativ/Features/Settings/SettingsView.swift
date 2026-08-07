@@ -49,12 +49,14 @@ struct SettingsView: View {
     let softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
+    @StateObject private var permissions = NativPermissionStore()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 pageHeader
                 generalSettings
+                permissionSettings
             }
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -172,6 +174,27 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
+        }
+    }
+
+    private var permissionSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Permissions")
+                .font(.headline)
+
+            NativPermissionsCard(store: permissions)
+
+            NativPermissionsSummary(store: permissions)
+        }
+        .onAppear {
+            permissions.refresh()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in
+            permissions.refresh()
         }
     }
 
