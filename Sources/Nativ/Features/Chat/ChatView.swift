@@ -2574,10 +2574,10 @@ private struct ChatAgentStepCell: View {
 
     private var statusTone: NativStatusTone {
         switch message.toolStatus {
-        case .running: return .active
+        case .preparing, .running: return .active
         case .succeeded: return .success
         case .failed: return .danger
-        case .awaitingConsent: return .warning
+        case .awaitingConsent, .awaitingImageModelSelection: return .warning
         case .cancelled, .declined, nil: return .neutral
         }
     }
