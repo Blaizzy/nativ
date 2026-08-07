@@ -204,9 +204,79 @@ if [[ "$app_entitlements" == *"com.apple.security.get-task-allow"* ]]; then
 fi
 
 info_plist="$app_path/Contents/Info.plist"
+bundle_identifier="$(
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist" 2>/dev/null || true
+)"
+[[ -n "$bundle_identifier" ]] || fail "CFBundleIdentifier is missing from $info_plist"
 app_name="$(basename "$app_path" .app)"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist" 2>/dev/null || true)"
 [[ -n "$version" ]] || fail "CFBundleShortVersionString is missing from $info_plist"
+
+embedded_profile="$app_path/Contents/embedded.provisionprofile"
+[[ -f "$embedded_profile" ]] || fail "the app is missing Contents/embedded.provisionprofile"
+profile_plist="$temporary_directory/embedded-profile.plist"
+security cms -D -i "$embedded_profile" > "$profile_plist" || \
+    fail "the embedded provisioning profile has an invalid signature"
+
+profile_name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$profile_plist")"
+profile_team_identifier="$(
+    /usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist"
+)"
+profile_application_identifier="$(
+    /usr/libexec/PlistBuddy \
+        -c 'Print :Entitlements:com.apple.application-identifier' \
+        "$profile_plist"
+)"
+expected_application_identifier="$app_team_identifier.$bundle_identifier"
+[[ "$profile_team_identifier" == "$app_team_identifier" ]] || \
+    fail "profile $profile_name belongs to Team $profile_team_identifier, expected $app_team_identifier"
+[[ "$profile_application_identifier" == "$expected_application_identifier" ]] || \
+    fail "profile $profile_name authorizes $profile_application_identifier, expected $expected_application_identifier"
+
+app_entitlements_plist="$temporary_directory/app-entitlements.plist"
+printf '%s' "$app_entitlements" > "$app_entitlements_plist"
+plutil -lint "$app_entitlements_plist" >/dev/null || \
+    fail "the app's signed entitlements could not be decoded"
+signed_application_identifier="$(
+    /usr/libexec/PlistBuddy \
+        -c 'Print :com.apple.application-identifier' \
+        "$app_entitlements_plist" 2>/dev/null || true
+)"
+signed_entitlement_team_identifier="$(
+    /usr/libexec/PlistBuddy \
+        -c 'Print :com.apple.developer.team-identifier' \
+        "$app_entitlements_plist" 2>/dev/null || true
+)"
+signed_keychain_group="$(
+    /usr/libexec/PlistBuddy \
+        -c 'Print :keychain-access-groups:0' \
+        "$app_entitlements_plist" 2>/dev/null || true
+)"
+[[ "$signed_application_identifier" == "$expected_application_identifier" ]] || \
+    fail "the app signature has an unexpected application identifier: $signed_application_identifier"
+[[ "$signed_entitlement_team_identifier" == "$app_team_identifier" ]] || \
+    fail "the app signature has an unexpected entitlement Team ID: $signed_entitlement_team_identifier"
+[[ "$signed_keychain_group" == "$expected_application_identifier" ]] || \
+    fail "the app signature has an unexpected Keychain group: $signed_keychain_group"
+
+profile_keychain_group=""
+profile_keychain_group_index=0
+profile_authorizes_keychain_group=false
+while profile_keychain_group="$(
+    /usr/libexec/PlistBuddy \
+        -c "Print :Entitlements:keychain-access-groups:$profile_keychain_group_index" \
+        "$profile_plist" 2>/dev/null
+)"; do
+    if [[ "$profile_keychain_group" == "$signed_keychain_group" || \
+          "$profile_keychain_group" == "$app_team_identifier.*" ]]; then
+        profile_authorizes_keychain_group=true
+        break
+    fi
+    ((profile_keychain_group_index += 1))
+done
+[[ "$profile_authorizes_keychain_group" == true ]] || \
+    fail "profile $profile_name does not authorize Keychain group $signed_keychain_group"
+echo "Verified embedded provisioning profile: $profile_name"
 
 if [[ "$validate_only" == true ]]; then
     if [[ "$is_disk_image" == true ]]; then

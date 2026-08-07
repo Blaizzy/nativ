@@ -27,12 +27,16 @@ struct FnRetryShortcutState {
 }
 
 struct VoiceModifierToggleShortcutState {
+    static let doubleTapWindow: TimeInterval = 0.4
+
     private(set) var isHeld = false
     private(set) var wasUsedAsChord = false
+    private var lastCleanTapTime: Date?
 
     mutating func update(
         activeModifiers: VoiceShortcutModifiers,
-        shortcutModifiers: VoiceShortcutModifiers
+        shortcutModifiers: VoiceShortcutModifiers,
+        now: Date = Date()
     ) -> Bool {
         guard !shortcutModifiers.isEmpty else {
             reset()
@@ -43,9 +47,20 @@ struct VoiceModifierToggleShortcutState {
             activeModifiers.intersection(shortcutModifiers) == shortcutModifiers
         if isHeld {
             guard containsShortcut else {
-                let shouldToggle = !wasUsedAsChord
-                reset()
-                return shouldToggle
+                let wasCleanTap = !wasUsedAsChord
+                isHeld = false
+                wasUsedAsChord = false
+                guard wasCleanTap else {
+                    lastCleanTapTime = nil
+                    return false
+                }
+                if let previous = lastCleanTapTime,
+                   now.timeIntervalSince(previous) <= Self.doubleTapWindow {
+                    lastCleanTapTime = nil
+                    return true
+                }
+                lastCleanTapTime = now
+                return false
             }
             if activeModifiers != shortcutModifiers {
                 wasUsedAsChord = true
@@ -69,6 +84,7 @@ struct VoiceModifierToggleShortcutState {
     mutating func reset() {
         isHeld = false
         wasUsedAsChord = false
+        lastCleanTapTime = nil
     }
 }
 
@@ -320,10 +336,13 @@ final class FnControlShortcutMonitor {
             return
         }
 
-        let keyedShortcuts = [
-            (recordHotKeyID, preferences.recordShortcut),
-            (retryHotKeyID, preferences.retryShortcut),
-        ].filter { $0.1.keyCode != nil }
+        var keyedShortcuts: [(UInt32, VoiceShortcut)] = []
+        if preferences.recordShortcut.keyCode != nil {
+            keyedShortcuts.append((recordHotKeyID, preferences.recordShortcut))
+        }
+        if preferences.retryShortcut.keyCode != nil {
+            keyedShortcuts.append((retryHotKeyID, preferences.retryShortcut))
+        }
         guard !keyedShortcuts.isEmpty else {
             return
         }

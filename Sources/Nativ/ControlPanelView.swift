@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import NativExtensionSDK
 import SwiftUI
 import UniformTypeIdentifiers
@@ -48,7 +49,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         case .integrations:
             "puzzlepiece.extension"
         case .extensions:
-            "shippingbox"
+            "point.3.filled.connected.trianglepath.dotted"
         case .developer:
             "hammer"
         case .settings:
@@ -262,12 +263,79 @@ struct ControlPanelView: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
+    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @StateObject private var embeddingLibrary = LocalModelLibrary()
+
+    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
+    private static let embeddingModelSize: Int64 = 4_300_000_000
+
+    private var artifactSemanticSearch: ArtifactSemanticSearchConfig? {
+        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
+            return nil
+        }
+        let settings = model.settings.normalized()
+        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
+            ?? URL(string: "http://127.0.0.1:8080")!
+        let modelID = Self.embeddingModelID
+        let insufficientReason = downloads.capacityBlocker(
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath
+        )
+        return ArtifactSemanticSearchConfig(
+            modelID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
+            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
+            isDownloading: downloads.isDownloading(modelID),
+            downloadProgress: downloads.progress(for: modelID),
+            canInstall: insufficientReason == nil,
+            insufficientReason: insufficientReason,
+            onEnable: {
+                downloads.download(
+                    repoID: modelID,
+                    sizeBytes: Self.embeddingModelSize,
+                    cachePath: settings.modelSearchPath,
+                    token: model.effectiveHuggingFaceToken
+                ) {
+                    EmbeddingModelPreparer.prepare(
+                        repoID: modelID,
+                        searchPath: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+                navigation.open(.models)
+            },
+            onRemove: {
+                Task {
+                    try? await LocalModelDiscovery.delete(
+                        repoID: modelID,
+                        path: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(
+                        path: settings.modelSearchPath,
+                        additionalPaths: settings.additionalModelSearchPaths
+                    )
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+            },
+            prepareModel: {
+                EmbeddingModelPreparer.prepare(
+                    repoID: modelID,
+                    searchPath: settings.modelSearchPath
+                )
+            }
+        )
+    }
     @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
@@ -280,6 +348,9 @@ struct ControlPanelView: View {
     @State private var detailTransitionOffset: CGFloat = 0
     @State private var isSidebarTransitioning = false
     @State private var sidebarTransitionGeneration = 0
+    @ObservedObject private var routineStore = RoutineStore.shared
+    @StateObject private var routineModelLibrary = LocalModelLibrary()
+    @State private var schedulingRoutineDraft: RoutineDraft?
     @State private var isModelConfigurationVisible = false
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
@@ -331,17 +402,19 @@ struct ControlPanelView: View {
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .top) {
-            if selectedTab != .models, let failure = model.modelLoadFailure {
-                GlobalModelLoadFailureBanner(
-                    failure: failure,
-                    onOpenModels: { navigation.open(.models) },
-                    onDismiss: { model.clearModelLoadFailure() }
-                )
-                .padding(.top, 10)
-                .padding(.horizontal, 16)
+            Group {
+                if selectedTab != .models, let failure = model.modelLoadFailure {
+                    GlobalModelLoadFailureBanner(
+                        failure: failure,
+                        onOpenModels: { navigation.open(.models) },
+                        onDismiss: { model.clearModelLoadFailure() }
+                    )
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: selectedTab)
         }
-        .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
             ZStack {
                 ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
@@ -363,6 +436,10 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
+            embeddingLibrary.scan(
+                path: model.settings.modelSearchPath,
+                additionalPaths: model.settings.normalized().additionalModelSearchPaths
+            )
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -451,17 +528,23 @@ struct ControlPanelView: View {
             if isSelectingRecents {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             } else {
                 sidebarActionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    pinnedSection
-                    foldersSection
+                    if showsPinnedSection {
+                        pinnedSection
+                    }
+                    if showsFoldersSection {
+                        foldersSection
+                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
@@ -505,7 +588,12 @@ struct ControlPanelView: View {
                 pendingDeleteRecent = nil
             }
         } message: { recent in
-            Text("“\(recent.title)” will be permanently deleted.")
+            if case .chat(let sessionID) = recent.selection,
+               let routine = routineStore.routine(forSession: sessionID) {
+                Text("“\(recent.title)” has a routine (\(RoutineFormatting.summary(routine))). Deleting the chat cancels the routine.")
+            } else {
+                Text("“\(recent.title)” will be permanently deleted.")
+            }
         }
         .alert(
             "Delete folder?",
@@ -535,6 +623,31 @@ struct ControlPanelView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
+        }
+        .sheet(item: $schedulingRoutineDraft) { draft in
+            let textModelIDs = routineModelLibrary.models
+                .filter { $0.capabilities.contains(.text) }
+                .map(\.repoID)
+            let snapshotModelID = draft.routine.modelID
+            let availableModelIDs = (
+                snapshotModelID.isEmpty || textModelIDs.contains(snapshotModelID)
+                    ? textModelIDs
+                    : textModelIDs + [snapshotModelID]
+            ).sorted()
+            let isExistingRoutine = RoutineStore.shared.routine(id: draft.routine.id) != nil
+            RoutineEditor(
+                draft: draft,
+                availableModelIDs: availableModelIDs,
+                onSave: { routine in
+                    saveScheduledRoutine(routine)
+                    schedulingRoutineDraft = nil
+                },
+                onCancel: { schedulingRoutineDraft = nil },
+                onDelete: isExistingRoutine ? {
+                    RoutineStore.shared.delete(id: draft.routine.id)
+                    schedulingRoutineDraft = nil
+                } : nil
+            )
         }
     }
 
@@ -677,25 +790,26 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            headerDivider
-
             if !model.settings.sidebarPinnedCollapsed {
-                if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
-                    emptyPinnedHint
-                } else {
-                    ForEach(pinnedFolders) { folder in
-                        folderView(folder, dropTargeted: isPinnedDropTargeted)
-                    }
-                    ForEach(pinnedSessions) { recent in
-                        draggableRow(recent, isPinnedRow: true)
-                            .overlay(alignment: .top) {
-                                pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
-                            }
-                            .overlay(alignment: .bottom) {
-                                pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
-                            }
+                Group {
+                    if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
+                        emptyPinnedHint
+                    } else {
+                        ForEach(pinnedFolders) { folder in
+                            folderView(folder, dropTargeted: isPinnedDropTargeted)
+                        }
+                        ForEach(pinnedSessions) { recent in
+                            draggableRow(recent, isPinnedRow: true)
+                                .overlay(alignment: .top) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                                .overlay(alignment: .bottom) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                        }
                     }
                 }
+                .transition(.slide)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -708,15 +822,17 @@ struct ControlPanelView: View {
         }
     }
 
+    private var showsPinnedSection: Bool {
+        isSelectingRecents || !pinnedSessions.isEmpty || !pinnedFolders.isEmpty
+    }
+
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarRecentsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
-                .padding(.top, 12)
+                .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
-
-            headerDivider
 
             if !model.settings.sidebarSessionsCollapsed {
                 ForEach(ungroupedSessions) { recent in
@@ -748,10 +864,8 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            headerDivider
-
             if !model.settings.sidebarFoldersCollapsed {
-                if chat.folders.isEmpty {
+                if unpinnedFolders.isEmpty {
                     emptyFoldersHint
                 } else {
                     ForEach(unpinnedFolders) { folder in
@@ -763,6 +877,10 @@ struct ControlPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isFoldersDropTargeted))
         .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
+    }
+
+    private var showsFoldersSection: Bool {
+        isSelectingRecents || !unpinnedFolders.isEmpty
     }
 
     private var emptyFoldersHint: some View {
@@ -1025,17 +1143,28 @@ struct ControlPanelView: View {
             .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
             .help("Select multiple")
 
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    createRecentSession()
+            Menu {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        createRecentSession()
+                    }
+                } label: {
+                    Label("New chat", systemImage: "square.and.pencil")
+                }
+                Button {
+                    presentNewRoutine()
+                } label: {
+                    Label("New routine", systemImage: "bolt")
                 }
             } label: {
-                Image(systemName: "square.and.pencil")
+                Image(systemName: "plus")
                     .font(.system(size: 15, weight: .medium))
                     .frame(width: 28, height: 28)
                     .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
             .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
@@ -1094,13 +1223,6 @@ struct ControlPanelView: View {
         )
     }
 
-    private var headerDivider: some View {
-        Divider()
-            .padding(.leading, 8)
-            .padding(.trailing, 10)
-            .padding(.bottom, 6)
-    }
-
     private func sidebarSectionHeader<Trailing: View>(
         title: String,
         isCollapsed: Bool,
@@ -1108,15 +1230,15 @@ struct ControlPanelView: View {
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 12)
-
+            HStack(spacing: 4) {
                 Text(title)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(.secondary.opacity(0.7))
+
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .frame(width: 12)
 
                 Spacer(minLength: 0)
             }
@@ -1409,6 +1531,7 @@ struct ControlPanelView: View {
     private func recentSessionRow(_ recent: ControlPanelRecentSession) -> some View {
         ControlPanelRecentSessionRow(
             recent: recent,
+            routineStatus: routineStatus(for: recent),
             isSelected: sidebarSelection == recent.selection,
             isCurrent: isCurrentRecent(recent),
             isSelectionDisabled: isRecentSelectionDisabled(recent),
@@ -1443,6 +1566,9 @@ struct ControlPanelView: View {
             onTogglePin: {
                 togglePinRecent(recent)
             },
+            onScheduleRoutine: {
+                scheduleRoutine(from: recent)
+            },
             folders: chat.folders,
             onMoveToFolder: { folderID in
                 moveRecentToFolder(recent, folderID: folderID)
@@ -1458,6 +1584,80 @@ struct ControlPanelView: View {
             return
         }
         chat.setPinned(sessionID, pinned: !recent.pinned)
+    }
+
+    private func routineStatus(for recent: ControlPanelRecentSession) -> RoutineRowStatus {
+        guard case .chat(let sessionID) = recent.selection,
+              let routine = routineStore.routine(forSession: sessionID)
+        else {
+            return .none
+        }
+        if routineStore.isRoutineRunning(forSession: sessionID) {
+            return .running
+        }
+        return routine.isEnabled ? .scheduled : .disabled
+    }
+
+    private func scheduleRoutine(from recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        let settings = model.settings.normalized()
+        routineModelLibrary.scan(
+            path: settings.modelSearchPath,
+            additionalPaths: settings.additionalModelSearchPaths
+        )
+        if let existing = RoutineStore.shared.routine(forSession: sessionID) {
+            schedulingRoutineDraft = RoutineDraft(routine: existing)
+            return
+        }
+        guard let session = ChatSessionStore().loadSession(id: sessionID) else {
+            return
+        }
+        let instructions = session.messages.last { $0.role == .user }?.content ?? ""
+        let modelID = session.messages
+            .last { $0.role == .assistant && !($0.modelID ?? "").isEmpty }?
+            .modelID
+            ?? settings.languageModelID
+            ?? ""
+        schedulingRoutineDraft = RoutineDraft(
+            routine: Routine(
+                name: recent.title,
+                instructions: instructions,
+                modelID: modelID,
+                triggerKind: .schedule,
+                sourceSessionID: sessionID
+            )
+        )
+    }
+
+    private func presentNewRoutine() {
+        let settings = model.settings.normalized()
+        routineModelLibrary.scan(
+            path: settings.modelSearchPath,
+            additionalPaths: settings.additionalModelSearchPaths
+        )
+        schedulingRoutineDraft = RoutineDraft(
+            routine: Routine(modelID: settings.languageModelID ?? "")
+        )
+    }
+
+    private func saveScheduledRoutine(_ routine: Routine) {
+        var routine = routine
+        if routine.sourceSessionID == nil {
+            let now = Date()
+            let session = ChatSession(
+                id: UUID(),
+                title: routine.name.isEmpty ? "Routine" : routine.name,
+                createdAt: now,
+                updatedAt: now,
+                messages: []
+            )
+            ChatSessionStore().saveSession(session)
+            routine.sourceSessionID = session.id
+        }
+        RoutineStore.shared.upsert(routine)
+        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func moveRecentToFolder(_ recent: ControlPanelRecentSession, folderID: UUID?) {
@@ -1731,6 +1931,7 @@ struct ControlPanelView: View {
             ChatView(
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
@@ -1741,6 +1942,8 @@ struct ControlPanelView: View {
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
+                semanticSearch: artifactSemanticSearch,
+                titleLeadingInset: detailTitleLeadingInset,
                 onOpenChat: { artifact in
                     switch artifact.source {
                     case .uploaded:
@@ -1788,9 +1991,10 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .extensions:
-            ExtensionsView(
+            ExtensionsHubView(
                 manager: extensionManager,
-                titleLeadingInset: detailTitleLeadingInset
+                host: mcpHost,
+                model: model
             )
         case .developer:
             DeveloperView(
@@ -2027,6 +2231,7 @@ struct ControlPanelView: View {
 
         switch recent.selection {
         case .chat(let sessionID):
+            routineStore.deleteRoutine(forSession: sessionID)
             chat.deleteSession(sessionID)
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
@@ -3525,8 +3730,16 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     }
 }
 
+private enum RoutineRowStatus {
+    case none
+    case disabled
+    case scheduled
+    case running
+}
+
 private struct ControlPanelRecentSessionRow: View {
     let recent: ControlPanelRecentSession
+    let routineStatus: RoutineRowStatus
     let isSelected: Bool
     let isCurrent: Bool
     let isSelectionDisabled: Bool
@@ -3543,6 +3756,7 @@ private struct ControlPanelRecentSessionRow: View {
     let onRename: (String) -> Void
     let onNewChat: () -> Void
     let onTogglePin: () -> Void
+    let onScheduleRoutine: () -> Void
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
@@ -3551,6 +3765,29 @@ private struct ControlPanelRecentSessionRow: View {
     @State private var isRenaming = false
     @State private var renameDraft = ""
     @FocusState private var renameFieldFocused: Bool
+
+    @ViewBuilder
+    private var routineBolt: some View {
+        switch routineStatus {
+        case .none:
+            EmptyView()
+        case .disabled:
+            Image(systemName: "bolt.slash")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .help("Routine paused")
+        case .scheduled:
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .help("Routine scheduled")
+        case .running:
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.green)
+                .help("Routine running now")
+        }
+    }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -3611,6 +3848,8 @@ private struct ControlPanelRecentSessionRow: View {
                         Text(recent.title)
                             .lineLimit(1)
                             .truncationMode(.tail)
+
+                        routineBolt
 
                         Spacer(minLength: 0)
                     }
@@ -3688,6 +3927,12 @@ private struct ControlPanelRecentSessionRow: View {
                     recent.pinned ? "Unpin" : "Pin",
                     systemImage: recent.pinned ? "pin.slash" : "pin"
                 )
+            }
+
+            Button {
+                onScheduleRoutine()
+            } label: {
+                Label(routineStatus == .none ? "Make recurring" : "Edit routine", systemImage: "bolt")
             }
 
             Menu {

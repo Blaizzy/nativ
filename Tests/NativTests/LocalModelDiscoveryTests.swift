@@ -238,6 +238,30 @@ final class LocalModelDiscoveryTests: XCTestCase {
         try data.write(to: url)
     }
 
+    func testDrafterKindDetection() {
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_5_mtp"), "mtp")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "gemma4_assistant"), "mtp")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "eagle3"), "eagle3")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_dflash"), "dflash")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "llama_eagle"), "eagle3")
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_5"))
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: nil))
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: ""))
+    }
+
+    func testDrafterExcludedFromLanguageModelPicker() {
+        let drafter = makeModel(
+            repoID: "mlx-community/Qwen3.5-4B-MTP-4bit",
+            capabilities: [.text, .drafter]
+        )
+        let chatModel = makeModel(
+            repoID: "mlx-community/Qwen3.5-4B-MLX-4bit",
+            capabilities: [.text]
+        )
+        XCTAssertFalse(drafter.isEligibleForLanguageModelPicker)
+        XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
+    }
+
     private func write(_ string: String, to url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -260,7 +284,9 @@ final class LocalModelDiscoveryTests: XCTestCase {
             quantizationGroupSize: nil,
             contextSize: nil,
             provider: nil,
-            capabilities: capabilities
+            capabilities: capabilities,
+            drafterKind: nil,
+            hiddenSize: nil
         )
     }
 }
