@@ -49,20 +49,96 @@ struct ChatNativeToolDescriptor {
     let configuration: ChatNativeToolConfiguration?
 }
 
+/// Bounds how many `spawn_agent` calls one coordinator round may fire
+/// concurrently. Loosened from a hard one-per-round cap for the
+/// concurrent-research scenario (coordinator fans out to several sub-agents
+/// at once), but deliberately still bounded, not unlimited -- a per-round
+/// tool count can spiral with this dev/test model; this cap is this
+/// feature's bounded contribution to that same risk category, sized with
+/// headroom above a concrete 3-sub-agent demo scenario, not left open-ended.
+enum ChatConcurrentSpawnGate {
+    static let maximumConcurrentSpawnsPerRound = 5
+
+    static func allowsAnotherSpawn(alreadyStarted count: Int) -> Bool {
+        count < maximumConcurrentSpawnsPerRound
+    }
+}
+
+/// Fires every pending `spawn_agent` call in a round concurrently via a
+/// `TaskGroup` and returns once all have settled (succeeded or failed) --
+/// this is what actually makes sub-agents run in parallel rather than one
+/// blocking the next. A child's own failure becomes a `.failure` outcome,
+/// not a thrown error, so one sub-agent failing never aborts its siblings.
+/// `CancellationError` is the one exception: it propagates out of the
+/// group, and Swift's structured concurrency cancels every other in-flight
+/// child automatically when the group scope exits early -- the caller does
+/// not need its own cancellation fan-out for that case.
+enum ChatConcurrentSpawnRunner {
+    struct PendingSpawn {
+        let toolMessageID: UUID
+        let call: MLXChatToolCall
+    }
+
+    struct SpawnOutcome {
+        let toolMessageID: UUID
+        let result: Result<String, Error>
+    }
+
+    static func runAll(
+        _ pending: [PendingSpawn],
+        execute: @escaping (PendingSpawn) async throws -> String
+    ) async throws -> [SpawnOutcome] {
+        try await withThrowingTaskGroup(of: SpawnOutcome.self) { group in
+            for spawn in pending {
+                group.addTask {
+                    do {
+                        let result = try await execute(spawn)
+                        return SpawnOutcome(toolMessageID: spawn.toolMessageID, result: .success(result))
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch let error as URLError where error.code == .cancelled {
+                        throw CancellationError()
+                    } catch {
+                        return SpawnOutcome(toolMessageID: spawn.toolMessageID, result: .failure(error))
+                    }
+                }
+            }
+
+            var outcomes: [SpawnOutcome] = []
+            outcomes.reserveCapacity(pending.count)
+            for try await outcome in group {
+                outcomes.append(outcome)
+            }
+            return outcomes
+        }
+    }
+}
+
 enum ChatToolRegistry {
     @MainActor
-    static func definitions(context: ChatToolExecutionContext? = nil, canEditImage: Bool) -> [MLXChatToolDefinition] {
-        descriptors(context: context, canEditImage: canEditImage).map(\.definition)
+    static func definitions(
+        context: ChatToolExecutionContext? = nil,
+        canEditImage: Bool,
+        allowsSpawning: Bool = true
+    ) -> [MLXChatToolDefinition] {
+        descriptors(context: context, canEditImage: canEditImage, allowsSpawning: allowsSpawning).map(\.definition)
     }
 
     @MainActor
-    static func descriptors(context: ChatToolExecutionContext? = nil, canEditImage: Bool) -> [ChatNativeToolDescriptor] {
+    static func descriptors(
+        context: ChatToolExecutionContext? = nil,
+        canEditImage: Bool,
+        allowsSpawning: Bool = true
+    ) -> [ChatNativeToolDescriptor] {
         var definitions = ChatImageToolRegistry.definitions(canEdit: canEditImage)
         definitions += ChatSystemMonitorToolRegistry.definitions()
         definitions += ChatModelLibraryToolRegistry.definitions()
         definitions += ChatServerStatsToolRegistry.definitions()
         definitions += ChatSwitchModelToolRegistry.definitions()
         definitions += context?.mcpHost?.toolDefinitions() ?? []
+        if allowsSpawning, context != nil {
+            definitions += ChatSpawnAgentToolRegistry.definitions()
+        }
         var tools = definitions.map {
             ChatNativeToolDescriptor(definition: $0, configuration: nil)
         }
@@ -157,6 +233,9 @@ enum ChatToolDispatcher {
         },
         ChatWebSearchToolRegistry.toolName: { _, error in
             ChatWebSearchToolExecutor().failurePayload(error: error)
+        },
+        ChatSpawnAgentToolRegistry.toolName: { name, error in
+            ChatSpawnAgentToolExecutor().failurePayload(operation: name, error: error)
         },
     ]
 
@@ -272,6 +351,512 @@ enum ChatToolDispatcher {
     }
 }
 
+/// Builds the wire-format completion request from a message history + settings.
+/// Shared by the coordinator's own loop (session-array-backed) and `ChatAgentLoop`
+/// (a sub-agent's private, in-memory-array-backed loop) so the two never drift on
+/// how settings map to request fields.
+enum ChatCompletionRequestBuilder {
+    @MainActor
+    static func make(
+        modelID: String,
+        precedingMessages: [ChatTranscriptMessage],
+        settings: NativSettings,
+        advertisesTools: Bool,
+        languageModelSupportsTools: Bool,
+        canEditImage: Bool,
+        allowsSpawning: Bool,
+        mcpHost: MCPHostManager? = nil
+    ) -> MLXChatCompletionRequest {
+        var requestMessages = precedingMessages.compactMap(\.apiMessage)
+        if !settings.systemPrompt.isEmpty {
+            requestMessages.insert(
+                MLXChatMessage(role: "system", content: settings.systemPrompt),
+                at: 0
+            )
+        }
+
+        let advertisesToolsForModel = advertisesTools && languageModelSupportsTools
+        let toolDefinitions = advertisesToolsForModel
+            ? ChatToolRegistry.definitions(
+                context: ChatToolExecutionContext(
+                    imageGenerationModelID: settings.imageGenerationModelID,
+                    baseURL: settings.serverBaseURL,
+                    apiKey: settings.serverAPIKey,
+                    imageReferences: [],
+                    modelSearchPath: settings.expandedModelSearchPath,
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                    mcpHost: mcpHost
+                ),
+                canEditImage: canEditImage,
+                allowsSpawning: allowsSpawning
+            )
+            : []
+        let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
+        return MLXChatCompletionRequest(
+            model: modelID,
+            messages: requestMessages,
+            maxTokens: settings.maxTokens,
+            temperature: settings.temperature,
+            topK: settings.topK,
+            topP: settings.topP,
+            minP: settings.minP,
+            repetitionPenalty: settings.repetitionPenaltyEnabled ? settings.repetitionPenalty : nil,
+            enableThinking: settings.thinkingEnabled,
+            thinkingBudget: settings.thinkingEnabled
+                && settings.thinkingBudgetEnabled
+                && !settings.speculativeDecodingActive
+                ? settings.thinkingBudget
+                : nil,
+            thinkingStartToken: settings.thinkingEnabled ? settings.thinkingStartToken : nil,
+            thinkingEndToken: settings.thinkingEnabled ? settings.thinkingEndToken : nil,
+            responseFormat: tools == nil ? settings.chatResponseFormat : nil,
+            tools: tools,
+            toolChoice: tools == nil ? nil : "auto",
+            stream: true
+        )
+    }
+}
+
+/// Assigns wire-required index/id/type defaults to a raw model completion's tool
+/// calls. Pure transformation, shared by the coordinator's own loop and
+/// `ChatAgentLoop` so both normalize identically.
+enum ChatToolCallNormalizer {
+    static func normalize(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {
+        toolCalls.enumerated().map { index, call in
+            var normalized = call
+            normalized.index = index
+            if normalized.id?.isEmpty != false {
+                normalized.id = "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            }
+            if normalized.type?.isEmpty != false {
+                normalized.type = "function"
+            }
+            // Some models' streamed tool-call name deltas (accumulated via
+            // NativChatClient's fragment-merging) can leave stray leading/
+            // trailing whitespace that's invisible once rendered but fails
+            // every exact-string dispatch check downstream (switch_model,
+            // spawn_agent's own coordinator-level route, MCP's qualified-name
+            // lookup) -- trim it here, once, at the single seam all of those
+            // checks read from, rather than patching each comparison site.
+            if let rawName = normalized.function?.name {
+                normalized.function?.name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return normalized
+        }
+    }
+}
+
+enum ChatSpawnAgentToolRegistry {
+    static let toolName = "spawn_agent"
+
+    static func definitions() -> [MLXChatToolDefinition] {
+        [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: toolName,
+            description: "Delegate a focused sub-task to a fresh instance of yourself and get back its final answer. Use for a self-contained piece of work you can fully describe up front.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([
+                    "task": .object([
+                        "type": .string("string"),
+                        "description": .string("What the sub-agent should do. This is the sub-agent's entire instruction — it does not see this conversation.")
+                    ]),
+                    "context": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional: specific facts from this conversation the sub-agent needs. Omit if the task is fully self-contained.")
+                    ]),
+                    "model": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional: run this sub-agent on a different model than your own (e.g. a smaller model for a simple task). Must be the exact full repo ID of a model already installed locally (e.g. \"mlx-community/Qwen3-0.6B-4bit\", not just \"Qwen3-0.6B-4bit\") -- use list_models if unsure. Omit to use your own model. Loading a different model evicts whichever model is currently loaded, including your own -- expect a reload pause on both the switch and the return.")
+                    ])
+                ]),
+                "required": .array([.string("task")])
+            ])
+        ))]
+    }
+}
+
+struct ChatSpawnAgentToolArguments: Decodable {
+    let task: String
+    let context: String?
+    let model: String?
+}
+
+struct ChatSpawnAgentToolResultPayload: Encodable {
+    let ok: Bool
+    let result: String?
+    let error: String?
+}
+
+enum ChatSpawnAgentToolError: LocalizedError {
+    case invalidArguments
+    case noModelConfigured
+    case unknownModel(String)
+    case tooManyPerRound
+    case noFinalAnswer
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArguments:
+            return "The spawn_agent arguments were not valid JSON."
+        case .noModelConfigured:
+            return "No language model is configured to run the sub-agent."
+        case .unknownModel(let modelID):
+            return "Unknown model: \(modelID). This model is not installed locally -- use one of the models already available, or omit \"model\" to use your own."
+        case .tooManyPerRound:
+            return "Only \(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound) sub-agents may run per round."
+        case .noFinalAnswer:
+            return "Sub-agent did not produce an answer."
+        }
+    }
+}
+
+/// A sub-agent's own round-loop: same shape as the coordinator's, over a private,
+/// in-memory message array instead of a session-backed one. Deliberately NOT
+/// wired into `ChatViewModel.runChatLoop` -- reusing that method's
+/// session-array/live-UI-throttling machinery for a fresh in-memory array would
+/// have meant refactoring the coordinator's proven, load-bearing loop, which is
+/// higher regression risk than this focused reimplementation. `ChatCompletionRequestBuilder`
+/// and `ChatToolCallNormalizer` are shared so the two loops can't drift on request
+/// construction or tool-call normalization, the parts most worth not duplicating.
+@MainActor
+struct ChatAgentLoop {
+    struct Configuration {
+        let modelID: String
+        let settings: NativSettings
+        let languageModelSupportsTools: Bool
+        let toolExecutionContext: ChatToolExecutionContext
+        let consentGate: ChatToolConsentGate
+        let appModel: NativModel?
+    }
+
+    let configuration: Configuration
+    let onMessagesChange: ([ChatTranscriptMessage]) -> Void
+
+    func run(initialUserContent: String) async throws -> String {
+        let client = NativChatClient(
+            baseURL: configuration.settings.serverBaseURL,
+            apiKey: configuration.settings.serverAPIKey
+        )
+
+        var messages: [ChatTranscriptMessage] = [
+            ChatTranscriptMessage(role: .user, content: initialUserContent)
+        ]
+        onMessagesChange(messages)
+
+        var toolRounds = 0
+        while true {
+            try Task.checkCancellation()
+            let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
+            let request = ChatCompletionRequestBuilder.make(
+                modelID: configuration.modelID,
+                precedingMessages: messages,
+                settings: configuration.settings,
+                advertisesTools: advertisesTools,
+                languageModelSupportsTools: configuration.languageModelSupportsTools,
+                canEditImage: messages.contains { !$0.imageAttachments.isEmpty },
+                allowsSpawning: false,
+                mcpHost: configuration.toolExecutionContext.mcpHost
+            )
+
+            let assistantMessageID = UUID()
+            messages.append(ChatTranscriptMessage(
+                id: assistantMessageID,
+                role: .assistant,
+                content: "",
+                modelID: configuration.modelID,
+                isStreaming: true
+            ))
+            onMessagesChange(messages)
+
+            let completion = try await client.streamChat(request, onEvent: { _ in })
+            let toolCalls = ChatToolCallNormalizer.normalize(completion.toolCalls)
+
+            if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
+                messages[index].content = completion.content
+                messages[index].reasoningContent = completion.reasoningContent ?? ""
+                messages[index].isStreaming = false
+            }
+            onMessagesChange(messages)
+
+            guard advertisesTools, !toolCalls.isEmpty else {
+                let finalContent = completion.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !finalContent.isEmpty else {
+                    throw ChatSpawnAgentToolError.noFinalAnswer
+                }
+                return finalContent
+            }
+
+            for toolCall in toolCalls {
+                try Task.checkCancellation()
+                try await runToolCall(toolCall, messages: &messages)
+            }
+
+            toolRounds += 1
+        }
+    }
+
+    private func runToolCall(
+        _ toolCall: MLXChatToolCall,
+        messages: inout [ChatTranscriptMessage]
+    ) async throws {
+        let toolMessageID = UUID()
+        messages.append(ChatTranscriptMessage(
+            id: toolMessageID,
+            role: .tool,
+            content: "",
+            toolCallID: toolCall.id,
+            toolName: toolCall.function?.name,
+            toolStatus: .running,
+            toolArguments: toolCall.function?.arguments
+        ))
+        onMessagesChange(messages)
+
+        if let consentGatedAction = ChatConsentGatedAction.detect(
+            call: toolCall,
+            mcpHost: configuration.toolExecutionContext.mcpHost
+        ) {
+            try await runConsentGatedToolCall(
+                toolCall,
+                action: consentGatedAction,
+                toolMessageID: toolMessageID,
+                messages: &messages
+            )
+            return
+        }
+
+        do {
+            let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: configuration.toolExecutionContext)
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .succeeded
+                $0.content = outcome.content
+                $0.imageAttachments = outcome.attachments
+            }
+        } catch is CancellationError {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .cancelled
+                $0.content = ChatToolDispatcher.failurePayload(toolName: toolCall.function?.name, error: CancellationError())
+            }
+            onMessagesChange(messages)
+            throw CancellationError()
+        } catch {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .failed
+                $0.content = ChatToolDispatcher.failurePayload(toolName: toolCall.function?.name, error: error)
+            }
+        }
+        onMessagesChange(messages)
+    }
+
+    private func runConsentGatedToolCall(
+        _ toolCall: MLXChatToolCall,
+        action: ChatConsentGatedAction,
+        toolMessageID: UUID,
+        messages: inout [ChatTranscriptMessage]
+    ) async throws {
+        update(&messages, id: toolMessageID) { $0.toolStatus = .awaitingConsent }
+        onMessagesChange(messages)
+
+        let approved = await configuration.consentGate.awaitDecision(for: toolMessageID)
+        switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+        case .cancelled:
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .cancelled
+                $0.content = ChatToolDispatcher.failurePayload(
+                    toolName: toolCall.function?.name,
+                    error: CancellationError()
+                )
+            }
+            onMessagesChange(messages)
+            throw CancellationError()
+        case .declined:
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .declined
+                $0.content = action.declinedPayload()
+            }
+            onMessagesChange(messages)
+            return
+        case .approved:
+            update(&messages, id: toolMessageID) { $0.toolStatus = .running }
+            onMessagesChange(messages)
+        }
+
+        if case .switchModel = action, configuration.appModel == nil {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .failed
+                $0.content = ChatSwitchModelToolExecutor().failurePayload(
+                    operation: ChatSwitchModelToolRegistry.toolName,
+                    error: ChatSwitchModelToolError.appModelUnavailable
+                )
+            }
+            onMessagesChange(messages)
+            return
+        }
+
+        do {
+            let content = try await action.execute(appModel: configuration.appModel)
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .succeeded
+                $0.content = content
+            }
+        } catch {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .failed
+                $0.content = action.failurePayload(error: error)
+            }
+        }
+        onMessagesChange(messages)
+    }
+
+    private func update(
+        _ messages: inout [ChatTranscriptMessage],
+        id: UUID,
+        mutate: (inout ChatTranscriptMessage) -> Void
+    ) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        mutate(&messages[index])
+    }
+}
+
+/// Resolves which model a `spawn_agent` call should run its sub-agent on: the
+/// call's own optional `model` argument when present and non-blank, else the
+/// coordinator's own model. Pure and separately testable so the fallback/
+/// trimming behavior doesn't need a live network call to verify.
+enum ChatSpawnAgentModelResolver {
+    static func resolve(argumentModel: String?, coordinatorModelID: String?) -> String? {
+        trimmedNonBlank(argumentModel) ?? coordinatorModelID
+    }
+
+    /// Whether the call explicitly requested a model override, as opposed to
+    /// falling back to the coordinator's own model. Used to scope model-
+    /// existence validation to just the override path -- the coordinator's
+    /// own configured model is already known-good (it came from the same
+    /// local scan that populates the settings picker), so re-validating it
+    /// on every single spawn_agent call would be wasted work.
+    static func isExplicitOverride(argumentModel: String?) -> Bool {
+        trimmedNonBlank(argumentModel) != nil
+    }
+
+    /// Exact match only, deliberately -- no case-folding or prefix/suffix
+    /// matching. A model ID either is or isn't one of the repos actually
+    /// installed locally; a loose match risks silently accepting a
+    /// plausible-but-wrong guess, exactly the failure mode this exists to
+    /// catch in the first place.
+    static func isKnownModel(_ modelID: String, among knownModels: [LocalModel]) -> Bool {
+        knownModels.contains { $0.repoID == modelID }
+    }
+
+    private static func trimmedNonBlank(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+}
+
+struct ChatSpawnAgentToolExecutor {
+    @MainActor
+    func execute(
+        call: MLXChatToolCall,
+        settings: NativSettings,
+        languageModelSupportsTools: Bool,
+        toolExecutionContext: ChatToolExecutionContext,
+        consentGate: ChatToolConsentGate,
+        appModel: NativModel?,
+        onSubMessagesChange: @escaping ([ChatTranscriptMessage]) -> Void
+    ) async throws -> String {
+        guard call.function?.name == ChatSpawnAgentToolRegistry.toolName else {
+            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+        }
+        guard let argumentsData = call.function?.arguments?.data(using: .utf8),
+              let arguments = try? JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: argumentsData),
+              !arguments.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw ChatSpawnAgentToolError.invalidArguments
+        }
+        // The server holds exactly one text-generation model at a time (confirmed by
+        // reading nativ_server.py / mlx_vlm's get_cached_model + the chat-completions
+        // handler): every request's own `model` field is resolved per-request, and a
+        // mismatch evicts whatever's cached -- stopping its response_generator and
+        // clearing its prefix cache -- before loading the new one. So a differently-
+        // modeled sub-agent needs no explicit swap orchestration here; it just needs to
+        // send its own `model` on every request it makes, which `ChatAgentLoop` already
+        // does via `configuration.modelID` (kept distinct from `settings.languageModelID`
+        // for exactly this purpose). The coordinator's own next round after this sub-agent
+        // returns still requests `settings.languageModelID` unconditionally (unchanged),
+        // which evicts the sub-agent's model and reloads the coordinator's the same way --
+        // same reload cost the existing switch_model tool already pays today, not a new
+        // regression. Conversation history for both sides survives regardless, since these
+        // are stateless per-request completions with the full message list resent each time.
+        guard let modelID = ChatSpawnAgentModelResolver.resolve(
+            argumentModel: arguments.model,
+            coordinatorModelID: settings.languageModelID
+        ) else {
+            throw ChatSpawnAgentToolError.noModelConfigured
+        }
+
+        // Live-caught 2026-08-06: a coordinator can hallucinate a plausible-
+        // but-wrong `model` argument (e.g. "Qwen3-1.7B-4bit", the composer's
+        // own picker DISPLAY string, missing the real "mlx-community/" repo
+        // prefix) on a prompt that never mentioned models at all. Passing
+        // that straight into a completion request's `model` field isn't a
+        // fast local failure -- the server treats an unrecognized model ID as
+        // a real remote lookup and it 401s minutes later. Only validate an
+        // *explicit* override, not the coordinator's own model (already
+        // known-good, and re-scanning on every single spawn_agent call would
+        // be wasted work for the common, unremarkable case).
+        if ChatSpawnAgentModelResolver.isExplicitOverride(argumentModel: arguments.model) {
+            let knownModels = try await LocalModelDiscovery.scan(
+                path: toolExecutionContext.modelSearchPath,
+                additionalPaths: toolExecutionContext.additionalModelSearchPaths
+            )
+            guard ChatSpawnAgentModelResolver.isKnownModel(modelID, among: knownModels) else {
+                throw ChatSpawnAgentToolError.unknownModel(modelID)
+            }
+        }
+
+        var initialContent = arguments.task
+        if let context = arguments.context, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            initialContent += "\n\nContext:\n\(context)"
+        }
+
+        let loop = ChatAgentLoop(
+            configuration: ChatAgentLoop.Configuration(
+                modelID: modelID,
+                settings: settings,
+                languageModelSupportsTools: languageModelSupportsTools,
+                toolExecutionContext: toolExecutionContext,
+                consentGate: consentGate,
+                appModel: appModel
+            ),
+            onMessagesChange: onSubMessagesChange
+        )
+
+        let result = try await loop.run(initialUserContent: initialContent)
+        return try encodedPayload(ChatSpawnAgentToolResultPayload(ok: true, result: result, error: nil))
+    }
+
+    func tooManyPerRoundPayload() -> String {
+        (try? encodedPayload(ChatSpawnAgentToolResultPayload(
+            ok: false,
+            result: nil,
+            error: ChatSpawnAgentToolError.tooManyPerRound.errorDescription
+        ))) ?? #"{"ok":false,"error":"Only \#(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound) sub-agents may run per round."}"#
+    }
+
+    func failurePayload(operation: String, error: Error) -> String {
+        let payload = ChatSpawnAgentToolResultPayload(ok: false, result: nil, error: error.localizedDescription)
+        return (try? encodedPayload(payload))
+            ?? #"{"ok":false,"error":"Sub-agent delegation failed."}"#
+    }
+
+    private func encodedPayload(_ payload: ChatSpawnAgentToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
+    }
+}
+
 @MainActor
 final class ChatToolConsentGate {
     private var pending: [UUID: CheckedContinuation<Bool, Never>] = [:]
@@ -319,6 +904,68 @@ enum ChatToolConsentRouter {
     }
 }
 
+/// Generalizes consent-gating over both `switch_model` and MCP tool calls for
+/// `ChatAgentLoop` (a sub-agent's own loop can encounter either). The
+/// coordinator's own loop (`ChatView.swift`) keeps its existing, separate
+/// inline `switch_model` consent branch untouched -- not refactored onto
+/// this enum -- to avoid touching that proven, already-shipped code; this
+/// type exists specifically for `ChatAgentLoop`, which needs one abstraction
+/// covering both cases since a sub-agent can call either.
+enum ChatConsentGatedAction {
+    case switchModel(call: MLXChatToolCall)
+    case mcpTool(call: MLXChatToolCall, bridge: ChatMCPHostBridge)
+
+    @MainActor
+    static func detect(call: MLXChatToolCall, mcpHost: MCPHostManager?) -> ChatConsentGatedAction? {
+        guard let name = call.function?.name else { return nil }
+        if name == ChatSwitchModelToolRegistry.toolName {
+            return .switchModel(call: call)
+        }
+        if let mcpHost {
+            let bridge = ChatMCPHostBridge(host: mcpHost)
+            if bridge.requiresConsent(name) {
+                return .mcpTool(call: call, bridge: bridge)
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    func execute(appModel: NativModel?) async throws -> String {
+        switch self {
+        case .switchModel(let call):
+            guard let appModel else {
+                throw ChatSwitchModelToolError.appModelUnavailable
+            }
+            return try await ChatSwitchModelToolExecutor().execute(call: call, appModel: appModel)
+        case .mcpTool(let call, let bridge):
+            let outcome = try await bridge.execute(call: call)
+            return outcome.content
+        }
+    }
+
+    func declinedPayload() -> String {
+        switch self {
+        case .switchModel:
+            return ChatSwitchModelToolExecutor().declinedPayload()
+        case .mcpTool(let call, _):
+            return ChatMCPHostBridge.declinedPayload(toolName: call.function?.name ?? "tool")
+        }
+    }
+
+    func failurePayload(error: Error) -> String {
+        switch self {
+        case .switchModel(let call):
+            return ChatSwitchModelToolExecutor().failurePayload(
+                operation: call.function?.name ?? ChatSwitchModelToolRegistry.toolName,
+                error: error
+            )
+        case .mcpTool(let call, _):
+            return ChatMCPHostBridge.failurePayload(toolName: call.function?.name ?? "tool", error: error)
+        }
+    }
+}
+
 enum ChatToolPresentation {
     static func title(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch toolName {
@@ -336,6 +983,8 @@ enum ChatToolPresentation {
             return switchModelTitle(status: status)
         case ChatWebSearchToolRegistry.toolName:
             return webSearchTitle(status: status)
+        case ChatSpawnAgentToolRegistry.toolName:
+            return spawnAgentTitle(status: status)
         case let name? where name.hasPrefix(MCPToolNaming.qualifiedPrefix):
             return mcpTitle(toolName: name, status: status)
         default:
@@ -370,6 +1019,8 @@ enum ChatToolPresentation {
                 return "arrow.triangle.2.circlepath"
             case ChatWebSearchToolRegistry.toolName:
                 return "globe"
+            case ChatSpawnAgentToolRegistry.toolName:
+                return "person.2.badge.gearshape"
             case let name? where name.hasPrefix(MCPToolNaming.qualifiedPrefix):
                 return "puzzlepiece.extension"
             default:
@@ -463,6 +1114,19 @@ enum ChatToolPresentation {
             return "Web search"
         case nil:
             return "Web search"
+        }
+    }
+
+    private static func spawnAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Delegating to sub-agent…"
+        case .succeeded:
+            return "Sub-agent finished"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Sub-agent delegation"
+        case nil:
+            return "Sub-agent tool"
         }
     }
 

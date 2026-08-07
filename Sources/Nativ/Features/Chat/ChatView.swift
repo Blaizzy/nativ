@@ -1265,6 +1265,7 @@ final class ChatViewModel: ObservableObject {
             }
 
             var insertionAnchor = assistantMessageID
+            var pendingSpawns: [(spawn: ChatConcurrentSpawnRunner.PendingSpawn, context: ChatToolExecutionContext)] = []
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
                 let toolMessageID = UUID()
@@ -1324,6 +1325,33 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                     }
+                }
+
+                if toolCall.function?.name == ChatSpawnAgentToolRegistry.toolName {
+                    guard ChatConcurrentSpawnGate.allowsAnotherSpawn(alreadyStarted: pendingSpawns.count) else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatSpawnAgentToolExecutor().tooManyPerRoundPayload(),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    let context = ChatToolExecutionContext(
+                        imageGenerationModelID: activeImageModelID,
+                        baseURL: queuedRequest.settings.serverBaseURL,
+                        apiKey: queuedRequest.settings.serverAPIKey,
+                        imageReferences: latestImageReferences(beforeOrAt: toolMessageID, in: queuedRequest.sessionID),
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        mcpHost: mcpHost
+                    )
+                    pendingSpawns.append((
+                        spawn: ChatConcurrentSpawnRunner.PendingSpawn(toolMessageID: toolMessageID, call: toolCall),
+                        context: context
+                    ))
+                    continue
                 }
 
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
@@ -1592,6 +1620,16 @@ final class ChatViewModel: ObservableObject {
                 }
             }
 
+            if !pendingSpawns.isEmpty {
+                try await runPendingSpawnsConcurrently(
+                    pendingSpawns,
+                    in: queuedRequest.sessionID,
+                    settings: activeSettings,
+                    languageModelSupportsTools: queuedRequest.languageModelSupportsTools,
+                    appModel: appModel
+                )
+            }
+
             toolRounds += 1
             assistantMessageID = UUID()
             activeAssistantMessageID = assistantMessageID
@@ -1634,7 +1672,8 @@ final class ChatViewModel: ObservableObject {
                     additionalModelSearchPaths: settings.additionalModelSearchPaths,
                     mcpHost: mcpHost
                 ),
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty },
+                allowsSpawning: true
             )
             : []
         if advertisesToolsForModel {
@@ -1817,6 +1856,106 @@ final class ChatViewModel: ObservableObject {
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
             bumpScroll()
+        }
+    }
+
+    /// Updates a `spawn_agent` tool message's nested transcript as the
+    /// sub-agent's own loop progresses. Called directly, with no
+    /// coalescing -- fine for now since `ChatAgentLoop` only reports back at
+    /// coarse points (message insertion, after a full completion, after each
+    /// tool round), not on every streamed token.
+    private func updateToolMessageSubMessages(
+        _ id: UUID,
+        in sessionID: UUID,
+        subMessages: [ChatTranscriptMessage]
+    ) {
+        _ = updateMessage(id, in: sessionID) { message in
+            message.subMessages = subMessages
+        }
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
+    }
+
+    /// Runs every pending `spawn_agent` call from one round concurrently via
+    /// `ChatConcurrentSpawnRunner` (a real TaskGroup, not sequential awaits),
+    /// then applies each outcome's final status once settled. A child's own
+    /// cancellation propagates out of the group and is re-thrown here after
+    /// updating whichever messages are still pending as `.cancelled` -- Swift's
+    /// structured concurrency has already cancelled every other in-flight
+    /// child by the time this catch runs (this only updates their UI status).
+    private func runPendingSpawnsConcurrently(
+        _ pendingSpawns: [(spawn: ChatConcurrentSpawnRunner.PendingSpawn, context: ChatToolExecutionContext)],
+        in sessionID: UUID,
+        settings: NativSettings,
+        languageModelSupportsTools: Bool,
+        appModel: NativModel?
+    ) async throws {
+        let contextByID = Dictionary(
+            uniqueKeysWithValues: pendingSpawns.map { ($0.spawn.toolMessageID, $0.context) }
+        )
+
+        do {
+            let outcomes = try await ChatConcurrentSpawnRunner.runAll(
+                pendingSpawns.map(\.spawn)
+            ) { [weak self] spawn in
+                guard let self, let context = contextByID[spawn.toolMessageID] else {
+                    throw ChatSpawnAgentToolError.noModelConfigured
+                }
+                return try await ChatSpawnAgentToolExecutor().execute(
+                    call: spawn.call,
+                    settings: settings,
+                    languageModelSupportsTools: languageModelSupportsTools,
+                    toolExecutionContext: context,
+                    consentGate: self.toolConsentGate,
+                    appModel: appModel,
+                    onSubMessagesChange: { [weak self] subMessages in
+                        self?.updateToolMessageSubMessages(
+                            spawn.toolMessageID,
+                            in: sessionID,
+                            subMessages: subMessages
+                        )
+                    }
+                )
+            }
+
+            for outcome in outcomes {
+                switch outcome.result {
+                case .success(let content):
+                    updateToolMessage(
+                        outcome.toolMessageID,
+                        in: sessionID,
+                        status: .succeeded,
+                        content: content,
+                        attachments: []
+                    )
+                case .failure(let error):
+                    updateToolMessage(
+                        outcome.toolMessageID,
+                        in: sessionID,
+                        status: .failed,
+                        content: ChatToolDispatcher.failurePayload(
+                            toolName: ChatSpawnAgentToolRegistry.toolName,
+                            error: error
+                        ),
+                        attachments: []
+                    )
+                }
+            }
+        } catch is CancellationError {
+            for pending in pendingSpawns {
+                updateToolMessage(
+                    pending.spawn.toolMessageID,
+                    in: sessionID,
+                    status: .cancelled,
+                    content: ChatToolDispatcher.failurePayload(
+                        toolName: ChatSpawnAgentToolRegistry.toolName,
+                        error: CancellationError()
+                    ),
+                    attachments: []
+                )
+            }
+            throw CancellationError()
         }
     }
 
@@ -2870,6 +3009,39 @@ private struct ChatAgentStepCell: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                     NativCodeBlock(raw: message.content, lineLimit: 12)
+                }
+            }
+            if !message.subMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(message.subMessages) { subMessage in
+                        if subMessage.role == .tool {
+                            // Sub-agents don't get the image-model-selection UX
+                            // (out of scope for spawn_agent -- a sub-agent's own
+                            // image tool call already works fine when a model is
+                            // pre-configured; it just can't prompt the user to
+                            // pick one, same as it can't prompt for anything else).
+                            ChatAgentStepCell(
+                                message: subMessage,
+                                imageModelSelectionRequest: nil,
+                                onConfirm: onConfirm,
+                                onDeny: onDeny,
+                                onSelectImageModel: { _, _ in },
+                                onCancelImageModelSelection: { _ in },
+                                onExploreImageModels: { _ in }
+                            )
+                        } else if subMessage.role == .assistant, !subMessage.content.isEmpty {
+                            // The sub-agent's own round text -- reuses
+                            // ChatMessageText (the same markdown renderer the
+                            // coordinator's own bubble uses) rather than a new one.
+                            ChatMessageText(
+                                content: subMessage.content,
+                                rendersMarkdown: true,
+                                isStreaming: subMessage.isStreaming
+                            )
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        }
+                    }
                 }
             }
         }
