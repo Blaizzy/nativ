@@ -3,15 +3,18 @@ import Foundation
 import NativServerKit
 
 enum ChatImageToolRegistry {
+    static let generateToolName = "generate_image"
+    static let editToolName = "edit_image"
+
     static func definitions(canEdit: Bool) -> [MLXChatToolDefinition] {
         var tools = [tool(
-            name: "generate_image",
-            description: "Create one or more new images from a detailed text prompt."
+            name: generateToolName,
+            description: "Create one or more new images from a detailed text prompt. Image-model selection is handled by the app; do not ask for or provide a model identifier."
         )]
         if canEdit {
             tools.append(tool(
-                name: "edit_image",
-                description: "Edit the most recently attached or generated image using a text instruction."
+                name: editToolName,
+                description: "Edit the most recently attached or generated image using a text instruction. Image-model selection is handled by the app; do not ask for or provide a model identifier."
             ))
         }
         return tools
@@ -60,6 +63,42 @@ struct ChatImageToolArguments: Decodable {
     let height: Int?
     let count: Int?
     let seed: Int?
+
+    static func decode(call: MLXChatToolCall) throws -> Self {
+        guard let arguments = call.function?.arguments?.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(Self.self, from: arguments)
+        else {
+            throw ChatImageToolError.invalidArguments
+        }
+        return decoded
+    }
+}
+
+struct ChatImageToolRequest: Equatable, Sendable {
+    let operation: ChatImageOperation
+    let prompt: String
+    let width: Int?
+    let height: Int?
+    let count: Int?
+    let seed: Int?
+
+    init(call: MLXChatToolCall, hasImageReference: Bool) throws {
+        operation = try ChatImageOperation(toolName: call.function?.name)
+        let arguments = try ChatImageToolArguments.decode(call: call)
+        let prompt = arguments.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            throw ChatImageToolError.emptyPrompt
+        }
+        guard operation != .edit || hasImageReference else {
+            throw ChatImageToolError.missingReference
+        }
+
+        self.prompt = prompt
+        width = arguments.width
+        height = arguments.height
+        count = arguments.count
+        seed = arguments.seed
+    }
 }
 
 struct ChatImageToolResultPayload: Encodable {
@@ -80,12 +119,56 @@ struct ChatImageToolResultPayload: Encodable {
     let ok: Bool
     let operation: String
     let images: [Image]?
+    let installationRequired: Bool?
     let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case operation
+        case images
+        case installationRequired = "installation_required"
+        case error
+    }
 }
 
-struct ChatImageToolExecution {
+struct ChatImageToolExecution: Sendable {
     let content: String
     let attachments: [ChatImageAttachment]
+}
+
+struct ChatImageToolDependencies: Sendable {
+    typealias ModelDiscovery = @Sendable (
+        String,
+        [String]
+    ) async throws -> [ChatImageModelOption]
+    typealias Execution = @Sendable (
+        ChatImageToolRequest,
+        String,
+        URL,
+        String?,
+        [ChatImageAttachment]
+    ) async throws -> ChatImageToolExecution
+
+    let discoverModels: ModelDiscovery
+    let execute: Execution
+
+    static let live = Self(
+        discoverModels: { path, additionalPaths in
+            try await ChatImageModelSelection.installedOptions(
+                modelSearchPath: path,
+                additionalModelSearchPaths: additionalPaths
+            )
+        },
+        execute: { request, modelID, baseURL, apiKey, references in
+            try await ChatImageToolExecutor().execute(
+                request: request,
+                modelID: modelID,
+                baseURL: baseURL,
+                apiKey: apiKey,
+                references: references
+            )
+        }
+    )
 }
 
 enum ChatImageToolError: LocalizedError {
@@ -93,6 +176,8 @@ enum ChatImageToolError: LocalizedError {
     case invalidArguments
     case emptyPrompt
     case missingReference
+    case modelSelectionUnavailable(ChatImageOperation)
+    case noCompatibleModels(ChatImageOperation)
 
     var errorDescription: String? {
         switch self {
@@ -104,60 +189,46 @@ enum ChatImageToolError: LocalizedError {
             "The image prompt cannot be empty."
         case .missingReference:
             "No earlier image is available to edit."
+        case .modelSelectionUnavailable(let operation):
+            "The app could not present the \(operation.capabilityName) model picker."
+        case .noCompatibleModels(let operation):
+            "No compatible \(operation.capabilityName) model is installed. Download one from the Models tab, then try again."
         }
     }
 }
 
 struct ChatImageToolExecutor {
     func execute(
-        call: MLXChatToolCall,
+        request: ChatImageToolRequest,
         modelID: String,
         baseURL: URL,
         apiKey: String?,
         references: [ChatImageAttachment]
     ) async throws -> ChatImageToolExecution {
-        guard let name = call.function?.name else {
-            throw ChatImageToolError.unsupportedTool("unknown")
-        }
-        guard name == "generate_image" || name == "edit_image" else {
-            throw ChatImageToolError.unsupportedTool(name)
-        }
-        guard let arguments = call.function?.arguments?.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(ChatImageToolArguments.self, from: arguments)
-        else {
-            throw ChatImageToolError.invalidArguments
-        }
-
-        let prompt = decoded.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else {
-            throw ChatImageToolError.emptyPrompt
-        }
-        if name == "edit_image", references.isEmpty {
-            throw ChatImageToolError.missingReference
-        }
-
-        let sourceSize = name == "edit_image" ? imageSize(for: references.first) : nil
+        let sourceSize = request.operation == .edit
+            ? imageSize(for: references.first)
+            : nil
         let settings = ImageRequestSettings(
-            count: min(max(decoded.count ?? 1, 1), 4),
-            width: boundedDimension(decoded.width ?? sourceSize?.width ?? 512),
-            height: boundedDimension(decoded.height ?? sourceSize?.height ?? 512),
+            count: min(max(request.count ?? 1, 1), 4),
+            width: boundedDimension(request.width ?? sourceSize?.width ?? 512),
+            height: boundedDimension(request.height ?? sourceSize?.height ?? 512),
             steps: 4,
             guidance: 1,
-            seedText: decoded.seed.map(String.init) ?? ""
+            seedText: request.seed.map(String.init) ?? ""
         )
         let outputs = try await ImageGenerationExecutor().run(
             baseURL: baseURL,
             apiKey: apiKey,
             modelID: modelID,
-            prompt: prompt,
-            references: name == "edit_image" ? references : [],
+            prompt: request.prompt,
+            references: request.operation == .edit ? references : [],
             settings: settings,
-            seed: decoded.seed
+            seed: request.seed
         )
         let attachments = outputs.map(\.attachment)
         let payload = ChatImageToolResultPayload(
             ok: true,
-            operation: name == "edit_image" ? "edit" : "generate",
+            operation: request.operation.rawValue,
             images: outputs.map {
                 ChatImageToolResultPayload.Image(
                     attachmentID: $0.id.uuidString,
@@ -166,6 +237,7 @@ struct ChatImageToolExecutor {
                     seed: $0.seed
                 )
             },
+            installationRequired: nil,
             error: nil
         )
         return ChatImageToolExecution(
@@ -175,10 +247,16 @@ struct ChatImageToolExecutor {
     }
 
     func failurePayload(operation: String, error: Error) -> String {
+        let installationRequired: Bool? = if case ChatImageToolError.noCompatibleModels = error {
+            true
+        } else {
+            nil
+        }
         let payload = ChatImageToolResultPayload(
             ok: false,
-            operation: operation,
+            operation: operation == ChatImageToolRegistry.editToolName ? "edit" : "generate",
             images: nil,
+            installationRequired: installationRequired,
             error: error.localizedDescription
         )
         return (try? encodedPayload(payload))

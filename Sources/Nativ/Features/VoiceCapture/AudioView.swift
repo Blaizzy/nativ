@@ -217,10 +217,10 @@ struct AudioView: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     private var destinationBar: some View {
@@ -1669,6 +1669,15 @@ struct AudioView: View {
         }
     }
 
+    private var handsFreeDescription: String {
+        guard shortcuts.isHandsFreeEnabled else {
+            return "Hold while speaking; release to transcribe."
+        }
+        return shortcuts.recordShortcut.keyCode == nil
+            ? "Double-tap to start; double-tap again to transcribe."
+            : "Press once to start; press again to transcribe."
+    }
+
     private var shortcutConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
@@ -1684,13 +1693,9 @@ struct AudioView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Hands-free")
                             .font(.callout.weight(.medium))
-                        Text(
-                            shortcuts.isHandsFreeEnabled
-                                ? "Press once to start; press again to transcribe."
-                                : "Hold while speaking; release to transcribe."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Text(handsFreeDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     Spacer(minLength: 16)
@@ -1710,6 +1715,7 @@ struct AudioView: View {
                     shortcut: shortcuts.recordShortcut,
                     kind: .record
                 )
+
                 shortcutRow(
                     title: "Retry recent audio",
                     shortcut: shortcuts.retryShortcut,

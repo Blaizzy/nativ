@@ -38,18 +38,27 @@ struct MLXImageModelResolver: Sendable {
         at root: URL,
         fileManager: FileManager
     ) -> Bool {
-        guard supportedModelType(
+        guard let modelType = supportedModelType(
             model: model,
             at: root,
             fileManager: fileManager
-        ) == "mage_flow" else {
+        ) else {
             return false
         }
-        return isMageFlowEditModel(
-            model: model,
-            at: root,
-            fileManager: fileManager
-        )
+        switch modelType {
+        case "flux2":
+            // Every FLUX.2 variant supported by the bundled backend can use
+            // reference images as well as generate from text.
+            return true
+        case "mage_flow":
+            return isMageFlowEditModel(
+                model: model,
+                at: root,
+                fileManager: fileManager
+            )
+        default:
+            return false
+        }
     }
 
     func isSupportedImageModel(
