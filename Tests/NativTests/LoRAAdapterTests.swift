@@ -2,6 +2,41 @@ import XCTest
 @testable import NativServerKit
 
 final class LoRAAdapterTests: XCTestCase {
+    func testModelLoadFailureUsesTypedAdapterContext() {
+        let reference = HubLoRAAdapterReference(
+            repoID: "example/address-parser",
+            revisionSHA: "0123456789abcdef0123456789abcdef01234567"
+        )
+        let adapterFailure = ModelLoadFailure(
+            modelID: "example/base-model",
+            context: .languageAdapter(
+                reference: reference,
+                operation: .activate
+            ),
+            message: "The selected module does not exist."
+        )
+        let deactivationFailure = ModelLoadFailure(
+            modelID: "example/base-model",
+            context: .languageAdapter(
+                reference: reference,
+                operation: .deactivate
+            ),
+            message: "The server rejected the transition."
+        )
+        let modelFailure = ModelLoadFailure(
+            modelID: "example/base-model",
+            context: .model,
+            message: "A LoRA adapter was mentioned in this model error."
+        )
+
+        XCTAssertEqual(adapterFailure.adapterReference, reference)
+        XCTAssertEqual(adapterFailure.title, "Couldn’t activate LoRA adapter")
+        XCTAssertEqual(deactivationFailure.adapterReference, reference)
+        XCTAssertEqual(deactivationFailure.title, "Couldn’t disable LoRA adapter")
+        XCTAssertNil(modelFailure.adapterReference)
+        XCTAssertEqual(modelFailure.title, "Couldn’t load base-model")
+    }
+
     func testReferenceRoundTripsAndNormalizesUnsafePathComponents() throws {
         let reference = HubLoRAAdapterReference(
             repoID: "example/address-parser",

@@ -1,5 +1,5 @@
 .PHONY: build verify clean test python-test
-.PHONY: xcode-generate xcode-build xcode-run xcode-test xcode-smoke xcode-lifecycle-smoke
+.PHONY: xcode-generate xcode-verify-generated xcode-build xcode-run xcode-test xcode-smoke xcode-lifecycle-smoke
 
 XCODE_DERIVED_DATA ?= build/NativDevelopmentDerivedData
 export DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
@@ -23,6 +23,9 @@ python-test:
 
 xcode-generate:
 	xcodegen generate
+
+xcode-verify-generated: xcode-generate
+	git diff --exit-code -- Nativ.xcodeproj/project.pbxproj
 
 xcode-build: xcode-generate
 	xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug -derivedDataPath $(XCODE_DERIVED_DATA) CODE_SIGNING_ALLOWED=NO build

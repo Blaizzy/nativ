@@ -228,12 +228,13 @@ struct ModelsView: View {
 
                         ForEach(filteredLocalModels) { localModel in
                             let preloadSlots = preloadSlots(for: localModel)
+                            let selectedPreloadSlots = selectedPreloadSlots(
+                                for: localModel.repoID
+                            )
                             InstalledModelRow(
                                 localModel: localModel,
                                 preloadSlots: preloadSlots,
-                                selectedPreloadSlots: selectedPreloadSlots(
-                                    for: localModel.repoID
-                                ),
+                                selectedPreloadSlots: selectedPreloadSlots,
                                 preferredPreloadSlot: preferredPreloadSlot(
                                     among: preloadSlots
                                 ),
@@ -241,7 +242,9 @@ struct ModelsView: View {
                                 isModelLoading: model.modelLoadingID
                                     == localModel.repoID,
                                 modelLoadingPercentage: model.modelLoadingPercentage,
-                                adapterName: selectedAdapterName(for: localModel.repoID),
+                                adapterName: selectedLanguageAdapterName(
+                                    for: localModel.repoID
+                                ),
                                 isDeleting: localLibrary.deletingModelIDs.contains(
                                     localModel.repoID),
                                 canDelete: localModel.isDeletable && !model.runtimeTransitionInProgress
@@ -477,8 +480,10 @@ struct ModelsView: View {
             })
     }
 
-    private func selectedAdapterName(for modelID: String) -> String? {
-        guard let reference = model.settings.normalized().languageAdapter(for: modelID),
+    private func selectedLanguageAdapterName(for modelID: String) -> String? {
+        let settings = model.settings.normalized()
+        guard settings.languageModelID == modelID,
+              let reference = settings.languageAdapter(for: modelID),
               adapterCatalog.localURL(for: reference, baseModelID: modelID) != nil
         else {
             return nil
@@ -1021,7 +1026,7 @@ private struct InstalledModelRow: View {
                                 ModelPill(
                                     title: adapterName,
                                     systemImage: "point.3.connected.trianglepath.dotted",
-                                    color: .purple
+                                    color: .blue
                                 )
                             }
                         }
@@ -1102,7 +1107,7 @@ private struct InstalledModelRow: View {
                 .accessibilityLabel("Show \(localModel.repoID) in Finder")
             }
 
-            ModelDownloadActionButton(
+            ModelRowActionButton(
                 title: canDelete
                     ? "Delete installed model"
                     : "Stop the server before deleting this model",
@@ -1416,14 +1421,14 @@ private struct ModelDownloadProgressControl: View {
         ZStack {
             if isHovering {
                 HStack(spacing: 6) {
-                    ModelDownloadActionButton(
+                    ModelRowActionButton(
                         title: isPaused ? "Resume download" : "Pause download",
                         systemImage: isPaused ? "play.fill" : "pause.fill",
                         tint: isPaused ? .green : .orange,
                         action: onPauseResume
                     )
 
-                    ModelDownloadActionButton(
+                    ModelRowActionButton(
                         title: "Remove download",
                         systemImage: "trash",
                         tint: .red,
@@ -1472,40 +1477,6 @@ private struct ModelDownloadProgressControl: View {
 
     private var displayedProgress: Double {
         min(max(progress, 0.025), 1)
-    }
-}
-
-private struct ModelDownloadActionButton: View {
-    let title: String
-    let systemImage: String
-    let tint: Color
-    var isDisabled = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(
-                    isDisabled
-                        ? Color.secondary.opacity(0.45) : (isHovering ? tint : Color.secondary)
-                )
-                .frame(width: 30, height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            isHovering && !isDisabled
-                                ? tint.opacity(0.13) : Color.secondary.opacity(0.10))
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .onHover { isHovering = $0 && !isDisabled }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .help(title)
-        .accessibilityLabel(title)
     }
 }
 
@@ -1651,53 +1622,6 @@ private struct ModelsEmptyState: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 260)
-    }
-}
-
-private struct ModelRowBackground: ViewModifier {
-    let isHighlighted: Bool
-    let isHovered: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(backgroundColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(borderColor, lineWidth: borderWidth)
-            )
-    }
-
-    private var backgroundColor: Color {
-        if isHighlighted {
-            return Color.accentColor.opacity(0.38)
-        }
-        if isHovered {
-            return Color.accentColor.opacity(0.08)
-        }
-        return Color(nsColor: .controlBackgroundColor)
-    }
-
-    private var borderColor: Color {
-        if isHighlighted {
-            return Color.accentColor.opacity(0.90)
-        }
-        if isHovered {
-            return Color.accentColor.opacity(0.40)
-        }
-        return Color(nsColor: .separatorColor)
-    }
-
-    private var borderWidth: CGFloat {
-        isHighlighted ? 1.5 : (isHovered ? 1 : 0.5)
-    }
-}
-
-extension View {
-    fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
-        modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
     }
 }
 

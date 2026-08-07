@@ -27,14 +27,44 @@ private struct ModelRuntimeTransition {
     let id: UUID
     let kind: ModelRuntimeTransitionKind
     let targetID: String?
+    let failureContext: ModelLoadFailureContext
+}
+
+enum ModelLoadFailureContext: Equatable, Sendable {
+    case model
+    case languageAdapter(
+        reference: HubLoRAAdapterReference,
+        operation: LanguageAdapterOperation
+    )
+}
+
+enum LanguageAdapterOperation: Equatable, Sendable {
+    case activate
+    case deactivate
 }
 
 struct ModelLoadFailure: Equatable, Identifiable, Sendable {
     let id = UUID()
     let modelID: String?
+    let context: ModelLoadFailureContext
     let message: String
 
+    var adapterReference: HubLoRAAdapterReference? {
+        guard case .languageAdapter(let reference, _) = context else {
+            return nil
+        }
+        return reference
+    }
+
     var title: String {
+        switch context {
+        case .languageAdapter(_, .activate):
+            return "Couldn’t activate LoRA adapter"
+        case .languageAdapter(_, .deactivate):
+            return "Couldn’t disable LoRA adapter"
+        case .model:
+            break
+        }
         guard let modelID else {
             return "Couldn’t load model"
         }
@@ -366,6 +396,10 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
                 settings = correctedSettings
                 setModelLoadFailure(
                     modelID: languageModelID,
+                    context: .languageAdapter(
+                        reference: reference,
+                        operation: .activate
+                    ),
                     message: "The selected LoRA adapter is no longer available locally. Download it again from Hugging Face."
                 )
             }
@@ -597,6 +631,10 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
            adapterCatalog.localURL(for: reference, baseModelID: modelID) == nil {
             setModelLoadFailure(
                 modelID: modelID,
+                context: .languageAdapter(
+                    reference: reference,
+                    operation: .activate
+                ),
                 message: "Download and verify this adapter from Hugging Face before activating it."
             )
             return
@@ -607,7 +645,14 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             var nextSettings = settings
             nextSettings.setLanguageAdapter(reference, for: modelID)
             settings = nextSettings
-            switchPreloadedModel(to: modelID, for: .language)
+            switchPreloadedModel(
+                to: modelID,
+                for: .language,
+                failureContext: adapterFailureContext(
+                    requestedReference: reference,
+                    currentReference: currentSettings.languageAdapter(for: modelID)
+                )
+            )
             return
         }
 
@@ -633,6 +678,10 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             ) else {
                 setModelLoadFailure(
                     modelID: modelID,
+                    context: .languageAdapter(
+                        reference: reference,
+                        operation: .activate
+                    ),
                     message: "The downloaded adapter files are missing. Download the adapter again from Hugging Face."
                 )
                 return
@@ -642,9 +691,14 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             path = nil
         }
 
+        let failureContext = adapterFailureContext(
+            requestedReference: reference,
+            currentReference: currentSettings.languageAdapter(for: modelID)
+        )
         guard let transitionID = beginRuntimeTransition(
             kind: .adapter,
-            targetID: reference?.id
+            targetID: reference?.id,
+            failureContext: failureContext
         ) else { return }
         notifyMenuStateChanged()
         let client = NativModelLoadClient(
@@ -686,10 +740,30 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             } catch {
                 self.setModelLoadFailure(
                     modelID: modelID,
-                    message: "Couldn’t activate the LoRA adapter: \(error.localizedDescription)"
+                    context: failureContext,
+                    message: error.localizedDescription
                 )
             }
         }
+    }
+
+    private func adapterFailureContext(
+        requestedReference: HubLoRAAdapterReference?,
+        currentReference: HubLoRAAdapterReference?
+    ) -> ModelLoadFailureContext {
+        if let requestedReference {
+            return .languageAdapter(
+                reference: requestedReference,
+                operation: .activate
+            )
+        }
+        if let currentReference {
+            return .languageAdapter(
+                reference: currentReference,
+                operation: .deactivate
+            )
+        }
+        return .model
     }
 
     @discardableResult
@@ -744,7 +818,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     func switchPreloadedModel(
         to modelID: String?,
-        for slot: ModelPreloadSlot
+        for slot: ModelPreloadSlot,
+        failureContext: ModelLoadFailureContext = .model
     ) {
         guard !runtimeTransitionInProgress else {
             return
@@ -766,7 +841,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         settings = nextSettings
         guard let transitionID = beginRuntimeTransition(
             kind: .model,
-            targetID: normalizedModelID
+            targetID: normalizedModelID,
+            failureContext: failureContext
         ) else { return }
         notifyMenuStateChanged()
 
@@ -937,6 +1013,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
                     ) {
                     self.setModelLoadFailure(
                         modelID: self.modelSwitchTargetID,
+                        context: self.runtimeTransition?.failureContext ?? .model,
                         message: message
                     )
                 }
@@ -1064,13 +1141,15 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     private func beginRuntimeTransition(
         kind: ModelRuntimeTransitionKind,
-        targetID: String?
+        targetID: String?,
+        failureContext: ModelLoadFailureContext = .model
     ) -> UUID? {
         guard runtimeTransition == nil else { return nil }
         let transition = ModelRuntimeTransition(
             id: UUID(),
             kind: kind,
-            targetID: targetID
+            targetID: targetID,
+            failureContext: failureContext
         )
         runtimeTransition = transition
         return transition.id
@@ -1135,8 +1214,16 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         }
     }
 
-    private func setModelLoadFailure(modelID: String?, message: String) {
-        modelLoadFailure = ModelLoadFailure(modelID: modelID, message: message)
+    private func setModelLoadFailure(
+        modelID: String?,
+        context: ModelLoadFailureContext = .model,
+        message: String
+    ) {
+        modelLoadFailure = ModelLoadFailure(
+            modelID: modelID,
+            context: context,
+            message: message
+        )
         appendLog("\n\(message)\n")
         notifyMenuStateChanged()
     }

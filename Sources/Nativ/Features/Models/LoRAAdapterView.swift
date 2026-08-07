@@ -101,6 +101,7 @@ struct LoRAAdapterSheet: View {
                                             || (model.adapterSwitchTargetID == nil
                                                 && activeReference == adapter.reference)
                                     ),
+                                operationFailure: operationFailure(for: adapter),
                                 onActivate: {
                                     model.activateLanguageAdapter(
                                         adapter.reference,
@@ -221,6 +222,26 @@ struct LoRAAdapterSheet: View {
 
     private var activeReference: HubLoRAAdapterReference? {
         model.settings.normalized().languageAdapter(for: baseModelID)
+    }
+
+    private func operationFailure(
+        for adapter: InstalledLoRAAdapter
+    ) -> AdapterOperationFailure? {
+        guard let failure = model.modelLoadFailure,
+              failure.modelID == baseModelID,
+              case .languageAdapter(let reference, let operation) = failure.context,
+              reference == adapter.reference
+        else {
+            return nil
+        }
+        let title: String
+        switch operation {
+        case .activate:
+            title = "Can’t use with this model"
+        case .deactivate:
+            title = "Couldn’t disable this adapter"
+        }
+        return AdapterOperationFailure(title: title, message: failure.message)
     }
 
     private var searchTaskID: String {
@@ -429,103 +450,180 @@ private struct InstalledLoRAAdapterRow: View {
     let isActive: Bool
     let isSwitching: Bool
     let isSwitchTarget: Bool
+    let operationFailure: AdapterOperationFailure?
     let onActivate: () -> Void
     let onDisable: () -> Void
     let deleteDisabled: Bool
     let onDelete: () -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.title3)
-                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .frame(width: 38, height: 38)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(
-                            isActive
-                                ? Color.accentColor.opacity(0.12)
-                                : Color.secondary.opacity(0.08)
-                        )
-                )
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(adapter.displayName)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    if isActive {
-                        Label("Active", systemImage: "checkmark.circle.fill")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.green))
-                    }
-                }
-                Text(adapter.reference.repoID)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                selectionControl
+                transitionStatus
+                deleteButton
+            }
+            .padding(14)
+
+            if let operationFailure {
+                AdapterOperationErrorView(failure: operationFailure)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .modelRowBackground(isHighlighted: isActive, isHovered: isHovered)
+    }
+
+    private var selectionControl: some View {
+        Button(action: toggleSelection) {
+            HStack(spacing: 14) {
+                adapterIcon
+                adapterDetails
+                Spacer(minLength: 12)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSwitching)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(selectionHelp)
+        .accessibilityLabel(selectionHelp)
+    }
+
+    private var adapterIcon: some View {
+        Image(systemName: "point.3.connected.trianglepath.dotted")
+            .font(.system(size: 19, weight: .medium))
+            .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+            .frame(width: 46, height: 46)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(
+                        isActive
+                            ? Color(nsColor: .controlBackgroundColor)
+                            : Color.secondary.opacity(0.10)
+                    )
+            )
+    }
+
+    private var adapterDetails: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Text(adapter.displayName)
+                    .font(.body.weight(.semibold))
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(
-                    "Rank \(adapter.rank) · \(adapter.tensorCount) tensors · \(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))"
-                )
-                .font(.caption2)
+                if isActive {
+                    Label("Active", systemImage: "checkmark.circle.fill")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.10)))
+                }
+            }
+            Text(adapter.reference.repoID)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            }
-            Spacer()
-            HStack(spacing: 8) {
-                if isSwitchTarget {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.small)
-                        Text(isActive ? "Disabling…" : "Loading…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else if isActive {
-                    Button("Disable", action: onDisable)
-                        .disabled(isSwitching)
-                } else {
-                    Button("Use", action: onActivate)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isSwitching)
-                }
-                Button(action: onDelete) {
-                    Image(systemName: "trash.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.red)
-                .disabled(deleteDisabled)
-                .accessibilityLabel("Delete adapter")
-                .help(
-                    isActive
-                        ? "Disable this adapter before deleting it"
-                        : "Delete this adapter"
-                )
-            }
-            .frame(minWidth: 150, alignment: .trailing)
+                .truncationMode(.middle)
+            Text(adapterMetadata)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.secondary.opacity(0.10)))
         }
-        .padding(12)
-        .frame(minHeight: 78)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var transitionStatus: some View {
+        if isSwitchTarget {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(isActive ? "Disabling…" : "Loading…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var deleteButton: some View {
+        ModelRowActionButton(
+            title: isActive
+                ? "Disable this adapter before deleting it"
+                : "Delete this adapter",
+            systemImage: "trash",
+            tint: .red,
+            isDisabled: deleteDisabled,
+            action: onDelete
+        )
+    }
+
+    private var adapterMetadata: String {
+        let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        return "Rank \(adapter.rank) · \(adapter.tensorCount) tensors · \(size)"
+    }
+
+    private func toggleSelection() {
+        guard !isSwitching else { return }
+        if isActive {
+            onDisable()
+        } else {
+            onActivate()
+        }
+    }
+
+    private var selectionHelp: String {
+        isActive
+            ? "Disable \(adapter.displayName)"
+            : "Use \(adapter.displayName)"
+    }
+}
+
+private struct AdapterOperationFailure {
+    let title: String
+    let message: String
+}
+
+private struct AdapterOperationErrorView: View {
+    let failure: AdapterOperationFailure
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Color.red.opacity(0.10)))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(failure.title)
+                    .font(.caption.weight(.semibold))
+                Text(failure.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(
-                    isActive
-                        ? Color.accentColor.opacity(0.10)
-                        : Color(nsColor: .controlBackgroundColor)
-                )
+            RoundedRectangle(cornerRadius: 9)
+                .fill(Color.red.opacity(0.06))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(
-                    isActive
-                        ? Color.accentColor.opacity(0.5)
-                        : Color(nsColor: .separatorColor),
-                    lineWidth: 0.5
-                )
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color.red.opacity(0.16), lineWidth: 0.5)
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(failure.title): \(failure.message)")
     }
 }
 
