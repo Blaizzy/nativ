@@ -104,6 +104,88 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
 
+    func testRequiresEveryShardReferencedBySafetensorsIndex() async throws {
+        try makeShardedTextModelSnapshot(
+            repoID: "org/incomplete-sharded-model",
+            shardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+            availableShardFilenames: ["model-00001-of-00002.safetensors"]
+        )
+        try makeShardedTextModelSnapshot(
+            repoID: "org/complete-sharded-model",
+            shardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+            availableShardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ]
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+
+        XCTAssertFalse(models.contains { $0.repoID == "org/incomplete-sharded-model" })
+        XCTAssertTrue(models.contains { $0.repoID == "org/complete-sharded-model" })
+    }
+
+    func testRejectsMalformedOrEmptySafetensorsIndex() async throws {
+        try makeShardedTextModelSnapshot(
+            repoID: "org/malformed-index",
+            shardFilenames: ["model-00001-of-00001.safetensors"],
+            availableShardFilenames: ["model-00001-of-00001.safetensors"]
+        )
+        try write(
+            "{ not valid JSON",
+            to: snapshotURL(repoID: "org/malformed-index")
+                .appendingPathComponent("model.safetensors.index.json")
+        )
+
+        try makeShardedTextModelSnapshot(
+            repoID: "org/empty-index",
+            shardFilenames: ["model-00001-of-00001.safetensors"],
+            availableShardFilenames: ["model-00001-of-00001.safetensors"]
+        )
+        let emptyIndex: [String: [String: String]] = ["weight_map": [:]]
+        try writeJSON(
+            emptyIndex,
+            to: snapshotURL(repoID: "org/empty-index")
+                .appendingPathComponent("model.safetensors.index.json")
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+
+        XCTAssertFalse(models.contains { $0.repoID == "org/malformed-index" })
+        XCTAssertFalse(models.contains { $0.repoID == "org/empty-index" })
+    }
+
+    func testAcceptsCompletedHuggingFaceShardSymlinks() async throws {
+        let repoID = "org/symlinked-sharded-model"
+        let shardFilename = "model-00001-of-00001.safetensors"
+        try makeShardedTextModelSnapshot(
+            repoID: repoID,
+            shardFilenames: [shardFilename],
+            availableShardFilenames: []
+        )
+
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let blobURL = repository.appendingPathComponent("blobs/completed-shard")
+        try write("weights", to: blobURL)
+        try FileManager.default.createSymbolicLink(
+            at: snapshot.appendingPathComponent(shardFilename),
+            withDestinationURL: blobURL
+        )
+
+        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+
+        XCTAssertTrue(models.contains { $0.repoID == repoID })
+    }
+
     func testSelectsAnyInstalledSpeechToTextModelWithoutKnownModelNames() {
         let models = [
             makeModel(repoID: "owner/text-only", capabilities: [.text]),
@@ -224,6 +306,46 @@ final class LocalModelDiscoveryTests: XCTestCase {
                 to: snapshot.appendingPathComponent("1_Pooling/config.json")
             )
         }
+    }
+
+    private func makeShardedTextModelSnapshot(
+        repoID: String,
+        shardFilenames: [String],
+        availableShardFilenames: Set<String>
+    ) throws {
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let revision = snapshot.lastPathComponent
+
+        try write(revision, to: repository.appendingPathComponent("refs/main"))
+        try writeJSON(
+            ["model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]],
+            to: snapshot.appendingPathComponent("config.json")
+        )
+
+        var weightMap: [String: String] = [:]
+        for (index, filename) in shardFilenames.enumerated() {
+            weightMap["model.layers.\(index).weight"] = filename
+            if availableShardFilenames.contains(filename) {
+                try write("weights", to: snapshot.appendingPathComponent(filename))
+            }
+        }
+        try writeJSON(
+            ["weight_map": weightMap],
+            to: snapshot.appendingPathComponent("model.safetensors.index.json")
+        )
+    }
+
+    private func snapshotURL(repoID: String) -> URL {
+        temporaryCache
+            .appendingPathComponent(
+                "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
+                isDirectory: true
+            )
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent("test-revision", isDirectory: true)
     }
 
     private func writeJSON(_ object: Any, to url: URL) throws {
