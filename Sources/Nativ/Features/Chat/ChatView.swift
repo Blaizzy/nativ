@@ -1158,7 +1158,8 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
+                let consentRequirement = ChatToolConsentRequirement.resolve(toolName: toolCall.function?.name)
+                if consentRequirement.isRequired {
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -1182,7 +1183,7 @@ final class ChatViewModel: ObservableObject {
                             toolMessageID,
                             in: queuedRequest.sessionID,
                             status: .declined,
-                            content: ChatSwitchModelToolExecutor().declinedPayload(),
+                            content: consentRequirement.declinedPayload(),
                             attachments: []
                         )
                         continue
@@ -1195,43 +1196,48 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                     }
-                    guard let appModel else {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: ChatSwitchModelToolError.appModelUnavailable
-                            ),
-                            attachments: []
-                        )
+
+                    if case .switchModel = consentRequirement {
+                        guard let appModel else {
+                            updateToolMessage(
+                                toolMessageID,
+                                in: queuedRequest.sessionID,
+                                status: .failed,
+                                content: ChatSwitchModelToolExecutor().failurePayload(
+                                    operation: ChatSwitchModelToolRegistry.toolName,
+                                    error: ChatSwitchModelToolError.appModelUnavailable
+                                ),
+                                attachments: []
+                            )
+                            continue
+                        }
+                        do {
+                            let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
+                            activeSettings.languageModelID = appModel.settings.normalized().languageModelID
+                            updateToolMessage(
+                                toolMessageID,
+                                in: queuedRequest.sessionID,
+                                status: .succeeded,
+                                content: content,
+                                attachments: []
+                            )
+                            appModel.refreshMetricsIfRunning(force: true)
+                        } catch {
+                            updateToolMessage(
+                                toolMessageID,
+                                in: queuedRequest.sessionID,
+                                status: .failed,
+                                content: ChatSwitchModelToolExecutor().failurePayload(
+                                    operation: ChatSwitchModelToolRegistry.toolName,
+                                    error: error
+                                ),
+                                attachments: []
+                            )
+                        }
                         continue
                     }
-                    do {
-                        let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
-                        activeSettings.languageModelID = appModel.settings.normalized().languageModelID
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .succeeded,
-                            content: content,
-                            attachments: []
-                        )
-                        appModel.refreshMetricsIfRunning(force: true)
-                    } catch {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: error
-                            ),
-                            attachments: []
-                        )
-                    }
-                    continue
+                    // An approved MCP call falls through to the shared
+                    // execution path below, which already routes it to the host.
                 }
 
                 do {
@@ -2442,9 +2448,7 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
+            consentPromptText
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2521,6 +2525,28 @@ private struct ChatAgentStepCell: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 7)
         }
+    }
+
+    private var consentPromptText: Text {
+        if message.toolName == ChatSwitchModelToolRegistry.toolName {
+            return Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept.")
+        }
+        if let toolName = message.toolName,
+           toolName.hasPrefix(MCPHostManager.toolNamePrefix) {
+            guard let split = MCPToolDisplayName.split(toolName) else {
+                return Text("The model wants to run ")
+                    + Text(verbatim: toolName).bold()
+                    + Text(". This runs outside Nativ and may change data.")
+            }
+            return Text("The model wants to run ")
+                + Text(verbatim: split.tool).bold()
+                + Text(" on ")
+                + Text(verbatim: split.server).bold()
+                + Text(". This runs outside Nativ and may change data.")
+        }
+        return Text("The model wants to run this tool. It needs your approval first.")
     }
 
     private var requestedModelID: String {
