@@ -2488,7 +2488,7 @@ private struct AudioCaptureRecordRow: View {
 
         var tint: Color {
             switch self {
-            case .summary: .white
+            case .summary: .primary
             case .transcript: .primary
             }
         }
@@ -2687,7 +2687,7 @@ private struct AudioCaptureRecordRow: View {
             .background(
                 isSelected
                     ? Color.accentColor
-                    : (isHovered ? Color.white.opacity(0.08) : Color.clear),
+                    : (isHovered ? Color.primary.opacity(0.06) : Color.clear),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .contentShape(Rectangle())
