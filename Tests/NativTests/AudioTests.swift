@@ -304,7 +304,7 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(1.0)))
     }
 
-    func testChordTapDoesNotArmDoubleTap() {
+    func testExtraModifierDoesNotInvalidateDoubleTap() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
@@ -328,7 +328,7 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
                 now: origin
             )
         )
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.1)))
     }
 
     func testKeyPressDoesNotArmDoubleTap() {
@@ -360,6 +360,60 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
 
         XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(2)))
         XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(2.2)))
+    }
+
+    func testDoubleTapWithinWidenedWindowToggles() {
+        var state = VoiceModifierToggleShortcutState()
+        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.5)))
+    }
+
+    func testEntersHeldWithExtraModifier() {
+        var state = VoiceModifierToggleShortcutState()
+        let shortcut: VoiceShortcutModifiers = [.control, .option, .command]
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.control, .option, .command, .shift],
+                shortcutModifiers: shortcut,
+                now: origin
+            )
+        )
+        XCTAssertTrue(state.isHeld)
+        XCTAssertFalse(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut, now: origin)
+        )
+        XCTAssertTrue(tap(&state, shortcut: shortcut, at: origin.addingTimeInterval(0.2)))
+    }
+}
+
+final class PushToTalkHoldStateTests: XCTestCase {
+    private let origin = Date(timeIntervalSinceReferenceDate: 0)
+
+    func testRisingEdgeStartsAndSustainedIsNoChange() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: true, now: origin.addingTimeInterval(0.05)))
+        XCTAssertTrue(state.isHeld)
+    }
+
+    func testTransientDropWithinGraceKeepsHeld() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: false, now: origin.addingTimeInterval(0.05)))
+        XCTAssertTrue(state.isHeld)
+        XCTAssertNil(state.update(rawHeld: true, now: origin.addingTimeInterval(0.08)))
+        XCTAssertTrue(state.isHeld)
+    }
+
+    func testSustainedReleaseAfterGraceStops() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: false, now: origin.addingTimeInterval(0.05)))
+        XCTAssertEqual(
+            state.update(rawHeld: false, now: origin.addingTimeInterval(0.2)),
+            false
+        )
+        XCTAssertFalse(state.isHeld)
     }
 }
 
@@ -654,10 +708,17 @@ final class VoiceAudioRetentionTests: XCTestCase {
     }
 }
 
+private struct VoiceStoredPreferencesPayload: Codable {
+    let version: Int?
+    let recordShortcut: VoiceShortcut
+    let retryShortcut: VoiceShortcut
+    let isHandsFreeEnabled: Bool?
+}
+
 @MainActor
 final class VoiceShortcutPreferencesTests: XCTestCase {
     func testDefaultsMatchExistingVoiceCommands() {
-        XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Fn + Control")
+        XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Control + Option + Command")
         XCTAssertEqual(VoiceShortcut.retryDefault.displayName, "Fn + R")
 
         let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
@@ -729,6 +790,76 @@ final class VoiceShortcutPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.recordShortcut, .recordDefault)
         XCTAssertEqual(restored.retryShortcut, .retryDefault)
         XCTAssertTrue(restored.isHandsFreeEnabled)
+    }
+
+    func testMigratesLegacyDefaultRecordShortcut() throws {
+        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let payload = VoiceStoredPreferencesPayload(
+            version: nil,
+            recordShortcut: .legacyRecordDefault,
+            retryShortcut: .retryDefault,
+            isHandsFreeEnabled: true
+        )
+        defaults.set(
+            try JSONEncoder().encode(payload),
+            forKey: "voiceShortcutPreferences.v1"
+        )
+
+        let restored = VoiceShortcutPreferences(defaults: defaults)
+        XCTAssertEqual(restored.recordShortcut, .recordDefault)
+
+        let persisted = try XCTUnwrap(defaults.data(forKey: "voiceShortcutPreferences.v1"))
+        let decoded = try JSONDecoder().decode(
+            VoiceStoredPreferencesPayload.self,
+            from: persisted
+        )
+        XCTAssertEqual(decoded.version, 2)
+        XCTAssertEqual(decoded.recordShortcut, .recordDefault)
+    }
+
+    func testPreservesCustomShortcutDuringMigration() throws {
+        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let custom = VoiceShortcut(
+            keyCode: nil,
+            keyDisplay: nil,
+            modifiers: [.control, .shift]
+        )
+        let payload = VoiceStoredPreferencesPayload(
+            version: nil,
+            recordShortcut: custom,
+            retryShortcut: .retryDefault,
+            isHandsFreeEnabled: true
+        )
+        defaults.set(
+            try JSONEncoder().encode(payload),
+            forKey: "voiceShortcutPreferences.v1"
+        )
+
+        let restored = VoiceShortcutPreferences(defaults: defaults)
+        XCTAssertEqual(restored.recordShortcut, custom)
+    }
+
+    func testDoesNotRemigrateVersionedLegacyShortcut() throws {
+        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let payload = VoiceStoredPreferencesPayload(
+            version: 2,
+            recordShortcut: .legacyRecordDefault,
+            retryShortcut: .retryDefault,
+            isHandsFreeEnabled: true
+        )
+        defaults.set(
+            try JSONEncoder().encode(payload),
+            forKey: "voiceShortcutPreferences.v1"
+        )
+
+        let restored = VoiceShortcutPreferences(defaults: defaults)
+        XCTAssertEqual(restored.recordShortcut, .legacyRecordDefault)
     }
 
     func testAddsHandsFreeModeDefaultToLegacyPreferences() throws {
