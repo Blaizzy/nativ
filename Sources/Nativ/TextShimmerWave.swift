@@ -2,10 +2,11 @@ import SwiftUI
 
 /// A per-character shimmer *wave* on a single `Text`: a bright band travels
 /// across the glyphs, each character easing from a dim base to a bright
-/// highlight (with a subtle lift) in sequence. Uses an `AttributedString` with
-/// per-character color + baseline offset — so the font, shaping, kerning, and
-/// truncation are identical to normal text (no per-glyph layout breakage).
-/// Animates only while `active`; otherwise it's plain primary text.
+/// highlight (color + subtle lift + depth) in sequence. Uses an
+/// `AttributedString` with per-character attributes, so the font, shaping,
+/// kerning, and truncation are identical to normal text (no per-glyph layout
+/// breakage). The band wraps seamlessly (no dead moment between passes),
+/// throttles to ~30 fps, and honors Reduce Motion. Animates only while `active`.
 struct TextShimmerWave: View {
     let text: String
     var active: Bool
@@ -20,10 +21,17 @@ struct TextShimmerWave: View {
     /// Vertical lift (points) of the brightest characters.
     var lift: Double = 1.5
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         if active {
-            TimelineView(.animation) { timeline in
-                Text(attributed(at: timeline.date.timeIntervalSinceReferenceDate))
+            if reduceMotion {
+                // No sweep — a static, gently-emphasized title.
+                Text(text).foregroundStyle(highlight)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+                    Text(attributed(at: timeline.date.timeIntervalSinceReferenceDate))
+                }
             }
         } else {
             Text(text).foregroundStyle(Color.primary)
@@ -35,19 +43,25 @@ struct TextShimmerWave: View {
         let count = text.count
         guard count > 0 else { return attr }
 
-        let travel = Double(count) + spread * 2
+        // Head wraps over the string length so the band exits the right edge as
+        // it re-enters the left — a continuous loop with no all-dim gap.
+        let period = Double(count)
         let progress = time.truncatingRemainder(dividingBy: duration) / duration
-        let head = progress * travel - spread  // sweeps -spread … count+spread, looping
+        let head = progress * period
 
         var index = attr.startIndex
         var i = 0
         while index < attr.endIndex {
             let next = attr.index(afterCharacter: index)
-            let distance = abs(head - Double(i))
-            let raw = max(0, 1 - distance / spread)      // triangular reach 0…1
-            let widened = min(1, raw * whiteGain)        // clip the top → wider bright plateau
+            let linear = abs(head - Double(i))
+            let distance = min(linear, period - linear)   // circular distance → seamless wrap
+            let raw = max(0, 1 - distance / spread)
+            let widened = min(1, raw * whiteGain)          // wider bright plateau
             let eased = widened * widened * (3 - 2 * widened)  // smoothstep
-            attr[index ..< next].foregroundColor = base.mix(with: highlight, by: eased)
+            // Color wave + a touch of opacity depth on the dim base.
+            attr[index ..< next].foregroundColor = base
+                .mix(with: highlight, by: eased)
+                .opacity(0.85 + 0.15 * eased)
             attr[index ..< next].baselineOffset = eased * lift
             index = next
             i += 1
