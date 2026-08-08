@@ -18,5 +18,11 @@ let package = Package(
             // process-per-invocation tool, not a concurrency-heavy service.
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(
+            name: "nativTests",
+            dependencies: ["nativ"],
+            path: "Tests/nativTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

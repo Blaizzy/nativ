@@ -10,8 +10,8 @@ struct Transcribe: AsyncParsableCommand {
 
     func run() async throws {
         let config = NativConfig.resolve(baseURL: global.baseURL, apiKey: global.apiKey, model: model)
-        guard let modelID = config.defaultModel else {
-            throw CLIError.usage("No model set. Pass --model <stt-model>.")
+        guard let modelID = config.resolvedSTTModel else {
+            throw CLIError.usage("No speech-to-text model set. Pass --model <id>, set NATIV_STT_MODEL, or `nativ config set --stt-model <id>`.")
         }
         let url = URL(fileURLWithPath: (file as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: url.path) else {

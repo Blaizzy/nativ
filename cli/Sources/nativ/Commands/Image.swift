@@ -12,8 +12,8 @@ struct Image: AsyncParsableCommand {
 
     func run() async throws {
         let config = NativConfig.resolve(baseURL: global.baseURL, apiKey: global.apiKey, model: model)
-        guard let modelID = config.defaultModel else {
-            throw CLIError.usage("No model set. Pass --model <image-model>.")
+        guard let modelID = config.resolvedImageModel else {
+            throw CLIError.usage("No image model set. Pass --model <id>, set NATIV_IMAGE_MODEL, or `nativ config set --image-model <id>`.")
         }
         let prompt = promptWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { throw CLIError.usage("No prompt.") }
