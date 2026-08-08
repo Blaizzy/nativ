@@ -28,6 +28,7 @@ swift build          # produces .build/debug/nativ
 | `nativ embed` | `/v1/embeddings` (JSON, or `--dims`) |
 | `nativ image "<prompt>"` | `/v1/images/generations` → saves a file |
 | `nativ transcribe <file>` | multipart `/v1/audio/transcriptions` |
+| `nativ speak "<text>"` | `/v1/audio/speech` → saves an audio file |
 | `nativ config show \| set \| path` | read/write `cli.json` |
 | `nativ agent [--json]` | full reference for coding agents |
 
@@ -45,6 +46,7 @@ flags; `nativ config set …` writes it standalone.
 | embedding model | `--model` | `NATIV_EMBEDDING_MODEL` | `embeddingModel` |
 | image model | `--model` | `NATIV_IMAGE_MODEL` | `imageModel` |
 | STT model | `--model` | `NATIV_STT_MODEL` | `sttModel` |
+| TTS model | `--model` | `NATIV_TTS_MODEL` | `ttsModel` |
 | model search path | — | `NATIV_MODEL_PATH` | `modelSearchPath` |
 | server binary | — | `NATIV_SERVER_BIN` | — |
 

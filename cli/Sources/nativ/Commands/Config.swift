@@ -27,6 +27,7 @@ struct Config: AsyncParsableCommand {
             line("embedding-model", c.embeddingModel)
             line("image-model", c.imageModel)
             line("stt-model", c.sttModel)
+            line("tts-model", c.ttsModel)
             line("model-path", c.modelSearchPath)
             print("\ncli.json: \(NativConfig.filePath)\(FileManager.default.fileExists(atPath: NativConfig.filePath) ? "" : " (not written yet)")")
         }
@@ -40,17 +41,18 @@ struct Config: AsyncParsableCommand {
         @Option(name: .customLong("embedding-model"), help: "Model for `nativ embed`.") var embeddingModel: String?
         @Option(name: .customLong("image-model"), help: "Model for `nativ image`.") var imageModel: String?
         @Option(name: .customLong("stt-model"), help: "Model for `nativ transcribe`.") var sttModel: String?
+        @Option(name: .customLong("tts-model"), help: "Model for `nativ speak`.") var ttsModel: String?
         @Option(name: .customLong("model-path"), help: "Directory scanned by `nativ models list`.") var modelPath: String?
 
         func run() async throws {
-            let all = [baseURL, apiKey, model, embeddingModel, imageModel, sttModel, modelPath]
+            let all = [baseURL, apiKey, model, embeddingModel, imageModel, sttModel, ttsModel, modelPath]
             guard all.contains(where: { $0 != nil }) else {
-                throw CLIError.usage("Nothing to set. Pass one or more of --base-url/--api-key/--model/--embedding-model/--image-model/--stt-model/--model-path.")
+                throw CLIError.usage("Nothing to set. Pass one or more of --base-url/--api-key/--model/--embedding-model/--image-model/--stt-model/--tts-model/--model-path.")
             }
             try NativConfig.write(
                 baseURL: baseURL, apiKey: apiKey, defaultModel: model,
                 embeddingModel: embeddingModel, imageModel: imageModel,
-                sttModel: sttModel, modelSearchPath: modelPath
+                sttModel: sttModel, ttsModel: ttsModel, modelSearchPath: modelPath
             )
             print("Updated \(NativConfig.filePath)")
         }

@@ -134,6 +134,16 @@ struct ServerClient {
         return image
     }
 
+    /// Synthesize speech via `/v1/audio/speech`; returns the encoded audio bytes.
+    func speak(model: String, input: String, voice: String?, speed: Double?, format: String) async throws -> Data {
+        var body: [String: Any] = ["model": model, "input": input, "response_format": format]
+        if let voice { body["voice"] = voice }
+        if let speed { body["speed"] = speed }
+        let (data, resp) = try await Self.session.data(for: try makeRequest("v1/audio/speech", method: "POST", jsonBody: body))
+        try Self.checkOK(resp, data)
+        return data
+    }
+
     /// Transcribe an audio file via multipart `/v1/audio/transcriptions`.
     func transcribe(fileURL: URL, model: String) async throws -> String {
         let boundary = "nativ-\(UUID().uuidString)"
