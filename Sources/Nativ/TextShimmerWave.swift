@@ -13,13 +13,13 @@ struct TextShimmerWave: View {
     var base: Color = .secondary
     var highlight: Color = .primary
     /// Seconds for the wave to travel the whole string once.
-    var duration: Double = 1.1
+    var duration: Double = 1.5
     /// Reach of the band, in characters (its dim falloff).
     var spread: Double = 2.2
     /// Widens the fully-bright plateau (higher = longer white part).
-    var whiteGain: Double = 1.7
+    var whiteGain: Double = 1.5
     /// Vertical lift (points) of the brightest characters.
-    var lift: Double = 1.5
+    var lift: Double = 1.4
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
