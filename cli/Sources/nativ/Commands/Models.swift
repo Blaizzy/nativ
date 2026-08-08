@@ -65,18 +65,14 @@ struct Models: AsyncParsableCommand {
     }
 
     struct Remove: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(commandName: "rm", abstract: "Remove a downloaded model from the model search path.")
+        static let configuration = CommandConfiguration(commandName: "rm", abstract: "Remove a downloaded model (model search path or the Hugging Face cache).")
         @OptionGroup var global: GlobalOptions
         @Flag(name: .shortAndLong, help: "Delete without confirmation.") var force = false
-        @Argument(help: "Model id / folder name, relative to the model search path.") var id: String
+        @Argument(help: "Model id, e.g. mlx-community/Model.") var id: String
         func run() async throws {
             let config = NativConfig.resolve(baseURL: global.baseURL, apiKey: global.apiKey, model: nil)
-            guard let base = config.modelSearchPath else {
-                throw CLIError.usage("No model search path configured (set NATIV_MODEL_PATH or configure it in the app).")
-            }
-            let dir = URL(fileURLWithPath: (base as NSString).expandingTildeInPath).appendingPathComponent(id)
-            guard FileManager.default.fileExists(atPath: dir.path) else {
-                throw CLIError.notFound("Not found: \(dir.path)")
+            guard let dir = Self.resolveModelDir(id: id, searchPath: config.modelSearchPath) else {
+                throw CLIError.notFound("Couldn't find \(id) in the model search path or the Hugging Face cache.")
             }
             if !force {
                 print("Delete \(dir.path)? [y/N] ", terminator: "")
@@ -85,6 +81,29 @@ struct Models: AsyncParsableCommand {
             }
             try FileManager.default.removeItem(at: dir)
             print("Removed \(dir.path)")
+        }
+
+        /// Resolve a model id to its on-disk directory: the configured model
+        /// search path, else the Hugging Face hub cache (`models--org--name`),
+        /// honoring HF_HUB_CACHE / HF_HOME.
+        private static func resolveModelDir(id: String, searchPath: String?) -> URL? {
+            let fm = FileManager.default
+            if let base = searchPath {
+                let url = URL(fileURLWithPath: (base as NSString).expandingTildeInPath).appendingPathComponent(id)
+                if fm.fileExists(atPath: url.path) { return url }
+            }
+            let env = ProcessInfo.processInfo.environment
+            let hubRoot: String
+            if let cache = env["HF_HUB_CACHE"] {
+                hubRoot = cache
+            } else if let home = env["HF_HOME"] {
+                hubRoot = (home as NSString).appendingPathComponent("hub")
+            } else {
+                hubRoot = ("~/.cache/huggingface/hub" as NSString).expandingTildeInPath
+            }
+            let cacheName = "models--" + id.replacingOccurrences(of: "/", with: "--")
+            let url = URL(fileURLWithPath: hubRoot).appendingPathComponent(cacheName)
+            return fm.fileExists(atPath: url.path) ? url : nil
         }
     }
 }

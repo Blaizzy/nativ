@@ -18,27 +18,32 @@ struct Serve: AsyncParsableCommand {
             return
         }
 
-        let process = Process()
-        process.executableURL = binary
-        process.arguments = ["--host", host, "--port", "\(port)"] + passthrough
         let address = "http://\(host):\(port)"
+        let serverArgs = ["--host", host, "--port", "\(port)"] + passthrough
 
         if detached {
-            // Best-effort background run: detach stdio to a log file so it keeps
-            // running after the CLI returns. (Full daemonization via setsid is a TODO.)
+            // Launch via `nohup` so the server ignores SIGHUP and keeps running
+            // after the CLI returns / the terminal closes. nohup exec-replaces
+            // itself with the server, so its pid is the server's pid.
             try? FileManager.default.createDirectory(atPath: NativConfig.supportDir, withIntermediateDirectories: true)
             let logPath = (NativConfig.supportDir as NSString).appendingPathComponent("server.log")
             FileManager.default.createFile(atPath: logPath, contents: nil)
+            let launcher = Process()
+            launcher.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+            launcher.arguments = [binary.path] + serverArgs
             if let handle = FileHandle(forWritingAtPath: logPath) {
-                process.standardOutput = handle
-                process.standardError = handle
+                launcher.standardOutput = handle
+                launcher.standardError = handle
             }
-            try process.run()
-            ServerProcess.writePID(process.processIdentifier)
-            print("Server started (pid \(process.processIdentifier)) at \(address)  ·  logs: \(logPath)")
+            try launcher.run()
+            ServerProcess.writePID(launcher.processIdentifier)
+            print("Server started (pid \(launcher.processIdentifier)) at \(address)  ·  logs: \(logPath)")
             return
         }
 
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = serverArgs
         try process.run()
         ServerProcess.writePID(process.processIdentifier)
         print("Server running at \(address)  (Ctrl-C to stop)")
