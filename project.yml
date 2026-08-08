@@ -177,7 +177,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
-      - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
+      - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationSupport.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
