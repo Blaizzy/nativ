@@ -54,10 +54,12 @@ struct AudioView: View {
     @StateObject private var inputDevices = AudioInputDevicePreferences.shared
     @StateObject private var inputLevelMonitor = AudioInputLevelMonitor()
     @StateObject private var inputVolume = AudioInputVolumeController()
-    @AppStorage("audio.capture.automaticallySummarize")
+    @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
-    @AppStorage("audio.capture.includeSystemAudio")
+    @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
+    @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
+    private var suggestMeetingTranscription = false
     @State private var searchText = ""
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
@@ -619,53 +621,60 @@ struct AudioView: View {
     private var unifiedCaptureCard: some View {
         let tint = Color.blue
 
-        return HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "waveform.badge.mic")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 42, height: 42)
-                .background(
-                    tint.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                )
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("New recording")
-                    .font(.headline)
-                Text("Capture audio, then transcribe it locally when you finish.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 16)
-
-            HStack(spacing: 9) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(Color.white)
-                Text("Auto-summary")
-                    .font(.callout.weight(.medium))
-                Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
-            .disabled(captureLibrary.isBusy)
-
-            Button {
-                inputLevelMonitor.stop()
-                Task {
-                    await captureLibrary.start(
-                        .meeting,
-                        automaticallySummarize: automaticallySummarize,
-                        includeSystemAudio: includeSystemAudio
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        tint.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
                     )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("New recording")
+                        .font(.headline)
+                    Text("Capture audio, then transcribe it locally when you finish.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } label: {
-                Label("Start recording", systemImage: "record.circle")
-                    .padding(.horizontal, 8)
+
+                Spacer(minLength: 16)
+
+                HStack(spacing: 9) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(Color.white)
+                    Text("Auto-summary")
+                        .font(.callout.weight(.medium))
+                    Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .disabled(captureLibrary.isBusy)
+
+                Button {
+                    inputLevelMonitor.stop()
+                    Task {
+                        await captureLibrary.start(
+                            .meeting,
+                            automaticallySummarize: automaticallySummarize,
+                            includeSystemAudio: includeSystemAudio
+                        )
+                    }
+                } label: {
+                    Label("Start recording", systemImage: "record.circle")
+                        .padding(.horizontal, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(tint)
-            .controlSize(.large)
+
+            Divider()
+                .padding(.vertical, 16)
+
+            meetingSuggestionRow(tint: tint)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -849,6 +858,35 @@ struct AudioView: View {
                 .foregroundStyle(.green)
         }
         .padding(.horizontal, 4)
+    }
+
+    private func meetingSuggestionRow(tint: Color) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "person.2.wave.2.fill")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 42, height: 42)
+                .background(
+                    tint.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Transcription suggestions")
+                    .font(.headline)
+                Text("Prompt me to start transcription when a supported meeting app begins using the microphone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Toggle(
+                "Suggest transcription when a meeting starts",
+                isOn: $suggestMeetingTranscription
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .accessibilityLabel("Suggest transcription when a meeting starts")
+        }
     }
 
     private var modelConfigurationPanel: some View {
@@ -2467,7 +2505,7 @@ private struct AudioCaptureRecordRow: View {
 
         var tint: Color {
             switch self {
-            case .summary: .white
+            case .summary: .primary
             case .transcript: .primary
             }
         }
@@ -2681,7 +2719,7 @@ private struct AudioCaptureRecordRow: View {
             .background(
                 isSelected
                     ? Color.accentColor
-                    : (isHovered ? Color.white.opacity(0.08) : Color.clear),
+                    : (isHovered ? Color.primary.opacity(0.06) : Color.clear),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .contentShape(Rectangle())
