@@ -304,7 +304,7 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(1.0)))
     }
 
-    func testChordTapDoesNotArmDoubleTap() {
+    func testExtraModifierDoesNotInvalidateDoubleTap() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
@@ -328,7 +328,7 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
                 now: origin
             )
         )
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.1)))
     }
 
     func testKeyPressDoesNotArmDoubleTap() {
@@ -360,6 +360,60 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
 
         XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(2)))
         XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(2.2)))
+    }
+
+    func testDoubleTapWithinWidenedWindowToggles() {
+        var state = VoiceModifierToggleShortcutState()
+        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.5)))
+    }
+
+    func testEntersHeldWithExtraModifier() {
+        var state = VoiceModifierToggleShortcutState()
+        let shortcut: VoiceShortcutModifiers = [.control, .option, .command]
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.control, .option, .command, .shift],
+                shortcutModifiers: shortcut,
+                now: origin
+            )
+        )
+        XCTAssertTrue(state.isHeld)
+        XCTAssertFalse(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut, now: origin)
+        )
+        XCTAssertTrue(tap(&state, shortcut: shortcut, at: origin.addingTimeInterval(0.2)))
+    }
+}
+
+final class PushToTalkHoldStateTests: XCTestCase {
+    private let origin = Date(timeIntervalSinceReferenceDate: 0)
+
+    func testRisingEdgeStartsAndSustainedIsNoChange() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: true, now: origin.addingTimeInterval(0.05)))
+        XCTAssertTrue(state.isHeld)
+    }
+
+    func testTransientDropWithinGraceKeepsHeld() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: false, now: origin.addingTimeInterval(0.05)))
+        XCTAssertTrue(state.isHeld)
+        XCTAssertNil(state.update(rawHeld: true, now: origin.addingTimeInterval(0.08)))
+        XCTAssertTrue(state.isHeld)
+    }
+
+    func testSustainedReleaseAfterGraceStops() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: false, now: origin.addingTimeInterval(0.05)))
+        XCTAssertEqual(
+            state.update(rawHeld: false, now: origin.addingTimeInterval(0.2)),
+            false
+        )
+        XCTAssertFalse(state.isHeld)
     }
 }
 
