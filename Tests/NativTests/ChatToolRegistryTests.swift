@@ -31,6 +31,7 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
     var modelSwitchInProgress = false
     private(set) var switchCallCount = 0
     var onSwitch: ((String?) -> Void)?
+    var memoryWarning: ModelPreloadMemoryWarning?
 
     init(languageModelID: String?, isRunning: Bool = true) {
         settings = NativSettings(languageModelID: languageModelID)
@@ -44,6 +45,10 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
         } else {
             settings.languageModelID = modelID
         }
+    }
+
+    func preloadMemoryWarning(forLanguageModelID modelID: String, availableModels: [LocalModel]) -> ModelPreloadMemoryWarning? {
+        memoryWarning
     }
 }
 
@@ -1167,6 +1172,33 @@ final class ChatSwitchModelToolExecutorTests: XCTestCase {
         } catch {
             XCTFail("expected ChatSwitchModelToolError, got \(error)")
         }
+    }
+
+    func testMemoryWarningRejectsCleanlyWithoutAttemptingTheSwitch() async {
+        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
+        fake.memoryWarning = ModelPreloadMemoryWarning(
+            candidateModelID: "org/new",
+            candidateSlot: .language,
+            existingSlots: [.imageGeneration],
+            estimatedWorkingSetBytes: 900,
+            memoryBudgetBytes: 100,
+            totalMemoryBytes: 200
+        )
+        do {
+            _ = try await ChatSwitchModelToolExecutor().execute(
+                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
+                appModel: fake
+            )
+            XCTFail("a model that can't fit must be rejected before attempting the switch")
+        } catch let error as ChatSwitchModelToolError {
+            guard case .insufficientMemory(let modelID, _) = error else {
+                return XCTFail("expected .insufficientMemory, got \(error)")
+            }
+            XCTAssertEqual(modelID, "org/new")
+        } catch {
+            XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+        XCTAssertEqual(fake.switchCallCount, 0, "a rejected switch must never restart the server")
     }
 
     private func decode(_ json: String) throws -> [String: Any] {

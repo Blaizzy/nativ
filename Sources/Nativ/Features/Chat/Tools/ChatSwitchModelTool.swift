@@ -55,6 +55,7 @@ enum ChatSwitchModelToolError: LocalizedError {
     case switchFailed
     case mismatchedModel(requested: String, active: String?)
     case appModelUnavailable
+    case insufficientMemory(modelID: String, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -68,6 +69,8 @@ enum ChatSwitchModelToolError: LocalizedError {
             return "Requested \(requested) but the active model is now \(active ?? "unknown")."
         case .appModelUnavailable:
             return "The app isn't ready to switch models right now."
+        case .insufficientMemory(let modelID, let message):
+            return "Not enough memory to switch to \(modelID): \(message)"
         }
     }
 }
@@ -78,6 +81,8 @@ protocol ChatModelSwitchingSurface {
     var modelSwitchInProgress: Bool { get }
     var isRunning: Bool { get }
     func switchLanguageModel(to modelID: String?)
+    /// Non-nil means "reject, don't attempt the switch."
+    func preloadMemoryWarning(forLanguageModelID modelID: String, availableModels: [LocalModel]) -> ModelPreloadMemoryWarning?
 }
 
 struct ChatSwitchModelToolExecutor {
@@ -103,6 +108,22 @@ struct ChatSwitchModelToolExecutor {
                 declined: false,
                 error: nil
             ))
+        }
+
+        // Best-effort: an unscannable search path just means no warning
+        // can be computed, not a blocked switch.
+        let availableModels = (try? await LocalModelDiscovery.scan(
+            path: appModel.settings.modelSearchPath,
+            additionalPaths: appModel.settings.additionalModelSearchPaths
+        )) ?? []
+        if let warning = appModel.preloadMemoryWarning(
+            forLanguageModelID: requestedModelID,
+            availableModels: availableModels
+        ) {
+            throw ChatSwitchModelToolError.insufficientMemory(
+                modelID: requestedModelID,
+                message: warning.message
+            )
         }
 
         appModel.switchLanguageModel(to: requestedModelID)
