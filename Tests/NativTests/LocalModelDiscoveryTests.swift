@@ -142,6 +142,93 @@ final class LocalModelDiscoveryTests: XCTestCase {
         )
     }
 
+    func testSpeechToTextPreloadIssueFlagsMissingPreprocessorConfig() throws {
+        let repoID = "aufklarer/Qwen3-ASR-1.7B-MLX-8bit"
+        try makeSpeechSnapshot(
+            repoID: repoID,
+            modelType: "qwen3_asr",
+            includesPreprocessorConfig: false
+        )
+
+        let issue = LocalModelDiscovery.speechToTextPreloadIssue(
+            repoID: repoID,
+            path: temporaryCache.path
+        )
+
+        let message = try XCTUnwrap(issue)
+        XCTAssertTrue(message.contains("preprocessor_config.json"))
+        XCTAssertTrue(message.contains(repoID))
+    }
+
+    func testSpeechToTextPreloadIssueAcceptsCompleteSnapshot() throws {
+        let repoID = "aufklarer/Qwen3-ASR-0.6B-MLX-4bit"
+        try makeSpeechSnapshot(
+            repoID: repoID,
+            modelType: "qwen3_asr",
+            includesPreprocessorConfig: true
+        )
+
+        XCTAssertNil(
+            LocalModelDiscovery.speechToTextPreloadIssue(
+                repoID: repoID,
+                path: temporaryCache.path
+            )
+        )
+    }
+
+    func testSpeechToTextPreloadIssueIgnoresModelTypesWithoutPreprocessor() throws {
+        let repoID = "mlx-community/whisper-tiny"
+        try makeSpeechSnapshot(
+            repoID: repoID,
+            modelType: "whisper",
+            includesPreprocessorConfig: false
+        )
+
+        XCTAssertNil(
+            LocalModelDiscovery.speechToTextPreloadIssue(
+                repoID: repoID,
+                path: temporaryCache.path
+            )
+        )
+    }
+
+    func testSpeechToTextPreloadIssueIgnoresUnknownModel() {
+        XCTAssertNil(
+            LocalModelDiscovery.speechToTextPreloadIssue(
+                repoID: "nobody/not-installed",
+                path: temporaryCache.path
+            )
+        )
+    }
+
+    private func makeSpeechSnapshot(
+        repoID: String,
+        modelType: String,
+        includesPreprocessorConfig: Bool
+    ) throws {
+        let repository = temporaryCache.appendingPathComponent(
+            "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
+            isDirectory: true
+        )
+        let revision = "speech-test-revision"
+        let snapshot =
+            repository
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent(revision, isDirectory: true)
+
+        try write(revision, to: repository.appendingPathComponent("refs/main"))
+        try writeJSON(
+            ["model_type": modelType, "architectures": ["Qwen3ASRForConditionalGeneration"]],
+            to: snapshot.appendingPathComponent("config.json")
+        )
+        if includesPreprocessorConfig {
+            try writeJSON(
+                ["feature_extractor_type": "WhisperFeatureExtractor"],
+                to: snapshot.appendingPathComponent("preprocessor_config.json")
+            )
+        }
+    }
+
     private func makeMageFlowSnapshot(repoID: String) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),

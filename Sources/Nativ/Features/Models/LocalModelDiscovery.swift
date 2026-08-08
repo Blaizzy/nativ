@@ -544,6 +544,57 @@ enum LocalModelDiscovery {
         )
     }
 
+    static let speechToTextModelTypesRequiringPreprocessor: Set<String> = [
+        "mms",
+        "moss_transcribe_diarize",
+        "qwen2_audio",
+        "qwen3_asr",
+        "voxtral"
+    ]
+
+    static func speechToTextPreloadIssue(repoID: String, path: String) -> String? {
+        let fileManager = FileManager.default
+        guard let snapshotURL = modelSnapshotURL(
+            repoID: repoID,
+            path: expandedPath(path),
+            fileManager: fileManager
+        ) else {
+            return nil
+        }
+
+        let configURL = snapshotURL.appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: configURL),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelType = (config["model_type"] as? String)?.lowercased(),
+              speechToTextModelTypesRequiringPreprocessor.contains(modelType)
+        else {
+            return nil
+        }
+
+        let preprocessorURL = snapshotURL.appendingPathComponent("preprocessor_config.json")
+        guard !fileManager.fileExists(atPath: preprocessorURL.path) else {
+            return nil
+        }
+
+        return "\(repoID) is missing preprocessor_config.json, which \(modelType) speech models need in order to load."
+    }
+
+    private static func modelSnapshotURL(
+        repoID: String,
+        path: String,
+        fileManager: FileManager
+    ) -> URL? {
+        if repoID.hasPrefix("/") {
+            let directURL = URL(fileURLWithPath: repoID, isDirectory: true)
+            return isDirectoryURL(directURL, fileManager: fileManager) ? directURL : nil
+        }
+
+        let repositoryName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
+        let repositoryURL = URL(fileURLWithPath: path, isDirectory: true)
+            .appendingPathComponent(repositoryName, isDirectory: true)
+        return preferredSnapshotURL(for: repositoryURL, fileManager: fileManager)
+    }
+
     private static func configurationMetadataSynchronously(
         repoID: String,
         path: String
