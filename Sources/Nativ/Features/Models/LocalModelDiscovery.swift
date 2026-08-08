@@ -655,9 +655,13 @@ enum LocalModelDiscovery {
             return false
         }
 
-        let indexURL = snapshotURL.appendingPathComponent("model.safetensors.index.json")
-        if fileManager.fileExists(atPath: indexURL.path) {
+        switch safetensorsShardIndexStatus(at: snapshotURL, fileManager: fileManager) {
+        case .complete:
             return true
+        case .incomplete:
+            return false
+        case .absent:
+            break
         }
 
         guard let contents = try? fileManager.contentsOfDirectory(
@@ -680,6 +684,68 @@ enum LocalModelDiscovery {
             at: snapshotURL,
             fileManager: fileManager
         )
+    }
+
+    private enum SafetensorsShardIndexStatus {
+        case absent
+        case complete
+        case incomplete
+    }
+
+    private struct SafetensorsShardIndex: Decodable {
+        let weightMap: [String: String]
+
+        private enum CodingKeys: String, CodingKey {
+            case weightMap = "weight_map"
+        }
+    }
+
+    /// A shard index is downloaded before the weight shards it describes. Treat
+    /// the snapshot as usable only after every referenced shard is a non-empty
+    /// regular file inside the snapshot directory.
+    private static func safetensorsShardIndexStatus(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> SafetensorsShardIndexStatus {
+        let indexURL = snapshotURL.appendingPathComponent("model.safetensors.index.json")
+        guard fileManager.fileExists(atPath: indexURL.path) else {
+            return .absent
+        }
+
+        guard let data = try? Data(contentsOf: indexURL),
+              let index = try? JSONDecoder().decode(SafetensorsShardIndex.self, from: data)
+        else {
+            return .incomplete
+        }
+
+        let shardFilenames = Set(index.weightMap.values)
+        guard !shardFilenames.isEmpty else {
+            return .incomplete
+        }
+
+        let snapshotPath = snapshotURL.standardizedFileURL.path
+        let snapshotPrefix = snapshotPath.hasSuffix("/") ? snapshotPath : snapshotPath + "/"
+        let allShardsAreAvailable = shardFilenames.allSatisfy { filename in
+            guard !filename.isEmpty,
+                  !(filename as NSString).isAbsolutePath
+            else {
+                return false
+            }
+
+            let shardURL = snapshotURL.appendingPathComponent(filename).standardizedFileURL
+            guard shardURL.path.hasPrefix(snapshotPrefix),
+                  let values = try? shardURL.resolvingSymlinksInPath().resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey]
+                  ),
+                  values.isRegularFile == true,
+                  let fileSize = values.fileSize,
+                  fileSize > 0
+            else {
+                return false
+            }
+            return true
+        }
+        return allShardsAreAvailable ? .complete : .incomplete
     }
 
     private static func snapshotSize(at snapshotURL: URL, fileManager: FileManager) -> Int64? {
