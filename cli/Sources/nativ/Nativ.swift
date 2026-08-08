@@ -20,7 +20,7 @@ struct Nativ: AsyncParsableCommand {
         """,
         version: version,
         subcommands: [Run.self, Chat.self, Serve.self, Status.self, Stop.self,
-                      Models.self, Embed.self, Image.self, Transcribe.self, Speak.self,
+                      Models.self, Embed.self, Image.self, Transcribe.self, Audio.self,
                       Config.self, Agent.self],
         defaultSubcommand: Run.self
     )

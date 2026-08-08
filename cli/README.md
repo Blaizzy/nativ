@@ -28,7 +28,7 @@ swift build          # produces .build/debug/nativ
 | `nativ embed` | `/v1/embeddings` (JSON, or `--dims`) |
 | `nativ image "<prompt>"` | `/v1/images/generations` → saves a file |
 | `nativ transcribe <file>` | multipart `/v1/audio/transcriptions` |
-| `nativ speak "<text>"` | `/v1/audio/speech` → saves an audio file |
+| `nativ audio speak "<text>"` | `/v1/audio/speech` → saves an audio file (audio group grows with the server) |
 | `nativ config show \| set \| path` | read/write `cli.json` |
 | `nativ agent [--json]` | full reference for coding agents |
 
