@@ -8,9 +8,11 @@ struct ServerClient {
     /// A session that aborts if the server goes silent mid-stream. The interval
     /// is "time to wait for *more* data" and resets on every chunk, so a healthy
     /// stream (data flowing, even slowly) is never cut — only a hung server is.
+    /// It's generous because first-token latency on a large model with a long
+    /// prompt (prefill) can be minutes before any bytes arrive.
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 120
+        cfg.timeoutIntervalForRequest = 300
         cfg.timeoutIntervalForResource = 3600
         return URLSession(configuration: cfg)
     }()
