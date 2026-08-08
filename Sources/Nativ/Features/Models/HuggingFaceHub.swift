@@ -1061,6 +1061,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
         let script = """
         import sys
+        import time
         from tqdm.auto import tqdm
         from huggingface_hub import snapshot_download
 
@@ -1081,6 +1082,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             def __init__(self, *args, **kwargs):
                 self._mlx_reports_bytes = kwargs.get("unit") == "B"
                 self._mlx_last_progress = -1.0
+                self._mlx_last_report = 0.0
                 super().__init__(*args, **kwargs)
                 self._mlx_report()
 
@@ -1100,8 +1102,12 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 total = float(expected_bytes or self.total or 0)
                 value = float(self.n or 0)
                 progress = min(max(value / total, 0.0), 1.0) if total > 0 else 0.0
-                if abs(progress - self._mlx_last_progress) >= 0.01 or progress >= 1.0:
+                now = time.monotonic()
+                changed = abs(progress - self._mlx_last_progress)
+                stale = now - self._mlx_last_report >= 0.25
+                if progress >= 1.0 or changed >= 0.002 or (changed > 0.0 and stale):
                     self._mlx_last_progress = progress
+                    self._mlx_last_report = now
                     print(f"__MLX_PROGRESS__:{progress:.6f}", flush=True)
 
         snapshot_download(
