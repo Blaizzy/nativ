@@ -163,16 +163,12 @@ private struct ExtensionsSectionView: View {
             title: "Extensions",
             subtitle: "Packages that add features to Nativ."
         ) {
-            Button {
-                installPackage()
-            } label: {
-                Label("Install\u{2026}", systemImage: "plus")
-            }
+            EmptyView()
         } content: {
             if manager.records.isEmpty {
                 HubEmptyHint(
                     icon: "square.stack.3d.up.slash",
-                    text: "No extensions installed. Install a .nativextension package to add features."
+                    text: "No extensions installed."
                 )
             } else {
                 VStack(spacing: 0) {
@@ -183,16 +179,9 @@ private struct ExtensionsSectionView: View {
                 }
             }
         }
-    }
-
-    private func installPackage() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Install"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        manager.installPackage(at: url)
+        .onAppear {
+            manager.refreshPermissionStatuses()
+        }
     }
 }
 
@@ -201,32 +190,172 @@ private struct ExtensionRow: View {
     @ObservedObject var manager: NativExtensionManager
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: record.manifest.systemImage)
-                .font(.system(size: 15))
-                .frame(width: 24)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record.manifest.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                Text(record.manifest.summary)
-                    .font(.system(size: 11))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: record.manifest.systemImage)
+                    .font(.system(size: 15))
+                    .frame(width: 24)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 12)
-            Toggle(
-                "",
-                isOn: Binding(
-                    get: { record.isEnabled },
-                    set: { manager.setEnabled($0, extensionID: record.id) }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.manifest.displayName)
+                        .font(.system(size: 13, weight: .medium))
+                    Text(record.manifest.summary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 12)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { record.isEnabled },
+                        set: { manager.setEnabled($0, extensionID: record.id) }
+                    )
                 )
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+            if !record.manifest.permissions.isEmpty {
+                permissions
+            }
         }
         .padding(.vertical, 11)
+    }
+
+    private var permissions: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Permissions")
+                .font(.subheadline.weight(.semibold))
+            FlowLayout(spacing: 8) {
+                ForEach(record.manifest.permissions, id: \.self) { permission in
+                    permissionBadge(permission, extensionIsEnabled: record.isEnabled)
+                }
+            }
+        }
+        .padding(.leading, 36)
+    }
+
+    @ViewBuilder
+    private func permissionBadge(
+        _ permission: NativExtensionPermission,
+        extensionIsEnabled: Bool
+    ) -> some View {
+        let status = manager.permissionStatus(permission)
+        let actionTitle = extensionIsEnabled
+            ? manager.permissionActionTitle(permission)
+            : nil
+        if let actionTitle {
+            Button {
+                manager.requestPermission(permission)
+            } label: {
+                permissionBadgeLabel(
+                    permission: permission,
+                    status: status,
+                    actionTitle: actionTitle
+                )
+            }
+            .buttonStyle(.plain)
+            .help("\(actionTitle) \(permission.displayName) permission")
+        } else {
+            permissionBadgeLabel(
+                permission: permission,
+                status: status,
+                actionTitle: nil
+            )
+        }
+    }
+
+    private func permissionBadgeLabel(
+        permission: NativExtensionPermission,
+        status: NativExtensionPermissionStatus,
+        actionTitle: String?
+    ) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(status.color)
+                .frame(width: 7, height: 7)
+            Text(permission.displayName)
+            Text("· \(status.title)")
+                .foregroundStyle(.secondary)
+            if let actionTitle {
+                Text(actionTitle)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(
+            Color.primary.opacity(0.045),
+            in: Capsule()
+        )
+        .contentShape(Capsule())
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(
+            proposal: proposal,
+            subviews: subviews
+        ).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+            subviews: subviews
+        )
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> (size: CGSize, points: [CGPoint]) {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var points: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+
+        return (
+            CGSize(
+                width: proposal.width ?? max(0, x - spacing),
+                height: y + lineHeight
+            ),
+            points
+        )
     }
 }
 
