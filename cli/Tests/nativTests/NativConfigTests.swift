@@ -3,11 +3,11 @@ import XCTest
 
 final class NativConfigTests: XCTestCase {
 
-    private func config(default d: String?, embedding e: String? = nil, image i: String? = nil, stt s: String? = nil) -> NativConfig {
+    private func config(default d: String?, embedding e: String? = nil, image i: String? = nil, stt s: String? = nil, tts t: String? = nil) -> NativConfig {
         NativConfig(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
             apiKey: nil, defaultModel: d,
-            embeddingModel: e, imageModel: i, sttModel: s,
+            embeddingModel: e, imageModel: i, sttModel: s, ttsModel: t,
             modelSearchPath: nil
         )
     }
@@ -17,13 +17,15 @@ final class NativConfigTests: XCTestCase {
         XCTAssertEqual(c.resolvedEmbeddingModel, "chat-model")
         XCTAssertEqual(c.resolvedImageModel, "chat-model")
         XCTAssertEqual(c.resolvedSTTModel, "chat-model")
+        XCTAssertEqual(c.resolvedTTSModel, "chat-model")
     }
 
     func testCapabilityModelsPreferTheirOwn() {
-        let c = config(default: "chat-model", embedding: "embed-model", image: "img-model", stt: "stt-model")
+        let c = config(default: "chat-model", embedding: "embed-model", image: "img-model", stt: "stt-model", tts: "tts-model")
         XCTAssertEqual(c.resolvedEmbeddingModel, "embed-model")
         XCTAssertEqual(c.resolvedImageModel, "img-model")
         XCTAssertEqual(c.resolvedSTTModel, "stt-model")
+        XCTAssertEqual(c.resolvedTTSModel, "tts-model")
     }
 
     func testCapabilityModelsNilWhenNothingSet() {
@@ -31,6 +33,7 @@ final class NativConfigTests: XCTestCase {
         XCTAssertNil(c.resolvedEmbeddingModel)
         XCTAssertNil(c.resolvedImageModel)
         XCTAssertNil(c.resolvedSTTModel)
+        XCTAssertNil(c.resolvedTTSModel)
     }
 
     func testFileConfigRoundTrips() throws {

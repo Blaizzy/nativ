@@ -40,6 +40,7 @@ struct Agent: AsyncParsableCommand {
     - embedding model: `--model` | `NATIV_EMBEDDING_MODEL` | cli.json.embeddingModel → falls back to the chat model
     - image model:     `--model` | `NATIV_IMAGE_MODEL`     | cli.json.imageModel → falls back to the chat model
     - stt model:       `--model` | `NATIV_STT_MODEL`       | cli.json.sttModel → falls back to the chat model
+    - tts model:       `--model` | `NATIV_TTS_MODEL`       | cli.json.ttsModel → falls back to the chat model
     - model search path: `NATIV_MODEL_PATH` | cli.json.modelSearchPath
     - server binary override: `NATIV_SERVER_BIN`
     cli.json lives at `~/Library/Application Support/Nativ/cli.json`.
@@ -66,6 +67,8 @@ struct Agent: AsyncParsableCommand {
       array-of-vectors. Reads stdin (one input per line) if no args.
     - `image [prompt...] [--out file] [--size WxH]` — generate an image to a file.
     - `transcribe <audio-file>` — speech-to-text, prints the transcript.
+    - `speak [text...] [--out file] [--voice v] [--speed s] [--format mp3]` —
+      text-to-speech; writes an audio file (reads stdin if no text).
     - `config show | set | path` — read/write cli.json.
     - `agent [--json]` — this reference.
 
@@ -75,6 +78,7 @@ struct Agent: AsyncParsableCommand {
     - POST `/v1/embeddings` — {model, input:[...]} → data[].embedding.
     - POST `/v1/images/generations` — {model, prompt, size, response_format:"b64_json"}.
     - POST `/v1/audio/transcriptions` — multipart {model, file} → {text}.
+    - POST `/v1/audio/speech` — {model, input, voice, speed, response_format} → audio bytes.
     - GET  `/v1/models` — {data:[{id}]}.
     Auth: `Authorization: Bearer <api-key>` when one is configured.
 
@@ -96,7 +100,7 @@ struct Agent: AsyncParsableCommand {
             "env": [
                 "NATIV_BASE_URL", "NATIV_API_KEY", "NATIV_MODEL",
                 "NATIV_EMBEDDING_MODEL", "NATIV_IMAGE_MODEL", "NATIV_STT_MODEL",
-                "NATIV_MODEL_PATH", "NATIV_SERVER_BIN",
+                "NATIV_TTS_MODEL", "NATIV_MODEL_PATH", "NATIV_SERVER_BIN",
             ],
             "commands": [
                 ["name": "run", "desc": "one-shot completion (streams)", "flags": ["--model", "--system", "--image", "--no-stream", "--json"]],
@@ -111,6 +115,7 @@ struct Agent: AsyncParsableCommand {
                 ["name": "embed", "desc": "text embeddings", "flags": ["--model", "--dims"]],
                 ["name": "image", "desc": "generate an image", "flags": ["--model", "--out", "--size"]],
                 ["name": "transcribe", "desc": "speech-to-text", "flags": ["--model"]],
+                ["name": "speak", "desc": "text-to-speech", "flags": ["--model", "--out", "--voice", "--speed", "--format"]],
                 ["name": "config", "desc": "show/set cli.json", "flags": []],
             ],
             "api": [
@@ -118,6 +123,7 @@ struct Agent: AsyncParsableCommand {
                 "embeddings": "POST /v1/embeddings",
                 "images": "POST /v1/images/generations",
                 "transcriptions": "POST /v1/audio/transcriptions",
+                "speech": "POST /v1/audio/speech",
                 "models": "GET /v1/models",
             ],
         ]

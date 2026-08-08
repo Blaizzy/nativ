@@ -11,6 +11,7 @@ struct NativConfig {
     var embeddingModel: String?
     var imageModel: String?
     var sttModel: String?
+    var ttsModel: String?
     var modelSearchPath: String?
 
     static let supportDir = ("~/Library/Application Support/Nativ" as NSString).expandingTildeInPath
@@ -23,6 +24,7 @@ struct NativConfig {
         var embeddingModel: String?
         var imageModel: String?
         var sttModel: String?
+        var ttsModel: String?
         var modelSearchPath: String?
     }
 
@@ -37,6 +39,7 @@ struct NativConfig {
             embeddingModel: env["NATIV_EMBEDDING_MODEL"] ?? file?.embeddingModel,
             imageModel: env["NATIV_IMAGE_MODEL"] ?? file?.imageModel,
             sttModel: env["NATIV_STT_MODEL"] ?? file?.sttModel,
+            ttsModel: env["NATIV_TTS_MODEL"] ?? file?.ttsModel,
             modelSearchPath: env["NATIV_MODEL_PATH"] ?? file?.modelSearchPath
         )
     }
@@ -46,6 +49,7 @@ struct NativConfig {
     var resolvedEmbeddingModel: String? { embeddingModel ?? defaultModel }
     var resolvedImageModel: String? { imageModel ?? defaultModel }
     var resolvedSTTModel: String? { sttModel ?? defaultModel }
+    var resolvedTTSModel: String? { ttsModel ?? defaultModel }
 
     static func loadFile() -> FileConfig? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)) else { return nil }
@@ -60,6 +64,7 @@ struct NativConfig {
         embeddingModel: String? = nil,
         imageModel: String? = nil,
         sttModel: String? = nil,
+        ttsModel: String? = nil,
         modelSearchPath: String? = nil
     ) throws {
         try FileManager.default.createDirectory(atPath: supportDir, withIntermediateDirectories: true)
@@ -70,6 +75,7 @@ struct NativConfig {
         if let embeddingModel { file.embeddingModel = embeddingModel }
         if let imageModel { file.imageModel = imageModel }
         if let sttModel { file.sttModel = sttModel }
+        if let ttsModel { file.ttsModel = ttsModel }
         if let modelSearchPath { file.modelSearchPath = modelSearchPath }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
