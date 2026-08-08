@@ -37,7 +37,16 @@ struct Serve: AsyncParsableCommand {
             }
             try launcher.run()
             ServerProcess.writePID(launcher.processIdentifier)
-            print("Server started (pid \(launcher.processIdentifier)) at \(address)  ·  logs: \(logPath)")
+            print("Server starting (pid \(launcher.processIdentifier)) at \(address)  ·  logs: \(logPath)")
+
+            // Report readiness honestly so a following `run` doesn't race a
+            // still-loading server.
+            let client = ServerClient(config: NativConfig.resolve(baseURL: address))
+            if await client.waitUntilReady(timeout: 60) {
+                print("Server ready.")
+            } else {
+                print("Server still loading after 60s — check the logs above.")
+            }
             return
         }
 

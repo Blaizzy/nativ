@@ -2,11 +2,26 @@ import ArgumentParser
 
 @main
 struct Nativ: AsyncParsableCommand {
+    static let version = "0.2.0"
     static let configuration = CommandConfiguration(
         commandName: "nativ",
         abstract: "Local AI from your terminal — chat, serve, and manage models on the Nativ / mlx-vlm server.",
-        version: "0.1.0",
-        subcommands: [Run.self, Chat.self, Serve.self, Status.self, Stop.self, Models.self, Embed.self, Image.self, Transcribe.self],
+        discussion: """
+        Everything runs against a local, OpenAI-compatible server — no cloud.
+
+        Quick start:
+          nativ serve -d                      # start the bundled server
+          nativ models use <model-id>         # pick a default model
+          nativ "write a haiku about metal"   # a bare prompt runs `run`
+          nativ chat                          # interactive session
+
+        Config resolves flag → env (NATIV_*) → cli.json → default.
+        Run `nativ agent` for a full reference aimed at coding agents.
+        """,
+        version: version,
+        subcommands: [Run.self, Chat.self, Serve.self, Status.self, Stop.self,
+                      Models.self, Embed.self, Image.self, Transcribe.self,
+                      Config.self, Agent.self],
         defaultSubcommand: Run.self
     )
 }

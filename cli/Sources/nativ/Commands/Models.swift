@@ -9,19 +9,72 @@ struct Models: AsyncParsableCommand {
     )
 
     struct List: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "List models the server can serve.")
+        static let configuration = CommandConfiguration(
+            abstract: "List available models: those loaded by the server plus any cached locally."
+        )
         @OptionGroup var global: GlobalOptions
+        @Flag(name: .long, help: "Only models the running server reports (skip the local cache scan).") var serverOnly = false
         func run() async throws {
             let config = NativConfig.resolve(baseURL: global.baseURL, apiKey: global.apiKey, model: nil)
             let client = ServerClient(config: config)
-            guard await client.isUp() else {
-                throw CLIError.server("not reachable at \(config.baseURL.absoluteString). Start it with `nativ serve`.")
+
+            let loaded = await client.isUp() ? ((try? await client.models()) ?? []) : []
+            let cached = serverOnly ? [] : Self.localModels(searchPath: config.modelSearchPath)
+
+            // Merge, dedup, keeping a note of where each came from.
+            var order: [String] = []
+            var seen = Set<String>()
+            for m in loaded + cached where !seen.contains(m) { seen.insert(m); order.append(m) }
+            let loadedSet = Set(loaded)
+
+            guard !order.isEmpty else {
+                print(serverOnly || !cached.isEmpty ? "No models found." :
+                      "No models found. Server not running and nothing cached locally.")
+                return
             }
-            let models = try await client.models()
-            if models.isEmpty { print("No models reported."); return }
-            for m in models {
-                print("\(m == config.defaultModel ? "* " : "  ")\(m)")
+            for m in order.sorted() {
+                let marker = m == config.defaultModel ? "*" : " "
+                let tag = loadedSet.contains(m) ? "loaded" : "cached"
+                print("\(marker) \(m)  (\(tag))")
             }
+        }
+
+        /// Model ids present on disk: the configured search path (one dir per
+        /// model) and the Hugging Face hub cache (`models--org--name`).
+        private static func localModels(searchPath: String?) -> [String] {
+            let fm = FileManager.default
+            var ids: [String] = []
+
+            if let base = searchPath {
+                let root = (base as NSString).expandingTildeInPath
+                if let entries = try? fm.contentsOfDirectory(atPath: root) {
+                    for e in entries where !e.hasPrefix(".") {
+                        var isDir: ObjCBool = false
+                        let full = (root as NSString).appendingPathComponent(e)
+                        // Support both flat (`Model`) and `org/name` layouts.
+                        if fm.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue {
+                            if let subs = try? fm.contentsOfDirectory(atPath: full),
+                               subs.contains(where: { $0.hasSuffix(".safetensors") || $0 == "config.json" }) {
+                                ids.append(e)
+                            } else if let subs = try? fm.contentsOfDirectory(atPath: full) {
+                                for s in subs where !s.hasPrefix(".") { ids.append("\(e)/\(s)") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let env = ProcessInfo.processInfo.environment
+            let hubRoot: String
+            if let cache = env["HF_HUB_CACHE"] { hubRoot = cache }
+            else if let home = env["HF_HOME"] { hubRoot = (home as NSString).appendingPathComponent("hub") }
+            else { hubRoot = ("~/.cache/huggingface/hub" as NSString).expandingTildeInPath }
+            if let entries = try? fm.contentsOfDirectory(atPath: hubRoot) {
+                for e in entries where e.hasPrefix("models--") {
+                    ids.append(e.dropFirst("models--".count).replacingOccurrences(of: "--", with: "/"))
+                }
+            }
+            return ids
         }
     }
 

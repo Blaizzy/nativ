@@ -11,8 +11,8 @@ struct Embed: AsyncParsableCommand {
 
     func run() async throws {
         let config = NativConfig.resolve(baseURL: global.baseURL, apiKey: global.apiKey, model: model)
-        guard let modelID = config.defaultModel else {
-            throw CLIError.usage("No model set. Pass --model <embedding-model>.")
+        guard let modelID = config.resolvedEmbeddingModel else {
+            throw CLIError.usage("No embedding model set. Pass --model <id>, set NATIV_EMBEDDING_MODEL, or `nativ config set --embedding-model <id>`.")
         }
 
         var inputs = texts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
