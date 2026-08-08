@@ -1534,6 +1534,7 @@ struct ControlPanelView: View {
             routineStatus: routineStatus(for: recent),
             isSelected: sidebarSelection == recent.selection,
             isCurrent: isCurrentRecent(recent),
+            isActive: isRecentActive(recent),
             isSelectionDisabled: isRecentSelectionDisabled(recent),
             isDeleteDisabled: isRecentDeleteDisabled(recent),
             canExport: canExportRecent(recent),
@@ -2300,6 +2301,16 @@ struct ControlPanelView: View {
         case .imageGeneration(let sessionID):
             return sessionID == imageGeneration.currentSessionID
         case .tab, .extensionPage:
+            return false
+        }
+    }
+
+    /// True while this chat is the one generating a response — drives the title shimmer.
+    private func isRecentActive(_ recent: ControlPanelRecentSession) -> Bool {
+        switch recent.selection {
+        case .chat(let sessionID):
+            return sessionID == chat.activeRequestSessionID
+        case .imageGeneration, .tab, .extensionPage:
             return false
         }
     }
@@ -3742,6 +3753,7 @@ private struct ControlPanelRecentSessionRow: View {
     let routineStatus: RoutineRowStatus
     let isSelected: Bool
     let isCurrent: Bool
+    let isActive: Bool
     let isSelectionDisabled: Bool
     let isDeleteDisabled: Bool
     let canExport: Bool
@@ -3845,7 +3857,7 @@ private struct ControlPanelRecentSessionRow: View {
                                 .accessibilityLabel("Image session")
                         }
 
-                        Text(recent.title)
+                        TextShimmerWave(text: recent.title, active: isActive)
                             .lineLimit(1)
                             .truncationMode(.tail)
 
