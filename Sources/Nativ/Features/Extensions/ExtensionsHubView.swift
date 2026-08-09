@@ -171,9 +171,8 @@ private struct ExtensionsSectionView: View {
                     text: "No extensions installed."
                 )
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(manager.records.enumerated()), id: \.element.id) { index, record in
-                        if index > 0 { Divider() }
+                VStack(spacing: 12) {
+                    ForEach(manager.records) { record in
                         ExtensionRow(record: record, manager: manager)
                     }
                 }
@@ -190,19 +189,23 @@ private struct ExtensionRow: View {
     @ObservedObject var manager: NativExtensionManager
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: record.manifest.systemImage)
-                    .font(.system(size: 15))
-                    .frame(width: 24)
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(record.manifest.displayName)
-                        .font(.system(size: 13, weight: .medium))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                NativTintedIconTile(symbol: record.manifest.systemImage, size: 44)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(record.manifest.displayName)
+                            .font(.system(size: 14, weight: .semibold))
+                        if record.isIncluded { includedBadge }
+                    }
                     Text(record.manifest.summary)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Version \(record.manifest.version)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 1)
                 }
                 Spacer(minLength: 12)
                 Toggle(
@@ -217,10 +220,30 @@ private struct ExtensionRow: View {
                 .controlSize(.small)
             }
             if !record.manifest.permissions.isEmpty {
+                Divider()
+                    .padding(.vertical, 14)
                 permissions
             }
         }
-        .padding(.vertical, 11)
+        .padding(16)
+        .background(
+            Color.primary.opacity(0.03),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+    }
+
+    private var includedBadge: some View {
+        Text("INCLUDED")
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.4)
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
 
     private var permissions: some View {
@@ -233,7 +256,6 @@ private struct ExtensionRow: View {
                 }
             }
         }
-        .padding(.leading, 36)
     }
 
     @ViewBuilder
