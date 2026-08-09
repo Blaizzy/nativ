@@ -51,6 +51,8 @@ struct Agent: AsyncParsableCommand {
       `--model`, `--system <text>`, `--image <path>` (repeatable, VLM),
       `--no-stream` (buffer then print), `--json` (raw completion JSON, for parsing).
       Reads the prompt from stdin if omitted: `echo "hi" | nativ run`.
+      Uses the running server if up; else loads the model locally via the bundled
+      engine (`--json` needs the server).
     - `chat` — interactive REPL. Slash: `/model <id>`, `/system <text>`, `/reset`,
       `/help`, `/exit`. Triple-double-quote on its own line = multi-line message.
     - `serve [--port N] [--host H] [-d] [-- passthrough...]` — start the bundled

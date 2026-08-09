@@ -2,7 +2,10 @@ import ArgumentParser
 import Foundation
 
 struct Run: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Generate a response to a prompt (streams to stdout).")
+    static let configuration = CommandConfiguration(
+        abstract: "Generate a response to a prompt (streams to stdout).",
+        discussion: "Uses the running server if one is up; otherwise loads the model locally via the bundled engine, so it works with the app closed."
+    )
 
     @OptionGroup var global: GlobalOptions
     @Option(name: .shortAndLong, help: "Model id to use (default: the configured model).") var model: String?
@@ -20,11 +23,23 @@ struct Run: AsyncParsableCommand {
         let prompt = resolvePrompt()
         guard !prompt.isEmpty else { throw CLIError.usage("No prompt. Pass text or pipe it via stdin.") }
 
+        // Reuse the running server if it's up; otherwise fall back to loading the
+        // model locally via the bundled engine, so `run` works with the app closed.
+        let client = ServerClient(config: config)
+        if await client.isUp() {
+            try await runOnServer(client: client, model: modelID, prompt: prompt)
+        } else if let python = EngineProcess.locatePython() {
+            try runLocally(python: python, model: modelID, prompt: prompt)
+        } else {
+            throw CLIError.server("no server running at \(config.baseURL.absoluteString) and no bundled engine found. Start one with `nativ serve`, or point NATIV_ENGINE_BIN at a python3.")
+        }
+    }
+
+    private func runOnServer(client: ServerClient, model modelID: String, prompt: String) async throws {
         var messages: [[String: Any]] = []
         if let system, !system.isEmpty { messages.append(["role": "system", "content": system]) }
         messages.append(try userMessage(text: prompt))
 
-        let client = ServerClient(config: config)
         if json {
             print(try await client.chatJSON(model: modelID, messages: messages))
             return
@@ -38,6 +53,31 @@ struct Run: AsyncParsableCommand {
             print(full)
         } else if !full.hasSuffix("\n") {
             print("")
+        }
+    }
+
+    /// Cold-load the model and generate via `python3 -m mlx_vlm.generate`. The
+    /// child inherits stdout/stderr, so `--no-verbose` output streams directly.
+    private func runLocally(python: URL, model modelID: String, prompt: String) throws {
+        if json {
+            throw CLIError.usage("--json needs the server. Start it with `nativ serve`, then retry.")
+        }
+        var args = ["-m", "mlx_vlm.generate", "--model", modelID, "--prompt", prompt, "--no-verbose"]
+        if let system, !system.isEmpty { args += ["--system", system] }
+        for path in images {
+            args += ["--image", (path as NSString).expandingTildeInPath]
+        }
+        FileHandle.standardError.write(Data("· server not running — loading \(modelID) locally (first run is slow)…\n".utf8))
+        let process = Process()
+        process.executableURL = python
+        process.arguments = args
+        var env = ProcessInfo.processInfo.environment
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"   // keep the child's stderr clean
+        process.environment = env
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            throw CLIError.server("local generation exited with status \(process.terminationStatus)")
         }
     }
 

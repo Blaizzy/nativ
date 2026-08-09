@@ -6,24 +6,32 @@ import Foundation
 enum ServerProcess {
     static var pidFile: String { (NativConfig.supportDir as NSString).appendingPathComponent("cli-server.pid") }
 
-    /// The bundled server binary, searched via env override then known app locations.
-    static func locateBinary() -> URL? {
+    /// Known install locations of Nativ.app, most-specific first.
+    static let appPaths: [String] = [
+        "/Applications/Nativ.app",
+        ("~/Applications/Nativ.app" as NSString).expandingTildeInPath,
+        ("~/Downloads/Nativ-dev-cpu-gpu/Nativ.app" as NSString).expandingTildeInPath,
+    ]
+
+    /// An executable resource inside the app bundle, at `relativePath` under the
+    /// app root, or nil if no bundle here has it. Shared by the server and engine
+    /// locators.
+    static func bundledResource(_ relativePath: String) -> URL? {
         let fm = FileManager.default
-        if let override = ProcessInfo.processInfo.environment["NATIV_SERVER_BIN"] {
-            let url = URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
-            if fm.isExecutableFile(atPath: url.path) { return url }
-        }
-        let relative = "Contents/Frameworks/NativServerKit.framework/Versions/A/Resources/mlx-vlm-server/bin/mlx-vlm-server"
-        let apps = [
-            "/Applications/Nativ.app",
-            ("~/Applications/Nativ.app" as NSString).expandingTildeInPath,
-            ("~/Downloads/Nativ-dev-cpu-gpu/Nativ.app" as NSString).expandingTildeInPath,
-        ]
-        for app in apps {
-            let url = URL(fileURLWithPath: app).appendingPathComponent(relative)
+        for app in appPaths {
+            let url = URL(fileURLWithPath: app).appendingPathComponent(relativePath)
             if fm.isExecutableFile(atPath: url.path) { return url }
         }
         return nil
+    }
+
+    /// The bundled server binary, searched via env override then known app locations.
+    static func locateBinary() -> URL? {
+        if let override = ProcessInfo.processInfo.environment["NATIV_SERVER_BIN"] {
+            let url = URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+            if FileManager.default.isExecutableFile(atPath: url.path) { return url }
+        }
+        return bundledResource("Contents/Frameworks/NativServerKit.framework/Versions/A/Resources/mlx-vlm-server/bin/mlx-vlm-server")
     }
 
     static func writePID(_ pid: Int32) {
