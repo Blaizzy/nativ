@@ -96,62 +96,6 @@ extension NativKit {
                 )
             ]
         ),
-        NativKit(
-            id: "sales",
-            name: "Sales",
-            summary: "Research accounts, remember context, draft outreach, and dictate notes.",
-            symbol: "chart.line.uptrend.xyaxis",
-            tint: .blue,
-            mcpServerIDs: ["fetch", "memory"],
-            extensionIDs: ["com.nativ.voice-dictation"],
-            skills: [
-                .kit(
-                    "A3000000-0000-4000-8000-000000000003",
-                    "Sales outreach",
-                    """
-                    You're helping with sales. Be specific, concise, and grounded in \
-                    what you can actually learn about the account.
-
-                    - Use the fetch tool to research a company or contact before writing; \
-                    reference concrete, current details.
-                    - Keep account context in the memory tool so follow-ups stay \
-                    consistent across the relationship.
-                    - Draft outreach that is short, personalized, and value-first — no \
-                    filler, no invented facts about the prospect.
-                    - When the user dictates notes, capture the substance faithfully \
-                    and offer clear next steps.
-                    """
-                )
-            ]
-        ),
-        NativKit(
-            id: "operations",
-            name: "Operations",
-            summary: "Work with files and structured data, and keep an operational memory.",
-            symbol: "checklist",
-            tint: .teal,
-            mcpServerIDs: ["filesystem", "sqlite", "memory"],
-            extensionIDs: [],
-            skills: [
-                .kit(
-                    "A4000000-0000-4000-8000-000000000004",
-                    "Operations and data hygiene",
-                    """
-                    You're helping run operations. Favor accuracy, repeatability, and \
-                    clear audit trails.
-
-                    - Use the filesystem and SQLite tools to read the real data before \
-                    summarizing or changing anything.
-                    - Prefer read-only queries; confirm explicitly before any write, \
-                    delete, or bulk change.
-                    - Record recurring facts, definitions, and process notes in the \
-                    memory tool so they persist.
-                    - Report numbers exactly as the data shows them and note any gaps \
-                    or inconsistencies you find.
-                    """
-                )
-            ]
-        )
     ]
 }
 
@@ -160,7 +104,7 @@ extension NativKit {
 /// How much of a kit is currently switched on, derived from its live pieces.
 enum NativKitState: Equatable {
     case off
-    case partial
+    case partial(active: Int, total: Int)
     case enabled
 }
 
@@ -217,7 +161,7 @@ enum NativKitActivation {
         }
 
         guard total > 0, active > 0 else { return .off }
-        return active == total ? .enabled : .partial
+        return active == total ? .enabled : .partial(active: active, total: total)
     }
 
     /// Matches a catalog entry to a configured server by launch identity

@@ -8,8 +8,8 @@ private func kitStateBadge(_ state: NativKitState) -> some View {
     switch state {
     case .enabled:
         NativStatusBadge(text: "Enabled", tone: .success, symbol: "checkmark")
-    case .partial:
-        NativStatusBadge(text: "Partial", tone: .warning)
+    case let .partial(active, total):
+        NativStatusBadge(text: "\(active) of \(total) on", tone: .warning)
     case .off:
         EmptyView()
     }
