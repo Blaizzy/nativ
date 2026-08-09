@@ -238,14 +238,14 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .release-select-option[aria-selected="true"] { color: var(--ink); background: var(--acid); }
 .release-select-option[aria-selected="true"]::before { opacity: 1; }
 
-.download-result { display: flex; justify-content: space-between; align-items: end; gap: 30px; max-width: 1500px; margin: 50px auto 24px; }
+.download-result { display: flex; justify-content: space-between; align-items: end; gap: 30px; max-width: 1280px; margin: 50px auto 24px; }
 .download-result > div { display: grid; gap: 12px; }
 .download-result > div > span { color: var(--muted); font: 500 8px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
 .download-result strong { font-size: clamp(76px, 10vw, 150px); line-height: .72; letter-spacing: -.075em; font-variant-numeric: tabular-nums; }
 .download-result p { display: flex; gap: 22px; margin: 0; color: var(--muted); font: 400 8px/1 var(--mono); text-transform: uppercase; }
 .download-result p span + span::before { content: "·"; margin-right: 22px; }
 
-.download-table-wrap { max-width: 1500px; margin: 0 auto; overflow-x: auto; border-top: 1px solid var(--ink); }
+.download-table-wrap { max-width: 1280px; margin: 0 auto; overflow-x: auto; border-top: 1px solid var(--ink); }
 .download-table { width: 100%; border-collapse: collapse; text-align: left; }
 .download-table th { height: 38px; color: var(--muted); border-bottom: 1px solid var(--line); font: 500 7px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
 .download-table th:nth-child(5) { padding-right: 24px; text-align: right; }
@@ -269,7 +269,7 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .download-share span { text-align: right; color: var(--muted); font: 400 7px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .download-loading { height: 110px !important; color: var(--muted); text-align: center; font: 400 9px/1 var(--mono) !important; }
 
-.download-notes { display: flex; justify-content: flex-end; max-width: 1500px; margin: 42px auto 0; }
+.download-notes { display: flex; justify-content: flex-end; max-width: 1280px; margin: 42px auto 0; }
 .download-notes a { align-self: start; display: flex; gap: 28px; padding-bottom: 7px; border-bottom: 1px solid var(--ink); font: 500 8px/1 var(--mono); text-transform: uppercase; }
 
 .downloads-cta { display: flex; align-items: end; justify-content: space-between; gap: 60px; padding: 115px clamp(24px, 7vw, 110px); background: var(--acid); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
