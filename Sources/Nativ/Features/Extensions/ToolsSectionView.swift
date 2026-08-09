@@ -4,6 +4,7 @@ import SwiftUI
 struct ToolsSectionView: View {
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
+    @ObservedObject var manager: NativExtensionManager
     @State private var inspecting: ToolItem?
 
     var body: some View {
@@ -71,6 +72,7 @@ struct ToolsSectionView: View {
         definitions += ChatServerStatsToolRegistry.definitions()
         definitions += ChatSwitchModelToolRegistry.definitions()
         definitions += ChatImageToolRegistry.definitions(canEdit: false)
+        definitions += manager.toolDefinitions
         return definitions.map {
             ToolItem(
                 name: $0.function.name,

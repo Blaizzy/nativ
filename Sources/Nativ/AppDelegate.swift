@@ -344,8 +344,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()
+    private let browsingExtension = BrowsingExtension()
     private lazy var extensionManager = NativExtensionManager(
-        builtInExtensions: [voiceDictationExtension]
+        builtInExtensions: [voiceDictationExtension, browsingExtension]
     )
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()

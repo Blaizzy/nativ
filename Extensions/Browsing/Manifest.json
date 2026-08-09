@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "com.nativ.browsing",
+  "version": "1.0.0",
+  "minimumNativVersion": "0.2.2",
+  "displayName": "Browsing",
+  "summary": "Fast, compact web search for tool-capable models.",
+  "developer": "Nativ",
+  "systemImage": "globe",
+  "included": true,
+  "enabledByDefault": true,
+  "runtime": "builtIn",
+  "extensionPoint": "com.nativ.extension",
+  "contributions": {
+    "sidebar": [
+      {
+        "id": "com.nativ.browsing.page",
+        "title": "Browsing",
+        "systemImage": "globe",
+        "order": 260
+      }
+    ],
+    "commands": [],
+    "shortcuts": [],
+    "settings": []
+  },
+  "permissions": [
+    "storage.namespaced"
+  ]
+}

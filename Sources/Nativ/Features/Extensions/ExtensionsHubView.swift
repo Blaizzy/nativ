@@ -94,7 +94,7 @@ struct ExtensionsHubView: View {
         case .mcp:
             MCPSectionView(host: host, model: model)
         case .tools:
-            ToolsSectionView(host: host, model: model)
+            ToolsSectionView(host: host, model: model, manager: manager)
         case .skills:
             SkillsSectionView(model: model)
         }

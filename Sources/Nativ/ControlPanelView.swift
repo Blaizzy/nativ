@@ -1939,6 +1939,7 @@ struct ControlPanelView: View {
                 model: model,
                 chat: chat,
                 mcpHost: mcpHost,
+                extensionManager: extensionManager,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
