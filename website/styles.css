@@ -247,26 +247,26 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 
 .download-table-wrap { max-width: 1500px; margin: 0 auto; overflow-x: auto; border-top: 1px solid var(--ink); }
 .download-table { width: 100%; border-collapse: collapse; text-align: left; }
-.download-table th { height: 38px; color: var(--muted); border-bottom: 1px solid var(--line); font: 500 7px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
+.download-table th { height: 38px; color: var(--muted); border-bottom: 1px solid var(--line); font: 500 9px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
 .download-table th:nth-child(5) { padding-right: 24px; text-align: right; }
-.download-table td { height: 74px; padding-right: 24px; border-bottom: 1px solid var(--line); font-size: 11px; white-space: nowrap; }
+.download-table td { height: 74px; padding-right: 24px; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
 .download-table th:first-child, .download-table td:first-child { padding-left: 12px; }
 .download-table th:last-child, .download-table td:last-child { padding-right: 12px; }
 .download-table tbody tr { transition: background .18s; }
 .download-table tbody tr:hover { background: color-mix(in srgb, var(--acid) 32%, transparent); }
 .download-release a { font-weight: 700; }
 .download-release a:hover, .download-asset a:hover { text-decoration: underline; }
-.download-asset { width: 32%; color: var(--muted); font: 400 9px/1 var(--mono); }
-.asset-badge { display: inline-block; padding: 6px 8px; border: 1px solid var(--line); border-radius: 20px; font: 500 7px/1 var(--mono); text-transform: uppercase; }
+.download-asset { width: 32%; color: var(--muted); font-family: var(--mono); }
+.asset-badge { display: inline-block; padding: 6px 8px; border: 1px solid var(--line); border-radius: 20px; font: 500 9px/1 var(--mono); text-transform: uppercase; }
 .asset-badge-dmg { color: var(--ink); background: var(--acid); border-color: var(--ink); }
 .asset-badge-appcast { color: var(--paper); background: var(--ink); border-color: var(--ink); }
-.download-date { color: var(--muted); font: 400 8px/1 var(--mono); }
+.download-date { color: var(--muted); font-family: var(--mono); }
 .download-value { text-align: right; }
-.download-value strong { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.download-value strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .download-share { display: grid; grid-template-columns: minmax(80px, 1fr) 42px; align-items: center; gap: 10px; min-width: 155px; }
 .download-share i { position: relative; display: block; height: 4px; background: var(--paper-2); overflow: hidden; }
 .download-share i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--share); background: var(--orange); }
-.download-share span { text-align: right; color: var(--muted); font: 400 7px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.download-share span { text-align: right; color: var(--muted); font: 400 9px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .download-loading { height: 110px !important; color: var(--muted); text-align: center; font: 400 9px/1 var(--mono) !important; }
 
 .download-notes { display: flex; justify-content: flex-end; max-width: 1500px; margin: 42px auto 0; }
