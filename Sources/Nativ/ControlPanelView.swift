@@ -587,6 +587,7 @@ struct ControlPanelView: View {
                 deleteRecentSession(recent)
                 pendingDeleteRecent = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteRecent = nil
             }
@@ -610,6 +611,7 @@ struct ControlPanelView: View {
                 chat.deleteFolder(folder.id)
                 pendingDeleteFolder = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteFolder = nil
             }
@@ -623,6 +625,7 @@ struct ControlPanelView: View {
             Button("Delete", role: .destructive) {
                 bulkDeleteSelected()
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")

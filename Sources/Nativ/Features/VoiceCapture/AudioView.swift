@@ -63,6 +63,7 @@ struct AudioView: View {
     @State private var shortcutConflict: String?
     @State private var destination: AudioDestination = .record
     @State private var pendingDeleteDictation: AudioTranscriptionRecord?
+    @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var isConfirmingClearAllDictations = false
 
     let titleLeadingInset: CGFloat
@@ -180,6 +181,7 @@ struct AudioView: View {
                 deleteDictation(record)
                 pendingDeleteDictation = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteDictation = nil
             }
@@ -193,9 +195,29 @@ struct AudioView: View {
             Button("Clear All", role: .destructive) {
                 clearAllDictations()
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("All locally stored dictation transcripts and retained dictation audio will be permanently deleted.")
+        }
+        .alert(
+            "Delete recording?",
+            isPresented: Binding(
+                get: { pendingDeleteRecording != nil },
+                set: { if !$0 { pendingDeleteRecording = nil } }
+            ),
+            presenting: pendingDeleteRecording
+        ) { record in
+            Button("Delete", role: .destructive) {
+                captureLibrary.delete(record)
+                pendingDeleteRecording = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDeleteRecording = nil
+            }
+        } message: { record in
+            Text("“\(record.displayTitle)” and its saved audio, transcript, and summary will be permanently deleted.")
         }
     }
 
@@ -1839,7 +1861,7 @@ struct AudioView: View {
                             onTranscribe: { captureLibrary.retryTranscription(record) },
                             onSummarize: { captureLibrary.summarize(record) },
                             onRename: { analytics.updateTitle($0, for: record.id) },
-                            onDelete: { captureLibrary.delete(record) }
+                            onDelete: { pendingDeleteRecording = record }
                         )
                     }
                 }
