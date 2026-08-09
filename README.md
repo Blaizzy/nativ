@@ -42,10 +42,6 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 
 Inference runs on your Mac after a model has been downloaded. Model downloads and first-time build dependencies still require network access.
 
-## Coming soon
-
-Support for dedicated audio-only models is coming soon, along with calling image generation as a tool directly from Chat.
-
 ## How it works
 
 ```mermaid
@@ -88,8 +84,8 @@ On first launch:
 3. Open **Models** to download or select a compatible model.
 4. Start chatting, inspect analytics, or connect one of the supported coding tools.
 
-Nativ asks for Accessibility permission so it can detect the default Fn + Control hold gesture
-outside the app, and for Microphone permission the first time you record. Recordings are
+Nativ asks for Accessibility permission so it can detect the default Control + Option + Command
+double-tap outside the app, and for Microphone permission the first time you record. Recordings are
 saved temporarily as `.wav` files with matching `.txt` transcripts and can be opened from
 **Show Voice Recordings** in the menu-bar menu. Raw audio is deleted automatically after five
 minutes (or immediately when Nativ quits), while transcript files remain available. Press
