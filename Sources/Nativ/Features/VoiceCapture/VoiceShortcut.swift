@@ -77,7 +77,7 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
     static let recordDefault = VoiceShortcut(
         keyCode: nil,
         keyDisplay: nil,
-        modifiers: [.control, .option, .command]
+        modifiers: [.function, .control]
     )
     static let retryDefault = VoiceShortcut(
         keyCode: UInt16(kVK_ANSI_R),
@@ -189,7 +189,7 @@ final class VoiceShortcutPreferences: ObservableObject {
         retryShortcut = .retryDefault
     }
 
-    private func preferencesDidChange() {
+    private func persistCurrent() {
         let payload = Payload(
             recordShortcut: recordShortcut,
             retryShortcut: retryShortcut,
@@ -198,6 +198,10 @@ final class VoiceShortcutPreferences: ObservableObject {
         if let data = try? JSONEncoder().encode(payload) {
             defaults.set(data, forKey: storageKey)
         }
+    }
+
+    private func preferencesDidChange() {
+        persistCurrent()
         NotificationCenter.default.post(
             name: .voiceShortcutPreferencesDidChange,
             object: self
