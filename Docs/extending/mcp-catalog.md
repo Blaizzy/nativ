@@ -2,9 +2,9 @@
 
 The **Browse catalog** grid in Nativ's MCP section is the list of community MCP
 servers we've reviewed and shipped. Every server in it is one entry in
-[`Sources/Nativ/Resources/MCPCatalog.json`](../Sources/Nativ/Resources/MCPCatalog.json),
+[`Sources/Nativ/Resources/MCPCatalog.json`](../../Sources/Nativ/Resources/MCPCatalog.json),
 and every entry has to pass CI before it can merge — the
-[`Verify MCP Catalog`](../.github/workflows/verify-mcp-catalog.yml) workflow
+[`Verify MCP Catalog`](../../.github/workflows/verify-mcp-catalog.yml) workflow
 launches your server over stdio, completes an MCP `initialize` handshake, calls
 `tools/list`, and requires **at least one tool** to come back.
 

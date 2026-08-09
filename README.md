@@ -23,6 +23,15 @@ Nativ is a native macOS workspace for running AI models locally on Apple silicon
 
 Use Nativ as a private chat app, a model manager, a performance dashboard, or an OpenAI- and Anthropic-compatible local inference server for the tools you already use.
 
+## Documentation
+
+Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)** — start there for
+[Chat](Docs/features/chat.md), [Models](Docs/features/models.md), [Voice](Docs/features/voice.md),
+[Routines](Docs/features/routines.md), [Integrations](Docs/features/integrations.md), and the
+[Developer](Docs/features/developer.md) reference, plus guides for
+[extensions](Docs/extending/extensions.md), [kits](Docs/extending/kits.md), and the
+[MCP catalog](Docs/extending/mcp-catalog.md).
+
 ## What Nativ can do
 
 | Feature | What you get |
@@ -193,7 +202,7 @@ scripts/                         # Archive, signing, notarization, and release t
 project.yml                      # XcodeGen project definition
 ```
 
-See [Docs/Extensions.md](Docs/Extensions.md) for the extension package format,
+See [Docs/extending/extensions.md](Docs/extending/extensions.md) for the extension package format,
 lifecycle, permission model, and the steps for adding another first-party extension.
 
 ## Development
