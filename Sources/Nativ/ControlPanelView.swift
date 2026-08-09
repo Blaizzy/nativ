@@ -154,40 +154,6 @@ private enum ControlPanelOnboarding {
         "nativ.control-panel.extensions-new-badge-dismissed.v1"
 }
 
-/// Overlays full-size pages without asking each page for an intrinsic size when
-/// the parent has already supplied both dimensions. Unlike `ZStack`, this keeps
-/// a page-order change from walking every retained page's layout hierarchy.
-private struct ControlPanelPageStackLayout: Layout {
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        var width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil }
-        var height = proposal.height.flatMap { $0.isFinite ? max(0, $0) : nil }
-        if width == nil || height == nil {
-            for subview in subviews {
-                let size = subview.sizeThatFits(proposal)
-                width = max(width ?? 0, size.width)
-                height = max(height ?? 0, size.height)
-            }
-        }
-        return CGSize(width: width ?? 0, height: height ?? 0)
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        let pageProposal = ProposedViewSize(width: bounds.width, height: bounds.height)
-        for subview in subviews {
-            subview.place(at: bounds.origin, anchor: .topLeading, proposal: pageProposal)
-        }
-    }
-}
-
 extension Color {
     static let nativMainContentBackground = Color(
         nsColor: NSColor(name: NSColor.Name("NativMainContentBackground")) { appearance in
@@ -377,9 +343,6 @@ struct ControlPanelView: View {
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
-    @State private var hasPreparedModelsPage = false
-    @State private var retainedNonModelsSelection: ControlPanelSidebarSelection = .tab(.chat)
-    @State private var retainedNonModelsTab: ControlPanelTab = .chat
     @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
@@ -496,12 +459,6 @@ struct ControlPanelView: View {
                     )
                 }
             }
-        }
-        .task {
-            guard !hasPreparedModelsPage else { return }
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            hasPreparedModelsPage = true
         }
         .onReceive(navigation.$requestedTab) { tab in
             guard let tab else { return }
@@ -1931,29 +1888,11 @@ struct ControlPanelView: View {
 
     private var detail: some View {
         VStack(spacing: 0) {
-            ControlPanelPageStackLayout {
-                Group {
-                    if case .extensionPage(let pageID) = retainedNonModelsSelection {
-                        extensionPage(pageID)
-                    } else {
-                        corePage(retainedNonModelsTab)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.nativMainContentBackground)
-                .allowsHitTesting(selectedTab != .models)
-                .accessibilityHidden(selectedTab == .models)
-                .accessibilityElement(children: selectedTab == .models ? .ignore : .contain)
-                .zIndex(selectedTab == .models ? 0 : 1)
-
-                if hasPreparedModelsPage || selectedTab == .models {
-                    modelsPage
-                        .allowsHitTesting(selectedTab == .models)
-                        .accessibilityHidden(selectedTab != .models)
-                        .accessibilityElement(
-                            children: selectedTab == .models ? .contain : .ignore
-                        )
-                        .zIndex(selectedTab == .models ? 1 : 0)
+            Group {
+                if case .extensionPage(let pageID) = sidebarSelection {
+                    extensionPage(pageID)
+                } else {
+                    corePage
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1989,8 +1928,8 @@ struct ControlPanelView: View {
     }
 
     @ViewBuilder
-    private func corePage(_ tab: ControlPanelTab) -> some View {
-        switch tab {
+    private var corePage: some View {
+        switch selectedTab {
         case .chat:
             ChatView(
                 model: model,
@@ -2043,7 +1982,12 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .models:
-            EmptyView()
+            ModelsView(
+                model: model,
+                showsConfiguration: $isModelConfigurationVisible,
+                titleLeadingInset: detailTitleLeadingInset,
+                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
+            )
         case .integrations:
             IntegrationsView(
                 model: model,
@@ -2069,18 +2013,6 @@ struct ControlPanelView: View {
                 launchAtLogin: launchAtLogin
             )
         }
-    }
-
-    private var modelsPage: some View {
-        ModelsView(
-            model: model,
-            showsConfiguration: Binding(
-                get: { selectedTab == .models && isModelConfigurationVisible },
-                set: { isModelConfigurationVisible = $0 }
-            ),
-            titleLeadingInset: detailTitleLeadingInset,
-            speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
-        )
     }
 
     @ViewBuilder
@@ -2129,8 +2061,6 @@ struct ControlPanelView: View {
             ) else {
                 sidebarSelection = .tab(.extensions)
                 selectedTab = .extensions
-                retainedNonModelsSelection = sidebarSelection
-                retainedNonModelsTab = selectedTab
                 return
             }
             sidebarSelection = selection
@@ -2151,11 +2081,6 @@ struct ControlPanelView: View {
                 sidebarSelection = .tab(.imageGeneration)
             }
             selectedTab = .imageGeneration
-        }
-
-        if selectedTab != .models {
-            retainedNonModelsSelection = sidebarSelection
-            retainedNonModelsTab = selectedTab
         }
     }
 
