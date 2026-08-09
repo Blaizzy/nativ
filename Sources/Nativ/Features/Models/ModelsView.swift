@@ -177,87 +177,101 @@ struct ModelsView: View {
     }
 
     private var installedPage: some View {
-        VStack(spacing: 0) {
+        let visibleModels = filteredLocalModels
+        let normalizedSettings = model.settings.normalized()
+
+        return VStack(spacing: 0) {
             installedToolbar
                 .padding(.horizontal, 22)
                 .padding(.vertical, 14)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if let error = localLibrary.error {
-                        ModelsNotice(
-                            title: "Couldn’t read the model cache",
-                            message: error,
-                            systemImage: "exclamationmark.triangle.fill",
-                            color: .orange
+            List {
+                if let error = localLibrary.error {
+                    ModelsNotice(
+                        title: "Couldn’t read the model cache",
+                        message: error,
+                        systemImage: "exclamationmark.triangle.fill",
+                        color: .orange
+                    )
+                    .modelsListRow()
+                }
+
+                if localLibrary.isScanning && localLibrary.models.isEmpty {
+                    ModelsLoadingState(title: "Scanning your Hugging Face cache…")
+                        .modelsListRow()
+                } else if visibleModels.isEmpty {
+                    ModelsEmptyState(
+                        systemImage: installedFilterIsActive
+                            ? "line.3.horizontal.decrease.circle" : "shippingbox",
+                        title: installedFilterIsActive
+                            ? "No models match your filter" : "No MLX models installed",
+                        message: installedFilterIsActive
+                            ? "Try a different search or model type."
+                            : "Discover an MLX model on Hugging Face and download it to this cache.",
+                        actionTitle: installedFilterIsActive ? nil : "Discover models",
+                        action: { section = .discover }
+                    )
+                    .modelsListRow()
+                } else {
+                    HStack {
+                        Text(
+                            "\(visibleModels.count) \(visibleModels.count == 1 ? "model" : "models")"
                         )
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if localLibrary.isScanning {
+                            ProgressView().controlSize(.small)
+                        }
                     }
+                    .modelsListRow(top: 0)
 
-                    if localLibrary.isScanning && localLibrary.models.isEmpty {
-                        ModelsLoadingState(title: "Scanning your Hugging Face cache…")
-                    } else if filteredLocalModels.isEmpty {
-                        ModelsEmptyState(
-                            systemImage: installedFilterIsActive
-                                ? "line.3.horizontal.decrease.circle" : "shippingbox",
-                            title: installedFilterIsActive
-                                ? "No models match your filter" : "No MLX models installed",
-                            message: installedFilterIsActive
-                                ? "Try a different search or model type."
-                                : "Discover an MLX model on Hugging Face and download it to this cache.",
-                            actionTitle: installedFilterIsActive ? nil : "Discover models",
-                            action: { section = .discover }
-                        )
-                    } else {
-                        HStack {
-                            Text(
-                                "\(filteredLocalModels.count) \(filteredLocalModels.count == 1 ? "model" : "models")"
-                            )
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if localLibrary.isScanning {
-                                ProgressView().controlSize(.small)
+                    ForEach(visibleModels) { localModel in
+                        let preloadSlots = preloadSlots(for: localModel)
+                        let selectedSlots = Set(
+                            ModelPreloadSlot.allCases.filter {
+                                normalizedSettings.modelID(for: $0) == localModel.repoID
                             }
-                        }
-
-                        ForEach(filteredLocalModels) { localModel in
-                            let preloadSlots = preloadSlots(for: localModel)
-                            InstalledModelRow(
-                                localModel: localModel,
-                                preloadSlots: preloadSlots,
-                                selectedPreloadSlots: selectedPreloadSlots(
-                                    for: localModel.repoID
-                                ),
-                                preferredPreloadSlot: preferredPreloadSlot(
-                                    among: preloadSlots
-                                ),
-                                isSelectionDisabled: model.modelSwitchInProgress,
-                                isModelLoading: model.modelLoadingID
-                                    == localModel.repoID,
-                                modelLoadingPercentage: model.modelLoadingPercentage,
-                                isDeleting: localLibrary.deletingModelIDs.contains(
-                                    localModel.repoID),
-                                canDelete: localModel.isDeletable && !model.modelSwitchInProgress
-                                    && !isModelInUse(localModel.repoID),
-                                onSetPreload: { slot, isEnabled in
-                                    if isEnabled {
-                                        model.requestPreloadedModelSwitch(
-                                            to: localModel,
-                                            for: slot,
-                                            availableModels: localLibrary.models
-                                        )
-                                    } else {
-                                        model.switchPreloadedModel(to: nil, for: slot)
-                                    }
-                                },
-                                onDelete: { deleteInstalledModel(localModel) }
-                            )
-                        }
+                        )
+                        InstalledModelRow(
+                            localModel: localModel,
+                            preloadSlots: preloadSlots,
+                            selectedPreloadSlots: selectedSlots,
+                            preferredPreloadSlot: preferredPreloadSlot(
+                                among: preloadSlots
+                            ),
+                            isSelectionDisabled: model.modelSwitchInProgress,
+                            isModelLoading: model.modelLoadingID
+                                == localModel.repoID,
+                            modelLoadingPercentage: model.modelLoadingPercentage,
+                            isDeleting: localLibrary.deletingModelIDs.contains(
+                                localModel.repoID),
+                            canDelete: localModel.isDeletable && !model.modelSwitchInProgress
+                                && !isModelInUse(localModel.repoID),
+                            onSetPreload: { slot, isEnabled in
+                                if isEnabled {
+                                    model.requestPreloadedModelSwitch(
+                                        to: localModel,
+                                        for: slot,
+                                        availableModels: localLibrary.models
+                                    )
+                                } else {
+                                    model.switchPreloadedModel(to: nil, for: slot)
+                                }
+                            },
+                            onDelete: { deleteInstalledModel(localModel) }
+                        )
+                        .modelsListRow()
                     }
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 22)
+
+                Color.clear
+                    .frame(height: 12)
+                    .modelsListRow(top: 0, bottom: 0)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
         }
     }
 
@@ -310,7 +324,9 @@ struct ModelsView: View {
     }
 
     private var discoverPage: some View {
-        VStack(spacing: 0) {
+        let installedIDs = installedModelIDs
+
+        return VStack(spacing: 0) {
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
                     DebouncedModelsSearchField(
@@ -331,99 +347,108 @@ struct ModelsView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if let error = hubLibrary.error {
-                        ModelsNotice(
-                            title: "Hugging Face is unavailable",
-                            message: error,
-                            systemImage: "wifi.exclamationmark",
-                            color: .orange
+            List {
+                if let error = hubLibrary.error {
+                    ModelsNotice(
+                        title: "Hugging Face is unavailable",
+                        message: error,
+                        systemImage: "wifi.exclamationmark",
+                        color: .orange
+                    )
+                    .modelsListRow()
+                } else if hubLibrary.isSearching && hubLibrary.models.isEmpty {
+                    ModelsLoadingState(
+                        title: hubQuery.isEmpty
+                            ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
+                        .modelsListRow()
+                } else if hubLibrary.models.isEmpty {
+                    if hubCapabilityFilters.isEmpty && hubAccessFilter == .all {
+                        ModelsEmptyState(
+                            systemImage: "magnifyingglass",
+                            title: "No Safetensors models found",
+                            message: "Try a model family, provider, or repository name.",
+                            actionTitle: nil,
+                            action: {}
                         )
-                    } else if hubLibrary.isSearching && hubLibrary.models.isEmpty {
-                        ModelsLoadingState(
-                            title: hubQuery.isEmpty
-                                ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
-                    } else if hubLibrary.models.isEmpty {
-                        if hubCapabilityFilters.isEmpty && hubAccessFilter == .all {
-                            ModelsEmptyState(
-                                systemImage: "magnifyingglass",
-                                title: "No Safetensors models found",
-                                message: "Try a model family, provider, or repository name.",
-                                actionTitle: nil,
-                                action: {}
-                            )
-                        } else {
-                            ModelsEmptyState(
-                                systemImage: "line.3.horizontal.decrease.circle",
-                                title: "No models match these filters",
-                                message:
-                                    "Try another model type, capability, or access filter, or continue to the next page.",
-                                actionTitle: nil,
-                                action: {}
-                            )
-                        }
+                        .modelsListRow()
                     } else {
-                        discoverResultsHeader
-
-                        ForEach(filteredHubModels) { hubModel in
-                            HubModelRowContainer(
-                                model: hubModel,
-                                isInstalled: installedModelIDs.contains(hubModel.id),
-                                cachePath: model.settings.modelSearchPath,
-                                onDownload: { downloadSizeBytes in
-                                    downloadManager.download(
-                                        repoID: hubModel.id,
-                                        sizeBytes: downloadSizeBytes,
-                                        cachePath: model.settings.modelSearchPath,
-                                        token: model.effectiveHuggingFaceToken
-                                    ) {}
-                                },
-                                onPauseResume: {
-                                    if downloadManager.isPaused(for: hubModel.id) {
-                                        downloadManager.resumeDownload(hubModel.id)
-                                    } else {
-                                        downloadManager.pauseDownload(hubModel.id)
-                                    }
-                                },
-                                onRemoveDownload: {
-                                    downloadManager.removeDownload(hubModel.id)
-                                }
-                            )
-                        }
-
-                        HStack(spacing: 12) {
-                            Spacer()
-
-                            Button {
-                                hubLibrary.goToPreviousPage()
-                            } label: {
-                                Label("Previous", systemImage: "chevron.left")
-                            }
-                            .disabled(!hubLibrary.canGoToPreviousPage)
-
-                            Text("Page \(hubLibrary.pageNumber) of up to 5")
-                                .font(.callout.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .frame(minWidth: 122)
-
-                            Button {
-                                hubLibrary.goToNextPage(token: model.effectiveHuggingFaceToken)
-                            } label: {
-                                Label("Next", systemImage: "chevron.right")
-                                    .labelStyle(.titleAndIcon)
-                            }
-                            .disabled(!hubLibrary.canGoToNextPage)
-
-                            Spacer()
-                        }
-                        .buttonStyle(.bordered)
-                        .padding(.top, 8)
+                        ModelsEmptyState(
+                            systemImage: "line.3.horizontal.decrease.circle",
+                            title: "No models match these filters",
+                            message:
+                                "Try another model type, capability, or access filter, or continue to the next page.",
+                            actionTitle: nil,
+                            action: {}
+                        )
+                        .modelsListRow()
                     }
+                } else {
+                    discoverResultsHeader
+                        .modelsListRow(top: 0)
+
+                    ForEach(filteredHubModels) { hubModel in
+                        HubModelRowContainer(
+                            model: hubModel,
+                            isInstalled: installedIDs.contains(hubModel.id),
+                            cachePath: model.settings.modelSearchPath,
+                            onDownload: { downloadSizeBytes in
+                                downloadManager.download(
+                                    repoID: hubModel.id,
+                                    sizeBytes: downloadSizeBytes,
+                                    cachePath: model.settings.modelSearchPath,
+                                    token: model.effectiveHuggingFaceToken
+                                ) {}
+                            },
+                            onPauseResume: {
+                                if downloadManager.isPaused(for: hubModel.id) {
+                                    downloadManager.resumeDownload(hubModel.id)
+                                } else {
+                                    downloadManager.pauseDownload(hubModel.id)
+                                }
+                            },
+                            onRemoveDownload: {
+                                downloadManager.removeDownload(hubModel.id)
+                            }
+                        )
+                        .modelsListRow()
+                    }
+
+                    HStack(spacing: 12) {
+                        Spacer()
+
+                        Button {
+                            hubLibrary.goToPreviousPage()
+                        } label: {
+                            Label("Previous", systemImage: "chevron.left")
+                        }
+                        .disabled(!hubLibrary.canGoToPreviousPage)
+
+                        Text("Page \(hubLibrary.pageNumber) of up to 5")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 122)
+
+                        Button {
+                            hubLibrary.goToNextPage(token: model.effectiveHuggingFaceToken)
+                        } label: {
+                            Label("Next", systemImage: "chevron.right")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .disabled(!hubLibrary.canGoToNextPage)
+
+                        Spacer()
+                    }
+                    .buttonStyle(.bordered)
+                    .modelsListRow(top: 13)
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 22)
+
+                Color.clear
+                    .frame(height: 12)
+                    .modelsListRow(top: 0, bottom: 0)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
         }
     }
 
@@ -458,16 +483,6 @@ struct ModelsView: View {
             slots.append(.embeddings)
         }
         return slots
-    }
-
-    private func selectedPreloadSlots(
-        for repoID: String
-    ) -> Set<ModelPreloadSlot> {
-        let settings = model.settings.normalized()
-        return Set(
-            ModelPreloadSlot.allCases.filter {
-                settings.modelID(for: $0) == repoID
-            })
     }
 
     private func preferredPreloadSlot(
@@ -1755,6 +1770,15 @@ private struct ModelRowBackground: ViewModifier {
 extension View {
     fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
         modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
+    }
+
+    fileprivate func modelsListRow(
+        top: CGFloat = 5,
+        bottom: CGFloat = 5
+    ) -> some View {
+        listRowInsets(EdgeInsets(top: top, leading: 22, bottom: bottom, trailing: 22))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 }
 
