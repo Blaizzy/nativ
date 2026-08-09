@@ -261,12 +261,12 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .download-chart-frame { position: relative; height: 350px; background: color-mix(in srgb, var(--paper-2) 62%, var(--paper)); border: 1px solid var(--ink); }
 .download-chart-plot { --chart-left: 62px; position: relative; width: 100%; height: 100%; overflow: hidden; }
 .download-chart-plot[hidden], .download-chart-empty[hidden] { display: none; }
-.download-chart-lines { position: absolute; inset: 28px 24px 38px var(--chart-left); background: repeating-linear-gradient(to bottom, transparent 0 calc(25% - 1px), var(--line) calc(25% - 1px) 25%); border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; }
-.download-chart-area { position: absolute; inset: 0; background: var(--acid); opacity: .2; }
-.download-chart-segment { position: absolute; z-index: 2; display: block; height: 3px; background: var(--orange); border-radius: 2px; transform-origin: left center; }
-.download-chart-point { position: absolute; z-index: 3; width: 8px; height: 8px; background: var(--ink); border-radius: 50%; transform: translate(-50%, -50%); }
-.download-chart-axis { position: absolute; top: 22px; bottom: 31px; left: 0; width: calc(var(--chart-left) - 10px); display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; color: var(--muted); font: 400 10px/1 var(--mono); }
-.download-chart-date { position: absolute; bottom: 11px; color: var(--muted); font: 400 10px/1 var(--mono); }
+.download-chart-lines { position: absolute; inset: 28px 24px 38px var(--chart-left); background: repeating-linear-gradient(to bottom, transparent 0 calc(25% - 1px), color-mix(in srgb, var(--ink) 18%, transparent) calc(25% - 1px) 25%); border-left: 1px solid color-mix(in srgb, var(--ink) 30%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--ink) 30%, transparent); overflow: hidden; }
+.download-chart-area { position: absolute; inset: 0; background: var(--acid); opacity: .3; }
+.download-chart-segment { position: absolute; z-index: 2; display: block; height: 4px; background: var(--orange); border-radius: 2px; transform-origin: left center; }
+.download-chart-point { position: absolute; z-index: 3; width: 10px; height: 10px; background: var(--ink); border-radius: 50%; transform: translate(-50%, -50%); }
+.download-chart-axis { position: absolute; top: 22px; bottom: 31px; left: 0; width: calc(var(--chart-left) - 10px); display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; color: var(--ink); font: 500 11px/1 var(--mono); }
+.download-chart-date { position: absolute; bottom: 11px; color: var(--ink); font: 500 11px/1 var(--mono); }
 .download-chart-date-start { left: var(--chart-left); }
 .download-chart-date-end { right: 24px; }
 .download-chart-empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; padding: 24px; text-align: center; }
