@@ -57,7 +57,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
 const filterLabels = {
   all: 'All assets',
   dmg: 'Installers',
-  appcast: 'Update feed'
+  appcast: 'Update checks'
 };
 
 const state = {

@@ -69,7 +69,7 @@
           <p class="kicker reveal">/ LIVE RELEASE TELEMETRY</p>
           <h1 class="reveal">Open-source<br /><em>momentum.</em></h1>
           <p class="downloads-lede reveal">
-            Every release. Every public asset request. Straight from GitHub—because open source should show its work.
+            Every release asset downloaded from GitHub—installer files and update-feed checks, shown separately.
           </p>
           <div class="downloads-status reveal" role="status">
             <span class="pulse-dot"></span>
@@ -79,22 +79,22 @@
           </div>
         </div>
 
-        <div class="downloads-metrics reveal" aria-label="All-time download summary">
+        <div class="downloads-metrics reveal" aria-label="All-time GitHub asset download summary">
           <article class="download-metric download-metric-primary">
             <span>INSTALLER DOWNLOADS</span>
             <strong data-installer-total>6,559</strong>
-            <p>.dmg downloads</p>
+            <p>.dmg app files downloaded</p>
             <i aria-hidden="true">↘</i>
           </article>
           <article class="download-metric">
-            <span>UPDATE FEED REQUESTS</span>
+            <span>UPDATE-FEED DOWNLOADS</span>
             <strong data-update-total>2,035</strong>
-            <p>appcast.xml downloads</p>
+            <p>appcast.xml update checks</p>
           </article>
           <article class="download-metric download-metric-dark">
-            <span>ALL ASSET REQUESTS</span>
+            <span>TOTAL ASSET DOWNLOADS</span>
             <strong data-all-total>8,594</strong>
-            <p>Combined downloads</p>
+            <p>.dmg + appcast.xml files</p>
             <small>ALL TIME</small>
           </article>
         </div>
@@ -107,7 +107,7 @@
             <h2 id="explorer-title">Filter the<br /><em>full history.</em></h2>
           </div>
           <p>
-            `.dmg` and `appcast.xml` requests both download a GitHub release asset and count toward the total. Appcast downloads are automatic update checks: they download the feed file, not the app installer, and do not indicate installations or unique users.
+            <strong>How to read this:</strong> Each appcast.xml download is an update check. If Sparkle finds a newer version and the update proceeds, that check can be followed by a separate .dmg download. If Nativ is current, it ends with the appcast. These totals count files—not users or installations.
           </p>
         </div>
 
@@ -122,7 +122,7 @@
                 Installers <span data-filter-count="dmg">6,559</span>
               </button>
               <button type="button" data-asset-filter="appcast" aria-pressed="false">
-                Update feed <span data-filter-count="appcast">2,035</span>
+                Update checks <span data-filter-count="appcast">2,035</span>
               </button>
             </div>
           </fieldset>
@@ -180,8 +180,8 @@
         </div>
 
         <div class="download-notes reveal">
-          <p><strong>What counts?</strong> GitHub increments an asset’s counter when that file is requested. Repeat downloads, retries, automation, and bots may count.</p>
-          <p><strong>What does not?</strong> These figures are not unique users, verified installations, or source-archive downloads.</p>
+          <p><strong>What counts?</strong> Each successful .dmg or appcast.xml file request. One completed update may add one feed download and one installer download; repeat downloads, retries, automation, and bots may also count.</p>
+          <p><strong>What does not?</strong> These figures do not measure unique users or verified installations, and they exclude source-archive downloads.</p>
           <a href="https://github.com/Blaizzy/nativ/releases" target="_blank" rel="noreferrer">Inspect every release on GitHub <span>↗</span></a>
         </div>
       </section>
