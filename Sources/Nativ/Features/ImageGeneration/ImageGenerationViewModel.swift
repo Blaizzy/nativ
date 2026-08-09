@@ -38,6 +38,7 @@ struct ImageGenerationExecutor {
         modelID: String,
         prompt: String,
         references: [ChatImageAttachment],
+        supportsEditing: Bool,
         settings: ImageRequestSettings,
         seed: Int?
     ) async throws -> [GeneratedImage] {
@@ -55,6 +56,13 @@ struct ImageGenerationExecutor {
                 guidance: settings.guidance
             ))
         } else {
+            guard supportsEditing else {
+                // The bundled backend cannot condition a generation-only
+                // model (e.g. Bonsai) on a reference image; the edit
+                // endpoint rejects it. Fail fast with a clear message
+                // instead of surfacing the server's unsupported-model error.
+                throw NativImageError.editingUnsupported(modelID)
+            }
             let paths = try references.map(Self.materializeReference).map(\.path)
             response = try await client.edit(MLXImageEditRequest(
                 model: modelID,
@@ -339,7 +347,7 @@ final class ImageGenerationViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func run(using appModel: NativModel, modelIsInstalled: Bool = true) {
+    func run(using appModel: NativModel, modelIsInstalled: Bool = true, supportsEditing: Bool = true) {
         guard !isGenerating,
               appModel.isRunning,
               let requestModelID = normalized(modelID),
@@ -422,6 +430,7 @@ final class ImageGenerationViewModel: ObservableObject {
                     modelID: requestModelID,
                     prompt: requestPrompt,
                     references: references,
+                    supportsEditing: supportsEditing,
                     settings: settings,
                     seed: requestSeed
                 )
@@ -431,11 +440,15 @@ final class ImageGenerationViewModel: ObservableObject {
                 }
 
                 if outputs.count == 1 {
-                    activeReference = outputs[0].attachment
-                    statusText = "Image ready. Your next prompt will edit it."
+                    activeReference = supportsEditing ? outputs[0].attachment : nil
+                    statusText = supportsEditing
+                        ? "Image ready. Your next prompt will edit it."
+                        : "Image ready."
                 } else {
                     activeReference = nil
-                    statusText = "\(outputs.count) images ready. Choose one to continue editing."
+                    statusText = supportsEditing
+                        ? "\(outputs.count) images ready. Choose one to continue editing."
+                        : "\(outputs.count) images ready."
                 }
                 persistCurrentSession(updateTimestamp: true)
                 bumpScroll()
