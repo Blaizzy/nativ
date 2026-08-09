@@ -126,12 +126,31 @@
               </button>
             </div>
           </fieldset>
-          <label class="release-filter">
-            <span>RELEASE</span>
-            <select data-release-filter>
-              <option value="all">All releases</option>
-            </select>
-          </label>
+          <div class="release-filter" role="group" aria-labelledby="release-filter-label">
+            <span id="release-filter-label">RELEASE</span>
+            <div class="release-select" data-release-select>
+              <button
+                class="release-select-trigger"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="release-filter-options"
+                aria-label="Release: All releases"
+                data-release-trigger
+              >
+                <span data-release-value>All releases</span>
+                <i aria-hidden="true"></i>
+              </button>
+              <div
+                class="release-select-menu"
+                id="release-filter-options"
+                role="listbox"
+                aria-labelledby="release-filter-label"
+                data-release-options
+                hidden
+              ></div>
+            </div>
+          </div>
         </div>
 
         <div class="download-result reveal" aria-live="polite">

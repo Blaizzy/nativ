@@ -216,7 +216,7 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .downloads-explorer-heading h2, .downloads-cta h2 { margin: 18px 0 0; font-size: clamp(60px, 7vw, 106px); line-height: .83; letter-spacing: -.07em; }
 .downloads-explorer-heading h2 em, .downloads-cta h2 em { font-family: var(--serif); font-weight: 400; }
 .downloads-explorer-heading > p { max-width: 430px; margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.download-controls { display: grid; grid-template-columns: 1fr minmax(210px, 300px); gap: 30px; align-items: end; max-width: 1500px; margin: 0 auto; padding: 22px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.download-controls { position: relative; z-index: 5; display: grid; grid-template-columns: 1fr minmax(210px, 300px); gap: 30px; align-items: end; max-width: 1500px; margin: 0 auto; padding: 22px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 .asset-filter { min-width: 0; padding: 0; margin: 0; border: 0; }
 .asset-filter legend, .release-filter > span { display: block; margin-bottom: 12px; color: var(--muted); font: 500 7px/1 var(--mono); letter-spacing: .12em; }
 .asset-filter > div { display: flex; gap: 7px; }
@@ -225,10 +225,17 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .asset-filter button:hover { border-color: var(--ink); }
 .asset-filter button.active { color: var(--paper); background: var(--ink); border-color: var(--ink); }
 .asset-filter button.active span { color: var(--acid); }
-.release-filter { position: relative; }
-.release-filter::after { content: ""; position: absolute; right: 14px; bottom: 17px; width: 7px; height: 7px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); pointer-events: none; transform: rotate(45deg); }
-.release-filter select { width: 100%; height: 40px; padding: 0 38px 0 13px; appearance: none; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 0; font: 500 9px/1 var(--mono); cursor: pointer; }
-.release-filter select:focus { outline: 2px solid var(--orange); outline-offset: 2px; }
+.release-select { position: relative; }
+.release-select-trigger { width: 100%; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px 0 13px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); cursor: pointer; font: 500 9px/1 var(--mono); text-align: left; }
+.release-select-trigger i { flex: 0 0 auto; width: 7px; height: 7px; margin-top: -4px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); transform: rotate(45deg); transition: margin .2s, transform .2s; }
+.release-select-trigger[aria-expanded="true"] i { margin-top: 4px; transform: rotate(225deg); }
+.release-select-trigger:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.release-select-menu { position: absolute; z-index: 20; inset: calc(100% + 6px) 0 auto; max-height: 250px; padding: 6px; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); box-shadow: 7px 7px 0 var(--orange); overflow-y: auto; }
+.release-select-option { position: relative; width: 100%; display: block; padding: 11px 13px 11px 34px; color: inherit; background: transparent; border: 0; cursor: pointer; font: 500 9px/1 var(--mono); text-align: left; }
+.release-select-option::before { content: ""; position: absolute; left: 15px; top: 50%; width: 5px; height: 9px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; opacity: 0; transform: translateY(-65%) rotate(45deg); }
+.release-select-option:hover, .release-select-option:focus-visible { color: var(--paper); background: #30312d; outline: none; }
+.release-select-option[aria-selected="true"] { color: var(--ink); background: var(--acid); }
+.release-select-option[aria-selected="true"]::before { opacity: 1; }
 
 .download-result { display: flex; justify-content: space-between; align-items: end; gap: 30px; max-width: 1500px; margin: 50px auto 24px; }
 .download-result > div { display: grid; gap: 12px; }
