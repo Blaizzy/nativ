@@ -1479,8 +1479,8 @@ private struct HubModelRow: View, Equatable {
 /// Keeps download progress observation local to the affected row. The parent
 /// Discover view remains stable while a download reports progress.
 private struct HubModelRowContainer: View, Equatable {
-    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
-    @State private var resolvedDownloadSizeBytes: Int64?
+    private let downloadManager = HuggingFaceDownloadManager.shared
+    @State private var downloadSnapshot: HuggingFaceDownloadManager.RowSnapshot
 
     let model: HuggingFaceModel
     let isInstalled: Bool
@@ -1489,6 +1489,25 @@ private struct HubModelRowContainer: View, Equatable {
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
 
+    init(
+        model: HuggingFaceModel,
+        isInstalled: Bool,
+        cachePath: String,
+        onDownload: @escaping (Int64?) -> Void,
+        onPauseResume: @escaping () -> Void,
+        onRemoveDownload: @escaping () -> Void
+    ) {
+        self.model = model
+        self.isInstalled = isInstalled
+        self.cachePath = cachePath
+        self.onDownload = onDownload
+        self.onPauseResume = onPauseResume
+        self.onRemoveDownload = onRemoveDownload
+        _downloadSnapshot = State(
+            initialValue: HuggingFaceDownloadManager.shared.rowSnapshot(for: model.id)
+        )
+    }
+
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model == rhs.model
             && lhs.isInstalled == rhs.isInstalled
@@ -1496,32 +1515,40 @@ private struct HubModelRowContainer: View, Equatable {
     }
 
     var body: some View {
-        let downloadSizeBytes = resolvedDownloadSizeBytes ?? model.estimatedDownloadBytes
+        let downloadSizeBytes = HubModelSizeResolver.shared.cachedSize(for: model.id)
+            ?? model.estimatedDownloadBytes
         HubModelRow(
             model: model,
             downloadSizeBytes: downloadSizeBytes,
             isInstalled: isInstalled,
-            isDownloading: downloadManager.isDownloading(model.id),
-            downloadProgress: downloadManager.progress(for: model.id),
-            isDownloadPaused: downloadManager.isPaused(for: model.id),
+            isDownloading: downloadSnapshot.isDownloading,
+            downloadProgress: downloadSnapshot.progress,
+            isDownloadPaused: downloadSnapshot.isPaused,
             downloadBlockedReason: downloadManager.capacityBlocker(
                 sizeBytes: downloadSizeBytes,
                 cachePath: cachePath
             ),
-            downloadError: downloadManager.errorByModelID[model.id],
-            onDownload: { onDownload(downloadSizeBytes) },
+            downloadError: downloadSnapshot.error,
+            onDownload: {
+                onDownload(
+                    HubModelSizeResolver.shared.cachedSize(for: model.id)
+                        ?? downloadSizeBytes
+                )
+            },
             onPauseResume: onPauseResume,
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
         .task(id: model.id, priority: .utility) {
-            resolvedDownloadSizeBytes = nil
-            guard let size = await HubModelSizeResolver.shared.resolveSize(for: model.id),
-                  !Task.isCancelled
-            else {
-                return
-            }
-            resolvedDownloadSizeBytes = size
+            // Warm the cache without mutating row state when the request
+            // finishes. A later interaction can still use the exact size.
+            _ = await HubModelSizeResolver.shared.resolveSize(for: model.id)
+        }
+        .onReceive(downloadManager.rowUpdates) { updatedModelID in
+            guard updatedModelID == nil || updatedModelID == model.id else { return }
+            let snapshot = downloadManager.rowSnapshot(for: model.id)
+            guard snapshot != downloadSnapshot else { return }
+            downloadSnapshot = snapshot
         }
     }
 }

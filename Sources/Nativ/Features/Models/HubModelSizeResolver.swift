@@ -6,14 +6,18 @@ final class HubModelSizeResolver {
 
     private var sizes: [String: Int64] = [:]
 
+    func cachedSize(for repoID: String) -> Int64? {
+        sizes[repoID]
+    }
+
     func resolveSize(for repoID: String) async -> Int64? {
         if let size = sizes[repoID] {
             return size
         }
 
         do {
-            // Let short-lived rows disappear during a scroll before starting a
-            // network request that will invalidate and relayout the row.
+            // Avoid starting network requests for rows that only appear
+            // briefly while the user scrolls through Discover results.
             try await Task.sleep(for: .seconds(1))
         } catch {
             return nil
