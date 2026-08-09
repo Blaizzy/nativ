@@ -40,8 +40,8 @@ struct Config: AsyncParsableCommand {
         @Option(name: .customLong("model"), help: "Default (chat/VLM) model id.") var model: String?
         @Option(name: .customLong("embedding-model"), help: "Model for `nativ embed`.") var embeddingModel: String?
         @Option(name: .customLong("image-model"), help: "Model for `nativ image`.") var imageModel: String?
-        @Option(name: .customLong("stt-model"), help: "Model for `nativ transcribe`.") var sttModel: String?
-        @Option(name: .customLong("tts-model"), help: "Model for `nativ speak`.") var ttsModel: String?
+        @Option(name: .customLong("stt-model"), help: "Model for `nativ audio --task stt`.") var sttModel: String?
+        @Option(name: .customLong("tts-model"), help: "Model for `nativ audio --task tts`.") var ttsModel: String?
         @Option(name: .customLong("model-path"), help: "Directory scanned by `nativ models list`.") var modelPath: String?
 
         func run() async throws {

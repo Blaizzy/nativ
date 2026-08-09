@@ -2,12 +2,12 @@
 
 > **WIP.** Local AI from your terminal, on the same stack Nativ runs.
 
-A small, standalone Swift package (`swift build`) that talks to the local
-mlx-vlm server over its OpenAI-compatible HTTP API. It's **API-first and
-decoupled**: the only contract with the app is a small `cli.json` handshake
-(flags → env → file → defaults), so Nativ's internals can change without
-breaking the CLI, and the same binary works against a local *or* remote server
-via `--base-url`.
+A small, standalone Swift package (`swift build`) that reflects the supported
+mlx-vlm CLI and server APIs. `nativ run` delegates to the bundled
+server-aware mlx-vlm CLI, while Nativ-specific commands use the
+OpenAI-compatible HTTP API. The only contract with the app is a small
+`cli.json` handshake (flags → env → file → defaults), so the same binary works
+against a local or remote server via `--base-url`.
 
 ## Build
 
@@ -20,7 +20,7 @@ swift build          # produces .build/debug/nativ
 
 | Command | Endpoint / action |
 |---|---|
-| `nativ run "<prompt>"` | `/v1/chat/completions` (streams); `--model`, `--system`, `--image`, `--json`, stdin |
+| `nativ run "<prompt>"` | bundled `mlx_vlm.generate` (server-aware); `--model`, `--system`, `--image`, `--json`, stdin |
 | `nativ chat` | interactive REPL (`/model`, `/system`, `/reset`, `/help`, `/exit`, `"""` multiline) |
 | `nativ serve` / `nativ stop` | launch/stop the bundled `mlx-vlm-server`; `serve -d` waits until ready |
 | `nativ status` | server health + `/v1/models` |
@@ -53,8 +53,9 @@ Per-capability models fall back to the chat model when unset.
 
 ## Design
 
-- **Contract = the server HTTP API.** The CLI carries its own tiny HTTP client;
-  no dependency on Nativ's Swift internals.
+- **Inference = the engine CLI.** `nativ run` passes the resolved model and
+  server configuration to mlx-vlm, which reuses a running server or loads
+  locally. Nativ-only commands remain thin HTTP clients.
 - **Command registry.** Each command is one self-contained file — adding a
   command is a new file, no cross-cutting changes.
 - **Server launch** uses the bundled `mlx-vlm-server` at a stable resource path.
