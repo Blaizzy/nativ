@@ -47,31 +47,27 @@ struct ModelConfigurationLayout<Content: View>: View {
             }
             .animation(nil, value: isConfigurationVisible)
 
-            ModelConfigurationView(
-                settings: $model.settings,
-                settingsRequireRestart: model.settingsRequireRestart,
-                onReset: model.resetSettings
-            )
-            .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
-            .ignoresSafeArea(.container, edges: .top)
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(width: 1)
-                    .ignoresSafeArea(.container, edges: [.top, .bottom])
+            if isConfigurationVisible {
+                ModelConfigurationView(
+                    settings: $model.settings,
+                    settingsRequireRestart: model.settingsRequireRestart,
+                    onReset: model.resetSettings
+                )
+                .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
+                .ignoresSafeArea(.container, edges: .top)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                }
+                .transition(.move(edge: .trailing))
             }
-            .offset(
-                x: isConfigurationVisible
-                    ? 0
-                    : ModelConfigurationLayoutMetrics.configurationWidth + 5
-            )
-            .allowsHitTesting(isConfigurationVisible)
-            .accessibilityHidden(!isConfigurationVisible)
-            .animation(
-                .smooth(duration: ModelConfigurationLayoutMetrics.transitionDuration),
-                value: isConfigurationVisible
-            )
         }
+        .animation(
+            .smooth(duration: ModelConfigurationLayoutMetrics.transitionDuration),
+            value: isConfigurationVisible
+        )
     }
 }
 

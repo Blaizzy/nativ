@@ -51,6 +51,40 @@ private struct HubSearchTaskID: Hashable {
     let authenticationToken: String?
 }
 
+/// Both model pages stay mounted for fast section changes. Their container is
+/// already constrained by the window, so avoid `ZStack`'s intrinsic-size pass
+/// through both row hierarchies whenever their z-order changes.
+private struct ModelsPageStackLayout: Layout {
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        var width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil }
+        var height = proposal.height.flatMap { $0.isFinite ? max(0, $0) : nil }
+        if width == nil || height == nil {
+            for subview in subviews {
+                let size = subview.sizeThatFits(proposal)
+                width = max(width ?? 0, size.width)
+                height = max(height ?? 0, size.height)
+            }
+        }
+        return CGSize(width: width ?? 0, height: height ?? 0)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let pageProposal = ProposedViewSize(width: bounds.width, height: bounds.height)
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: pageProposal)
+        }
+    }
+}
+
 struct ModelsView: View {
     @ObservedObject var model: NativModel
     @Binding var showsConfiguration: Bool
@@ -83,7 +117,7 @@ struct ModelsView: View {
                 activeDownloadBanner
                 modelLoadFailureBanner
 
-                ZStack {
+                ModelsPageStackLayout {
                     installedPage
                         .opacity(section == .installed ? 1 : 0)
                         .allowsHitTesting(section == .installed)
