@@ -80,12 +80,20 @@ const resultCount = document.querySelector('[data-result-count]');
 const dataStatus = document.querySelector('[data-data-status]');
 const refreshedAt = document.querySelector('[data-refreshed-at]');
 const progressScope = document.querySelector('[data-progress-scope]');
+const chartCanvas = document.querySelector('[data-download-chart]');
+const chartEmpty = document.querySelector('[data-chart-empty]');
+const chartSummary = document.querySelector('[data-chart-summary]');
+const chartScope = document.querySelector('[data-chart-scope]');
 
 const progressPeriods = [
   { key: 'day', days: 1, unavailableLabel: 'Available after 24 hours' },
   { key: 'week', days: 7, unavailableLabel: 'Available after 7 days' },
-  { key: 'month', days: 30, unavailableLabel: 'Available after 30 days' }
+  { key: 'month', days: 30, unavailableLabel: 'Available after 30 days' },
+  { key: 'year', days: 365, unavailableLabel: 'Available after 1 year' }
 ];
+
+let chartPoints = [];
+let chartFrame = null;
 
 const getAssetType = (asset) => {
   const name = asset.name.toLowerCase();
@@ -224,6 +232,180 @@ const renderProgress = (assets) => {
   });
 };
 
+const setChartEmptyState = (message) => {
+  chartPoints = [];
+  if (chartCanvas) chartCanvas.hidden = true;
+  if (chartEmpty) chartEmpty.hidden = false;
+  if (chartSummary) chartSummary.textContent = message;
+};
+
+const drawDownloadChart = () => {
+  if (!chartCanvas || chartPoints.length < 2 || chartCanvas.hidden) return;
+  const bounds = chartCanvas.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  chartCanvas.width = Math.round(bounds.width * pixelRatio);
+  chartCanvas.height = Math.round(bounds.height * pixelRatio);
+  const context = chartCanvas.getContext('2d');
+  if (!context) return;
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, bounds.width, bounds.height);
+
+  const rootStyles = getComputedStyle(document.documentElement);
+  const ink = rootStyles.getPropertyValue('--ink').trim() || '#111210';
+  const muted = rootStyles.getPropertyValue('--muted').trim() || '#71736c';
+  const line = rootStyles.getPropertyValue('--line').trim() || '#c9c9c0';
+  const acid = rootStyles.getPropertyValue('--acid').trim() || '#d4ff32';
+  const orange = rootStyles.getPropertyValue('--orange').trim() || '#ff5c35';
+  const compactNumber = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+  const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+  const padding = { top: 28, right: 24, bottom: 38, left: bounds.width < 520 ? 48 : 62 };
+  const plotWidth = bounds.width - padding.left - padding.right;
+  const plotHeight = bounds.height - padding.top - padding.bottom;
+  const firstTime = chartPoints[0].date.getTime();
+  const lastTime = chartPoints.at(-1).date.getTime();
+  const values = chartPoints.map((point) => point.value);
+  const rawMinimum = Math.min(...values);
+  const rawMaximum = Math.max(...values);
+  const rawRange = rawMaximum - rawMinimum;
+  const rangePadding = rawRange > 0 ? rawRange * 0.12 : Math.max(rawMaximum * 0.04, 1);
+  const minimum = Math.max(0, rawMinimum - rangePadding);
+  const maximum = rawMaximum + rangePadding;
+  const valueRange = Math.max(maximum - minimum, 1);
+  const timeRange = Math.max(lastTime - firstTime, 1);
+  const toX = (date) => padding.left + (((date.getTime() - firstTime) / timeRange) * plotWidth);
+  const toY = (value) => padding.top + (1 - ((value - minimum) / valueRange)) * plotHeight;
+
+  context.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  context.fillStyle = muted;
+  context.strokeStyle = line;
+  context.lineWidth = 1;
+  context.textBaseline = 'middle';
+
+  for (let index = 0; index <= 4; index += 1) {
+    const ratio = index / 4;
+    const y = padding.top + (ratio * plotHeight);
+    const value = maximum - (ratio * valueRange);
+    context.beginPath();
+    context.moveTo(padding.left, y);
+    context.lineTo(bounds.width - padding.right, y);
+    context.stroke();
+    context.textAlign = 'right';
+    context.fillText(compactNumber.format(Math.max(value, 0)), padding.left - 10, y);
+  }
+
+  context.textBaseline = 'alphabetic';
+  context.textAlign = 'left';
+  context.fillText(shortDate.format(chartPoints[0].date), padding.left, bounds.height - 12);
+  context.textAlign = 'right';
+  context.fillText(shortDate.format(chartPoints.at(-1).date), bounds.width - padding.right, bounds.height - 12);
+
+  context.beginPath();
+  chartPoints.forEach((point, index) => {
+    const x = toX(point.date);
+    const y = toY(point.value);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.lineTo(toX(chartPoints.at(-1).date), padding.top + plotHeight);
+  context.lineTo(toX(chartPoints[0].date), padding.top + plotHeight);
+  context.closePath();
+  context.save();
+  context.globalAlpha = .2;
+  context.fillStyle = acid;
+  context.fill();
+  context.restore();
+
+  context.beginPath();
+  chartPoints.forEach((point, index) => {
+    const x = toX(point.date);
+    const y = toY(point.value);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.strokeStyle = orange;
+  context.lineWidth = 3;
+  context.lineJoin = 'round';
+  context.lineCap = 'round';
+  context.stroke();
+
+  const latestPoint = chartPoints.at(-1);
+  context.beginPath();
+  context.arc(toX(latestPoint.date), toY(latestPoint.value), 4, 0, Math.PI * 2);
+  context.fillStyle = ink;
+  context.fill();
+};
+
+const scheduleChartDraw = () => {
+  if (chartFrame) window.cancelAnimationFrame(chartFrame);
+  chartFrame = window.requestAnimationFrame(drawDownloadChart);
+};
+
+const renderDownloadChart = (assets) => {
+  const releaseLabel = state.release === 'all' ? 'all releases' : state.release;
+  const scopeLabel = `${filterLabels[state.assetType]} · ${releaseLabel}`;
+  if (chartScope) chartScope.textContent = scopeLabel;
+
+  if (!state.liveData) {
+    setChartEmptyState('Waiting for live download data.');
+    return;
+  }
+  if (state.historyStatus === 'loading') {
+    setChartEmptyState('Loading download history.');
+    return;
+  }
+  if (state.historyStatus === 'error') {
+    setChartEmptyState('Download history is unavailable.');
+    return;
+  }
+
+  const cutoff = Date.now() - (365 * 24 * 60 * 60 * 1000);
+  const points = (state.history?.snapshots || [])
+    .map((snapshot) => ({
+      date: new Date(snapshot.capturedAt),
+      value: assets.reduce((total, asset) => {
+        const key = getHistoryAssetKey(asset);
+        return total + (key ? Number(snapshot.counts?.[key] || 0) : 0);
+      }, 0)
+    }))
+    .filter((point) => Number.isFinite(point.date.getTime()) && point.date.getTime() >= cutoff)
+    .sort((left, right) => left.date - right.date);
+
+  const currentPoint = { date: new Date(), value: sumDownloads(assets) };
+  const latestPoint = points.at(-1);
+  if (!latestPoint || currentPoint.date.getTime() - latestPoint.date.getTime() > 60 * 60 * 1000) {
+    points.push(currentPoint);
+  } else if (latestPoint) {
+    latestPoint.value = currentPoint.value;
+  }
+
+  if (points.length < 2) {
+    setChartEmptyState('The chart appears after another snapshot is recorded.');
+    return;
+  }
+
+  chartPoints = points;
+  if (chartCanvas) {
+    chartCanvas.hidden = false;
+    const netChange = points.at(-1).value - points[0].value;
+    chartCanvas.setAttribute(
+      'aria-label',
+      `${scopeLabel} cumulative download history. ${numberFormatter.format(points.at(-1).value)} downloads, ${netChange >= 0 ? '+' : ''}${numberFormatter.format(netChange)} over the displayed period.`
+    );
+  }
+  if (chartEmpty) chartEmpty.hidden = true;
+
+  const netChange = points.at(-1).value - points[0].value;
+  const firstDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(points[0].date);
+  if (chartSummary) {
+    chartSummary.textContent = `${numberFormatter.format(points.length)} snapshots · ${netChange >= 0 ? '+' : ''}${numberFormatter.format(netChange)} downloads since ${firstDate}`;
+  }
+  scheduleChartDraw();
+};
+
+window.addEventListener('resize', scheduleChartDraw);
+
 const makeCell = (content, className) => {
   const cell = document.createElement('td');
   if (className) cell.className = className;
@@ -329,6 +511,7 @@ const render = () => {
 
   updateSummaryMetrics(allAssets);
   renderProgress(filteredAssets);
+  renderDownloadChart(filteredAssets);
   renderRows(filteredAssets, total);
 
   if (resultTotal) resultTotal.textContent = numberFormatter.format(total);

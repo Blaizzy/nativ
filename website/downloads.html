@@ -174,7 +174,33 @@
               <strong data-progress-value="month">—</strong>
               <p data-progress-note="month">Collecting history</p>
             </article>
+            <article>
+              <span>YEARLY · 365D</span>
+              <strong data-progress-value="year">—</strong>
+              <p data-progress-note="year">Collecting history</p>
+            </article>
           </div>
+        </section>
+
+        <section class="download-chart reveal" aria-labelledby="download-chart-title">
+          <div class="download-chart-heading">
+            <div>
+              <p class="kicker">/ DOWNLOAD HISTORY</p>
+              <h3 id="download-chart-title">One year,<br /><em>at a glance.</em></h3>
+            </div>
+            <div>
+              <span>CUMULATIVE DOWNLOADS</span>
+              <strong data-chart-scope>All assets · all releases</strong>
+            </div>
+          </div>
+          <div class="download-chart-frame">
+            <canvas data-download-chart role="img" aria-label="Download history chart"></canvas>
+            <div class="download-chart-empty" data-chart-empty>
+              <strong>COLLECTING HISTORY</strong>
+              <span>The chart appears as daily snapshots accumulate.</span>
+            </div>
+          </div>
+          <p class="download-chart-summary" data-chart-summary>Waiting for download history.</p>
         </section>
 
         <div class="download-result reveal" aria-live="polite">

@@ -80,7 +80,10 @@ history.snapshots.push({
   counts
 });
 history.snapshots.sort((left, right) => new Date(left.capturedAt) - new Date(right.capturedAt));
-history.snapshots = history.snapshots.slice(-500);
+const retentionCutoff = capturedAt.getTime() - (400 * 24 * 60 * 60 * 1000);
+history.snapshots = history.snapshots
+  .filter((snapshot) => new Date(snapshot.capturedAt).getTime() >= retentionCutoff)
+  .slice(-2000);
 
 await mkdir(path.dirname(outputPath), { recursive: true });
 await writeFile(outputPath, `${JSON.stringify(history, null, 2)}\n`);
