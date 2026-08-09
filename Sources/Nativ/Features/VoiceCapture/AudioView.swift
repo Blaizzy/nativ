@@ -727,17 +727,6 @@ struct AudioView: View {
 
                 Spacer(minLength: 16)
 
-                HStack(spacing: 9) {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(Color.white)
-                    Text("Auto-summary")
-                        .font(.callout.weight(.medium))
-                    Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                }
-                .disabled(captureLibrary.isBusy)
-
                 Button {
                     inputLevelMonitor.stop()
                     Task {
@@ -749,7 +738,8 @@ struct AudioView: View {
                     }
                 } label: {
                     Label("Start recording", systemImage: "record.circle")
-                        .padding(.horizontal, 8)
+                        .font(.callout.weight(.semibold))
+                        .frame(minWidth: 164)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(tint)
@@ -759,7 +749,28 @@ struct AudioView: View {
             Divider()
                 .padding(.vertical, 16)
 
-            meetingSuggestionRow(tint: tint)
+            HStack(alignment: .center, spacing: 20) {
+                capturePreferenceRow(
+                    title: "Auto-summary",
+                    detail: "Create summarized notes automatically after each recording.",
+                    systemImage: "sparkles",
+                    tint: .purple,
+                    isOn: $automaticallySummarize,
+                    accessibilityLabel: "Create summarized notes automatically"
+                )
+
+                Divider()
+                    .frame(height: 52)
+
+                capturePreferenceRow(
+                    title: "Transcription suggestions",
+                    detail: "Prompt me when a supported meeting app begins using the microphone.",
+                    systemImage: "person.2.wave.2.fill",
+                    tint: tint,
+                    isOn: $suggestMeetingTranscription,
+                    accessibilityLabel: "Suggest transcription when a meeting starts"
+                )
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -945,33 +956,43 @@ struct AudioView: View {
         .padding(.horizontal, 4)
     }
 
-    private func meetingSuggestionRow(tint: Color) -> some View {
+    private func capturePreferenceRow(
+        title: String,
+        detail: String,
+        systemImage: String,
+        tint: Color,
+        isOn: Binding<Bool>,
+        accessibilityLabel: String
+    ) -> some View {
         HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "person.2.wave.2.fill")
-                .font(.system(size: 19, weight: .semibold))
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(tint)
-                .frame(width: 42, height: 42)
+                .frame(width: 38, height: 38)
                 .background(
                     tint.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                 )
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Transcription suggestions")
-                    .font(.headline)
-                Text("Prompt me to start transcription when a supported meeting app begins using the microphone.")
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
+            .layoutPriority(1)
+
             Spacer(minLength: 12)
-            Toggle(
-                "Suggest transcription when a meeting starts",
-                isOn: $suggestMeetingTranscription
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .accessibilityLabel("Suggest transcription when a meeting starts")
+
+            Toggle(accessibilityLabel, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(captureLibrary.isBusy)
+                .accessibilityLabel(accessibilityLabel)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelConfigurationPanel: some View {
