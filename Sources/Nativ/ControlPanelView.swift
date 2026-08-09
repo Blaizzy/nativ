@@ -259,7 +259,10 @@ struct ControlPanelView: View {
     @Environment(\.displayScale) private var displayScale
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
-    @ObservedObject var runtime: SystemRuntimeMonitor
+    // Only the Developer page observes live runtime values. Keeping this as a
+    // plain reference prevents its one-second polling cycle from invalidating
+    // the entire control panel (including the Models result list).
+    let runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
