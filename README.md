@@ -29,15 +29,19 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 |---|---|
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Image generation and editing** | Generate and edit images locally with compatible MLX image models in a dedicated Images tab. |
-| **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, and speech models at once, with a warning if the combination would exceed your Mac's memory. |
+| **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, speech, and embedding models at once, with a warning if the combination would exceed your Mac's memory. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
-| **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, and SMART health. |
-| **Local APIs** | OpenAI-compatible chat, Responses, image, audio, and model endpoints, plus Anthropic Messages endpoints. |
+| **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, SMART health, and thermal and power sensors. |
+| **Local APIs** | OpenAI-compatible chat, Responses, image, audio, embeddings, and model endpoints, plus Anthropic Messages endpoints. |
 | **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [INTEGRATIONS.md](INTEGRATIONS.md) for per-tool setup. |
 | **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
 | **Extension platform** | Install, disable, remove, and restore independently versioned capabilities. Audio ships as the first included extension and contributes its own pages, commands, shortcuts, settings, and permission declarations. |
 | **Audio extension** | Use private local audio capabilities, including voice dictation in any app with either a pointer-following waveform or a camera-cutout pill with a reactive gradient orb and timer. Review transcript history, track words per minute, total words, time saved, and streaks, choose an installed speech model, and customize the record and retry shortcuts. |
+| **Artifacts** | Browse every image and document produced or uploaded across chats, with filters, sorting, and semantic search over your own artifacts. |
+| **MCP servers** | Connect Model Context Protocol servers and expose their tools to chat, with per-tool consent. |
+| **Routines** | Schedule prompts to run on their own and collect the results. |
+| **Chat tools** | Let the model generate and edit images, list or switch models, and read server and system stats, each behind a consent prompt. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
 Inference runs on your Mac after a model has been downloaded. Model downloads and first-time build dependencies still require network access.
@@ -81,8 +85,9 @@ On first launch:
 
 1. Choose an installed language model, download a recommended one, or continue with load-on-demand.
 2. Optionally generate an API key to protect the server's management endpoints.
-3. Open **Models** to download or select a compatible model.
-4. Start chatting, inspect analytics, or connect one of the supported coding tools.
+3. Grant microphone, accessibility, and screen recording permissions up front, or change them later in Settings.
+4. Open **Models** to download or select a compatible model.
+5. Start chatting, inspect analytics, or connect one of the supported coding tools.
 
 Nativ asks for Accessibility permission so it can detect the default Control + Option + Command
 double-tap outside the app, and for Microphone permission the first time you record. Recordings are
@@ -156,13 +161,19 @@ The server includes:
 Sources/
 ├── Nativ/                       # SwiftUI application
 │   ├── Features/
+│   │   ├── Artifacts/
 │   │   ├── Chat/
 │   │   ├── Dashboard/
 │   │   ├── Developer/
 │   │   ├── Extensions/         # Extension registry, broker, and management UI
 │   │   ├── ImageGeneration/
 │   │   ├── Integrations/
+│   │   ├── IssueReport/
+│   │   ├── MCP/
 │   │   ├── Models/
+│   │   ├── Routines/
+│   │   ├── Settings/
+│   │   ├── Shared/
 │   │   ├── VoiceCapture/
 │   │   └── SystemMonitor/
 │   ├── Assets.xcassets/
