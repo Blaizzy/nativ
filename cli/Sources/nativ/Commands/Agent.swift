@@ -68,10 +68,10 @@ struct Agent: AsyncParsableCommand {
     - `embed [text...]` — embeddings; `--dims` prints only dimensions; else JSON
       array-of-vectors. Reads stdin (one input per line) if no args.
     - `image [prompt...] [--out file] [--size WxH]` — generate an image to a file.
-    - `transcribe <audio-file>` — speech-to-text, prints the transcript.
-    - `audio speak [text...] [--out file] [--voice v] [--speed s] [--format mp3]` —
-      text-to-speech; writes an audio file (reads stdin if no text). The `audio`
-      group is where other audio-out tasks land as the server grows endpoints.
+    - `audio --task <tts|stt|sts|vad|lid> [input...]` — one audio surface (mlx-audio
+      tasks). `--task tts "text" [--voice --speed --out --format]` writes speech;
+      `--task stt <audio-file>` prints a transcript. sts/vad/lid are reserved names
+      until the server exposes them.
     - `config show | set | path` — read/write cli.json.
     - `agent [--json]` — this reference.
 
@@ -117,8 +117,7 @@ struct Agent: AsyncParsableCommand {
                 ["name": "models rm", "desc": "delete model from disk", "flags": ["-f"]],
                 ["name": "embed", "desc": "text embeddings", "flags": ["--model", "--dims"]],
                 ["name": "image", "desc": "generate an image", "flags": ["--model", "--out", "--size"]],
-                ["name": "transcribe", "desc": "speech-to-text", "flags": ["--model"]],
-                ["name": "audio speak", "desc": "text-to-speech (audio group grows: separate/enhance/sfx)", "flags": ["--model", "--out", "--voice", "--speed", "--format"]],
+                ["name": "audio", "desc": "audio tasks (tts/stt wired; sts/vad/lid reserved)", "flags": ["--task", "--model", "--out", "--voice", "--speed", "--format"]],
                 ["name": "config", "desc": "show/set cli.json", "flags": []],
             ],
             "api": [

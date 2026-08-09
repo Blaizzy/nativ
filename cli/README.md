@@ -27,8 +27,7 @@ swift build          # produces .build/debug/nativ
 | `nativ models list \| use \| pull \| rm` | list loaded + locally-cached models, set default, download (HF), remove |
 | `nativ embed` | `/v1/embeddings` (JSON, or `--dims`) |
 | `nativ image "<prompt>"` | `/v1/images/generations` → saves a file |
-| `nativ transcribe <file>` | multipart `/v1/audio/transcriptions` |
-| `nativ audio speak "<text>"` | `/v1/audio/speech` → saves an audio file (audio group grows with the server) |
+| `nativ audio --task <tts\|stt\|sts\|vad\|lid> …` | one audio surface (mlx-audio tasks); tts→`/v1/audio/speech`, stt→`/v1/audio/transcriptions`; sts/vad/lid reserved |
 | `nativ config show \| set \| path` | read/write `cli.json` |
 | `nativ agent [--json]` | full reference for coding agents |
 
