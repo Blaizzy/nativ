@@ -63,7 +63,10 @@ const filterLabels = {
 const state = {
   releases: fallbackReleases,
   assetType: 'all',
-  release: 'all'
+  release: 'all',
+  history: null,
+  historyStatus: 'loading',
+  liveData: false
 };
 
 const rowsContainer = document.querySelector('[data-download-rows]');
@@ -76,6 +79,13 @@ const resultLabel = document.querySelector('[data-result-label]');
 const resultCount = document.querySelector('[data-result-count]');
 const dataStatus = document.querySelector('[data-data-status]');
 const refreshedAt = document.querySelector('[data-refreshed-at]');
+const progressScope = document.querySelector('[data-progress-scope]');
+
+const progressPeriods = [
+  { key: 'day', days: 1, unavailableLabel: 'Available after 24 hours' },
+  { key: 'week', days: 7, unavailableLabel: 'Available after 7 days' },
+  { key: 'month', days: 30, unavailableLabel: 'Available after 30 days' }
+];
 
 const getAssetType = (asset) => {
   const name = asset.name.toLowerCase();
@@ -101,6 +111,12 @@ const sumDownloads = (assets) => assets.reduce(
   0
 );
 
+const getFilteredAssets = (assets) => assets.filter((asset) => {
+  const typeMatches = state.assetType === 'all' || asset.type === state.assetType;
+  const releaseMatches = state.release === 'all' || asset.release === state.release;
+  return typeMatches && releaseMatches;
+});
+
 const setText = (selector, value) => {
   document.querySelectorAll(selector).forEach((node) => {
     node.textContent = value;
@@ -122,6 +138,89 @@ const updateSummaryMetrics = (assets) => {
 
   Object.entries(totals).forEach(([type, total]) => {
     setText(`[data-filter-count="${type}"]`, numberFormatter.format(total));
+  });
+};
+
+const setProgressState = (period, value, note, title = '') => {
+  const valueNode = document.querySelector(`[data-progress-value="${period.key}"]`);
+  const noteNode = document.querySelector(`[data-progress-note="${period.key}"]`);
+  if (valueNode) {
+    valueNode.textContent = value;
+    valueNode.title = title;
+  }
+  if (noteNode) noteNode.textContent = note;
+};
+
+const getHistoryAssetKey = (asset) => {
+  if (!state.history?.assetIndex) return null;
+  const idKey = asset.id == null ? null : String(asset.id);
+  if (idKey && state.history.assetIndex[idKey]) return idKey;
+
+  const matchingEntry = Object.entries(state.history.assetIndex).find(([, metadata]) => (
+    metadata.release === asset.release && metadata.name === asset.name
+  ));
+  return matchingEntry?.[0] || idKey;
+};
+
+const renderProgress = (assets) => {
+  const releaseLabel = state.release === 'all' ? 'all releases' : state.release;
+  if (progressScope) progressScope.textContent = `${filterLabels[state.assetType]} · ${releaseLabel}`;
+
+  if (!state.liveData) {
+    progressPeriods.forEach((period) => setProgressState(period, '—', 'Waiting for live data'));
+    return;
+  }
+
+  if (state.historyStatus === 'loading') {
+    progressPeriods.forEach((period) => setProgressState(period, '—', 'Loading history'));
+    return;
+  }
+
+  if (state.historyStatus === 'error') {
+    progressPeriods.forEach((period) => setProgressState(period, '—', 'History unavailable'));
+    return;
+  }
+
+  const snapshots = (state.history?.snapshots || [])
+    .filter((snapshot) => Number.isFinite(new Date(snapshot.capturedAt).getTime()))
+    .sort((left, right) => new Date(left.capturedAt) - new Date(right.capturedAt));
+  const now = Date.now();
+
+  progressPeriods.forEach((period) => {
+    const cutoff = now - (period.days * 24 * 60 * 60 * 1000);
+    const baseline = [...snapshots]
+      .reverse()
+      .find((snapshot) => new Date(snapshot.capturedAt).getTime() <= cutoff);
+
+    if (!baseline) {
+      setProgressState(period, '—', period.unavailableLabel);
+      return;
+    }
+
+    let baselineTotal = 0;
+    let delta = 0;
+    assets.forEach((asset) => {
+      const currentCount = Number(asset.download_count || 0);
+      const key = getHistoryAssetKey(asset);
+      const baselineCount = key ? Number(baseline.counts?.[key] || 0) : 0;
+      baselineTotal += baselineCount;
+      delta += Math.max(currentCount - baselineCount, 0);
+    });
+
+    const percentage = baselineTotal > 0 ? (delta / baselineTotal) * 100 : null;
+    const formattedDelta = delta > 0 ? `+${numberFormatter.format(delta)}` : '0';
+    const note = percentage == null
+      ? (delta > 0 ? 'New downloads' : 'No change')
+      : `${percentage < 0.1 && percentage > 0 ? percentage.toFixed(2) : percentage.toFixed(1)}% growth`;
+    const baselineDate = new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(new Date(baseline.capturedAt));
+
+    setProgressState(period, formattedDelta, note, `Compared with the ${baselineDate} snapshot`);
   });
 };
 
@@ -224,15 +323,12 @@ const selectRelease = (value) => {
 
 const render = () => {
   const allAssets = flattenAssets(state.releases);
-  const filteredAssets = allAssets.filter((asset) => {
-    const typeMatches = state.assetType === 'all' || asset.type === state.assetType;
-    const releaseMatches = state.release === 'all' || asset.release === state.release;
-    return typeMatches && releaseMatches;
-  });
+  const filteredAssets = getFilteredAssets(allAssets);
   const total = sumDownloads(filteredAssets);
   const releaseCount = new Set(filteredAssets.map((asset) => asset.release)).size;
 
   updateSummaryMetrics(allAssets);
+  renderProgress(filteredAssets);
   renderRows(filteredAssets, total);
 
   if (resultTotal) resultTotal.textContent = numberFormatter.format(total);
@@ -355,10 +451,32 @@ const fetchAllReleases = async () => {
   return releases;
 };
 
+const fetchDownloadHistory = async () => {
+  const response = await fetch('data/download-history.json', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`History returned ${response.status}`);
+  const history = await response.json();
+  if (history.version !== 1 || typeof history.assetIndex !== 'object' || !Array.isArray(history.snapshots)) {
+    throw new Error('Unsupported download history schema');
+  }
+  return history;
+};
+
+fetchDownloadHistory()
+  .then((history) => {
+    state.history = history;
+    state.historyStatus = 'ready';
+    render();
+  })
+  .catch(() => {
+    state.historyStatus = 'error';
+    render();
+  });
+
 fetchAllReleases()
   .then((releases) => {
     if (!releases.length) throw new Error('No published releases found');
     state.releases = releases;
+    state.liveData = true;
     populateReleaseFilter();
     render();
     if (dataStatus) dataStatus.textContent = 'Live from GitHub';

@@ -238,6 +238,18 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .release-select-option[aria-selected="true"] { color: var(--ink); background: var(--acid); }
 .release-select-option[aria-selected="true"]::before { opacity: 1; }
 
+.download-progress { max-width: 1500px; margin: 54px auto 0; }
+.download-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
+.download-progress-heading .kicker { margin: 0; }
+.download-progress-heading > span { color: var(--muted); font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.download-progress-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--ink); }
+.download-progress article { min-height: 175px; display: flex; flex-direction: column; justify-content: space-between; padding: 24px; border-right: 1px solid var(--ink); }
+.download-progress article:last-child { border-right: 0; }
+.download-progress article > span { font: 500 10px/1 var(--mono); letter-spacing: .1em; }
+.download-progress article > strong { margin: auto 0 14px; font-size: clamp(46px, 4.5vw, 70px); font-weight: 600; line-height: .8; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
+.download-progress article > p { margin: 0; color: var(--muted); font: 400 12px/1.4 var(--mono); }
+.download-progress article:first-child { background: color-mix(in srgb, var(--acid) 34%, var(--paper)); }
+
 .download-result { display: flex; justify-content: space-between; align-items: end; gap: 30px; max-width: 1500px; margin: 50px auto 24px; }
 .download-result > div { display: grid; gap: 12px; }
 .download-result > div > span { color: var(--muted); font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
@@ -298,6 +310,10 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
   .download-controls { grid-template-columns: 1fr; }
   .asset-filter > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .asset-filter button { width: 100%; min-width: 0; justify-content: space-between; gap: 8px; }
+  .download-progress-heading { align-items: flex-start; flex-direction: column; }
+  .download-progress-grid { grid-template-columns: 1fr; }
+  .download-progress article { min-height: 150px; border-right: 0; border-bottom: 1px solid var(--ink); }
+  .download-progress article:last-child { border-bottom: 0; }
   .download-result { display: block; }
   .download-result p { margin-top: 30px; flex-wrap: wrap; }
   .download-table { min-width: 0; table-layout: fixed; }
