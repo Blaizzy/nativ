@@ -32,7 +32,7 @@
       {
         "id": "com.nativ.voice-dictation.transcribe",
         "title": "Transcribe",
-        "defaultShortcut": "Control+Option+Command"
+        "defaultShortcut": "Fn+Control"
       },
       {
         "id": "com.nativ.voice-dictation.retranscribe",

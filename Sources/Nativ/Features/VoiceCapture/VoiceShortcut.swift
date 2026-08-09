@@ -77,11 +77,6 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
     static let recordDefault = VoiceShortcut(
         keyCode: nil,
         keyDisplay: nil,
-        modifiers: [.control, .option, .command]
-    )
-    static let legacyRecordDefault = VoiceShortcut(
-        keyCode: nil,
-        keyDisplay: nil,
         modifiers: [.function, .control]
     )
     static let retryDefault = VoiceShortcut(
@@ -157,13 +152,10 @@ final class VoiceShortcutPreferences: ObservableObject {
     }
 
     private struct Payload: Codable {
-        let version: Int?
         let recordShortcut: VoiceShortcut
         let retryShortcut: VoiceShortcut
         let isHandsFreeEnabled: Bool?
     }
-
-    private static let currentVersion = 2
 
     private let defaults: UserDefaults
     private let storageKey: String
@@ -179,17 +171,9 @@ final class VoiceShortcutPreferences: ObservableObject {
            payload.recordShortcut.isValid,
            payload.retryShortcut.isValid
         {
-            let needsMigration = (payload.version ?? 1) < Self.currentVersion
-            if needsMigration, payload.recordShortcut == .legacyRecordDefault {
-                recordShortcut = .recordDefault
-            } else {
-                recordShortcut = payload.recordShortcut
-            }
+            recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
             isHandsFreeEnabled = payload.isHandsFreeEnabled ?? true
-            if needsMigration {
-                persistCurrent()
-            }
         } else {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault
@@ -207,7 +191,6 @@ final class VoiceShortcutPreferences: ObservableObject {
 
     private func persistCurrent() {
         let payload = Payload(
-            version: Self.currentVersion,
             recordShortcut: recordShortcut,
             retryShortcut: retryShortcut,
             isHandsFreeEnabled: isHandsFreeEnabled

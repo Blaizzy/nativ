@@ -709,7 +709,6 @@ final class VoiceAudioRetentionTests: XCTestCase {
 }
 
 private struct VoiceStoredPreferencesPayload: Codable {
-    let version: Int?
     let recordShortcut: VoiceShortcut
     let retryShortcut: VoiceShortcut
     let isHandsFreeEnabled: Bool?
@@ -718,7 +717,7 @@ private struct VoiceStoredPreferencesPayload: Codable {
 @MainActor
 final class VoiceShortcutPreferencesTests: XCTestCase {
     func testDefaultsMatchExistingVoiceCommands() {
-        XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Control + Option + Command")
+        XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Fn + Control")
         XCTAssertEqual(VoiceShortcut.retryDefault.displayName, "Fn + R")
 
         let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
@@ -792,75 +791,8 @@ final class VoiceShortcutPreferencesTests: XCTestCase {
         XCTAssertTrue(restored.isHandsFreeEnabled)
     }
 
-    func testMigratesLegacyDefaultRecordShortcut() throws {
-        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let payload = VoiceStoredPreferencesPayload(
-            version: nil,
-            recordShortcut: .legacyRecordDefault,
-            retryShortcut: .retryDefault,
-            isHandsFreeEnabled: true
-        )
-        defaults.set(
-            try JSONEncoder().encode(payload),
-            forKey: "voiceShortcutPreferences.v1"
-        )
 
-        let restored = VoiceShortcutPreferences(defaults: defaults)
-        XCTAssertEqual(restored.recordShortcut, .recordDefault)
 
-        let persisted = try XCTUnwrap(defaults.data(forKey: "voiceShortcutPreferences.v1"))
-        let decoded = try JSONDecoder().decode(
-            VoiceStoredPreferencesPayload.self,
-            from: persisted
-        )
-        XCTAssertEqual(decoded.version, 2)
-        XCTAssertEqual(decoded.recordShortcut, .recordDefault)
-    }
-
-    func testPreservesCustomShortcutDuringMigration() throws {
-        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let custom = VoiceShortcut(
-            keyCode: nil,
-            keyDisplay: nil,
-            modifiers: [.control, .shift]
-        )
-        let payload = VoiceStoredPreferencesPayload(
-            version: nil,
-            recordShortcut: custom,
-            retryShortcut: .retryDefault,
-            isHandsFreeEnabled: true
-        )
-        defaults.set(
-            try JSONEncoder().encode(payload),
-            forKey: "voiceShortcutPreferences.v1"
-        )
-
-        let restored = VoiceShortcutPreferences(defaults: defaults)
-        XCTAssertEqual(restored.recordShortcut, custom)
-    }
-
-    func testDoesNotRemigrateVersionedLegacyShortcut() throws {
-        let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let payload = VoiceStoredPreferencesPayload(
-            version: 2,
-            recordShortcut: .legacyRecordDefault,
-            retryShortcut: .retryDefault,
-            isHandsFreeEnabled: true
-        )
-        defaults.set(
-            try JSONEncoder().encode(payload),
-            forKey: "voiceShortcutPreferences.v1"
-        )
-
-        let restored = VoiceShortcutPreferences(defaults: defaults)
-        XCTAssertEqual(restored.recordShortcut, .legacyRecordDefault)
-    }
 
     func testAddsHandsFreeModeDefaultToLegacyPreferences() throws {
         struct LegacyPayload: Codable {
