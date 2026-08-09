@@ -1515,8 +1515,7 @@ private struct HubModelRowContainer: View, Equatable {
     }
 
     var body: some View {
-        let downloadSizeBytes = HubModelSizeResolver.shared.cachedSize(for: model.id)
-            ?? model.estimatedDownloadBytes
+        let downloadSizeBytes = model.estimatedDownloadBytes
         HubModelRow(
             model: model,
             downloadSizeBytes: downloadSizeBytes,
@@ -1530,20 +1529,12 @@ private struct HubModelRowContainer: View, Equatable {
             ),
             downloadError: downloadSnapshot.error,
             onDownload: {
-                onDownload(
-                    HubModelSizeResolver.shared.cachedSize(for: model.id)
-                        ?? downloadSizeBytes
-                )
+                onDownload(downloadSizeBytes)
             },
             onPauseResume: onPauseResume,
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
-        .task(id: model.id, priority: .utility) {
-            // Warm the cache without mutating row state when the request
-            // finishes. A later interaction can still use the exact size.
-            _ = await HubModelSizeResolver.shared.resolveSize(for: model.id)
-        }
         .onReceive(downloadManager.rowUpdates) { updatedModelID in
             guard updatedModelID == nil || updatedModelID == model.id else { return }
             let snapshot = downloadManager.rowSnapshot(for: model.id)
