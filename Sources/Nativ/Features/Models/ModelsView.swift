@@ -1225,7 +1225,7 @@ private struct InstalledModelRow: View {
             )
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
-            Button("Delete Model", action: onDelete)
+            Button("Delete Model", role: .destructive, action: onDelete)
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -1250,6 +1250,7 @@ private struct ActiveDownloadBannerRow: View {
     let download: HuggingFaceDownloadManager.ActiveDownload
     let onPauseResume: () -> Void
     let onCancel: () -> Void
+    @State private var isConfirmingCancellation = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1267,11 +1268,20 @@ private struct ActiveDownloadBannerRow: View {
             }
             Spacer(minLength: 12)
             Button(download.state == .paused ? "Resume" : "Pause", action: onPauseResume)
-            Button("Cancel", role: .destructive, action: onCancel)
+            Button("Cancel", role: .destructive) {
+                isConfirmingCancellation = true
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .background(Color.accentColor.opacity(0.08))
+        .alert("Remove download?", isPresented: $isConfirmingCancellation) {
+            Button("Remove Download", role: .destructive, action: onCancel)
+                .keyboardShortcut(.defaultAction)
+            Button("Keep Download", role: .cancel) {}
+        } message: {
+            Text("The partial download for \(download.modelID) will be removed from the local cache.")
+        }
     }
 
     private var statusText: String {
@@ -1515,6 +1525,7 @@ private struct ModelDownloadProgressControl: View {
     let onRemove: () -> Void
 
     @State private var isHovering = false
+    @State private var isConfirmingRemoval = false
 
     var body: some View {
         ZStack {
@@ -1531,7 +1542,7 @@ private struct ModelDownloadProgressControl: View {
                         title: "Remove download",
                         systemImage: "trash",
                         tint: .red,
-                        action: onRemove
+                        action: { isConfirmingRemoval = true }
                     )
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
@@ -1572,6 +1583,13 @@ private struct ModelDownloadProgressControl: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isPaused ? "Download paused" : "Download progress")
         .accessibilityValue("\(Int((progress * 100).rounded())) percent")
+        .alert("Remove download?", isPresented: $isConfirmingRemoval) {
+            Button("Remove Download", role: .destructive, action: onRemove)
+                .keyboardShortcut(.defaultAction)
+            Button("Keep Download", role: .cancel) {}
+        } message: {
+            Text("The partial download will be removed from the local cache.")
+        }
     }
 
     private var displayedProgress: Double {

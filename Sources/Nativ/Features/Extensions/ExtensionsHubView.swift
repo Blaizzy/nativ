@@ -386,6 +386,7 @@ private struct FlowLayout: Layout {
 private struct SkillsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: NativSkill?
+    @State private var pendingDelete: NativSkill?
 
     var body: some View {
         HubSectionScaffold(
@@ -412,7 +413,7 @@ private struct SkillsSectionView: View {
                         skill: skill,
                         onToggle: { toggle(skill) },
                         onEdit: { editing = skill },
-                        onDelete: { delete(skill) }
+                        onDelete: { pendingDelete = skill }
                     )
                 }
             }
@@ -424,6 +425,25 @@ private struct SkillsSectionView: View {
             } onCancel: {
                 editing = nil
             }
+        }
+        .alert(
+            "Delete skill?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { skill in
+            Button("Delete", role: .destructive) {
+                delete(skill)
+                pendingDelete = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { skill in
+            Text("“\(skill.name.isEmpty ? "This skill" : skill.name)” will be permanently deleted.")
         }
     }
 
