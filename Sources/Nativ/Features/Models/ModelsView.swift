@@ -104,9 +104,10 @@ struct ModelsView: View {
             openSpeechModelDiscoveryIfRequested()
         }
         .task(id: hubSearchTaskID) {
-            guard section == .discover else { return }
-            try? await Task.sleep(for: .milliseconds(350))
-            guard !Task.isCancelled else { return }
+            guard section == .discover else {
+                hubLibrary.cancel()
+                return
+            }
             hubLibrary.search(
                 query: hubQuery,
                 sort: hubSort,
@@ -310,7 +311,11 @@ struct ModelsView: View {
         VStack(spacing: 0) {
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
-                    ModelsSearchField(prompt: "Search models on Hugging Face", text: $hubQuery)
+                    DebouncedModelsSearchField(
+                        prompt: "Search models on Hugging Face",
+                        text: $hubQuery
+                    )
+                    .frame(height: 32)
 
                     if hubLibrary.isSearching {
                         ProgressView()
@@ -364,11 +369,10 @@ struct ModelsView: View {
                                 model: hubModel,
                                 isInstalled: installedModelIDs.contains(hubModel.id),
                                 cachePath: model.settings.modelSearchPath,
-                                onDownload: {
+                                onDownload: { downloadSizeBytes in
                                     downloadManager.download(
                                         repoID: hubModel.id,
-                                        sizeBytes: HubModelSizeResolver.shared
-                                            .resolvedSize(for: hubModel.id) ?? hubModel.estimatedDownloadBytes,
+                                        sizeBytes: downloadSizeBytes,
                                         cachePath: model.settings.modelSearchPath,
                                         token: model.effectiveHuggingFaceToken
                                     ) {}
@@ -908,6 +912,93 @@ private struct ModelsSearchField: View {
     }
 }
 
+/// Keeps the editor buffer inside AppKit so typing does not start a SwiftUI
+/// transaction. Only the debounced, committed query reaches the Models view.
+private struct DebouncedModelsSearchField: NSViewRepresentable {
+    let prompt: String
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField()
+        searchField.placeholderString = prompt
+        searchField.stringValue = text
+        searchField.delegate = context.coordinator
+        searchField.target = context.coordinator
+        searchField.action = #selector(Coordinator.commitFromAction(_:))
+        searchField.sendsWholeSearchString = true
+        searchField.sendsSearchStringImmediately = false
+        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        searchField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return searchField
+    }
+
+    func updateNSView(_ searchField: NSSearchField, context: Context) {
+        context.coordinator.text = $text
+        searchField.placeholderString = prompt
+
+        // Do not overwrite an in-progress AppKit edit when an unrelated parent
+        // update arrives before the query's debounce interval has elapsed.
+        if searchField.currentEditor() == nil, searchField.stringValue != text {
+            searchField.stringValue = text
+        }
+    }
+
+    static func dismantleNSView(_ searchField: NSSearchField, coordinator: Coordinator) {
+        coordinator.cancelPendingCommit()
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var text: Binding<String>
+        private var pendingCommit: Task<Void, Never>?
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let searchField = notification.object as? NSSearchField else { return }
+            scheduleCommit(searchField.stringValue)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let searchField = notification.object as? NSSearchField else { return }
+            commit(searchField.stringValue)
+        }
+
+        @objc func commitFromAction(_ searchField: NSSearchField) {
+            commit(searchField.stringValue)
+        }
+
+        func cancelPendingCommit() {
+            pendingCommit?.cancel()
+            pendingCommit = nil
+        }
+
+        private func scheduleCommit(_ value: String) {
+            cancelPendingCommit()
+            pendingCommit = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(350))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.commit(value)
+            }
+        }
+
+        private func commit(_ value: String) {
+            cancelPendingCommit()
+            guard text.wrappedValue != value else { return }
+            text.wrappedValue = value
+        }
+    }
+}
+
 private struct InstalledModelRow: View {
     let localModel: LocalModel
     let preloadSlots: [ModelPreloadSlot]
@@ -1328,17 +1419,17 @@ private struct HubModelRow: View, Equatable {
 /// Discover view remains stable while a download reports progress.
 private struct HubModelRowContainer: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
-    @ObservedObject private var sizeResolver = HubModelSizeResolver.shared
+    @State private var resolvedDownloadSizeBytes: Int64?
 
     let model: HuggingFaceModel
     let isInstalled: Bool
     let cachePath: String
-    let onDownload: () -> Void
+    let onDownload: (Int64?) -> Void
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
 
     var body: some View {
-        let downloadSizeBytes = sizeResolver.resolvedSize(for: model.id) ?? model.estimatedDownloadBytes
+        let downloadSizeBytes = resolvedDownloadSizeBytes ?? model.estimatedDownloadBytes
         HubModelRow(
             model: model,
             downloadSizeBytes: downloadSizeBytes,
@@ -1351,13 +1442,19 @@ private struct HubModelRowContainer: View {
                 cachePath: cachePath
             ),
             downloadError: downloadManager.errorByModelID[model.id],
-            onDownload: onDownload,
+            onDownload: { onDownload(downloadSizeBytes) },
             onPauseResume: onPauseResume,
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
         .task(id: model.id) {
-            await sizeResolver.prefetch(model.id)
+            resolvedDownloadSizeBytes = nil
+            guard let size = await HubModelSizeResolver.shared.resolveSize(for: model.id),
+                  !Task.isCancelled
+            else {
+                return
+            }
+            resolvedDownloadSizeBytes = size
         }
     }
 }
