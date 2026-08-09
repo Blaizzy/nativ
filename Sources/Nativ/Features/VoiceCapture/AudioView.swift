@@ -191,6 +191,24 @@ struct AudioView: View {
             Text("The transcript and any retained audio will be permanently deleted.")
         }
         .alert(
+            "Delete recording?",
+            isPresented: Binding(
+                get: { pendingDeleteRecording != nil },
+                set: { if !$0 { pendingDeleteRecording = nil } }
+            ),
+            presenting: pendingDeleteRecording
+        ) { record in
+            Button("Delete", role: .destructive) {
+                captureLibrary.delete(record)
+                pendingDeleteRecording = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteRecording = nil
+            }
+        } message: { record in
+            Text("\u{201c}\(record.displayTitle)\u{201d} and its audio, transcript, and summary will be permanently deleted.")
+        }
+        .alert(
             "Clear all recent dictations?",
             isPresented: $isConfirmingClearAllDictations
         ) {
