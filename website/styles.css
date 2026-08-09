@@ -266,7 +266,7 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .download-share { display: grid; grid-template-columns: minmax(80px, 1fr) 42px; align-items: center; gap: 10px; min-width: 155px; }
 .download-share i { position: relative; display: block; height: 4px; background: var(--paper-2); overflow: hidden; }
 .download-share i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--share); background: var(--orange); }
-.download-share span { text-align: right; color: var(--muted); font: 400 9px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.download-share span { text-align: right; color: var(--muted); font: 400 11px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .download-loading { height: 110px !important; color: var(--muted); text-align: center; font: 400 9px/1 var(--mono) !important; }
 
 .download-notes { display: flex; justify-content: flex-end; max-width: 1500px; margin: 42px auto 0; }
