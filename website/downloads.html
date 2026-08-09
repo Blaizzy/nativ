@@ -220,7 +220,12 @@
             </div>
           </div>
           <div class="download-chart-frame">
-            <canvas data-download-chart role="img" aria-label="Download history chart"></canvas>
+            <div class="download-chart-plot" data-download-chart role="img" aria-label="Download history chart">
+              <div class="download-chart-axis" data-chart-axis aria-hidden="true"></div>
+              <div class="download-chart-lines" data-chart-lines aria-hidden="true"></div>
+              <span class="download-chart-date download-chart-date-start" data-chart-start aria-hidden="true">—</span>
+              <span class="download-chart-date download-chart-date-end" data-chart-end aria-hidden="true">—</span>
+            </div>
             <div class="download-chart-empty" data-chart-empty>
               <strong>COLLECTING HISTORY</strong>
               <span>The chart appears as daily snapshots accumulate.</span>

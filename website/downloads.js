@@ -80,7 +80,11 @@ const resultCount = document.querySelector('[data-result-count]');
 const dataStatus = document.querySelector('[data-data-status]');
 const refreshedAt = document.querySelector('[data-refreshed-at]');
 const progressScope = document.querySelector('[data-progress-scope]');
-const chartCanvas = document.querySelector('[data-download-chart]');
+const chartPlot = document.querySelector('[data-download-chart]');
+const chartLines = document.querySelector('[data-chart-lines]');
+const chartAxis = document.querySelector('[data-chart-axis]');
+const chartStart = document.querySelector('[data-chart-start]');
+const chartEnd = document.querySelector('[data-chart-end]');
 const chartEmpty = document.querySelector('[data-chart-empty]');
 const chartSummary = document.querySelector('[data-chart-summary]');
 const chartScope = document.querySelector('[data-chart-scope]');
@@ -234,35 +238,18 @@ const renderProgress = (assets) => {
 
 const setChartEmptyState = (message) => {
   chartPoints = [];
-  if (chartCanvas) chartCanvas.hidden = true;
+  if (chartPlot) chartPlot.hidden = true;
   if (chartEmpty) chartEmpty.hidden = false;
   if (chartSummary) chartSummary.textContent = message;
 };
 
 const drawDownloadChart = () => {
-  if (!chartCanvas || chartPoints.length < 2 || chartCanvas.hidden) return;
-  const bounds = chartCanvas.getBoundingClientRect();
+  if (!chartPlot || !chartLines || chartPoints.length < 2 || chartPlot.hidden) return;
+  const bounds = chartLines.getBoundingClientRect();
   if (!bounds.width || !bounds.height) return;
 
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  chartCanvas.width = Math.round(bounds.width * pixelRatio);
-  chartCanvas.height = Math.round(bounds.height * pixelRatio);
-  const context = chartCanvas.getContext('2d');
-  if (!context) return;
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  context.clearRect(0, 0, bounds.width, bounds.height);
-
-  const rootStyles = getComputedStyle(document.documentElement);
-  const ink = rootStyles.getPropertyValue('--ink').trim() || '#111210';
-  const muted = rootStyles.getPropertyValue('--muted').trim() || '#71736c';
-  const line = rootStyles.getPropertyValue('--line').trim() || '#c9c9c0';
-  const acid = rootStyles.getPropertyValue('--acid').trim() || '#d4ff32';
-  const orange = rootStyles.getPropertyValue('--orange').trim() || '#ff5c35';
   const compactNumber = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
   const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
-  const padding = { top: 28, right: 24, bottom: 38, left: bounds.width < 520 ? 48 : 62 };
-  const plotWidth = bounds.width - padding.left - padding.right;
-  const plotHeight = bounds.height - padding.top - padding.bottom;
   const firstTime = chartPoints[0].date.getTime();
   const lastTime = chartPoints.at(-1).date.getTime();
   const values = chartPoints.map((point) => point.value);
@@ -274,67 +261,51 @@ const drawDownloadChart = () => {
   const maximum = rawMaximum + rangePadding;
   const valueRange = Math.max(maximum - minimum, 1);
   const timeRange = Math.max(lastTime - firstTime, 1);
-  const toX = (date) => padding.left + (((date.getTime() - firstTime) / timeRange) * plotWidth);
-  const toY = (value) => padding.top + (1 - ((value - minimum) / valueRange)) * plotHeight;
+  const toX = (date) => ((date.getTime() - firstTime) / timeRange) * bounds.width;
+  const toY = (value) => (1 - ((value - minimum) / valueRange)) * bounds.height;
+  const coordinates = chartPoints.map((point) => ({ x: toX(point.date), y: toY(point.value) }));
+  const fragment = document.createDocumentFragment();
 
-  context.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-  context.fillStyle = muted;
-  context.strokeStyle = line;
-  context.lineWidth = 1;
-  context.textBaseline = 'middle';
+  const area = document.createElement('i');
+  area.className = 'download-chart-area';
+  const polygonPoints = coordinates
+    .map(({ x, y }) => `${(x / bounds.width) * 100}% ${(y / bounds.height) * 100}%`)
+    .join(', ');
+  area.style.clipPath = `polygon(${polygonPoints}, 100% 100%, 0 100%)`;
+  fragment.append(area);
 
-  for (let index = 0; index <= 4; index += 1) {
-    const ratio = index / 4;
-    const y = padding.top + (ratio * plotHeight);
-    const value = maximum - (ratio * valueRange);
-    context.beginPath();
-    context.moveTo(padding.left, y);
-    context.lineTo(bounds.width - padding.right, y);
-    context.stroke();
-    context.textAlign = 'right';
-    context.fillText(compactNumber.format(Math.max(value, 0)), padding.left - 10, y);
+  coordinates.slice(0, -1).forEach((point, index) => {
+    const nextPoint = coordinates[index + 1];
+    const deltaX = nextPoint.x - point.x;
+    const deltaY = nextPoint.y - point.y;
+    const segment = document.createElement('i');
+    segment.className = 'download-chart-segment';
+    segment.style.left = `${point.x}px`;
+    segment.style.top = `${point.y}px`;
+    segment.style.width = `${Math.hypot(deltaX, deltaY)}px`;
+    segment.style.transform = `rotate(${Math.atan2(deltaY, deltaX)}rad)`;
+    fragment.append(segment);
+  });
+
+  const latestCoordinates = coordinates.at(-1);
+  const latestMarker = document.createElement('i');
+  latestMarker.className = 'download-chart-point';
+  latestMarker.style.left = `${latestCoordinates.x}px`;
+  latestMarker.style.top = `${latestCoordinates.y}px`;
+  fragment.append(latestMarker);
+  chartLines.replaceChildren(fragment);
+
+  if (chartAxis) {
+    const labels = Array.from({ length: 5 }, (_, index) => {
+      const label = document.createElement('span');
+      const value = maximum - ((index / 4) * valueRange);
+      label.textContent = compactNumber.format(Math.max(value, 0));
+      return label;
+    });
+    chartAxis.replaceChildren(...labels);
   }
-
-  context.textBaseline = 'alphabetic';
-  context.textAlign = 'left';
-  context.fillText(shortDate.format(chartPoints[0].date), padding.left, bounds.height - 12);
-  context.textAlign = 'right';
-  context.fillText(shortDate.format(chartPoints.at(-1).date), bounds.width - padding.right, bounds.height - 12);
-
-  context.beginPath();
-  chartPoints.forEach((point, index) => {
-    const x = toX(point.date);
-    const y = toY(point.value);
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-  });
-  context.lineTo(toX(chartPoints.at(-1).date), padding.top + plotHeight);
-  context.lineTo(toX(chartPoints[0].date), padding.top + plotHeight);
-  context.closePath();
-  context.save();
-  context.globalAlpha = .2;
-  context.fillStyle = acid;
-  context.fill();
-  context.restore();
-
-  context.beginPath();
-  chartPoints.forEach((point, index) => {
-    const x = toX(point.date);
-    const y = toY(point.value);
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-  });
-  context.strokeStyle = orange;
-  context.lineWidth = 3;
-  context.lineJoin = 'round';
-  context.lineCap = 'round';
-  context.stroke();
-
-  const latestPoint = chartPoints.at(-1);
-  context.beginPath();
-  context.arc(toX(latestPoint.date), toY(latestPoint.value), 4, 0, Math.PI * 2);
-  context.fillStyle = ink;
-  context.fill();
+  if (chartStart) chartStart.textContent = shortDate.format(chartPoints[0].date);
+  if (chartEnd) chartEnd.textContent = shortDate.format(chartPoints.at(-1).date);
 };
 
 const scheduleChartDraw = () => {
@@ -386,10 +357,10 @@ const renderDownloadChart = (assets) => {
   }
 
   chartPoints = points;
-  if (chartCanvas) {
-    chartCanvas.hidden = false;
+  if (chartPlot) {
+    chartPlot.hidden = false;
     const netChange = points.at(-1).value - points[0].value;
-    chartCanvas.setAttribute(
+    chartPlot.setAttribute(
       'aria-label',
       `${scopeLabel} cumulative download history. ${numberFormatter.format(points.at(-1).value)} downloads, ${netChange >= 0 ? '+' : ''}${numberFormatter.format(netChange)} over the displayed period.`
     );
