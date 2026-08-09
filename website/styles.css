@@ -248,6 +248,7 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 .download-table-wrap { max-width: 1500px; margin: 0 auto; overflow-x: auto; border-top: 1px solid var(--ink); }
 .download-table { width: 100%; border-collapse: collapse; text-align: left; }
 .download-table th { height: 38px; color: var(--muted); border-bottom: 1px solid var(--line); font: 500 7px/1 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
+.download-table th:nth-child(5) { padding-right: 24px; text-align: right; }
 .download-table td { height: 74px; padding-right: 24px; border-bottom: 1px solid var(--line); font-size: 11px; white-space: nowrap; }
 .download-table th:first-child, .download-table td:first-child { padding-left: 12px; }
 .download-table th:last-child, .download-table td:last-child { padding-right: 12px; }
