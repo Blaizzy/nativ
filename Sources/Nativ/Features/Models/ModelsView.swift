@@ -211,7 +211,7 @@ struct ModelsView: View {
                         ? "Search installed models" : "Search models on Hugging Face",
                     text: activeSearchQuery,
                     identity: renderedSection,
-                    debounceMilliseconds: renderedSection == .installed ? 0 : 350
+                    debounceMilliseconds: renderedSection == .installed ? 100 : 350
                 )
                 .frame(height: 32)
 
@@ -329,6 +329,7 @@ struct ModelsView: View {
                     },
                     onDelete: { deleteInstalledModel(localModel) }
                 )
+                .equatable()
                 .modelsListRow()
             }
         }
@@ -443,6 +444,7 @@ struct ModelsView: View {
                         downloadManager.removeDownload(hubModel.id)
                     }
                 )
+                .equatable()
                 .modelsListRow()
             }
 
@@ -934,7 +936,8 @@ struct ModelsView: View {
 
 /// Keeps the editor buffer inside AppKit so typing does not start a SwiftUI
 /// transaction. Only a committed query reaches the Models view; remote search
-/// uses a debounce while the local filter commits on the next main-actor turn.
+/// uses a longer debounce while local filtering stays within a 100 ms response
+/// window and coalesces repeated typing or deletion.
 private struct DebouncedModelsSearchField: NSViewRepresentable {
     let prompt: String
     @Binding var text: String
@@ -1048,7 +1051,7 @@ private struct DebouncedModelsSearchField: NSViewRepresentable {
     }
 }
 
-private struct InstalledModelRow: View {
+private struct InstalledModelRow: View, Equatable {
     let localModel: LocalModel
     let preloadSlots: [ModelPreloadSlot]
     let selectedPreloadSlots: Set<ModelPreloadSlot>
@@ -1061,9 +1064,20 @@ private struct InstalledModelRow: View {
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onDelete: () -> Void
 
-    @State private var isHovered = false
     @State private var showsDeleteConfirmation = false
     @State private var showsUnsupportedModelInformation = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.localModel == rhs.localModel
+            && lhs.preloadSlots == rhs.preloadSlots
+            && lhs.selectedPreloadSlots == rhs.selectedPreloadSlots
+            && lhs.preferredPreloadSlot == rhs.preferredPreloadSlot
+            && lhs.isSelectionDisabled == rhs.isSelectionDisabled
+            && lhs.isModelLoading == rhs.isModelLoading
+            && lhs.modelLoadingPercentage == rhs.modelLoadingPercentage
+            && lhs.isDeleting == rhs.isDeleting
+            && lhs.canDelete == rhs.canDelete
+    }
 
     private var isSelected: Bool {
         !selectedPreloadSlots.isEmpty
@@ -1213,9 +1227,7 @@ private struct InstalledModelRow: View {
         }
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.14), value: isHovered)
-        .modelRowBackground(isHighlighted: isSelected, isHovered: isHovered)
+        .modelRowBackground(isHighlighted: isSelected)
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -1466,7 +1478,7 @@ private struct HubModelRow: View, Equatable {
 
 /// Keeps download progress observation local to the affected row. The parent
 /// Discover view remains stable while a download reports progress.
-private struct HubModelRowContainer: View {
+private struct HubModelRowContainer: View, Equatable {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
     @State private var resolvedDownloadSizeBytes: Int64?
 
@@ -1476,6 +1488,12 @@ private struct HubModelRowContainer: View {
     let onDownload: (Int64?) -> Void
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model == rhs.model
+            && lhs.isInstalled == rhs.isInstalled
+            && lhs.cachePath == rhs.cachePath
+    }
 
     var body: some View {
         let downloadSizeBytes = resolvedDownloadSizeBytes ?? model.estimatedDownloadBytes
@@ -1496,7 +1514,7 @@ private struct HubModelRowContainer: View {
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
-        .task(id: model.id) {
+        .task(id: model.id, priority: .utility) {
             resolvedDownloadSizeBytes = nil
             guard let size = await HubModelSizeResolver.shared.resolveSize(for: model.id),
                   !Task.isCancelled

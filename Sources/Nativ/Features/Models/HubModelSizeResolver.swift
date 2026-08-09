@@ -12,7 +12,9 @@ final class HubModelSizeResolver {
         }
 
         do {
-            try await Task.sleep(nanoseconds: 250_000_000)
+            // Let short-lived rows disappear during a scroll before starting a
+            // network request that will invalidate and relayout the row.
+            try await Task.sleep(for: .seconds(1))
         } catch {
             return nil
         }
