@@ -58,6 +58,8 @@ private struct KitCard: View {
             HStack(spacing: 6) {
                 NativTintedIconTile(symbol: kit.symbol, tint: kit.tint)
                 Spacer(minLength: 0)
+                NativStatusBadge(text: "Built-in")
+                    .help("Ships with Nativ")
                 kitStateBadge(state)
             }
             VStack(alignment: .leading, spacing: 3) {

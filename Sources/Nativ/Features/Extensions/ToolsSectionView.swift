@@ -4,6 +4,7 @@ import SwiftUI
 struct ToolsSectionView: View {
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
+    var onAddViaMCP: () -> Void = {}
     @State private var inspecting: ToolItem?
 
     var body: some View {
@@ -11,7 +12,9 @@ struct ToolsSectionView: View {
             title: "Tools",
             subtitle: "Capabilities tool-capable models can call. Select a tool to inspect or try it."
         ) {
-            EmptyView()
+            Button(action: onAddViaMCP) {
+                Label("Add via MCP", systemImage: "plus")
+            }
         } content: {
             VStack(alignment: .leading, spacing: 22) {
                 toolGroup(title: "Built-in", tools: nativeTools)
@@ -77,7 +80,8 @@ struct ToolsSectionView: View {
                 title: $0.function.name,
                 detail: $0.function.description,
                 parameters: $0.function.parameters,
-                isRunnable: false
+                isRunnable: false,
+                isBuiltIn: true
             )
         }
     }
@@ -104,6 +108,7 @@ struct ToolItem: Identifiable {
     let detail: String
     var parameters: MLXJSONValue?
     var isRunnable: Bool = false
+    var isBuiltIn: Bool = false
 }
 
 private struct ToolRow: View {
@@ -115,8 +120,14 @@ private struct ToolRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(tool.title)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                HStack(spacing: 6) {
+                    Text(tool.title)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    if tool.isBuiltIn {
+                        NativStatusBadge(text: "Built-in")
+                            .help("Ships with Nativ")
+                    }
+                }
                 if !tool.detail.isEmpty {
                     Text(tool.detail)
                         .font(.system(size: 11))
