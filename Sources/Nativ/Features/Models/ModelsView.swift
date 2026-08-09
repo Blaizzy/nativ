@@ -63,7 +63,6 @@ struct ModelsView: View {
     // progress tick, which makes Discover scroll janky during downloads.
     private var downloadManager: HuggingFaceDownloadManager { .shared }
     @State private var section: ModelsPageSection = .installed
-    @State private var renderedSection: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
     @State private var hubQuery = ""
@@ -84,12 +83,20 @@ struct ModelsView: View {
                 activeDownloadBanner
                 modelLoadFailureBanner
 
-                switch renderedSection {
-                case .installed:
+                ZStack {
                     installedPage
-                case .discover:
+                        .opacity(section == .installed ? 1 : 0)
+                        .allowsHitTesting(section == .installed)
+                        .accessibilityHidden(section != .installed)
+                        .zIndex(section == .installed ? 1 : 0)
+
                     discoverPage
+                        .opacity(section == .discover ? 1 : 0)
+                        .allowsHitTesting(section == .discover)
+                        .accessibilityHidden(section != .discover)
+                        .zIndex(section == .discover ? 1 : 0)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(Color.nativMainContentBackground)
@@ -104,18 +111,6 @@ struct ModelsView: View {
         }
         .onChange(of: speechModelDiscoveryRequest) { _, _ in
             openSpeechModelDiscoveryIfRequested()
-        }
-        .task(id: section) {
-            guard renderedSection != section else { return }
-            do {
-                // Give the segmented control time to draw its new selection
-                // before replacing the heavier model-row hierarchy.
-                try await Task.sleep(for: .milliseconds(40))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            renderedSection = section
         }
         .task(id: hubSearchTaskID) {
             guard section == .discover else { return }
