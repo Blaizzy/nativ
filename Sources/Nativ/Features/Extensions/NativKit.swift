@@ -72,10 +72,10 @@ extension NativKit {
         NativKit(
             id: "research",
             name: "Research",
-            summary: "Gather sources from the web, keep notes, and query your own data.",
+            summary: "Find and read sources from the web.",
             symbol: "magnifyingglass",
             tint: .purple,
-            mcpServerIDs: ["fetch", "memory", "sqlite"],
+            mcpServerIDs: ["fetch"],
             extensionIDs: [],
             skills: [
                 .kit(
@@ -84,12 +84,9 @@ extension NativKit {
                     """
                     You're doing careful research. Prioritize accuracy and traceability.
 
-                    - Use the fetch tool to read primary sources; quote or paraphrase \
-                    with a link back to where each claim came from.
-                    - Record durable findings in the memory tool so they carry across \
-                    the conversation, and recall them before re-fetching.
-                    - Query the SQLite tool for anything in the user's own dataset \
-                    instead of estimating.
+                    - Use web search to find relevant, current sources, then use the \
+                    fetch tool to read the strongest sources.
+                    - Prefer primary sources and include links for factual claims.
                     - Separate what the sources say from your own inference, and flag \
                     uncertainty plainly.
                     """

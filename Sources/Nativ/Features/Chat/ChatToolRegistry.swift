@@ -9,6 +9,7 @@ struct ChatToolExecutionContext {
     let imageGenerationModelID: String?
     let baseURL: URL
     let apiKey: String?
+    var braveSearchAPIKey: String? = nil
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
@@ -32,12 +33,18 @@ enum ChatToolRoundGate {
 }
 
 enum ChatToolRegistry {
-    static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
+    static func definitions(
+        canEditImage: Bool,
+        hasWebSearch: Bool = false
+    ) -> [MLXChatToolDefinition] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
         tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
+        if hasWebSearch {
+            tools.append(contentsOf: ChatWebSearchToolRegistry.definitions())
+        }
         return tools
     }
 }
@@ -52,6 +59,7 @@ enum ChatToolDispatcher {
         ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
         ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
         ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
+        ChatWebSearchToolRegistry.toolName: executeWebSearchTool,
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -65,6 +73,9 @@ enum ChatToolDispatcher {
         },
         ChatServerStatsToolRegistry.toolName: { name, error in
             ChatServerStatsToolExecutor().failurePayload(operation: name, error: error)
+        },
+        ChatWebSearchToolRegistry.toolName: { name, error in
+            ChatWebSearchToolExecutor().failurePayload(operation: name, error: error)
         },
         ChatSwitchModelToolRegistry.toolName: { name, error in
             ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
@@ -161,6 +172,17 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeWebSearchTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatWebSearchToolExecutor().execute(
+            call: call,
+            apiKey: context.braveSearchAPIKey
+        )
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -228,6 +250,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case ChatWebSearchToolRegistry.toolName:
+            return webSearchTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -258,6 +282,8 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case ChatWebSearchToolRegistry.toolName:
+                return "globe"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -336,6 +362,19 @@ enum ChatToolPresentation {
             return "Model switch"
         case nil:
             return "Model switch tool"
+        }
+    }
+
+    private static func webSearchTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Searching the web…"
+        case .succeeded:
+            return "Searched the web"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Web search"
+        case nil:
+            return "Web search tool"
         }
     }
 

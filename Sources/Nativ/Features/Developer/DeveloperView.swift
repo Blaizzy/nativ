@@ -227,23 +227,22 @@ struct DeveloperView: View {
         )
     }
 
+    private var braveSearchAuthenticationPanel: some View {
+        BraveSearchAuthenticationPanel()
+    }
+
     private var authenticationPanels: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 12) {
-                huggingFaceAuthenticationPanel
-                    .frame(minWidth: 300, maxWidth: .infinity)
-
-                serverAPIAuthenticationPanel
-                    .frame(minWidth: 300, maxWidth: .infinity)
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                huggingFaceAuthenticationPanel
-                    .frame(maxWidth: .infinity)
-
-                serverAPIAuthenticationPanel
-                    .frame(maxWidth: .infinity)
-            }
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 300), spacing: 12)],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            huggingFaceAuthenticationPanel
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            serverAPIAuthenticationPanel
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            braveSearchAuthenticationPanel
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
@@ -1043,6 +1042,269 @@ private struct ServerAPIAuthenticationPanel: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(activeToken, forType: .string)
+    }
+}
+
+private struct BraveSearchAuthenticationPanel: View {
+    private static let keyURL = URL(string: "https://api-dashboard.search.brave.com/app/subscriptions/subscribe")!
+
+    @State private var isConfigured = false
+    @State private var isEditingKey = false
+    @State private var keyEntry = ""
+    @State private var errorMessage: String?
+    @State private var showsRemovalConfirmation = false
+    @FocusState private var keyFieldIsFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            authenticationHeader
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                if isEditingKey {
+                    keyEditor
+                } else {
+                    credentialOverview
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .task {
+            isConfigured = BraveSearchCredential.load() != nil
+        }
+        .alert("Remove Brave Search API Key?", isPresented: $showsRemovalConfirmation) {
+            Button("Remove", role: .destructive) {
+                removeKey()
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Web search will no longer be available in chat until you add a new key.")
+        }
+        .alert(
+            "Couldn’t Save Brave Search API Key",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                errorMessage = nil
+            }
+            .keyboardShortcut(.defaultAction)
+        } message: {
+            Text(errorMessage ?? "An unknown error occurred.")
+        }
+    }
+
+    private var authenticationHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                authenticationHeaderTitle
+                    .frame(width: 220, alignment: .leading)
+                Spacer(minLength: 8)
+                authenticationStatusBadge
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                authenticationHeaderTitle
+                authenticationStatusBadge
+            }
+        }
+    }
+
+    private var authenticationHeaderTitle: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "globe")
+                .foregroundStyle(.purple)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Brave Search")
+                    .font(.callout.weight(.semibold))
+                Text("Search current public sources from chat.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var authenticationStatusBadge: some View {
+        Label(
+            isConfigured ? "Configured" : "Needs API Key",
+            systemImage: isConfigured ? "checkmark.circle.fill" : "key"
+        )
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(isConfigured ? .green : .secondary)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            (isConfigured ? Color.green : Color.secondary).opacity(0.12),
+            in: Capsule()
+        )
+        .fixedSize()
+    }
+
+    private var credentialOverview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(
+                isConfigured
+                    ? "Your key is stored securely in this Mac’s Keychain."
+                    : "Add your free Brave Search API key to enable web search."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    credentialActions
+                    Spacer(minLength: 0)
+                    apiKeyLink
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    credentialActions
+                    apiKeyLink
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var credentialActions: some View {
+        if isConfigured {
+            Button("Replace Key") {
+                beginEditingKey()
+            }
+            .buttonStyle(.bordered)
+
+            Button("Remove", role: .destructive) {
+                showsRemovalConfirmation = true
+            }
+            .buttonStyle(.bordered)
+        } else {
+            Button("Add API Key") {
+                beginEditingKey()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var apiKeyLink: some View {
+        Link(destination: Self.keyURL) {
+            Label("Get API Key", systemImage: "arrow.up.right")
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var keyEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(isConfigured ? "Replace Brave Search API Key" : "Add Brave Search API Key")
+                .font(.caption.weight(.semibold))
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    keyField
+                        .frame(minWidth: 180)
+                    keyEditorActions
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    keyField
+                    keyEditorActions
+                }
+            }
+
+            Text("Your key is stored only in macOS Keychain and sent only to Brave Search.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .task {
+            keyFieldIsFocused = true
+        }
+    }
+
+    private var keyField: some View {
+        SecureField("Paste Brave Search API key", text: $keyEntry)
+            .textFieldStyle(.roundedBorder)
+            .font(.callout.monospaced())
+            .focused($keyFieldIsFocused)
+            .privacySensitive()
+            .accessibilityLabel("Brave Search API key")
+            .onSubmit(saveKey)
+    }
+
+    private var keyEditorActions: some View {
+        HStack(spacing: 8) {
+            Button("Cancel") {
+                cancelEditingKey()
+            }
+            .buttonStyle(.bordered)
+
+            Button("Save Key") {
+                saveKey()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(ServerAPIAuthentication.normalizedToken(keyEntry) == nil)
+        }
+    }
+
+    private func beginEditingKey() {
+        keyEntry = ""
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEditingKey = true
+        }
+        keyFieldIsFocused = true
+    }
+
+    private func cancelEditingKey() {
+        keyEntry = ""
+        keyFieldIsFocused = false
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEditingKey = false
+        }
+    }
+
+    private func saveKey() {
+        guard let key = ServerAPIAuthentication.normalizedToken(keyEntry) else {
+            return
+        }
+
+        do {
+            try BraveSearchCredential.save(key)
+            isConfigured = true
+            cancelEditingKey()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeKey() {
+        do {
+            try BraveSearchCredential.save(nil)
+            isConfigured = false
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

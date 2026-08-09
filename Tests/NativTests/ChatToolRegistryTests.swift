@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import NativServerKit
 
@@ -89,6 +90,78 @@ final class ChatToolRegistryTests: XCTestCase {
         let withEdit = ChatToolRegistry.definitions(canEditImage: true)
             .map(\.function.name)
         XCTAssertTrue(withEdit.contains(ChatImageToolRegistry.editToolName))
+    }
+
+    func testWebSearchIsAdvertisedOnlyWhenAKeyIsConfigured() {
+        let withoutWebSearch = ChatToolRegistry.definitions(
+            canEditImage: false,
+            hasWebSearch: false
+        ).map(\.function.name)
+        let withWebSearch = ChatToolRegistry.definitions(
+            canEditImage: false,
+            hasWebSearch: true
+        ).map(\.function.name)
+
+        XCTAssertFalse(withoutWebSearch.contains(ChatWebSearchToolRegistry.toolName))
+        XCTAssertTrue(withWebSearch.contains(ChatWebSearchToolRegistry.toolName))
+    }
+
+    func testWebSearchUsesBraveWithACompactResultPayload() async throws {
+        let executor = ChatWebSearchToolExecutor { request in
+            XCTAssertEqual(request.url?.host, "api.search.brave.com")
+            XCTAssertEqual(request.url?.path, "/res/v1/web/search")
+            let components = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )
+            XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "q" })?.value, "Nativ")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Subscription-Token"), "brave-test-key")
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = #"""
+                {"web":{"results":[{"title":" Nativ  ","url":"https://nativ.example","description":"A  concise \n result."}]}}
+                """#.data(using: .utf8)!
+            return (data, response)
+        }
+
+        let payload = try await executor.execute(
+            call: makeCall(
+                name: ChatWebSearchToolRegistry.toolName,
+                arguments: #"{"query":" Nativ "}"#
+            ),
+            apiKey: "brave-test-key"
+        )
+        let object = try decode(payload)
+        let results = try XCTUnwrap(object["results"] as? [[String: String]])
+
+        XCTAssertEqual(object["ok"] as? Bool, true)
+        XCTAssertEqual(results, [[
+            "title": "Nativ",
+            "url": "https://nativ.example",
+            "snippet": "A concise result."
+        ]])
+    }
+
+    func testWebSearchWithoutAKeyReturnsAnActionableError() async throws {
+        do {
+            _ = try await ChatWebSearchToolExecutor().execute(
+                call: makeCall(
+                    name: ChatWebSearchToolRegistry.toolName,
+                    arguments: #"{"query":"Nativ"}"#
+                ),
+                apiKey: nil
+            )
+            XCTFail("web search must require an API key")
+        } catch {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Add a Brave Search API key in Developer to use web search."
+            )
+        }
     }
 
     func testDefinitionsNeverAdvertiseDuplicateToolNames() {
@@ -410,6 +483,14 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(object["error"] as? String, "fake failure")
     }
 
+    func testWebSearchFailurePayloadShape() throws {
+        let payload = ChatWebSearchToolExecutor().failurePayload(operation: "x", error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "fake failure")
+        XCTAssertNil(object["results"])
+    }
+
     func testSwitchModelDeclinedPayloadShape() throws {
         let payload = ChatSwitchModelToolExecutor().declinedPayload()
         let object = try decode(payload)
@@ -670,6 +751,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "Model switch",
                 .awaitingConsent: "Switch model?", .declined: "Model switch declined",
             ],
+            ChatWebSearchToolRegistry.toolName: [
+                nil: "Web search tool", .preparing: "Searching the web…",
+                .running: "Searching the web…", .succeeded: "Searched the web",
+                .failed: "Web search", .cancelled: "Web search",
+                .awaitingImageModelSelection: "Web search",
+                .awaitingConsent: "Web search", .declined: "Web search",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -700,6 +788,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatWebSearchToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -709,6 +798,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            ChatWebSearchToolRegistry.toolName: "globe",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 

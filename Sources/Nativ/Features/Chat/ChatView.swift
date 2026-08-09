@@ -1246,6 +1246,7 @@ final class ChatViewModel: ObservableObject {
                         imageGenerationModelID: activeImageModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
                         apiKey: queuedRequest.settings.serverAPIKey,
+                        braveSearchAPIKey: BraveSearchCredential.load(),
                         imageReferences: references,
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
                         additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
@@ -1362,7 +1363,8 @@ final class ChatViewModel: ObservableObject {
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty },
+                hasWebSearch: BraveSearchCredential.load() != nil
             )
             : []
         if advertisesToolsForModel {
