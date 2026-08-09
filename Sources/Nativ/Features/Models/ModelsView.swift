@@ -63,6 +63,7 @@ struct ModelsView: View {
     // progress tick, which makes Discover scroll janky during downloads.
     private var downloadManager: HuggingFaceDownloadManager { .shared }
     @State private var section: ModelsPageSection = .installed
+    @State private var renderedSection: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
     @State private var hubQuery = ""
@@ -70,6 +71,7 @@ struct ModelsView: View {
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
+    @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -82,7 +84,7 @@ struct ModelsView: View {
                 activeDownloadBanner
                 modelLoadFailureBanner
 
-                switch section {
+                switch renderedSection {
                 case .installed:
                     installedPage
                 case .discover:
@@ -103,11 +105,23 @@ struct ModelsView: View {
         .onChange(of: speechModelDiscoveryRequest) { _, _ in
             openSpeechModelDiscoveryIfRequested()
         }
-        .task(id: hubSearchTaskID) {
-            guard section == .discover else {
-                hubLibrary.cancel()
+        .task(id: section) {
+            guard renderedSection != section else { return }
+            do {
+                // Give the segmented control time to draw its new selection
+                // before replacing the heavier model-row hierarchy.
+                try await Task.sleep(for: .milliseconds(40))
+            } catch {
                 return
             }
+            guard !Task.isCancelled else { return }
+            renderedSection = section
+        }
+        .task(id: hubSearchTaskID) {
+            guard section == .discover else { return }
+            let searchTaskID = hubSearchTaskID
+            guard searchTaskID != lastStartedHubSearchTaskID else { return }
+            lastStartedHubSearchTaskID = searchTaskID
             hubLibrary.search(
                 query: hubQuery,
                 sort: hubSort,
@@ -119,6 +133,7 @@ struct ModelsView: View {
         .onDisappear {
             localLibrary.cancel()
             hubLibrary.cancel()
+            lastStartedHubSearchTaskID = nil
         }
     }
 
