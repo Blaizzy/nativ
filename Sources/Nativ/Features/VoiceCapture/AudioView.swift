@@ -66,6 +66,7 @@ struct AudioView: View {
     @State private var destination: AudioDestination = .record
     @State private var pendingDeleteDictation: AudioTranscriptionRecord?
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
+    @State private var hoveredActivity: AudioDailyUsage?
     @State private var isConfirmingClearAllDictations = false
 
     let titleLeadingInset: CGFloat
@@ -423,19 +424,44 @@ struct AudioView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 220)
             } else {
-                Chart(dailyUsage) { item in
-                    BarMark(
-                        x: .value("Day", item.date, unit: .day),
-                        y: .value("Words", item.words)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.accentColor, .accentColor.opacity(0.5)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                Chart {
+                    ForEach(dailyUsage) { item in
+                        BarMark(
+                            x: .value("Day", item.date, unit: .day),
+                            y: .value("Words", item.words)
                         )
-                    )
-                    .cornerRadius(4)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.accentColor, .accentColor.opacity(0.5)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .cornerRadius(4)
+                        .opacity(
+                            hoveredActivity == nil || hoveredActivity?.id == item.id
+                                ? 1
+                                : 0.42
+                        )
+                    }
+
+                    if let hoveredActivity {
+                        RuleMark(
+                            x: .value("Hovered day", hoveredActivity.date, unit: .day)
+                        )
+                        .foregroundStyle(Color.secondary.opacity(0.28))
+                        .lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                        .annotation(
+                            position: .top,
+                            spacing: 8,
+                            overflowResolution: .init(
+                                x: .fit(to: .chart),
+                                y: .disabled
+                            )
+                        ) {
+                            AudioActivityTooltip(item: hoveredActivity)
+                        }
+                    }
                 }
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .day, count: 2)) { value in
@@ -445,6 +471,25 @@ struct AudioView: View {
                 }
                 .chartYAxis {
                     AxisMarks(position: .leading)
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case let .active(location):
+                                    updateHoveredActivity(
+                                        at: location,
+                                        proxy: proxy,
+                                        geometry: geometry
+                                    )
+                                case .ended:
+                                    hoveredActivity = nil
+                                }
+                            }
+                    }
                 }
                 .frame(height: 230)
             }
@@ -1988,6 +2033,35 @@ struct AudioView: View {
         dailyUsage.reduce(0) { $0 + $1.words }
     }
 
+    private func updateHoveredActivity(
+        at location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        guard let plotFrameAnchor = proxy.plotFrame else {
+            hoveredActivity = nil
+            return
+        }
+
+        let plotFrame = geometry[plotFrameAnchor]
+        guard plotFrame.contains(location) else {
+            hoveredActivity = nil
+            return
+        }
+
+        let plotX = location.x - plotFrame.minX
+        guard let date: Date = proxy.value(atX: plotX) else {
+            hoveredActivity = nil
+            return
+        }
+
+        let nextActivity = dailyUsage.min {
+            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+        }
+        guard hoveredActivity != nextActivity else { return }
+        hoveredActivity = nextActivity
+    }
+
     private var filteredRecords: [AudioTranscriptionRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
@@ -2302,6 +2376,38 @@ private struct AudioMetricCard: View {
         }
         .padding(16)
         .audioPanelStyle()
+    }
+}
+
+private struct AudioActivityTooltip: View {
+    let item: AudioDailyUsage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(item.date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                .font(.caption.weight(.semibold))
+
+            HStack(spacing: 6) {
+                Text("\(item.words.formatted()) words")
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("\(item.sessions) \(item.sessions == 1 ? "dictation" : "dictations")")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        .fixedSize()
     }
 }
 
