@@ -31,8 +31,14 @@ struct KitsSectionView: View {
             Button {
                 editingKit = UserNativKit()
             } label: {
-                Label("Create kit", systemImage: "plus")
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
+            .buttonStyle(.plain)
+            .help("Create kit")
         } content: {
             VStack(alignment: .leading, spacing: 22) {
                 if !model.settings.userKits.isEmpty {
@@ -613,7 +619,15 @@ private struct KitComponentPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: 10) {
+                Button(action: onDone) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Back to kit")
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Choose \(kind.title)")
                         .font(.system(size: 16, weight: .semibold))
@@ -622,7 +636,6 @@ private struct KitComponentPickerView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                NativHoverCloseButton(action: onDone)
             }
             .padding(20)
             Divider()
