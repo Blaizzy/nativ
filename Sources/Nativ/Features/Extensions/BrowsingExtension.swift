@@ -109,6 +109,7 @@ private enum BrowsingProvider: String, CaseIterable, Identifiable, Sendable {
 
 private enum BrowsingProviderSettings {
     private static let activeProviderKey = "nativ.browsing.active-provider.v1"
+    private static let verificationKeyPrefix = "nativ.browsing.provider-verified.v1."
 
     static var active: BrowsingProvider {
         guard let rawValue = UserDefaults.standard.string(forKey: activeProviderKey),
@@ -120,6 +121,18 @@ private enum BrowsingProviderSettings {
 
     static func setActive(_ provider: BrowsingProvider) {
         UserDefaults.standard.set(provider.rawValue, forKey: activeProviderKey)
+    }
+
+    static func isVerified(_ provider: BrowsingProvider) -> Bool {
+        UserDefaults.standard.bool(forKey: verificationKey(for: provider))
+    }
+
+    static func markVerified(_ provider: BrowsingProvider, verified: Bool) {
+        UserDefaults.standard.set(verified, forKey: verificationKey(for: provider))
+    }
+
+    private static func verificationKey(for provider: BrowsingProvider) -> String {
+        verificationKeyPrefix + provider.rawValue
     }
 }
 
@@ -210,7 +223,7 @@ private struct BrowsingConfigurationView: View {
                         Text(provider.name)
                             .font(.system(size: 12, weight: provider == selectedProvider ? .semibold : .regular))
                         Spacer(minLength: 0)
-                        if BrowsingCredentials.load(for: provider) != nil {
+                        if BrowsingProviderSettings.isVerified(provider) {
                             Circle()
                                 .fill(Color.green)
                                 .frame(width: 6, height: 6)
@@ -306,10 +319,12 @@ private struct BrowsingConfigurationView: View {
                 try await BrowsingSearchService.test(provider: selectedProvider, apiKey: key)
                 try BrowsingCredentials.save(key, for: selectedProvider)
                 BrowsingProviderSettings.setActive(selectedProvider)
+                BrowsingProviderSettings.markVerified(selectedProvider, verified: true)
                 apiKey = ""
                 revealsKey = false
                 status = .connected
             } catch {
+                BrowsingProviderSettings.markVerified(selectedProvider, verified: false)
                 status = .failure(error.localizedDescription)
             }
             isTesting = false
@@ -369,12 +384,20 @@ private enum BrowsingSearchTool {
         guard let key = BrowsingCredentials.load(for: provider) else {
             throw BrowsingSearchError.missingAPIKey(provider)
         }
-        let results = try await BrowsingSearchService.search(
-            provider: provider,
-            apiKey: key,
-            query: query,
-            limit: 3
-        )
+        let results: [BrowsingSearchResult]
+        do {
+            results = try await BrowsingSearchService.search(
+                provider: provider,
+                apiKey: key,
+                query: query,
+                limit: 3
+            )
+        } catch {
+            if BrowsingSearchError.invalidatesCredential(error) {
+                BrowsingProviderSettings.markVerified(provider, verified: false)
+            }
+            throw error
+        }
         let payload = ResultPayload(results: results)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -608,6 +631,14 @@ private enum BrowsingSearchError: LocalizedError {
     case invalidResponse(BrowsingProvider)
     case emptyResponse(BrowsingProvider)
     case requestFailed(BrowsingProvider, Int)
+
+    static func invalidatesCredential(_ error: Error) -> Bool {
+        guard let browsingError = error as? BrowsingSearchError,
+              case .requestFailed(_, let status) = browsingError else {
+            return false
+        }
+        return [401, 402, 403].contains(status)
+    }
 
     var errorDescription: String? {
         switch self {
