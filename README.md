@@ -23,6 +23,15 @@ Nativ is a native macOS workspace for running AI models locally on Apple silicon
 
 Use Nativ as a private chat app, a model manager, a performance dashboard, or an OpenAI- and Anthropic-compatible local inference server for the tools you already use.
 
+## Documentation
+
+Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)** — start there for
+[Chat](Docs/features/chat.md), [Models](Docs/features/models.md), [Voice](Docs/features/voice.md),
+[Routines](Docs/features/routines.md), [Integrations](Docs/features/integrations.md), and the
+[Developer](Docs/features/developer.md) reference, plus guides for
+[extensions](Docs/extending/extensions.md), [kits](Docs/extending/kits.md), and the
+[MCP catalog](Docs/extending/mcp-catalog.md).
+
 ## What Nativ can do
 
 | Feature | What you get |
@@ -33,7 +42,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, SMART health, and thermal and power sensors. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, embeddings, and model endpoints, plus Anthropic Messages endpoints. |
-| **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [INTEGRATIONS.md](INTEGRATIONS.md) for per-tool setup. |
+| **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [Docs/features/integrations.md](Docs/features/integrations.md) for per-tool setup. |
 | **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
 | **Extension platform** | Install, disable, remove, and restore independently versioned capabilities. Audio ships as the first included extension and contributes its own pages, commands, shortcuts, settings, and permission declarations. |
@@ -193,7 +202,7 @@ scripts/                         # Archive, signing, notarization, and release t
 project.yml                      # XcodeGen project definition
 ```
 
-See [Docs/Extensions.md](Docs/Extensions.md) for the extension package format,
+See [Docs/extending/extensions.md](Docs/extending/extensions.md) for the extension package format,
 lifecycle, permission model, and the steps for adding another first-party extension.
 
 ## Development
