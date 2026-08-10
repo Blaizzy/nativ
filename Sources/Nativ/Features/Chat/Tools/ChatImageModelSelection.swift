@@ -194,8 +194,10 @@ enum ChatImageModelSelection {
         let models: [LocalModel]
         do {
             models = try await LocalModelDiscovery.scan(
-                path: modelSearchPath,
-                additionalPaths: additionalModelSearchPaths
+                searchPaths: LocalModelSearchPaths(
+                    primary: modelSearchPath,
+                    additional: additionalModelSearchPaths
+                )
             )
         } catch LocalModelDiscoveryError.pathNotFound {
             // A fresh install may not have a model cache directory yet.

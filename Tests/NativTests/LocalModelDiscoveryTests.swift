@@ -4,6 +4,10 @@ import XCTest
 final class LocalModelDiscoveryTests: XCTestCase {
     private var temporaryCache: URL!
 
+    private var searchPaths: LocalModelSearchPaths {
+        LocalModelSearchPaths(primary: temporaryCache.path)
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         temporaryCache = FileManager.default.temporaryDirectory
@@ -23,9 +27,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
     func testDiscoversMageFlowComponentLayoutAsImageGenerationModel() async throws {
         try makeMageFlowSnapshot(repoID: "microsoft/Mage-Flow-Turbo")
 
-        let models = try await LocalModelDiscovery.scan(
-            path: temporaryCache.path
-        )
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         let model = try XCTUnwrap(models.first)
         XCTAssertEqual(models.count, 1)
@@ -38,9 +40,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
     func testDiscoversMageFlowEditComponentLayoutAsImageEditingModel() async throws {
         try makeMageFlowSnapshot(repoID: "microsoft/Mage-Flow-Edit-Turbo")
 
-        let models = try await LocalModelDiscovery.scan(
-            path: temporaryCache.path
-        )
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         let model = try XCTUnwrap(models.first)
         XCTAssertEqual(models.count, 1)
@@ -48,6 +48,29 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertEqual(model.provider, .microsoft)
         XCTAssertTrue(model.capabilities.contains(.imageEditing))
         XCTAssertFalse(model.capabilities.contains(.imageGeneration))
+    }
+
+    func testDiscoversModelFromAdditionalSearchFolder() async throws {
+        let externalModel = temporaryCache.appendingPathComponent(
+            "external/owner/model",
+            isDirectory: true
+        )
+        try writeJSON(
+            ["model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]],
+            to: externalModel.appendingPathComponent("config.json")
+        )
+        try write("weights", to: externalModel.appendingPathComponent("model.safetensors"))
+
+        let models = try await LocalModelDiscovery.scan(
+            searchPaths: LocalModelSearchPaths(
+                primary: temporaryCache.path,
+                additional: [externalModel.path]
+            )
+        )
+
+        let model = try XCTUnwrap(models.first { $0.repoID == externalModel.standardizedFileURL.path })
+        XCTAssertEqual(model.source, .external)
+        XCTAssertTrue(model.capabilities.contains(.text))
     }
 
     func testClassifiesEncoderWithPoolingAsEmbeddingModel() async throws {
@@ -58,7 +81,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             sentenceTransformer: true
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
@@ -71,7 +94,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             sentenceTransformer: false
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertFalse(model.capabilities.contains(.embeddings))
         XCTAssertTrue(model.capabilities.contains(.text))
@@ -85,7 +108,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             sentenceTransformer: true
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
@@ -99,7 +122,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             stamp: ["kind": "embedding", "modality": "text"]
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
@@ -125,7 +148,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             ]
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         XCTAssertFalse(models.contains { $0.repoID == "org/incomplete-sharded-model" })
         XCTAssertTrue(models.contains { $0.repoID == "org/complete-sharded-model" })
@@ -155,7 +178,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
                 .appendingPathComponent("model.safetensors.index.json")
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         XCTAssertFalse(models.contains { $0.repoID == "org/malformed-index" })
         XCTAssertFalse(models.contains { $0.repoID == "org/empty-index" })
@@ -181,7 +204,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             withDestinationURL: blobURL
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         XCTAssertTrue(models.contains { $0.repoID == repoID })
     }

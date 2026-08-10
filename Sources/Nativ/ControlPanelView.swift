@@ -310,10 +310,7 @@ struct ControlPanelView: View {
                         repoID: modelID,
                         searchPath: settings.modelSearchPath
                     )
-                    embeddingLibrary.scan(
-                        path: settings.modelSearchPath,
-                        additionalPaths: settings.additionalModelSearchPaths
-                    )
+                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
                     NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
                 }
                 navigation.open(.models)
@@ -324,10 +321,7 @@ struct ControlPanelView: View {
                         repoID: modelID,
                         path: settings.modelSearchPath
                     )
-                    embeddingLibrary.scan(
-                        path: settings.modelSearchPath,
-                        additionalPaths: settings.additionalModelSearchPaths
-                    )
+                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
                     NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
                 }
             },
@@ -441,10 +435,7 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
-            embeddingLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            embeddingLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -1620,10 +1611,7 @@ struct ControlPanelView: View {
             return
         }
         let settings = model.settings.normalized()
-        routineModelLibrary.scan(
-            path: settings.modelSearchPath,
-            additionalPaths: settings.additionalModelSearchPaths
-        )
+        routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
         if let existing = RoutineStore.shared.routine(forSession: sessionID) {
             schedulingRoutineDraft = RoutineDraft(routine: existing)
             return
@@ -1650,10 +1638,7 @@ struct ControlPanelView: View {
 
     private func presentNewRoutine() {
         let settings = model.settings.normalized()
-        routineModelLibrary.scan(
-            path: settings.modelSearchPath,
-            additionalPaths: settings.additionalModelSearchPaths
-        )
+        routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
         schedulingRoutineDraft = RoutineDraft(
             routine: Routine(modelID: settings.languageModelID ?? "")
         )

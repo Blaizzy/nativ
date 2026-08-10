@@ -176,8 +176,8 @@ private struct WelcomeView: View {
             .padding(.vertical, 32)
         }
         .frame(minWidth: 900, minHeight: 760)
-        .task(id: modelSearchPath) {
-            modelLibrary.scan(path: model.settings.modelSearchPath)
+        .task(id: model.settings.localModelSearchPaths) {
+            modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .task(id: step) {
             guard step == .permissions else { return }
@@ -766,7 +766,7 @@ private struct WelcomeView: View {
     }
 
     private func refreshModelChoices() {
-        modelLibrary.scan(path: model.settings.modelSearchPath)
+        modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         requestRecommendedModels()
     }
 
@@ -790,7 +790,7 @@ private struct WelcomeView: View {
             cachePath: model.settings.modelSearchPath,
             token: model.effectiveHuggingFaceToken
         ) {
-            modelLibrary.scan(path: model.settings.modelSearchPath)
+            modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
             if selectedModelID == nil {
                 selectedModelID = hubModel.id
             }

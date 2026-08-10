@@ -959,9 +959,7 @@ struct ModelsView: View {
     }
 
     private var modelScanPath: String {
-        let settings = modelState.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        modelState.settings.localModelSearchPaths.cacheKey
     }
 
     private var sourcesMenu: some View {
@@ -992,10 +990,7 @@ struct ModelsView: View {
     }
 
     private func rescanLocalModels() {
-        localLibrary.scan(
-            path: modelState.settings.modelSearchPath,
-            additionalPaths: modelState.settings.normalized().additionalModelSearchPaths
-        )
+        localLibrary.scan(searchPaths: modelState.settings.localModelSearchPaths)
     }
 
     private func addModelSourceFolder() {
