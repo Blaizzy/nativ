@@ -172,7 +172,8 @@ private struct ProviderLogo: View {
 
     var body: some View {
         Group {
-            if let image = NSImage(contentsOf: logoURL) {
+            if let logoURL,
+               let image = NSImage(contentsOf: logoURL) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
@@ -182,8 +183,7 @@ private struct ProviderLogo: View {
         .frame(width: size, height: size)
     }
 
-    private var logoURL: URL {
-        Bundle.main.resourceURL!
-            .appendingPathComponent("Browsing/Assets/\(provider.logoFileName).png")
+    private var logoURL: URL? {
+        Bundle.main.url(forResource: provider.logoFileName, withExtension: "png")
     }
 }
