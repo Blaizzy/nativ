@@ -63,6 +63,15 @@ final class MCPHostManager: ObservableObject {
         scheduleReload(servers: servers, debounce: true)
     }
 
+    func reloadImmediately(servers: [MCPServerConfig]) async {
+        guard servers != appliedServers else { return }
+        appliedServers = servers
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        reloadTask?.cancel()
+        await applyReload(servers: servers, generation: generation)
+    }
+
     func reconnect(_ serverID: UUID) {
         if let connection = connections.removeValue(forKey: serverID) {
             states[serverID] = .connecting

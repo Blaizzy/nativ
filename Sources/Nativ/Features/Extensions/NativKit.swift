@@ -171,6 +171,10 @@ extension NativKit {
             extensionIDs: []
         ),
     ]
+
+    static func available(in settings: NativSettings) -> [NativKit] {
+        all + settings.userKits.map { $0.resolved() }
+    }
 }
 
 enum NativKitState: Equatable {

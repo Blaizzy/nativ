@@ -98,6 +98,27 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(names.count, Set(names).count)
     }
 
+    func testUseKitDefinitionIncludesBuiltInAndUserCreatedKits() throws {
+        let kits = [
+            ChatKitDescriptor(id: "engineering", name: "Engineering", summary: "Build software."),
+            ChatKitDescriptor(id: "research", name: "Research", summary: "Gather sources."),
+            ChatKitDescriptor(id: "release", name: "Release", summary: "Prepare a release."),
+        ]
+        let definition = try XCTUnwrap(ChatUseKitToolRegistry.definitions(kits: kits).first)
+        let encoded = try JSONEncoder().encode(definition)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let function = try XCTUnwrap(object["function"] as? [String: Any])
+        let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+        let kitID = try XCTUnwrap(properties["kit_id"] as? [String: Any])
+        let identifiers = try XCTUnwrap(kitID["enum"] as? [String])
+
+        XCTAssertEqual(function["name"] as? String, ChatUseKitToolRegistry.toolName)
+        XCTAssertTrue(identifiers.contains("engineering"))
+        XCTAssertTrue(identifiers.contains("research"))
+        XCTAssertTrue(identifiers.contains("release"))
+    }
+
     func testImageToolSchemasAreGoldenPinned() throws {
         let golden = #"""
             [{"function":{"description":"Create one or more new images from a detailed text prompt. Image-model selection is handled by the app; do not ask for or provide a model identifier.","name":"generate_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"},{"function":{"description":"Edit the most recently attached or generated image using a text instruction. Image-model selection is handled by the app; do not ask for or provide a model identifier.","name":"edit_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"}]
@@ -358,6 +379,16 @@ final class ChatToolRegistryTests: XCTestCase {
         } catch {}
     }
 
+    func testUseKitIsUnreachableThroughGenericDispatcherExecute() async {
+        do {
+            _ = try await ChatToolDispatcher.execute(
+                call: makeCall(name: ChatUseKitToolRegistry.toolName, arguments: #"{"kit_id":"engineering"}"#),
+                context: makeContext()
+            )
+            XCTFail("use_kit must never execute through the generic dispatcher without the consent gate")
+        } catch {}
+    }
+
     func testConsentRouterTreatsCancellationAsHigherPriorityThanApproval() {
         XCTAssertEqual(ChatToolConsentRouter.outcome(approved: true, isCancelled: true), .cancelled)
         XCTAssertEqual(ChatToolConsentRouter.outcome(approved: false, isCancelled: true), .cancelled)
@@ -416,6 +447,14 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["declined"] as? Bool, true)
         XCTAssertNotNil(object["error"])
+    }
+
+    func testUseKitFailurePayloadShape() throws {
+        let payload = ChatUseKitToolExecutor().failurePayload(operation: "x", error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "fake failure")
+        XCTAssertNil(object["kit_id"])
     }
 
     private func decode(_ json: String) throws -> [String: Any] {
@@ -670,6 +709,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "Model switch",
                 .awaitingConsent: "Switch model?", .declined: "Model switch declined",
             ],
+            ChatUseKitToolRegistry.toolName: [
+                nil: "Kit tool", .preparing: "Enabling Kit…",
+                .running: "Enabling Kit…", .succeeded: "Enabled Kit",
+                .failed: "Use Kit", .cancelled: "Use Kit",
+                .awaitingImageModelSelection: "Use Kit",
+                .awaitingConsent: "Use Kit?", .declined: "Kit activation declined",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -700,6 +746,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatUseKitToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -709,6 +756,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            ChatUseKitToolRegistry.toolName: "shippingbox",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -834,6 +882,54 @@ final class ChatSwitchModelToolExecutorTests: XCTestCase {
             XCTAssertEqual(active, "org/unexpected")
         } catch {
             XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+@MainActor
+final class ChatUseKitToolExecutorTests: XCTestCase {
+    func testSelectsRequestedKitAndReportsItsComponents() throws {
+        let kit = ChatKitDescriptor(id: "release", name: "Release", summary: "Prepare a release.")
+        let selected = try ChatUseKitToolExecutor().selectedKit(
+            call: makeCall(name: ChatUseKitToolRegistry.toolName, arguments: #"{"kit_id":"release"}"#),
+            kits: [kit]
+        )
+        let content = try ChatUseKitToolExecutor().enabledPayload(
+            kit: selected,
+            extensionsEnabled: 1,
+            mcpServersEnabled: 2,
+            toolsEnabled: 3,
+            skillsEnabled: 4
+        )
+        let object = try decode(content)
+
+        XCTAssertEqual(object["ok"] as? Bool, true)
+        XCTAssertEqual(object["kit_id"] as? String, "release")
+        XCTAssertEqual(object["kit_name"] as? String, "Release")
+        XCTAssertEqual(object["extensions_enabled"] as? Int, 1)
+        XCTAssertEqual(object["mcp_servers_enabled"] as? Int, 2)
+        XCTAssertEqual(object["tools_enabled"] as? Int, 3)
+        XCTAssertEqual(object["skills_enabled"] as? Int, 4)
+    }
+
+    func testUnknownKitThrows() {
+        do {
+            _ = try ChatUseKitToolExecutor().selectedKit(
+                call: makeCall(name: ChatUseKitToolRegistry.toolName, arguments: #"{"kit_id":"missing"}"#),
+                kits: []
+            )
+            XCTFail("unknown Kit identifiers must not activate anything")
+        } catch let error as ChatUseKitToolError {
+            guard case .unknownKit("missing") = error else {
+                return XCTFail("expected unknown Kit error, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatUseKitToolError, got \(error)")
         }
     }
 

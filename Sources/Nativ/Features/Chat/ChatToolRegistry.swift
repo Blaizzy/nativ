@@ -32,12 +32,16 @@ enum ChatToolRoundGate {
 }
 
 enum ChatToolRegistry {
-    static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
+    static func definitions(
+        canEditImage: Bool,
+        kits: [ChatKitDescriptor] = []
+    ) -> [MLXChatToolDefinition] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
         tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
+        tools.append(contentsOf: ChatUseKitToolRegistry.definitions(kits: kits))
         return tools
     }
 }
@@ -68,6 +72,9 @@ enum ChatToolDispatcher {
         },
         ChatSwitchModelToolRegistry.toolName: { name, error in
             ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
+        },
+        ChatUseKitToolRegistry.toolName: { name, error in
+            ChatUseKitToolExecutor().failurePayload(operation: name, error: error)
         },
     ]
 
@@ -228,6 +235,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case ChatUseKitToolRegistry.toolName:
+            return useKitTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -258,6 +267,8 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case ChatUseKitToolRegistry.toolName:
+                return "shippingbox"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -336,6 +347,23 @@ enum ChatToolPresentation {
             return "Model switch"
         case nil:
             return "Model switch tool"
+        }
+    }
+
+    private static func useKitTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .awaitingConsent:
+            return "Use Kit?"
+        case .preparing, .running:
+            return "Enabling Kit…"
+        case .succeeded:
+            return "Enabled Kit"
+        case .declined:
+            return "Kit activation declined"
+        case .failed, .cancelled, .awaitingImageModelSelection:
+            return "Use Kit"
+        case nil:
+            return "Kit tool"
         }
     }
 

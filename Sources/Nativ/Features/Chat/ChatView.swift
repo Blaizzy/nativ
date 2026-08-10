@@ -25,6 +25,7 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var extensionManager: NativExtensionManager
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -52,7 +53,10 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
-        .onAppear { chat.mcpHost = mcpHost }
+        .onAppear {
+            chat.mcpHost = mcpHost
+            chat.extensionManager = extensionManager
+        }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
         }
@@ -275,6 +279,7 @@ private struct ChatComposerContainer: View {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    weak var extensionManager: NativExtensionManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -1161,6 +1166,120 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
+                if toolCall.function?.name == ChatUseKitToolRegistry.toolName {
+                    let kits = NativKit.available(in: appModel?.settings ?? activeSettings)
+                    let descriptors = kits.map {
+                        ChatKitDescriptor(id: $0.id, name: $0.name, summary: $0.summary)
+                    }
+                    let selected: ChatKitDescriptor
+                    do {
+                        selected = try ChatUseKitToolExecutor().selectedKit(
+                            call: toolCall,
+                            kits: descriptors
+                        )
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatUseKitToolExecutor().failurePayload(
+                                operation: ChatUseKitToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: selected.name,
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatUseKitToolExecutor().declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                    guard let appModel, let extensionManager, let mcpHost else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatUseKitToolExecutor().failurePayload(
+                                operation: ChatUseKitToolRegistry.toolName,
+                                error: NativChatError.invalidResponse
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    do {
+                        guard let kit = kits.first(where: { $0.id == selected.id }) else {
+                            throw ChatUseKitToolError.unknownKit(selected.id)
+                        }
+                        NativKitActivation.setEnabled(
+                            true,
+                            kit: kit,
+                            model: appModel,
+                            manager: extensionManager
+                        )
+                        await mcpHost.reloadImmediately(servers: appModel.settings.mcpServers)
+                        let content = try ChatUseKitToolExecutor().enabledPayload(
+                            kit: selected,
+                            extensionsEnabled: kit.extensionIDs.count,
+                            mcpServersEnabled: kit.mcpServers.count,
+                            toolsEnabled: kit.toolNames.count,
+                            skillsEnabled: kit.skills.count
+                        )
+                        activeSettings = appModel.settings
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: content,
+                            attachments: []
+                        )
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatUseKitToolExecutor().failurePayload(
+                                operation: ChatUseKitToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
+
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
@@ -1362,7 +1481,10 @@ final class ChatViewModel: ObservableObject {
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty },
+                kits: NativKit.available(in: appModel?.settings ?? settings).map {
+                    ChatKitDescriptor(id: $0.id, name: $0.name, summary: $0.summary)
+                }
             )
             : []
         if advertisesToolsForModel {
@@ -2467,12 +2589,7 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            consentDescription
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -2487,6 +2604,25 @@ private struct ChatAgentStepCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 7)
+    }
+
+    @ViewBuilder
+    private var consentDescription: some View {
+        if message.toolName == ChatUseKitToolRegistry.toolName {
+            (Text("The model wants to enable ")
+                + Text(verbatim: requestedKitName).bold()
+                + Text(". Its saved extensions, MCP servers, tools, and skills will be turned on."))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            (Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept."))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder
@@ -2556,6 +2692,11 @@ private struct ChatAgentStepCell: View {
             return "a different model"
         }
         return modelID
+    }
+
+    private var requestedKitName: String {
+        let name = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "this Kit" : name
     }
 
     @ViewBuilder
@@ -3307,6 +3448,7 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        extensionManager: .init(builtInExtensions: []),
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )
