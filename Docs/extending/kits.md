@@ -8,7 +8,7 @@ stays individually manageable afterward.
 Kits are the layer above the [MCP catalog](mcp-catalog.md): the catalog is the
 parts bin, a kit is an assembled machine. Kits live in code so their skill text
 stays readable and type-checked. The registry is
-[`Sources/Nativ/Features/Extensions/NativKit.swift`](../Sources/Nativ/Features/Extensions/NativKit.swift).
+[`Sources/Nativ/Features/Extensions/NativKit.swift`](../../Sources/Nativ/Features/Extensions/NativKit.swift).
 
 ## The four things a kit can bundle
 
@@ -62,7 +62,7 @@ Rules of thumb:
   derived live from whether its pieces are on, so it never drifts out of sync.
 - **`mcpServerIDs`** must match catalog entry `id`s. If your kit needs a server
   that isn't in the catalog yet, add it there first — it has to pass the
-  [`Verify MCP Catalog`](../.github/workflows/verify-mcp-catalog.yml) check.
+  [`Verify MCP Catalog`](../../.github/workflows/verify-mcp-catalog.yml) check.
 - **Skill UUIDs** must be stable and unique, so enabling a kit twice never
   duplicates a skill. Generate one and keep it.
 - **`tint`** uses the shared names (`blue`, `green`, `indigo`, `teal`, `purple`,

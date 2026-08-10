@@ -26,6 +26,39 @@ struct ModelConfigurationLayout<Content: View>: View {
     }
 
     var body: some View {
+        ModelConfigurationLayoutContent(
+            settings: $model.settings,
+            settingsRequireRestart: model.settingsRequireRestart,
+            isConfigurationVisible: $isConfigurationVisible,
+            onReset: model.resetSettings
+        ) {
+            content
+        }
+    }
+}
+
+struct ModelConfigurationLayoutContent<Content: View>: View {
+    @Binding var settings: NativSettings
+    let settingsRequireRestart: Bool
+    @Binding var isConfigurationVisible: Bool
+    let onReset: () -> Void
+    private let content: Content
+
+    init(
+        settings: Binding<NativSettings>,
+        settingsRequireRestart: Bool,
+        isConfigurationVisible: Binding<Bool>,
+        onReset: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        _settings = settings
+        self.settingsRequireRestart = settingsRequireRestart
+        _isConfigurationVisible = isConfigurationVisible
+        self.onReset = onReset
+        self.content = content()
+    }
+
+    var body: some View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 0) {
                 content
@@ -49,9 +82,9 @@ struct ModelConfigurationLayout<Content: View>: View {
 
             if isConfigurationVisible {
                 ModelConfigurationView(
-                    settings: $model.settings,
-                    settingsRequireRestart: model.settingsRequireRestart,
-                    onReset: model.resetSettings
+                    settings: $settings,
+                    settingsRequireRestart: settingsRequireRestart,
+                    onReset: onReset
                 )
                 .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
                 .ignoresSafeArea(.container, edges: .top)

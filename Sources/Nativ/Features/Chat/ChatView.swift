@@ -1173,6 +1173,48 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
+                let customTool = toolCall.function?.name.flatMap { toolName in
+                    queuedRequest.settings.customTools.first { $0.toolName == toolName }
+                }
+                if customTool?.kind == .script {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                }
+
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
@@ -1295,7 +1337,15 @@ final class ChatViewModel: ObservableObject {
                         }
                     )
                     let outcome: ChatToolExecutionOutcome
-                    if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
+                    if let customTool {
+                        let result = try await CustomToolExecutor.execute(
+                            customTool,
+                            argumentsJSON: toolCall.function?.arguments
+                        )
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else if let host = mcpHost,
+                              let toolName = toolCall.function?.name,
+                              host.handlesTool(named: toolName) {
                         let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
@@ -1378,10 +1428,14 @@ final class ChatViewModel: ObservableObject {
             )
             : []
         if advertisesToolsForModel {
+            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            // Honor the per-tool switches from the Tools section for every
-            // source, built-in and MCP alike.
-            toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
+            let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+            toolDefinitions.removeAll {
+                settings.disabledToolNames.contains($0.function.name)
+                    || ($0.function.name == ChatWebSearchToolRegistry.toolName
+                        && !webSearchIsConfigured)
+            }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
@@ -2479,9 +2533,7 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
+            consentDescription
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2499,6 +2551,15 @@ private struct ChatAgentStepCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 7)
+    }
+
+    private var consentDescription: Text {
+        if message.toolName == ChatSwitchModelToolRegistry.toolName {
+            return Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept.")
+        }
+        return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
 
     @ViewBuilder
