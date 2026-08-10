@@ -151,12 +151,16 @@ struct ModelsViewHost: View, Equatable {
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
     var speechModelDiscoveryRequest = 0
+    var imageModelDiscoveryRequest = 0
+    var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
             && lhs.showsConfiguration == rhs.showsConfiguration
             && lhs.titleLeadingInset == rhs.titleLeadingInset
             && lhs.speechModelDiscoveryRequest == rhs.speechModelDiscoveryRequest
+            && lhs.imageModelDiscoveryRequest == rhs.imageModelDiscoveryRequest
+            && lhs.imageModelDiscoveryCapability == rhs.imageModelDiscoveryCapability
     }
 
     var body: some View {
@@ -164,7 +168,9 @@ struct ModelsViewHost: View, Equatable {
             model: model,
             showsConfiguration: $showsConfiguration,
             titleLeadingInset: titleLeadingInset,
-            speechModelDiscoveryRequest: speechModelDiscoveryRequest
+            speechModelDiscoveryRequest: speechModelDiscoveryRequest,
+            imageModelDiscoveryRequest: imageModelDiscoveryRequest,
+            imageModelDiscoveryCapability: imageModelDiscoveryCapability
         )
     }
 }
@@ -199,12 +205,16 @@ struct ModelsView: View {
         model: NativModel,
         showsConfiguration: Binding<Bool>,
         titleLeadingInset: CGFloat = 0,
-        speechModelDiscoveryRequest: Int = 0
+        speechModelDiscoveryRequest: Int = 0,
+        imageModelDiscoveryRequest: Int = 0,
+        imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
     ) {
         self.model = model
         _showsConfiguration = showsConfiguration
         self.titleLeadingInset = titleLeadingInset
         self.speechModelDiscoveryRequest = speechModelDiscoveryRequest
+        self.imageModelDiscoveryRequest = imageModelDiscoveryRequest
+        self.imageModelDiscoveryCapability = imageModelDiscoveryCapability
         _modelState = StateObject(wrappedValue: ModelsNativState(model: model))
     }
 
