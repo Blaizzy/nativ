@@ -11,9 +11,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
     case system = "System"
     case models = "Models"
-    case integrations = "Integrations"
     case extensions = "Extensions"
-    case developer = "Developer"
+    case dev = "Dev"
     case settings = "Settings"
 
     static var allCases: [ControlPanelTab] {
@@ -24,9 +23,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             .dashboard,
             .system,
             .models,
-            .integrations,
             .extensions,
-            .developer,
+            .dev,
         ]
     }
 
@@ -46,12 +44,10 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "gauge.open.with.lines.needle.33percent"
         case .models:
             "cube.transparent"
-        case .integrations:
-            "puzzlepiece.extension"
         case .extensions:
             "point.3.filled.connected.trianglepath.dotted"
-        case .developer:
-            "hammer"
+        case .dev:
+            "chevron.left.forwardslash.chevron.right"
         case .settings:
             "gearshape"
         }
@@ -363,6 +359,7 @@ struct ControlPanelView: View {
     @StateObject private var routineModelLibrary = LocalModelLibrary()
     @State private var schedulingRoutineDraft: RoutineDraft?
     @State private var isModelConfigurationVisible = false
+    @State private var selectedDevSection: DevHubView.Section = .integrations
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
@@ -1365,9 +1362,11 @@ struct ControlPanelView: View {
 
     private var showsModelConfigurationToggle: Bool {
         switch selectedTab {
-        case .chat, .models, .developer:
+        case .chat, .models:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
+        case .dev:
+            selectedDevSection == .developer
+        case .imageGeneration, .artifacts, .dashboard, .system, .extensions, .settings:
             false
         }
     }
@@ -1995,7 +1994,7 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .models:
-            ModelsView(
+            ModelsViewHost(
                 model: model,
                 showsConfiguration: $isModelConfigurationVisible,
                 titleLeadingInset: detailTitleLeadingInset,
@@ -2003,23 +2002,19 @@ struct ControlPanelView: View {
                 imageModelDiscoveryRequest: navigation.imageModelDiscoveryRequest,
                 imageModelDiscoveryCapability: navigation.imageModelDiscoveryCapability
             )
-        case .integrations:
-            IntegrationsView(
-                model: model,
-                titleLeadingInset: detailTitleLeadingInset
-            )
+            .equatable()
         case .extensions:
             ExtensionsHubView(
                 manager: extensionManager,
                 host: mcpHost,
                 model: model
             )
-        case .developer:
-            DeveloperView(
+        case .dev:
+            DevHubView(
+                section: $selectedDevSection,
                 model: model,
                 runtime: runtime,
-                showsConfiguration: $isModelConfigurationVisible,
-                titleLeadingInset: detailTitleLeadingInset
+                showsConfiguration: $isModelConfigurationVisible
             )
         case .settings:
             SettingsView(
@@ -2110,7 +2105,7 @@ struct ControlPanelView: View {
             return true
         }
         switch selectedTab {
-        case .dashboard, .system, .models, .integrations, .extensions, .developer:
+        case .dashboard, .system, .models, .extensions, .dev:
             return true
         case .chat, .imageGeneration, .artifacts, .settings:
             return false

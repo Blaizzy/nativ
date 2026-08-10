@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import Foundation
 import NativServerKit
@@ -113,11 +114,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         )
     }
 
-    // Fallback download size shown until the real file sizes are fetched (and if
-    // that fetch fails). The safetensors parameter summary only covers the
-    // diffusion transformer, so for image models it lands well under the real
-    // download; scale it toward the components a modern image pipeline also ships
-    // (text encoder + VAE). This is a placeholder — the async fetch replaces it.
+    // The safetensors parameter summary only covers the diffusion transformer,
+    // so for image models it lands well under the real download. Scale it toward
+    // the components a modern image pipeline also ships (text encoder + VAE).
+    // The download manager validates available capacity again before enqueueing.
     var estimatedDownloadBytes: Int64? {
         guard let sizeBytes else {
             return nil
@@ -725,6 +725,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
         case paused
     }
 
+    struct RowSnapshot: Equatable {
+        let isDownloading: Bool
+        let progress: Double
+        let isPaused: Bool
+        let error: String?
+    }
+
     struct ActiveDownload: Identifiable, Equatable {
         let modelID: String
         let sizeBytes: Int64?
@@ -753,6 +760,9 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     @Published private(set) var downloads: [ActiveDownload] = []
     @Published private(set) var errorByModelID: [String: String] = [:]
+    /// Emits the affected model ID for progress/state changes. `nil` denotes
+    /// a structural change that can affect capacity for every download row.
+    let rowUpdates = PassthroughSubject<String?, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
     private var progressUpdateTimes: [String: Date] = [:]
@@ -785,6 +795,16 @@ final class HuggingFaceDownloadManager: ObservableObject {
         downloads.first { $0.modelID == modelID }?.state == .paused
     }
 
+    func rowSnapshot(for modelID: String) -> RowSnapshot {
+        let download = downloads.first { $0.modelID == modelID }
+        return RowSnapshot(
+            isDownloading: download != nil,
+            progress: download?.progress ?? 0,
+            isPaused: download?.state == .paused,
+            error: errorByModelID[modelID]
+        )
+    }
+
     func state(for modelID: String) -> DownloadState? {
         downloads.first { $0.modelID == modelID }?.state
     }
@@ -814,6 +834,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         guard contexts[repoID] == nil else { return }
         if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
             errorByModelID[repoID] = blocker
+            rowUpdates.send(repoID)
             return
         }
         do {
@@ -827,6 +848,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         } catch {
             errorByModelID[repoID] =
                 (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            rowUpdates.send(repoID)
         }
     }
 
@@ -853,6 +875,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
             } catch {
                 errorByModelID[repoID] =
                     (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                rowUpdates.send(repoID)
                 throw error
             }
         }
@@ -924,6 +947,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         )
         do {
             try startDownload(context)
+            rowUpdates.send(nil)
         } catch {
             removeContext(repoID)
             throw error
@@ -999,17 +1023,20 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
         downloads[index].progress = clampedProgress
         progressUpdateTimes[modelID] = now
+        rowUpdates.send(modelID)
     }
 
     private func setState(_ modelID: String, _ state: DownloadState) {
         guard let index = downloads.firstIndex(where: { $0.modelID == modelID }) else { return }
         downloads[index].state = state
+        rowUpdates.send(modelID)
     }
 
     private func removeContext(_ modelID: String) {
         contexts.removeValue(forKey: modelID)
         downloads.removeAll { $0.modelID == modelID }
         progressUpdateTimes.removeValue(forKey: modelID)
+        rowUpdates.send(nil)
     }
 
     private func cancelWaiter(_ waiterID: UUID, modelID: String) {
