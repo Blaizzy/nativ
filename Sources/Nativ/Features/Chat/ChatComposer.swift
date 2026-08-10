@@ -87,6 +87,8 @@ struct ChatComposer: View {
     let unavailableReason: String?
     let canCompose: Bool
     let canSend: Bool
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onSend: (Bool) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
@@ -194,6 +196,11 @@ struct ChatComposer: View {
                     )
                     .frame(width: 30, height: 30)
                     .help("Add attachment")
+
+                    ChatWorkspacePicker(
+                        selection: workspaceMode,
+                        onSelect: onSelectWorkspaceMode
+                    )
 
                     Spacer(minLength: 12)
 
