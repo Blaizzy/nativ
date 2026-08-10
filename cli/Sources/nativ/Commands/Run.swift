@@ -24,14 +24,15 @@ struct Run: AsyncParsableCommand {
         guard !prompt.isEmpty else { throw CLIError.usage("No prompt. Pass text or pipe it via stdin.") }
 
         let client = ServerClient(config: config)
+        let serverUp = await client.isUp()
         if json {
-            guard await client.isUp() else {
+            guard serverUp else {
                 throw CLIError.usage("--json needs the server. Start it with `nativ serve`, then retry.")
             }
             try await runOnServer(client: client, model: modelID, prompt: prompt)
         } else if let python = EngineProcess.locatePython() {
-            try runWithEngine(python: python, config: config, model: modelID, prompt: prompt)
-        } else if await client.isUp() {
+            try runWithEngine(python: python, config: config, model: modelID, prompt: prompt, serverUp: serverUp)
+        } else if serverUp {
             try await runOnServer(client: client, model: modelID, prompt: prompt)
         } else {
             throw CLIError.server("no server running at \(config.baseURL.absoluteString) and no bundled engine found. Start one with `nativ serve`, or point NATIV_ENGINE_BIN at a python3.")
@@ -59,15 +60,19 @@ struct Run: AsyncParsableCommand {
         }
     }
 
-    private func runWithEngine(python: URL, config: NativConfig, model modelID: String, prompt: String) throws {
+    private func runWithEngine(python: URL, config: NativConfig, model modelID: String, prompt: String, serverUp: Bool) throws {
         var args = [
             "-m", "mlx_vlm.generate",
             "--model", modelID,
             "--prompt", prompt,
-            "--base-url", config.baseURL.absoluteString,
             noStream ? "--no-verbose" : "--verbose",
         ]
-        if let apiKey = config.apiKey, !apiKey.isEmpty { args += ["--api-key", apiKey] }
+        // Reuse the server only when it's actually up; the engine errors on an
+        // unreachable --base-url, so when it's down we omit it and load locally.
+        if serverUp {
+            args += ["--base-url", config.baseURL.absoluteString]
+            if let apiKey = config.apiKey, !apiKey.isEmpty { args += ["--api-key", apiKey] }
+        }
         if let system, !system.isEmpty { args += ["--system", system] }
         for path in images {
             args += ["--image", (path as NSString).expandingTildeInPath]
