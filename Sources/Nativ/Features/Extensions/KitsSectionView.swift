@@ -683,8 +683,8 @@ private struct KitEditor: View {
                         .font(.system(size: 11, weight: .semibold))
                         .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
                 .help("Add \(kind.title.lowercased())")
             }
             if count(for: kind) == 0 {
@@ -704,15 +704,14 @@ private struct KitEditor: View {
                 get: { picker == kind },
                 set: { if !$0 { picker = nil } }
             ),
-            arrowEdge: .trailing
+            arrowEdge: .top
         ) {
             KitComponentPickerPopover(
                 kind: kind,
                 kit: $kit,
                 manager: manager,
                 host: host,
-                model: model,
-                onDismiss: { picker = nil }
+                model: model
             )
         }
     }
@@ -751,17 +750,11 @@ private struct KitComponentPickerPopover: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
-    let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Add \(kind.title.lowercased())")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                Button("Done", action: onDismiss)
-                    .controlSize(.small)
-            }
+            Text("Add \(kind.title.lowercased())")
+                .font(.system(size: 14, weight: .semibold))
             .padding(14)
             Divider()
             ScrollView {
