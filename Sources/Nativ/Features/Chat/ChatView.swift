@@ -1161,6 +1161,48 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
+                let customTool = toolCall.function?.name.flatMap { toolName in
+                    queuedRequest.settings.customTools.first { $0.toolName == toolName }
+                }
+                if customTool?.kind == .script {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                }
+
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
@@ -1283,9 +1325,8 @@ final class ChatViewModel: ObservableObject {
                         }
                     )
                     let outcome: ChatToolExecutionOutcome
-                    if let toolName = toolCall.function?.name,
-                       let customTool = queuedRequest.settings.customTools.first(where: { $0.toolName == toolName }) {
-                        let result = try await CustomHTTPToolExecutor.execute(
+                    if let customTool {
+                        let result = try await CustomToolExecutor.execute(
                             customTool,
                             argumentsJSON: toolCall.function?.arguments
                         )
@@ -2477,9 +2518,7 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
+            consentDescription
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2497,6 +2536,15 @@ private struct ChatAgentStepCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 7)
+    }
+
+    private var consentDescription: Text {
+        if message.toolName == ChatSwitchModelToolRegistry.toolName {
+            return Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept.")
+        }
+        return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
 
     @ViewBuilder

@@ -6,8 +6,8 @@ struct ToolsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var inspecting: ToolItem?
     @State private var showsAddTool = false
-    @State private var editingTool: CustomHTTPTool?
-    @State private var toolPendingRemoval: CustomHTTPTool?
+    @State private var editingTool: CustomTool?
+    @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
 
     var body: some View {
@@ -61,7 +61,11 @@ struct ToolsSectionView: View {
                 toolPendingRemoval = nil
             }
         } message: {
-            Text("This removes the tool and its saved request credential.")
+            if toolPendingRemoval?.kind == .endpoint {
+                Text("This removes the tool and its saved request credential.")
+            } else {
+                Text("This removes the tool.")
+            }
         }
         .alert("Couldn’t remove tool", isPresented: Binding(
             get: { toolManagementError != nil },
@@ -140,7 +144,7 @@ struct ToolsSectionView: View {
                 detail: $0.displaySummary,
                 parameters: try? $0.definition().function.parameters,
                 customToolID: $0.id,
-                executionHint: "This custom tool sends model-provided JSON to \($0.endpoint) when it is called in chat."
+                executionHint: $0.executionHint
             )
         }
     }
@@ -162,7 +166,9 @@ struct ToolsSectionView: View {
     private func removePendingTool() {
         guard let tool = toolPendingRemoval else { return }
         do {
-            try CustomHTTPToolKeychain().save(nil, for: tool.id)
+            if tool.kind == .endpoint {
+                try CustomToolKeychain().save(nil, for: tool.id)
+            }
             model.settings.customTools.removeAll { $0.id == tool.id }
             model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
             toolPendingRemoval = nil
@@ -392,12 +398,15 @@ private struct ToolInspectorView: View {
 
 private struct CustomToolEditorSheet: View {
     @ObservedObject var model: NativModel
-    let tool: CustomHTTPTool?
+    let tool: CustomTool?
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
     @State private var summary: String
+    @State private var kind: CustomToolKind
     @State private var endpoint: String
+    @State private var script: String
+    @State private var scriptLanguage: CustomToolScriptLanguage
     @State private var headerName: String
     @State private var headerValue = ""
     @State private var parametersJSON: String
@@ -407,15 +416,22 @@ private struct CustomToolEditorSheet: View {
     @State private var validationError: String?
     @State private var testResult: String?
     @State private var testing = false
+    @State private var verifiedScriptSignature: String?
 
-    init(model: NativModel, tool: CustomHTTPTool? = nil) {
+    init(model: NativModel, tool: CustomTool? = nil) {
         self.model = model
         self.tool = tool
         _name = State(initialValue: tool?.name ?? "")
         _summary = State(initialValue: tool?.summary ?? "")
+        _kind = State(initialValue: tool?.kind ?? .endpoint)
         _endpoint = State(initialValue: tool?.endpoint ?? "")
+        _scriptLanguage = State(initialValue: tool?.scriptLanguage ?? .python)
+        _script = State(initialValue: tool?.script ?? CustomToolScriptLanguage.python.template)
         _headerName = State(initialValue: tool?.headerName ?? "")
-        _parametersJSON = State(initialValue: tool?.parametersJSON ?? CustomHTTPTool.defaultParametersJSON)
+        _parametersJSON = State(initialValue: tool?.parametersJSON ?? CustomTool.defaultParametersJSON)
+        _verifiedScriptSignature = State(initialValue: tool?.kind == .script
+            ? Self.scriptSignature(language: tool?.scriptLanguage ?? .python, script: tool?.script ?? "")
+            : nil)
     }
 
     var body: some View {
@@ -423,7 +439,9 @@ private struct CustomToolEditorSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(tool == nil ? "Add tool" : "Edit tool")
                     .font(.system(size: 17, weight: .semibold))
-                Text("Nativ sends the model’s JSON arguments to your HTTP endpoint.")
+                Text(kind == .endpoint
+                    ? "Send model-provided JSON to an HTTP endpoint."
+                    : "Run a local script with model-provided JSON.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -445,18 +463,20 @@ private struct CustomToolEditorSheet: View {
             HStack {
                 Button("Cancel", action: dismiss.callAsFunction)
                 Spacer()
-                Button(testing ? "Testing…" : "Test request", action: test)
-                    .disabled(testing
-                        || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if kind == .script, isScriptVerified {
+                    Label("Verified", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.green)
+                }
+                Button(testing ? "Testing…" : testButtonTitle, action: test)
+                    .disabled(!canTest)
                 Button(tool == nil ? "Add tool" : "Save", action: save)
                     .buttonStyle(.borderedProminent)
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSave)
             }
         }
         .padding(22)
-        .frame(width: 480)
+        .frame(width: 520)
         .onAppear(perform: loadCredential)
     }
 
@@ -468,43 +488,24 @@ private struct CustomToolEditorSheet: View {
             field("Description") {
                 TextField("Looks up a forecast for a place.", text: $summary)
             }
-            field("Endpoint") {
-                TextField("https://example.com/tools/weather", text: $endpoint)
-                    .textContentType(.URL)
+            Picker("Type", selection: kindBinding) {
+                ForEach(CustomToolKind.allCases) { option in
+                    Text(option.title).tag(option)
+                }
             }
-            Text("Uses POST with a JSON request body.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            .pickerStyle(.segmented)
+
+            if kind == .endpoint {
+                endpointFields
+            } else {
+                scriptFields
+            }
 
             DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
                 VStack(alignment: .leading, spacing: 12) {
-                    field("Header name") {
-                        TextField("Authorization", text: $headerName)
+                    if kind == .endpoint {
+                        credentialFields
                     }
-                    if !headerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        field("Header value") {
-                            HStack(spacing: 6) {
-                                Group {
-                                    if revealsHeaderValue {
-                                        TextField("Bearer …", text: $headerValue)
-                                    } else {
-                                        SecureField("Bearer …", text: $headerValue)
-                                    }
-                                }
-                                Button {
-                                    revealsHeaderValue.toggle()
-                                } label: {
-                                    Image(systemName: revealsHeaderValue ? "eye.slash" : "eye")
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.secondary)
-                                .help(revealsHeaderValue ? "Hide value" : "Show value")
-                            }
-                        }
-                    }
-                    Text("The header value is saved only in your Mac’s Keychain.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
 
                     field("Parameters") {
                         TextEditor(text: $parametersJSON)
@@ -528,6 +529,137 @@ private struct CustomToolEditorSheet: View {
     }
 
     @ViewBuilder
+    private var endpointFields: some View {
+        field("Endpoint") {
+            TextField("https://example.com/tools/weather", text: $endpoint)
+                .textContentType(.URL)
+        }
+        Text("Uses POST with a JSON request body.")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+    }
+
+    private var scriptFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("Language") {
+                Picker("Language", selection: languageBinding) {
+                    ForEach(CustomToolScriptLanguage.allCases) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(scriptLanguage.availabilityNote)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            field("Script") {
+                TextEditor(text: $script)
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(height: 180)
+                    .padding(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            }
+            Text("Arguments arrive as JSON on stdin. Return the tool result on stdout.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var credentialFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("Header name") {
+                TextField("Authorization", text: $headerName)
+            }
+            if !headerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                field("Header value") {
+                    HStack(spacing: 6) {
+                        Group {
+                            if revealsHeaderValue {
+                                TextField("Bearer …", text: $headerValue)
+                            } else {
+                                SecureField("Bearer …", text: $headerValue)
+                            }
+                        }
+                        Button {
+                            revealsHeaderValue.toggle()
+                        } label: {
+                            Image(systemName: revealsHeaderValue ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help(revealsHeaderValue ? "Hide value" : "Show value")
+                    }
+                }
+            }
+            Text("The header value is saved only in your Mac’s Keychain.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var kindBinding: Binding<CustomToolKind> {
+        Binding(
+            get: { kind },
+            set: { newKind in
+                kind = newKind
+                if newKind == .script && script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    script = scriptLanguage.template
+                }
+                resetFeedback()
+            }
+        )
+    }
+
+    private var languageBinding: Binding<CustomToolScriptLanguage> {
+        Binding(
+            get: { scriptLanguage },
+            set: { newLanguage in
+                let shouldReplaceTemplate = script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || script == scriptLanguage.template
+                scriptLanguage = newLanguage
+                if shouldReplaceTemplate {
+                    script = newLanguage.template
+                }
+                resetFeedback()
+            }
+        )
+    }
+
+    private var testButtonTitle: String {
+        kind == .endpoint ? "Test request" : "Test script"
+    }
+
+    private var hasName: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasImplementation: Bool {
+        switch kind {
+        case .endpoint:
+            return !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .script:
+            return !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private var canTest: Bool {
+        !testing && hasName && hasImplementation
+    }
+
+    private var canSave: Bool {
+        hasName && hasImplementation && (kind == .endpoint || isScriptVerified)
+    }
+
+    private var isScriptVerified: Bool {
+        verifiedScriptSignature == Self.scriptSignature(language: scriptLanguage, script: script)
+    }
+
+    @ViewBuilder
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
@@ -538,6 +670,10 @@ private struct CustomToolEditorSheet: View {
 
     private func save() {
         do {
+            guard kind == .endpoint || isScriptVerified else {
+                validationError = "Test the current script before adding it."
+                return
+            }
             let savedTool = try makeTool()
             guard !model.settings.customTools.contains(where: {
                 $0.id != savedTool.id && $0.toolName == savedTool.toolName
@@ -545,7 +681,7 @@ private struct CustomToolEditorSheet: View {
                 validationError = "A tool with that name already exists."
                 return
             }
-            try CustomHTTPToolKeychain().save(headerValue, for: savedTool.id)
+            try CustomToolKeychain().save(savedTool.kind == .endpoint ? headerValue : nil, for: savedTool.id)
             if let index = model.settings.customTools.firstIndex(where: { $0.id == savedTool.id }) {
                 model.settings.customTools[index] = savedTool
             } else {
@@ -565,15 +701,24 @@ private struct CustomToolEditorSheet: View {
             testing = true
             let arguments = testArgumentsJSON
             let credential = headerValue
+            let testedScriptSignature = Self.scriptSignature(
+                language: draft.scriptLanguage,
+                script: draft.script
+            )
             Task {
                 do {
-                    _ = try await CustomHTTPToolExecutor.execute(
+                    _ = try await CustomToolExecutor.execute(
                         draft,
                         argumentsJSON: arguments,
                         headerValue: credential
                     )
                     await MainActor.run {
-                        testResult = "Request succeeded."
+                        if draft.kind == .script {
+                            verifiedScriptSignature = testedScriptSignature
+                            testResult = "Script compiled and ran successfully."
+                        } else {
+                            testResult = "Request succeeded."
+                        }
                         testing = false
                     }
                 } catch {
@@ -588,30 +733,42 @@ private struct CustomToolEditorSheet: View {
         }
     }
 
-    private func makeTool() throws -> CustomHTTPTool {
-        try CustomHTTPTool.make(
-                name: name,
-                summary: summary,
-                endpoint: endpoint,
-                parametersJSON: parametersJSON,
-                headerName: headerName,
-                id: tool?.id ?? UUID()
+    private func makeTool() throws -> CustomTool {
+        try CustomTool.make(
+            name: name,
+            summary: summary,
+            kind: kind,
+            endpoint: endpoint,
+            script: script,
+            scriptLanguage: scriptLanguage,
+            parametersJSON: parametersJSON,
+            headerName: headerName,
+            id: tool?.id ?? UUID()
         )
     }
 
     private func loadCredential() {
-        guard let tool else { return }
+        guard let tool, tool.kind == .endpoint else { return }
         do {
-            headerValue = try CustomHTTPToolKeychain().load(for: tool.id) ?? ""
+            headerValue = try CustomToolKeychain().load(for: tool.id) ?? ""
         } catch {
             validationError = "Couldn’t load the saved header value."
         }
     }
 
     private func credentialErrorMessage(for error: Error) -> String {
-        if error is CustomHTTPToolCredentialPersistenceError {
+        if error is CustomToolCredentialPersistenceError {
             return "Couldn’t save the header value in Keychain."
         }
         return error.localizedDescription
+    }
+
+    private func resetFeedback() {
+        validationError = nil
+        testResult = nil
+    }
+
+    private static func scriptSignature(language: CustomToolScriptLanguage, script: String) -> String {
+        "\(language.rawValue)\u{0}\(script)"
     }
 }
