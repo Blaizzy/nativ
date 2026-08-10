@@ -108,6 +108,7 @@ final class NativSettingsTests: XCTestCase {
             name: "Project research",
             summary: "Sources and notes for a project.",
             mcpServerIDs: [serverID],
+            toolNames: ["fetch_url"],
             skillIDs: [skillID],
             extensionIDs: ["com.example.notes"]
         )
@@ -127,7 +128,21 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(UserNativKit().isComplete)
         XCTAssertFalse(UserNativKit(name: "Research").isComplete)
         XCTAssertFalse(UserNativKit(mcpServerIDs: [UUID()]).isComplete)
+        XCTAssertTrue(UserNativKit(name: "Research", toolNames: ["fetch_url"]).isComplete)
         XCTAssertTrue(UserNativKit(name: "Research", skillIDs: [UUID()]).isComplete)
+    }
+
+    func testUserKitWithoutToolsDecodes() throws {
+        let id = UUID()
+        let data = Data(
+            #"{"id":"\#(id.uuidString)","name":"Research","summary":"","mcpServerIDs":[],"skillIDs":[],"extensionIDs":[]}"#
+                .utf8
+        )
+
+        let kit = try JSONDecoder().decode(UserNativKit.self, from: data)
+
+        XCTAssertEqual(kit.id, id)
+        XCTAssertTrue(kit.toolNames.isEmpty)
     }
 
     func testServerHostRequiresServerRestart() {

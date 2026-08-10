@@ -16,6 +16,7 @@ struct UserNativKit: Codable, Equatable, Identifiable {
     var name: String
     var summary: String
     var mcpServerIDs: [UUID]
+    var toolNames: [String]
     var skillIDs: [UUID]
     var extensionIDs: [String]
 
@@ -24,6 +25,7 @@ struct UserNativKit: Codable, Equatable, Identifiable {
         name: String = "",
         summary: String = "",
         mcpServerIDs: [UUID] = [],
+        toolNames: [String] = [],
         skillIDs: [UUID] = [],
         extensionIDs: [String] = []
     ) {
@@ -31,13 +33,29 @@ struct UserNativKit: Codable, Equatable, Identifiable {
         self.name = name
         self.summary = summary
         self.mcpServerIDs = mcpServerIDs
+        self.toolNames = toolNames
         self.skillIDs = skillIDs
         self.extensionIDs = extensionIDs
     }
 
+    enum CodingKeys: String, CodingKey {
+        case id, name, summary, mcpServerIDs, toolNames, skillIDs, extensionIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        mcpServerIDs = try container.decodeIfPresent([UUID].self, forKey: .mcpServerIDs) ?? []
+        toolNames = try container.decodeIfPresent([String].self, forKey: .toolNames) ?? []
+        skillIDs = try container.decodeIfPresent([UUID].self, forKey: .skillIDs) ?? []
+        extensionIDs = try container.decodeIfPresent([String].self, forKey: .extensionIDs) ?? []
+    }
+
     var isComplete: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (!mcpServerIDs.isEmpty || !skillIDs.isEmpty || !extensionIDs.isEmpty)
+            && (!mcpServerIDs.isEmpty || !toolNames.isEmpty || !skillIDs.isEmpty || !extensionIDs.isEmpty)
     }
 
     func resolved() -> NativKit {
@@ -49,6 +67,7 @@ struct UserNativKit: Codable, Equatable, Identifiable {
             tint: .teal,
             isBuiltIn: false,
             mcpServers: mcpServerIDs.map(NativKitMCP.configured),
+            toolNames: toolNames,
             skills: skillIDs.map(NativKitSkill.configured),
             extensionIDs: extensionIDs
         )
@@ -63,15 +82,19 @@ struct NativKit: Identifiable {
     let tint: Color
     let isBuiltIn: Bool
     let mcpServers: [NativKitMCP]
+    let toolNames: [String]
     let skills: [NativKitSkill]
     let extensionIDs: [String]
 
     var inventory: String {
         var parts: [String] = []
         let servers = mcpServers.count
+        let extensions = extensionIDs.count
+        let tools = toolNames.count
+        if extensions > 0 { parts.append("\(extensions) extension\(extensions == 1 ? "" : "s")") }
         if servers > 0 { parts.append("\(servers) MCP server\(servers == 1 ? "" : "s")") }
+        if tools > 0 { parts.append("\(tools) tool\(tools == 1 ? "" : "s")") }
         if !skills.isEmpty { parts.append("\(skills.count) skill\(skills.count == 1 ? "" : "s")") }
-        if !extensionIDs.isEmpty { parts.append("\(extensionIDs.count) extension\(extensionIDs.count == 1 ? "" : "s")") }
         return parts.joined(separator: " · ")
     }
 }
@@ -92,6 +115,7 @@ extension NativKit {
             tint: .indigo,
             isBuiltIn: true,
             mcpServers: ["git", "github", "filesystem", "fetch"].map(NativKitMCP.catalog),
+            toolNames: [],
             skills: [
                 .builtIn(
                     .kit(
@@ -123,6 +147,7 @@ extension NativKit {
             tint: .purple,
             isBuiltIn: true,
             mcpServers: ["fetch", "memory", "sqlite"].map(NativKitMCP.catalog),
+            toolNames: [],
             skills: [
                 .builtIn(
                     .kit(
@@ -162,14 +187,17 @@ enum NativKitActivation {
         model: NativModel,
         manager: NativExtensionManager
     ) {
+        for extensionID in kit.extensionIDs {
+            manager.setEnabled(enabled, extensionID: extensionID)
+        }
         for server in kit.mcpServers {
             setServerEnabled(enabled, target: server, model: model)
         }
+        for name in kit.toolNames {
+            setToolEnabled(enabled, name: name, model: model)
+        }
         for skill in kit.skills {
             setSkillEnabled(enabled, target: skill, model: model)
-        }
-        for extensionID in kit.extensionIDs {
-            manager.setEnabled(enabled, extensionID: extensionID)
         }
     }
 
@@ -177,17 +205,21 @@ enum NativKitActivation {
         var total = 0
         var active = 0
 
+        for extensionID in kit.extensionIDs {
+            total += 1
+            if manager.isEnabled(extensionID: extensionID) { active += 1 }
+        }
         for server in kit.mcpServers {
             total += 1
             if isServerEnabled(server, model: model) { active += 1 }
         }
+        for name in kit.toolNames {
+            total += 1
+            if isToolEnabled(name, model: model) { active += 1 }
+        }
         for skill in kit.skills {
             total += 1
             if isSkillEnabled(skill, model: model) { active += 1 }
-        }
-        for extensionID in kit.extensionIDs {
-            total += 1
-            if manager.isEnabled(extensionID: extensionID) { active += 1 }
         }
 
         guard total > 0, active > 0 else { return .off }
@@ -223,6 +255,14 @@ enum NativKitActivation {
         }
     }
 
+    static func setToolEnabled(_ enabled: Bool, name: String, model: NativModel) {
+        if enabled {
+            model.settings.disabledToolNames.removeAll { $0 == name }
+        } else if !model.settings.disabledToolNames.contains(name) {
+            model.settings.disabledToolNames.append(name)
+        }
+    }
+
     static func isServerEnabled(_ target: NativKitMCP, model: NativModel) -> Bool {
         switch target {
         case .catalog(let catalogID):
@@ -237,6 +277,10 @@ enum NativKitActivation {
 
     static func isSkillEnabled(_ target: NativKitSkill, model: NativModel) -> Bool {
         skill(for: target, model: model)?.isEnabled ?? false
+    }
+
+    static func isToolEnabled(_ name: String, model: NativModel) -> Bool {
+        !model.settings.disabledToolNames.contains(name)
     }
 
     static func skill(for target: NativKitSkill, model: NativModel) -> NativSkill? {

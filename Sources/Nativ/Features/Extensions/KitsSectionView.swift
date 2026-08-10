@@ -16,6 +16,7 @@ private func kitStateBadge(_ state: NativKitState) -> some View {
 
 struct KitsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
+    @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
     @State private var openKit: NativKit?
     @State private var editingKit: UserNativKit?
@@ -60,6 +61,7 @@ struct KitsSectionView: View {
             KitEditor(
                 kit: kit,
                 manager: manager,
+                host: host,
                 model: model,
                 onSave: save,
                 onCancel: { editingKit = nil }
@@ -219,9 +221,10 @@ private struct KitDetailView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if !kit.mcpServers.isEmpty { mcpGroup }
-                    if !kit.skills.isEmpty { skillsGroup }
                     if !kit.extensionIDs.isEmpty { extensionsGroup }
+                    if !kit.mcpServers.isEmpty { mcpGroup }
+                    if !kit.toolNames.isEmpty { toolsGroup }
+                    if !kit.skills.isEmpty { skillsGroup }
                 }
                 .padding(20)
             }
@@ -277,9 +280,24 @@ private struct KitDetailView: View {
     }
 
     private var mcpGroup: some View {
-        KitGroup(title: "MCP servers", caption: "Their tools follow the server configuration and remain manageable under Tools.") {
+        KitGroup(title: "MCP servers", caption: nil) {
             ForEach(Array(kit.mcpServers.enumerated()), id: \.offset) { _, target in
                 mcpPart(target)
+            }
+        }
+    }
+
+    private var toolsGroup: some View {
+        KitGroup(title: "Tools", caption: nil) {
+            ForEach(kit.toolNames, id: \.self) { name in
+                KitPartRow(
+                    symbol: "hammer",
+                    tint: kit.tint,
+                    logoAssetName: nil,
+                    title: name,
+                    subtitle: nil,
+                    isOn: toolBinding(name)
+                )
             }
         }
     }
@@ -385,6 +403,13 @@ private struct KitDetailView: View {
         )
     }
 
+    private func toolBinding(_ name: String) -> Binding<Bool> {
+        Binding(
+            get: { NativKitActivation.isToolEnabled(name, model: model) },
+            set: { NativKitActivation.setToolEnabled($0, name: name, model: model) }
+        )
+    }
+
     private func extensionBinding(_ extensionID: String) -> Binding<Bool> {
         Binding(
             get: { manager.isEnabled(extensionID: extensionID) },
@@ -471,25 +496,28 @@ private struct KitUnavailablePartRow: View {
 }
 
 private enum KitComponentPicker: String, Identifiable {
-    case mcpServers
-    case skills
     case extensions
+    case mcpServers
+    case tools
+    case skills
 
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .mcpServers: "MCP servers"
-        case .skills: "Skills"
         case .extensions: "Extensions"
+        case .mcpServers: "MCP servers"
+        case .tools: "Tools"
+        case .skills: "Skills"
         }
     }
 
     var symbol: String {
         switch self {
-        case .mcpServers: "server.rack"
-        case .skills: "sparkles"
         case .extensions: "puzzlepiece.extension"
+        case .mcpServers: "server.rack"
+        case .tools: "hammer"
+        case .skills: "sparkles"
         }
     }
 }
@@ -498,6 +526,7 @@ private struct KitEditor: View {
     @State private var kit: UserNativKit
     @State private var picker: KitComponentPicker?
     @ObservedObject var manager: NativExtensionManager
+    @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
     let onSave: (UserNativKit) -> Void
     let onCancel: () -> Void
@@ -505,29 +534,35 @@ private struct KitEditor: View {
     init(
         kit: UserNativKit,
         manager: NativExtensionManager,
+        host: MCPHostManager,
         model: NativModel,
         onSave: @escaping (UserNativKit) -> Void,
         onCancel: @escaping () -> Void
     ) {
         _kit = State(initialValue: kit)
         self.manager = manager
+        self.host = host
         self.model = model
         self.onSave = onSave
         self.onCancel = onCancel
     }
 
     var body: some View {
-        if let picker {
-            KitComponentPickerView(
-                kind: picker,
-                kit: $kit,
-                manager: manager,
-                model: model,
-                onDone: { self.picker = nil }
-            )
-        } else {
-            editor
+        Group {
+            if let picker {
+                KitComponentPickerView(
+                    kind: picker,
+                    kit: $kit,
+                    manager: manager,
+                    host: host,
+                    model: model,
+                    onDone: { self.picker = nil }
+                )
+            } else {
+                editor
+            }
         }
+        .frame(width: 500, height: 480)
     }
 
     private var editor: some View {
@@ -559,7 +594,7 @@ private struct KitEditor: View {
                 Text("Choose only the components that belong in this setup.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                ForEach([KitComponentPicker.mcpServers, .skills, .extensions]) { kind in
+                ForEach([KitComponentPicker.extensions, .mcpServers, .tools, .skills]) { kind in
                     Button {
                         picker = kind
                     } label: {
@@ -580,7 +615,7 @@ private struct KitEditor: View {
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
-                    if kind != .extensions { Divider() }
+                    if kind != .skills { Divider() }
                 }
             }
             .padding(12)
@@ -598,14 +633,15 @@ private struct KitEditor: View {
             }
         }
         .padding(20)
-        .frame(width: 480)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func count(for kind: KitComponentPicker) -> Int {
         switch kind {
-        case .mcpServers: kit.mcpServerIDs.count
-        case .skills: kit.skillIDs.count
         case .extensions: kit.extensionIDs.count
+        case .mcpServers: kit.mcpServerIDs.count
+        case .tools: kit.toolNames.count
+        case .skills: kit.skillIDs.count
         }
     }
 }
@@ -614,6 +650,7 @@ private struct KitComponentPickerView: View {
     let kind: KitComponentPicker
     @Binding var kit: UserNativKit
     @ObservedObject var manager: NativExtensionManager
+    @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
     let onDone: () -> Void
 
@@ -629,11 +666,13 @@ private struct KitComponentPickerView: View {
                 .foregroundStyle(.secondary)
                 .help("Back to kit")
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Choose \(kind.title)")
+                    Text(kind.title)
                         .font(.system(size: 16, weight: .semibold))
-                    Text("A component can belong to more than one kit.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    if kind != .mcpServers {
+                        Text("A component can belong to more than one kit.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
             }
@@ -641,6 +680,20 @@ private struct KitComponentPickerView: View {
             Divider()
             List {
                 switch kind {
+                case .extensions:
+                    if extensions.isEmpty {
+                        emptyRow("Install an extension first, then include it here.")
+                    } else {
+                        ForEach(extensions) { record in
+                            selectionRow(
+                                title: record.manifest.displayName,
+                                subtitle: record.manifest.summary,
+                                isSelected: kit.extensionIDs.contains(record.id)
+                            ) {
+                                toggle(record.id, in: \.extensionIDs)
+                            }
+                        }
+                    }
                 case .mcpServers:
                     if servers.isEmpty {
                         emptyRow("Add an MCP server first, then include it here.")
@@ -648,10 +701,24 @@ private struct KitComponentPickerView: View {
                         ForEach(servers) { server in
                             selectionRow(
                                 title: server.name.isEmpty ? "Untitled server" : server.name,
-                                subtitle: server.command,
+                                subtitle: "",
                                 isSelected: kit.mcpServerIDs.contains(server.id)
                             ) {
                                 toggle(server.id, in: \.mcpServerIDs)
+                            }
+                        }
+                    }
+                case .tools:
+                    if tools.isEmpty {
+                        emptyRow("Connect an MCP server first, then include its tools here.")
+                    } else {
+                        ForEach(tools) { tool in
+                            selectionRow(
+                                title: tool.title,
+                                subtitle: "",
+                                isSelected: kit.toolNames.contains(tool.name)
+                            ) {
+                                toggle(tool.name, in: \.toolNames)
                             }
                         }
                     }
@@ -669,20 +736,6 @@ private struct KitComponentPickerView: View {
                             }
                         }
                     }
-                case .extensions:
-                    if extensions.isEmpty {
-                        emptyRow("Install an extension first, then include it here.")
-                    } else {
-                        ForEach(extensions) { record in
-                            selectionRow(
-                                title: record.manifest.displayName,
-                                subtitle: record.manifest.summary,
-                                isSelected: kit.extensionIDs.contains(record.id)
-                            ) {
-                                toggle(record.id, in: \.extensionIDs)
-                            }
-                        }
-                    }
                 }
             }
             .listStyle(.inset)
@@ -693,7 +746,7 @@ private struct KitComponentPickerView: View {
             }
             .padding(16)
         }
-        .frame(width: 500, height: 480)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var servers: [MCPServerConfig] {
@@ -704,6 +757,15 @@ private struct KitComponentPickerView: View {
 
     private var extensions: [NativExtensionRecord] {
         manager.records.filter { !$0.isRemoved && $0.hasRuntime }
+    }
+
+    private var tools: [ToolItem] {
+        let tools = NativToolCatalog.builtIns()
+            + model.settings.mcpServers.flatMap { NativToolCatalog.mcpTools(for: $0, host: host) }
+        var names = Set<String>()
+        return tools
+            .filter { names.insert($0.name).inserted }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 
     @ViewBuilder

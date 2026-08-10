@@ -68,6 +68,17 @@ struct ToolsSectionView: View {
     }
 
     private var nativeTools: [ToolItem] {
+        NativToolCatalog.builtIns()
+    }
+
+    private func mcpTools(for server: MCPServerConfig) -> [ToolItem] {
+        NativToolCatalog.mcpTools(for: server, host: host)
+    }
+}
+
+@MainActor
+enum NativToolCatalog {
+    static func builtIns() -> [ToolItem] {
         var definitions: [MLXChatToolDefinition] = []
         definitions += ChatSystemMonitorToolRegistry.definitions()
         definitions += ChatModelLibraryToolRegistry.definitions()
@@ -86,7 +97,7 @@ struct ToolsSectionView: View {
         }
     }
 
-    private func mcpTools(for server: MCPServerConfig) -> [ToolItem] {
+    static func mcpTools(for server: MCPServerConfig, host: MCPHostManager) -> [ToolItem] {
         let defs = host.toolDefinitions()
         return host.tools(forServer: server.id).map { pair in
             let def = defs.first { $0.function.name == pair.name }
