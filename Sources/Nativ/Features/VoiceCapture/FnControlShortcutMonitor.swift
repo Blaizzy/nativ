@@ -27,16 +27,12 @@ struct FnRetryShortcutState {
 }
 
 struct VoiceModifierToggleShortcutState {
-    static let doubleTapWindow: TimeInterval = 0.6
-
     private(set) var isHeld = false
     private(set) var wasUsedAsChord = false
-    private var lastCleanTapTime: Date?
 
     mutating func update(
         activeModifiers: VoiceShortcutModifiers,
-        shortcutModifiers: VoiceShortcutModifiers,
-        now: Date = Date()
+        shortcutModifiers: VoiceShortcutModifiers
     ) -> Bool {
         guard !shortcutModifiers.isEmpty else {
             reset()
@@ -50,17 +46,7 @@ struct VoiceModifierToggleShortcutState {
                 let wasCleanTap = !wasUsedAsChord
                 isHeld = false
                 wasUsedAsChord = false
-                guard wasCleanTap else {
-                    lastCleanTapTime = nil
-                    return false
-                }
-                if let previous = lastCleanTapTime,
-                   now.timeIntervalSince(previous) <= Self.doubleTapWindow {
-                    lastCleanTapTime = nil
-                    return true
-                }
-                lastCleanTapTime = now
-                return false
+                return wasCleanTap
             }
             return false
         }
@@ -81,7 +67,6 @@ struct VoiceModifierToggleShortcutState {
     mutating func reset() {
         isHeld = false
         wasUsedAsChord = false
-        lastCleanTapTime = nil
     }
 }
 
