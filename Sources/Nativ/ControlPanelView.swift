@@ -641,6 +641,7 @@ struct ControlPanelView: View {
             RoutineEditor(
                 draft: draft,
                 availableModelIDs: availableModelIDs,
+                availableKits: NativKit.all + model.settings.userKits.map { $0.resolved() },
                 onSave: { routine in
                     saveScheduledRoutine(routine)
                     schedulingRoutineDraft = nil

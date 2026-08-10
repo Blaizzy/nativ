@@ -101,6 +101,35 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(settings.serverHost, "127.0.0.1")
     }
 
+    func testUserKitsRoundTripAndLegacySettingsDefaultToNone() throws {
+        let serverID = UUID()
+        let skillID = UUID()
+        let kit = UserNativKit(
+            name: "Project research",
+            summary: "Sources and notes for a project.",
+            mcpServerIDs: [serverID],
+            skillIDs: [skillID],
+            extensionIDs: ["com.example.notes"]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(NativSettings(userKits: [kit]))
+        )
+
+        XCTAssertEqual(decoded.userKits, [kit])
+        XCTAssertTrue(
+            try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8)).userKits.isEmpty
+        )
+    }
+
+    func testUserKitRequiresNameAndAtLeastOneComponent() {
+        XCTAssertFalse(UserNativKit().isComplete)
+        XCTAssertFalse(UserNativKit(name: "Research").isComplete)
+        XCTAssertFalse(UserNativKit(mcpServerIDs: [UUID()]).isComplete)
+        XCTAssertTrue(UserNativKit(name: "Research", skillIDs: [UUID()]).isComplete)
+    }
+
     func testServerHostRequiresServerRestart() {
         let original = NativSettings()
         var changed = original

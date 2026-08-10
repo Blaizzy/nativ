@@ -146,11 +146,13 @@ final class RoutineRunner {
 
     private func systemPrompt(for routine: Routine) -> String? {
         guard let kitID = routine.kitID,
-              let kit = NativKit.all.first(where: { $0.id == kitID })
+              let kit = (NativKit.all + model.settings.userKits.map { $0.resolved() })
+                .first(where: { $0.id == kitID })
         else {
             return nil
         }
         let instructions = kit.skills
+            .compactMap { NativKitActivation.skill(for: $0, model: model) }
             .filter(\.isEnabled)
             .map(\.instructions)
             .filter { !$0.isEmpty }

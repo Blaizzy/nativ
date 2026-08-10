@@ -88,7 +88,7 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, host: host, model: model)
+            KitsSectionView(manager: manager, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:

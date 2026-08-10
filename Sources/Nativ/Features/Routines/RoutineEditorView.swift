@@ -3,6 +3,7 @@ import SwiftUI
 struct RoutineEditor: View {
     let draft: RoutineDraft
     let availableModelIDs: [String]
+    let availableKits: [NativKit]
     let onSave: (Routine) -> Void
     let onCancel: () -> Void
     var onDelete: (() -> Void)?
@@ -19,12 +20,14 @@ struct RoutineEditor: View {
     init(
         draft: RoutineDraft,
         availableModelIDs: [String],
+        availableKits: [NativKit] = NativKit.all,
         onSave: @escaping (Routine) -> Void,
         onCancel: @escaping () -> Void,
         onDelete: (() -> Void)? = nil
     ) {
         self.draft = draft
         self.availableModelIDs = availableModelIDs
+        self.availableKits = availableKits
         self.onSave = onSave
         self.onCancel = onCancel
         self.onDelete = onDelete
@@ -93,12 +96,12 @@ struct RoutineEditor: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Picker("Kit", selection: $kitID) {
                                 Text("None").tag(String?.none)
-                                ForEach(NativKit.all) { kit in
+                                ForEach(availableKits) { kit in
                                     Text(kit.name).tag(String?.some(kit.id))
                                 }
                             }
                             .labelsHidden()
-                            if let kitID, let kit = NativKit.all.first(where: { $0.id == kitID }) {
+                            if let kitID, let kit = availableKits.first(where: { $0.id == kitID }) {
                                 Text(kit.inventory)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
