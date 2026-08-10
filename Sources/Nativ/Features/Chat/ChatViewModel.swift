@@ -23,6 +23,7 @@ private struct ChatSessionBootstrap {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    weak var kitStore: NativKitStore?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -33,6 +34,7 @@ final class ChatViewModel: ObservableObject {
         let assistantMessageID: UUID
         let settings: NativSettings
         let imageGenerationModelID: String?
+        let kitID: String?
         let languageModelSupportsTools: Bool
         let languageModelSupportsVision: Bool
     }
@@ -56,6 +58,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
+    @Published private(set) var currentKitID: String?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = [] {
         didSet {
@@ -150,6 +153,13 @@ final class ChatViewModel: ObservableObject {
 
     var hasPendingRequests: Bool {
         activeRequestSessionID != nil || !requestQueue.isEmpty
+    }
+
+    func selectKit(_ id: String?) {
+        guard !hasPendingRequests else { return }
+        currentKitID = id
+        currentSession?.kitID = id
+        persistCurrentSession(updateTimestamp: false)
     }
 
     var visibleMessages: [ChatTranscriptMessage] {
@@ -730,6 +740,7 @@ final class ChatViewModel: ObservableObject {
             settings: settings,
             imageGenerationModelID: imageGenerationModelID(for: sessionID)
                 ?? settings.imageGenerationModelID,
+            kitID: currentSession?.kitID,
             languageModelSupportsTools: languageModelSupportsTools,
             languageModelSupportsVision: languageModelSupportsVision
         ))
@@ -1199,6 +1210,7 @@ final class ChatViewModel: ObservableObject {
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
         let fileReadTracker = ChatReadFileTracker()
+        let kitPlan = try kitExecutionPlan(for: queuedRequest)
 
         guard let initialMessages = sessionMessages(for: queuedRequest.sessionID),
               let initialAssistantIndex = initialMessages.firstIndex(where: {
@@ -1243,7 +1255,8 @@ final class ChatViewModel: ObservableObject {
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
                 settings: activeSettings,
-                documentContexts: documentContext.result.contexts
+                documentContexts: documentContext.result.contexts,
+                kitPlan: kitPlan
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -1296,8 +1309,23 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
+                if let kitPlan,
+                   let toolName = toolCall.function?.name,
+                   !kitPlan.allowedToolNames.contains(toolName) {
+                    throw NativKitExecutionError.notReady(
+                        kitPlan.kit.name,
+                        [NativKitIssue(
+                            componentID: "tool:\(toolName)",
+                            componentName: toolName,
+                            capability: nil,
+                            reason: .componentRemoved
+                        )]
+                    )
+                }
+
                 let customTool = toolCall.function?.name.flatMap { toolName in
-                    queuedRequest.settings.customTools.first { $0.toolName == toolName }
+                    kitPlan?.customToolsByName[toolName]
+                        ?? queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
                 if customTool?.kind == .script {
                     updateToolMessage(
@@ -1484,7 +1512,8 @@ final class ChatViewModel: ObservableObject {
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else if let host = mcpHost,
                               let toolName = toolCall.function?.name,
-                              host.handlesTool(named: toolName) {
+                              (kitPlan?.mcpToolsByName[toolName] != nil
+                                || (kitPlan == nil && host.handlesTool(named: toolName))) {
                         let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
@@ -1634,7 +1663,8 @@ final class ChatViewModel: ObservableObject {
         before assistantMessageID: UUID,
         advertisesTools: Bool,
         settings: NativSettings,
-        documentContexts: [UUID: String]
+        documentContexts: [UUID: String],
+        kitPlan: NativKitExecutionPlan?
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
@@ -1652,14 +1682,16 @@ final class ChatViewModel: ObservableObject {
         }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
-            ? ChatToolRegistry.definitions(
+        var toolDefinitions: [MLXChatToolDefinition] = if advertisesToolsForModel {
+            kitPlan?.toolDefinitions ?? ChatToolRegistry.definitions(
                 canEditImage: precedingMessages.contains { message in
                     message.imageAttachments.contains { $0.chatAttachmentKind == .image }
                 }
             )
-            : []
-        if advertisesToolsForModel {
+        } else {
+            []
+        }
+        if advertisesToolsForModel, kitPlan == nil {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
@@ -1687,7 +1719,8 @@ final class ChatViewModel: ObservableObject {
         if !toolDefinitions.isEmpty {
             systemParts.append(NativSkill.builtInToolGuide.instructions)
         }
-        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+        let skills = kitPlan?.skills ?? settings.skills.filter(\.isEnabled)
+        for skill in skills where !skill.instructions.isEmpty {
             systemParts.append(skill.instructions)
         }
         if !systemParts.isEmpty {
@@ -1718,6 +1751,27 @@ final class ChatViewModel: ObservableObject {
             toolChoice: tools == nil ? nil : "auto",
             stream: true
         )
+    }
+
+    private func kitExecutionPlan(
+        for queuedRequest: QueuedChatRequest
+    ) throws -> NativKitExecutionPlan? {
+        guard let kitID = queuedRequest.kitID else { return nil }
+        guard let kitStore, let mcpHost,
+              let kit = kitStore.kit(id: kitID)
+        else {
+            throw NativKitExecutionError.removed
+        }
+        let canEditImage = sessionMessages(for: queuedRequest.sessionID)?
+            .contains { !$0.imageAttachments.isEmpty } == true
+        let plan = NativKitCapabilityInventory(
+            settings: queuedRequest.settings,
+            host: mcpHost
+        ).plan(for: kit, context: .chat, canEditImage: canEditImage)
+        guard plan.isReady else {
+            throw NativKitExecutionError.notReady(kit.name, plan.issues)
+        }
+        return plan
     }
 
     private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {
@@ -2187,6 +2241,7 @@ final class ChatViewModel: ObservableObject {
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
+        currentKitID = session.kitID
         messages = ChatSessionLoadPolicy.shouldNormalizeOnApply(
             sessionID: session.id,
             activeRequestSessionID: activeRequestSessionID
@@ -2253,6 +2308,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         session.messages = messages
+        session.kitID = currentKitID
         session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
         if updateTimestamp {
             session.updatedAt = Date()

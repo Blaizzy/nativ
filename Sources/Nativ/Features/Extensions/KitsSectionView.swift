@@ -1,385 +1,225 @@
-import NativExtensionSDK
 import NativServerKit
 import SwiftUI
 
-private struct KitStateIcon: View {
-    let state: NativKitState
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(color)
-            .accessibilityLabel("Kit status: \(title)")
-            .help(title)
-    }
-
-    private var title: String {
-        switch state {
-        case .off: "Not enabled"
-        case .partial: "Partially enabled"
-        case .enabled: "Enabled"
-        }
-    }
-
-    private var symbol: String {
-        switch state {
-        case .off: "circle"
-        case .partial: "circle.lefthalf.filled"
-        case .enabled: "circle.fill"
-        }
-    }
-
-    private var color: Color {
-        switch state {
-        case .off: .secondary
-        case .partial: .orange
-        case .enabled: .green
-        }
-    }
-}
-
 struct KitsSectionView: View {
-    @ObservedObject var manager: NativExtensionManager
-    var model: NativModel
-    @State private var openKit: NativKit?
+    @ObservedObject var host: MCPHostManager
+    @ObservedObject var model: NativModel
+    @ObservedObject var store: NativKitStore
+    let onOpenCapability: (NativKitCapabilityReference) -> Void
 
-    private static let columns = [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 14)]
+    @State private var editingKit: CustomNativKit?
+    @State private var deletingKit: CustomNativKit?
+    @State private var capabilityPendingNavigation: NativKitCapabilityReference?
+
+    private let columns = [GridItem(.adaptive(minimum: 260, maximum: 340), spacing: 14)]
 
     var body: some View {
         HubSectionScaffold(
             title: "Kits",
-            subtitle: "Ready-made setups. Enable one to turn on the MCP servers, skills, and extensions for a way of working — then manage any piece on its own."
+            subtitle: "Bundle MCPs, tools, and skills for chat or routines."
         ) {
-            EmptyView()
+            Button(action: createKit) {
+                Label("Create Kit", systemImage: "plus")
+            }
         } content: {
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 14) {
-                ForEach(NativKitCatalog.bundled.kits) { kit in
-                    kitCard(for: kit)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                ForEach(store.allKits) { kit in
+                    KitCard(
+                        kit: kit,
+                        evaluation: inventory.evaluation(of: kit),
+                        onSetEnabled: { store.setEnabled($0, id: kit.id) },
+                        onManage: { editingKit = kit },
+                        onOpenCapability: onOpenCapability,
+                        onDelete: kit.isBuiltIn ? nil : { deletingKit = kit }
+                    )
                 }
             }
         }
-        .sheet(item: $openKit) { kit in
-            KitDetailView(kit: kit, manager: manager, model: model)
+        .sheet(item: $editingKit, onDismiss: openPendingCapability) { kit in
+            NativKitEditor(
+                kit: kit,
+                host: host,
+                model: model,
+                onSave: {
+                    store.save($0)
+                    editingKit = nil
+                },
+                onCancel: { editingKit = nil },
+                onOpenCapability: { capability in
+                    capabilityPendingNavigation = capability
+                    editingKit = nil
+                },
+                onReset: kit.isBuiltIn ? {
+                    store.resetBuiltIn(id: kit.id)
+                    editingKit = nil
+                } : nil
+            )
+        }
+        .alert(
+            "Delete Kit?",
+            isPresented: Binding(
+                get: { deletingKit != nil },
+                set: { if !$0 { deletingKit = nil } }
+            ),
+            presenting: deletingKit
+        ) { kit in
+            Button("Delete", role: .destructive) {
+                if let id = UUID(uuidString: kit.id) {
+                    store.deleteUserKit(id: id)
+                }
+                deletingKit = nil
+            }
+            Button("Cancel", role: .cancel) { deletingKit = nil }
+        } message: { _ in
+            Text("The Kit will be removed. Its MCPs, tools, and skills will not be changed.")
         }
     }
 
-    private func kitCard(for kit: NativKit) -> some View {
-        let snapshot = NativKitActivation.snapshot(
-            of: kit,
-            model: model,
-            extensionName: extensionName,
-            isExtensionEnabled: manager.isEnabled(extensionID:)
-        )
-        return KitCard(
-            kit: kit,
-            snapshot: snapshot,
-            onOpen: { openKit = kit },
-            onEnable: { enableMissing(in: kit) }
-        )
+    private var inventory: NativKitCapabilityInventory {
+        NativKitCapabilityInventory(settings: model.settings, host: host)
     }
 
-    private func extensionName(_ id: String) -> String {
-        manager.records.first { $0.id == id }?.manifest.displayName ?? id
+    private func createKit() {
+        editingKit = UserNativKit(
+            name: "New Kit",
+            summary: "",
+            contents: NativKitContents()
+        ).resolved()
     }
 
-    private func enableMissing(in kit: NativKit) {
-        NativKitActivation.enableMissing(
-            in: kit,
-            model: model,
-            isExtensionEnabled: manager.isEnabled(extensionID:),
-            enableExtension: { manager.setEnabled(true, extensionID: $0) }
-        )
+    private func openPendingCapability() {
+        guard let capability = capabilityPendingNavigation else { return }
+        capabilityPendingNavigation = nil
+        onOpenCapability(capability)
     }
 }
 
 private struct KitCard: View {
-    let kit: NativKit
-    let snapshot: NativKitActivationSnapshot
-    let onOpen: () -> Void
-    let onEnable: () -> Void
+    let kit: CustomNativKit
+    let evaluation: NativKitEvaluation
+    let onSetEnabled: (Bool) -> Void
+    let onManage: () -> Void
+    let onOpenCapability: (NativKitCapabilityReference) -> Void
+    let onDelete: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                NativTintedIconTile(symbol: kit.symbol, tint: .nativTint(kit.tintName))
-                    .accessibilityHidden(true)
-                Spacer(minLength: 0)
-                NativStatusBadge(text: "Built-in")
-                    .help("Ships with Nativ")
-                KitStateIcon(state: snapshot.state)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                NativTintedIconTile(symbol: kit.symbol, tint: kit.tint, size: 34)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
+                        Text(kit.name)
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                        if kit.isBuiltIn {
+                            Text("Built-in")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(kit.summary.isEmpty ? "A custom capability bundle." : kit.summary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 6)
+                Toggle("", isOn: Binding(
+                    get: { kit.isEnabled },
+                    set: onSetEnabled
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .help(kit.isEnabled ? "Turn off this Kit" : "Turn on this Kit")
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(kit.name)
-                    .font(.headline)
-                Text(kit.summary)
-                    .font(.subheadline)
+
+            HStack(spacing: 7) {
+                readinessControl
+                if !kit.inventory.isEmpty {
+                    Text(kit.inventory)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            if kit.isEnabled, let summary = evaluation.summary {
+                Text(summary)
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
             }
-            Text(capabilitiesText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    actions
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                VStack(alignment: .leading, spacing: 8) {
-                    actions
+
+            HStack {
+                Button("Manage", action: onManage)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                if let onDelete {
+                    Button(role: .destructive, action: onDelete) {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Delete Kit")
                 }
             }
-            .controlSize(.regular)
+            .font(.system(size: 11, weight: .medium))
         }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             Color(nsColor: .controlBackgroundColor),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .contain)
-    }
-
-    private var capabilitiesText: String {
-        if snapshot.state == .partial {
-            "Needs: \(snapshot.inactivePartNames.joined(separator: " · "))"
-        } else {
-            "Includes: \(kit.capabilityNames(in: .bundled).joined(separator: " · "))"
         }
     }
 
     @ViewBuilder
-    private var actions: some View {
-        if snapshot.state != .enabled {
-            Button(snapshot.state == .partial ? "Enable All" : "Enable", action: onEnable)
-                .buttonStyle(.borderedProminent)
-        }
-        Button(snapshot.state == .off ? "Details" : "Manage", action: onOpen)
-            .buttonStyle(.bordered)
-    }
-}
-
-private struct KitDetailView: View {
-    let kit: NativKit
-    @ObservedObject var manager: NativExtensionManager
-    var model: NativModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    mcpGroup
-                    if !kit.skills.isEmpty { skillsGroup }
-                    if !kit.extensionIDs.isEmpty { extensionsGroup }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-        }
-        .presentationSizing(.fitted)
-        .frame(
-            minWidth: 600,
-            idealWidth: 680,
-            maxWidth: 920,
-            minHeight: 480,
-            idealHeight: 620,
-            maxHeight: 800
-        )
-    }
-
-    private var header: some View {
-        let snapshot = NativKitActivation.snapshot(
-            of: kit,
-            model: model,
-            extensionName: extensionName,
-            isExtensionEnabled: manager.isEnabled(extensionID:)
-        )
-        return HStack(alignment: .top, spacing: 12) {
-            NativTintedIconTile(symbol: kit.symbol, tint: .nativTint(kit.tintName), size: 40)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(kit.name)
-                        .font(.title3.weight(.semibold))
-                    KitStateIcon(state: snapshot.state)
-                }
-                Text(kit.summary)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if snapshot.state != .enabled {
-                    Button("Enable All") {
-                        NativKitActivation.enableMissing(
-                            in: kit,
-                            model: model,
-                            isExtensionEnabled: manager.isEnabled(extensionID:),
-                            enableExtension: { manager.setEnabled(true, extensionID: $0) }
-                        )
+    private var readinessControl: some View {
+        if !kit.isEnabled {
+            NativStatusBadge(text: "Off")
+        } else {
+            switch evaluation.availability {
+            case .ready:
+                EmptyView()
+            case .needsSetup:
+                if let issue = evaluation.issues.first,
+                   let capability = issue.capability,
+                   let title = setupTitle(for: issue) {
+                    Button {
+                        onOpenCapability(capability)
+                    } label: {
+                        Label(title, systemImage: "arrow.up.right")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .padding(.top, 4)
+                    .buttonStyle(.plain)
+                    .help(issue.message)
+                } else if let issue = evaluation.issues.first,
+                          case .connecting = issue.reason {
+                    NativStatusBadge(text: "Connecting", tone: .warning)
+                } else {
+                    NativStatusBadge(text: "Needs setup", tone: .warning)
                 }
-            }
-            Spacer(minLength: 12)
-            NativHoverCloseButton { dismiss() }
-        }
-        .padding(20)
-    }
-
-    // MARK: Groups
-
-    private var mcpGroup: some View {
-        KitGroup(title: "MCP servers & tools", caption: "Their tools become available in chat and appear under Tools.") {
-            ForEach(kit.mcpEntries(in: .bundled)) { entry in
-                KitPartRow(
-                    symbol: entry.symbol,
-                    tint: .nativTint(entry.tintName),
-                    logoAssetName: entry.logoAssetName,
-                    title: entry.name,
-                    subtitle: entry.summary,
-                    isOn: mcpBinding(entry)
-                )
+            case .unavailable:
+                NativStatusBadge(text: "Unavailable", tone: .warning)
             }
         }
     }
 
-    private var skillsGroup: some View {
-        KitGroup(title: "Skills", caption: "Guidance added to the model when tools are available.") {
-            ForEach(kit.skills) { skill in
-                KitPartRow(
-                    symbol: "sparkles",
-                    tint: .nativTint(kit.tintName),
-                    logoAssetName: nil,
-                    title: skill.name,
-                    subtitle: nil,
-                    isOn: skillBinding(skill)
-                )
-            }
+    private func setupTitle(for issue: NativKitIssue) -> String? {
+        switch issue.reason {
+        case .globallyOff:
+            "Turn on \(issue.componentName)"
+        case .needsConfiguration, .connectionFailed:
+            "Set up \(issue.componentName)"
+        default:
+            nil
         }
-    }
-
-    private var extensionsGroup: some View {
-        KitGroup(title: "Extensions", caption: nil) {
-            ForEach(kit.extensionIDs, id: \.self) { extensionID in
-                KitPartRow(
-                    symbol: "puzzlepiece.extension",
-                    tint: .nativTint(kit.tintName),
-                    logoAssetName: nil,
-                    title: extensionName(extensionID),
-                    subtitle: nil,
-                    isOn: extensionBinding(extensionID)
-                )
-            }
-        }
-    }
-
-    // MARK: Bindings
-
-    private func mcpBinding(_ entry: MCPCatalogEntry) -> Binding<Bool> {
-        let catalog = MCPServerCatalog.bundled
-        return Binding(
-            get: { catalog.isEnabled(entry, in: model.settings.mcpServers) },
-            set: { newValue in
-                var servers = model.settings.mcpServers
-                catalog.setEnabled(newValue, for: entry, in: &servers)
-                model.settings.mcpServers = servers
-            }
-        )
-    }
-
-    private func skillBinding(_ skill: NativSkill) -> Binding<Bool> {
-        Binding(
-            get: { model.settings.skills.first { $0.id == skill.id }?.isEnabled ?? false },
-            set: { newValue in
-                if let index = model.settings.skills.firstIndex(where: { $0.id == skill.id }) {
-                    model.settings.skills[index].isEnabled = newValue
-                } else if newValue {
-                    var enabled = skill
-                    enabled.isEnabled = true
-                    model.settings.skills.append(enabled)
-                }
-            }
-        )
-    }
-
-    private func extensionBinding(_ extensionID: String) -> Binding<Bool> {
-        Binding(
-            get: { manager.isEnabled(extensionID: extensionID) },
-            set: { manager.setEnabled($0, extensionID: extensionID) }
-        )
-    }
-
-    private func extensionName(_ extensionID: String) -> String {
-        manager.records.first { $0.id == extensionID }?.manifest.displayName ?? extensionID
-    }
-}
-
-private struct KitGroup<Content: View>: View {
-    let title: String
-    let caption: String?
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                if let caption {
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            VStack(spacing: 0) {
-                content()
-            }
-        }
-    }
-}
-
-private struct KitPartRow: View {
-    let symbol: String
-    let tint: Color
-    let logoAssetName: String?
-    let title: String
-    let subtitle: String?
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            HStack(spacing: 10) {
-                NativTintedIconTile(
-                    symbol: symbol,
-                    tint: tint,
-                    logoAssetName: logoAssetName,
-                    size: 30
-                )
-                .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.body.weight(.medium))
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: 12)
-            }
-        }
-        .toggleStyle(.switch)
-        .controlSize(.regular)
-        .padding(.vertical, 8)
     }
 }

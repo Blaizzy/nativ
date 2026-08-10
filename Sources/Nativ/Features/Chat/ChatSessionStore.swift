@@ -23,6 +23,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var folderID: UUID?
     var imageGenerationModelID: String?
     var scheduledTaskID: String?
+    var kitID: String?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(

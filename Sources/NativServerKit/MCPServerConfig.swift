@@ -10,6 +10,7 @@ public struct MCPServerConfig: Codable, Equatable, Identifiable, Sendable {
     public var arguments: [String]
     public var environment: [String: String]
     public var isEnabled: Bool
+    public var catalogID: String?
 
     public init(
         id: UUID = UUID(),
@@ -18,7 +19,8 @@ public struct MCPServerConfig: Codable, Equatable, Identifiable, Sendable {
         command: String = "",
         arguments: [String] = [],
         environment: [String: String] = [:],
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        catalogID: String? = nil
     ) {
         self.id = id
         self.catalogID = catalogID
@@ -27,6 +29,7 @@ public struct MCPServerConfig: Codable, Equatable, Identifiable, Sendable {
         self.arguments = arguments
         self.environment = environment
         self.isEnabled = isEnabled
+        self.catalogID = catalogID
     }
 }
 
