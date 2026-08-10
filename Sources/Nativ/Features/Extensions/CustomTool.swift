@@ -21,7 +21,6 @@ enum CustomToolScriptLanguage: String, Codable, CaseIterable, Identifiable {
     case python
     case javaScript
     case shell
-    case java
 
     var id: Self { self }
 
@@ -30,7 +29,6 @@ enum CustomToolScriptLanguage: String, Codable, CaseIterable, Identifiable {
         case .python: "Python"
         case .javaScript: "JavaScript"
         case .shell: "Shell"
-        case .java: "Java"
         }
     }
 
@@ -39,7 +37,6 @@ enum CustomToolScriptLanguage: String, Codable, CaseIterable, Identifiable {
         case .python: "Uses Nativ’s bundled Python."
         case .javaScript: "Requires Node.js."
         case .shell: "Runs with macOS zsh."
-        case .java: "Requires a JDK."
         }
     }
 
@@ -64,17 +61,6 @@ enum CustomToolScriptLanguage: String, Codable, CaseIterable, Identifiable {
             #"""
             input=$(cat)
             printf '%s\n' "$input"
-            """#
-        case .java:
-            #"""
-            import java.nio.charset.StandardCharsets;
-
-            public class NativTool {
-                public static void main(String[] args) throws Exception {
-                    String input = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
-                    System.out.println(input);
-                }
-            }
             """#
         }
     }
@@ -560,15 +546,6 @@ private enum CustomToolScriptRunner {
             return (
                 Command(executableURL: zshURL, arguments: ["-n", scriptURL.path], environment: environment, currentDirectoryURL: directory),
                 Command(executableURL: zshURL, arguments: [scriptURL.path], environment: environment, currentDirectoryURL: directory)
-            )
-        case .java:
-            let compilerURL = try executable(named: "javac", displayName: "Java compiler", environment: environment)
-            let javaURL = try executable(named: "java", displayName: "Java", environment: environment)
-            let scriptURL = directory.appendingPathComponent("NativTool.java")
-            try tool.script.write(to: scriptURL, atomically: true, encoding: .utf8)
-            return (
-                Command(executableURL: compilerURL, arguments: ["-d", directory.path, scriptURL.path], environment: environment, currentDirectoryURL: directory),
-                Command(executableURL: javaURL, arguments: ["-cp", directory.path, "NativTool"], environment: environment, currentDirectoryURL: directory)
             )
         }
     }
