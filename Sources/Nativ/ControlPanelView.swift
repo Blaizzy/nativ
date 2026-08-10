@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
-    case imageGeneration = "Images"
     case artifacts = "Artifacts"
     case dashboard = "Dashboard"
     case system = "System"
@@ -19,7 +18,6 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     static var allCases: [ControlPanelTab] {
         [
             .chat,
-            .imageGeneration,
             .artifacts,
             .dashboard,
             .system,
@@ -36,8 +34,6 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .chat:
             "bubble.left.and.bubble.right"
-        case .imageGeneration:
-            "photo.on.rectangle"
         case .artifacts:
             "photo.on.rectangle.angled"
         case .dashboard:
@@ -343,6 +339,7 @@ struct ControlPanelView: View {
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
+    @State private var chatWorkspaceMode: ChatWorkspaceMode = .chat
     @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
@@ -725,7 +722,7 @@ struct ControlPanelView: View {
             ForEach(ControlPanelTab.allCases) { tab in
                 sidebarTabButton(tab)
 
-                if tab == .imageGeneration {
+                if tab == .chat {
                     ForEach(extensionManager.enabledSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }
@@ -1155,7 +1152,7 @@ struct ControlPanelView: View {
                         createRecentSession()
                     }
                 } label: {
-                    Label("New chat", systemImage: "square.and.pencil")
+                    Label(newRecentTitle, systemImage: newRecentSystemImage)
                 }
                 Button {
                     presentNewRoutine()
@@ -1171,7 +1168,11 @@ struct ControlPanelView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
+            .disabled(
+                selectedTab == .chat
+                    && chatWorkspaceMode == .images
+                    && imageGeneration.isGenerating
+            )
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
         }
@@ -1357,9 +1358,11 @@ struct ControlPanelView: View {
 
     private var showsModelConfigurationToggle: Bool {
         switch selectedTab {
-        case .chat, .models, .developer:
+        case .chat:
+            chatWorkspaceMode == .chat
+        case .models, .developer:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
+        case .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
             false
         }
     }
@@ -1879,8 +1882,14 @@ struct ControlPanelView: View {
         guard affectsDisplayed else {
             return
         }
-        let survivor = recentSessions.first { !removedIDs.contains($0.id) }
-        applySidebarSelection(survivor?.selection ?? .tab(selectedTab))
+        if let survivor = recentSessions.first(where: { !removedIDs.contains($0.id) }) {
+            applySidebarSelection(survivor.selection)
+        } else if chatWorkspaceMode == .images {
+            imageGeneration.beginNewDraft()
+            showImageWorkspace()
+        } else {
+            createChatSession()
+        }
     }
 
     private func renameRecentSession(_ recent: ControlPanelRecentSession, to newTitle: String) {
@@ -1935,17 +1944,18 @@ struct ControlPanelView: View {
     private var corePage: some View {
         switch selectedTab {
         case .chat:
-            ChatView(
+            ChatWorkspaceView(
+                mode: chatWorkspaceMode,
+                onSelectMode: selectChatWorkspaceMode,
                 model: model,
                 chat: chat,
                 mcpHost: mcpHost,
+                imageGeneration: imageGeneration,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
                     : ControlPanelLayout.titlebarHeight
             )
-        case .imageGeneration:
-            ImageGenerationView(model: model, viewModel: imageGeneration)
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
@@ -1964,13 +1974,14 @@ struct ControlPanelView: View {
                     if let attachment = artifacts.chatAttachment(for: artifact) {
                         chat.stageAttachment(attachment)
                     }
-                    applySidebarSelection(.tab(.chat))
+                    showChatWorkspace()
                 },
                 onUseAsReference: { artifact in
+                    imageGeneration.beginNewDraft()
+                    showImageWorkspace()
                     if let attachment = artifacts.chatAttachment(for: artifact) {
                         imageGeneration.useAsReference(attachment)
                     }
-                    applySidebarSelection(.tab(.imageGeneration))
                 }
             )
         case .dashboard:
@@ -2051,11 +2062,13 @@ struct ControlPanelView: View {
             if tab == .extensions {
                 isExtensionsBadgeDismissed = true
             }
-            if tab == .chat, chat.currentSessionID == nil {
-                chat.createSession()
-            } else if tab == .imageGeneration,
-                      imageGeneration.currentSessionID == nil {
-                imageGeneration.createSession()
+            if tab == .chat {
+                switch chatWorkspaceMode {
+                case .chat where chat.currentSessionID == nil:
+                    chat.createSession()
+                default:
+                    break
+                }
             }
             sidebarSelection = selection
             selectedTab = tab
@@ -2076,15 +2089,17 @@ struct ControlPanelView: View {
             } else {
                 sidebarSelection = .tab(.chat)
             }
+            chatWorkspaceMode = .chat
             selectedTab = .chat
         case .imageGeneration(let sessionID):
             if imageGeneration.sessions.contains(where: { $0.id == sessionID }) {
                 imageGeneration.selectSession(sessionID)
                 sidebarSelection = selection
             } else {
-                sidebarSelection = .tab(.imageGeneration)
+                sidebarSelection = .tab(.chat)
             }
-            selectedTab = .imageGeneration
+            chatWorkspaceMode = .images
+            selectedTab = .chat
         }
     }
 
@@ -2101,18 +2116,15 @@ struct ControlPanelView: View {
         switch selectedTab {
         case .dashboard, .system, .models, .integrations, .extensions, .developer:
             return true
-        case .chat, .imageGeneration, .artifacts, .settings:
+        case .chat, .artifacts, .settings:
             return false
         }
     }
 
     private func createRecentSession() {
-        if selectedTab == .imageGeneration {
-            imageGeneration.createSession()
-            applySidebarSelection(
-                imageGeneration.currentSessionID.map(ControlPanelSidebarSelection.imageGeneration)
-                    ?? .tab(.imageGeneration)
-            )
+        if selectedTab == .chat, chatWorkspaceMode == .images {
+            imageGeneration.beginNewDraft()
+            showImageWorkspace()
         } else {
             createChatSession()
         }
@@ -2249,9 +2261,17 @@ struct ControlPanelView: View {
         guard shouldSelectReplacement else {
             return
         }
-        applySidebarSelection(
-            replacementSelection ?? fallbackTabSelection(for: recent)
-        )
+        if let replacementSelection {
+            applySidebarSelection(replacementSelection)
+        } else {
+            switch recent.selection {
+            case .imageGeneration:
+                imageGeneration.beginNewDraft()
+                showImageWorkspace()
+            case .chat, .tab, .extensionPage:
+                createChatSession()
+            }
+        }
     }
 
     private func adjacentRecentSelection(
@@ -2277,26 +2297,11 @@ struct ControlPanelView: View {
         }
         switch (sidebarSelection, recent.selection) {
         case (.tab(.chat), .chat(let sessionID)):
-            return sessionID == chat.currentSessionID
-        case (.tab(.imageGeneration), .imageGeneration(let sessionID)):
-            return sessionID == imageGeneration.currentSessionID
+            return chatWorkspaceMode == .chat && sessionID == chat.currentSessionID
+        case (.tab(.chat), .imageGeneration(let sessionID)):
+            return chatWorkspaceMode == .images && sessionID == imageGeneration.currentSessionID
         default:
             return false
-        }
-    }
-
-    private func fallbackTabSelection(
-        for recent: ControlPanelRecentSession
-    ) -> ControlPanelSidebarSelection {
-        switch recent.selection {
-        case .chat:
-            .tab(.chat)
-        case .imageGeneration:
-            .tab(.imageGeneration)
-        case .tab(let tab):
-            .tab(tab)
-        case .extensionPage(let pageID):
-            .extensionPage(pageID)
         }
     }
 
@@ -2344,14 +2349,99 @@ struct ControlPanelView: View {
     }
 
     private var newRecentHelp: String {
-        selectedTab == .imageGeneration ? "Create a new image conversation" : "Create a new chat"
+        selectedTab == .chat && chatWorkspaceMode == .images
+            ? "Start a new image draft"
+            : "Create a new chat"
+    }
+
+    private var newRecentTitle: String {
+        selectedTab == .chat && chatWorkspaceMode == .images
+            ? "New image"
+            : "New chat"
+    }
+
+    private var newRecentSystemImage: String {
+        selectedTab == .chat && chatWorkspaceMode == .images
+            ? "photo.badge.plus"
+            : "square.and.pencil"
     }
 
     private func createChatSession() {
         chat.createSession()
-        applySidebarSelection(chat.currentSessionID.map(ControlPanelSidebarSelection.chat) ?? .tab(.chat))
+        showChatWorkspace()
     }
 
+    private func selectChatWorkspaceMode(_ mode: ChatWorkspaceMode) {
+        guard mode != chatWorkspaceMode else {
+            return
+        }
+        switch mode {
+        case .chat:
+            showChatWorkspace()
+        case .images:
+            imageGeneration.beginNewDraft(preservingUncommittedDraft: true)
+            showImageWorkspace()
+        }
+    }
+
+    private func showChatWorkspace() {
+        if chat.currentSessionID == nil {
+            chat.createSession()
+        }
+        chatWorkspaceMode = .chat
+        selectedTab = .chat
+        sidebarSelection = chat.currentSessionID.map(ControlPanelSidebarSelection.chat)
+            ?? .tab(.chat)
+    }
+
+    private func showImageWorkspace() {
+        chatWorkspaceMode = .images
+        selectedTab = .chat
+        sidebarSelection = imageGeneration.currentSessionID
+            .map(ControlPanelSidebarSelection.imageGeneration)
+            ?? .tab(.chat)
+    }
+
+}
+
+private struct ChatWorkspaceView: View {
+    let mode: ChatWorkspaceMode
+    let onSelectMode: (ChatWorkspaceMode) -> Void
+    @ObservedObject var model: NativModel
+    let chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var imageGeneration: ImageGenerationViewModel
+    @Binding var showsConfiguration: Bool
+    let conversationWidthReduction: CGFloat
+
+    var body: some View {
+        Group {
+            switch mode {
+            case .chat:
+                ChatView(
+                    model: model,
+                    chat: chat,
+                    mcpHost: mcpHost,
+                    workspaceMode: mode,
+                    onSelectWorkspaceMode: onSelectMode,
+                    showsConfiguration: $showsConfiguration,
+                    conversationWidthReduction: conversationWidthReduction
+                )
+            case .images:
+                ImageGenerationView(
+                    model: model,
+                    viewModel: imageGeneration,
+                    workspaceMode: mode,
+                    onSelectWorkspaceMode: onSelectMode
+                )
+            }
+        }
+        .id(mode)
+        .transition(.opacity)
+        .animation(.easeOut(duration: 0.1), value: mode)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.nativMainContentBackground)
+    }
 }
 
 private struct FooterControlTrackingView: NSViewRepresentable {

@@ -25,6 +25,8 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -37,6 +39,8 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
+                workspaceMode: workspaceMode,
+                onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction
             )
             .dropDestination(for: URL.self) { urls, _ in
@@ -91,6 +95,8 @@ private struct ChatTranscriptView: View {
 
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
@@ -147,6 +153,8 @@ private struct ChatTranscriptView: View {
             ChatComposerContainer(
                 model: model,
                 chat: chat,
+                workspaceMode: workspaceMode,
+                onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction,
                 onHeightChange: { height in
                     let isInitialMeasurement = composerHeight == 0
@@ -232,6 +240,8 @@ private struct ChatTranscriptView: View {
 private struct ChatComposerContainer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
     let onHeightChange: (CGFloat) -> Void
 
@@ -253,6 +263,8 @@ private struct ChatComposerContainer: View {
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
+            workspaceMode: workspaceMode,
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
             onSend: { languageModelSupportsTools in
                 chat.send(
                     using: model,
@@ -3307,6 +3319,8 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        workspaceMode: .chat,
+        onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )
