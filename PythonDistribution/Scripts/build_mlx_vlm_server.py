@@ -45,6 +45,14 @@ DEFAULT_REQUIREMENTS = (
 DEFAULT_OUTPUT = REPO_ROOT / "dist" / "mlx-vlm-server"
 DEFAULT_CACHE = REPO_ROOT / ".cache" / "python-build-standalone"
 BUILD_STAMP = ".mlx-vlm-server-build.json"
+PILLOW_VERSION = "12.2.0"
+PILLOW_RUNTIME_LIBRARIES = (
+    "libtiff.6.dylib",
+    "libjpeg.62.4.0.dylib",
+    "libopenjp2.2.5.4.dylib",
+    "libz.1.3.1.zlib-ng.dylib",
+    "libxcb.1.1.0.dylib",
+)
 LATEST_RELEASE_JSON = (
     "https://raw.githubusercontent.com/astral-sh/python-build-standalone/"
     "latest-release/latest-release.json"
@@ -528,6 +536,50 @@ def install_requirements(
     run([*command, *extra_pip_args], env=env)
 
 
+def repair_pillow_runtime_libraries(python: Path, output: Path) -> None:
+    """Restore the dynamic libraries shipped inside Pillow's macOS wheel.
+
+    Some previously cached distributions contained Pillow's extension modules
+    without its bundled ``PIL/.dylibs`` directory. That lets a shallow import
+    succeed, but the server then fails at launch when Pillow loads libtiff.
+    """
+    dylib_directory = site_packages_dir(output) / "PIL" / ".dylibs"
+    missing = [
+        library for library in PILLOW_RUNTIME_LIBRARIES
+        if not (dylib_directory / library).is_file()
+    ]
+    if not missing:
+        return
+
+    log("Repairing incomplete Pillow runtime libraries")
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "--no-cache-dir",
+            "--no-deps",
+            "--only-binary=:all:",
+            f"pillow=={PILLOW_VERSION}",
+        ],
+        env=env,
+    )
+
+    missing = [
+        library for library in PILLOW_RUNTIME_LIBRARIES
+        if not (dylib_directory / library).is_file()
+    ]
+    if missing:
+        raise SystemExit(
+            "Pillow runtime libraries are missing after repair: "
+            + ", ".join(missing)
+        )
+
+
 def install_local_mlx_vlm(
     python: Path,
     *,
@@ -631,20 +683,19 @@ def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
 
     run([str(python), "-c", "import sys; print(sys.version)"])
     if expect_mlx_vlm:
+        run([str(python), "-c", "from PIL import Image"])
         run(
             [
                 str(python),
                 "-c",
-                "import importlib.util; "
-                "raise SystemExit(0 if importlib.util.find_spec('mlx_vlm.server') else 1)",
+                "import mlx_vlm.server",
             ]
         )
         run(
             [
                 str(python),
                 "-c",
-                "import importlib.util; "
-                "raise SystemExit(0 if importlib.util.find_spec('nativ_server') else 1)",
+                "import nativ_server",
             ]
         )
         manifest_path = output / IMAGE_MODEL_MANIFEST_FILENAME
@@ -823,6 +874,7 @@ def main() -> None:
                 mlx_audio_source=mlx_audio_source,
                 extra_pip_args=args.pip_arg,
             )
+            repair_pillow_runtime_libraries(python, output)
         else:
             install_mlx_vlm(
                 python,
