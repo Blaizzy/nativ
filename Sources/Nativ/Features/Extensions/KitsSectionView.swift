@@ -8,8 +8,8 @@ private func kitStateBadge(_ state: NativKitState) -> some View {
     switch state {
     case .enabled:
         NativStatusBadge(text: "Enabled", tone: .success, symbol: "checkmark")
-    case let .partial(active, total):
-        NativStatusBadge(text: "\(active) of \(total) on", tone: .warning)
+    case .partial:
+        NativStatusBadge(text: "Needs setup", tone: .warning)
     case .off:
         EmptyView()
     }
@@ -35,6 +35,7 @@ struct KitsSectionView: View {
                     KitCard(
                         kit: kit,
                         state: NativKitActivation.state(of: kit, model: model, manager: manager),
+                        inactiveParts: NativKitActivation.inactivePartNames(of: kit, model: model, manager: manager),
                         onOpen: { openKit = kit },
                         onEnable: { NativKitActivation.setEnabled(true, kit: kit, model: model, manager: manager) }
                     )
@@ -50,6 +51,7 @@ struct KitsSectionView: View {
 private struct KitCard: View {
     let kit: NativKit
     let state: NativKitState
+    let inactiveParts: [String]
     let onOpen: () -> Void
     let onEnable: () -> Void
 
@@ -71,9 +73,10 @@ private struct KitCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(3)
             }
-            Text(kit.inventory)
+            Text(capabilitiesText)
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 if state == .off {
                     Button("Enable", action: onEnable)
@@ -104,6 +107,13 @@ private struct KitCard: View {
         )
         .contentShape(.rect)
         .onTapGesture(perform: onOpen)
+    }
+
+    private var capabilitiesText: String {
+        if state == .partial {
+            return "Off: \(inactiveParts.joined(separator: " · "))"
+        }
+        return "Includes: \(kit.capabilityNames.joined(separator: " · "))"
     }
 }
 

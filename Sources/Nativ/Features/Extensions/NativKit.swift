@@ -29,6 +29,11 @@ struct NativKit: Identifiable {
         if !extensionIDs.isEmpty { parts.append("\(extensionIDs.count) extension\(extensionIDs.count == 1 ? "" : "s")") }
         return parts.joined(separator: " · ")
     }
+
+    /// The abilities a person gets when every part of this kit is enabled.
+    var capabilityNames: [String] {
+        mcpEntries.map(\.name) + skills.map(\.name) + extensionIDs
+    }
 }
 
 private extension NativSkill {
@@ -104,7 +109,7 @@ extension NativKit {
 /// How much of a kit is currently switched on, derived from its live pieces.
 enum NativKitState: Equatable {
     case off
-    case partial(active: Int, total: Int)
+    case partial
     case enabled
 }
 
@@ -140,28 +145,34 @@ enum NativKitActivation {
         }
     }
 
-    /// The kit's activation derived from the actual state of its pieces: enabled
-    /// when every piece is on, partial when some are, off when none — so the UI
-    /// can't drift out of sync with the individual switches.
+    /// The kit's activation derived from the actual state of its pieces, so the UI
+    /// cannot drift out of sync with the individual switches.
     static func state(of kit: NativKit, model: NativModel, manager: NativExtensionManager) -> NativKitState {
-        var total = 0
-        var active = 0
+        let inactive = inactivePartNames(of: kit, model: model, manager: manager)
+        guard inactive.count < kit.capabilityNames.count else { return .off }
+        return inactive.isEmpty ? .enabled : .partial
+    }
 
-        for entry in kit.mcpEntries {
-            total += 1
-            if isServerEnabled(entry, in: model) { active += 1 }
+    /// Names the parts a person still needs to turn on for this kit.
+    static func inactivePartNames(
+        of kit: NativKit,
+        model: NativModel,
+        manager: NativExtensionManager
+    ) -> [String] {
+        var names: [String] = []
+
+        for entry in kit.mcpEntries where !isServerEnabled(entry, in: model) {
+            names.append(entry.name)
         }
-        for skill in kit.skills {
-            total += 1
-            if model.settings.skills.first(where: { $0.id == skill.id })?.isEnabled == true { active += 1 }
+        for skill in kit.skills where model.settings.skills.first(where: { $0.id == skill.id })?.isEnabled != true {
+            names.append(skill.name)
         }
-        for extensionID in kit.extensionIDs {
-            total += 1
-            if manager.isEnabled(extensionID: extensionID) { active += 1 }
+        for extensionID in kit.extensionIDs where !manager.isEnabled(extensionID: extensionID) {
+            let name = manager.records.first { $0.id == extensionID }?.manifest.displayName ?? extensionID
+            names.append(name)
         }
 
-        guard total > 0, active > 0 else { return .off }
-        return active == total ? .enabled : .partial(active: active, total: total)
+        return names
     }
 
     /// Matches a catalog entry to a configured server by launch identity
