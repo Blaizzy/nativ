@@ -155,7 +155,8 @@ private enum BrowsingCredentials {
     private static func keychain(for provider: BrowsingProvider) -> ServerAPIKeychain {
         ServerAPIKeychain(
             service: "dev.local.Nativ.extension.com.nativ.browsing.credential.\(provider.rawValue)-api-key",
-            account: "api-key"
+            account: "api-key",
+            usesDataProtectionKeychain: false
         )
     }
 }
@@ -173,18 +174,7 @@ private struct BrowsingConfigurationView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Spacer()
-                Button(action: dismiss.callAsFunction) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.borderless)
-                .help("Close")
-            }
-
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 16) {
                 providerPicker
                     .frame(width: 238)
@@ -202,14 +192,24 @@ private struct BrowsingConfigurationView: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(24)
+        .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .topTrailing) {
+            Button(action: dismiss.callAsFunction) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("Close")
+            .padding(12)
+        }
         .background(Color.nativMainContentBackground)
         .onExitCommand(perform: dismiss.callAsFunction)
     }
 
     private var providerPicker: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Providers")
                 .font(.system(size: 13, weight: .semibold))
 
@@ -227,13 +227,16 @@ private struct BrowsingConfigurationView: View {
                         }
                     }
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                     .background(
                         provider == selectedProvider ? Color.accentColor.opacity(0.12) : .clear,
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                     )
                 }
                 .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
             }
         }
         .padding(12)

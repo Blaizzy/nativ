@@ -15,13 +15,16 @@ protocol ServerAPICredentialStoring {
 struct ServerAPIKeychain: ServerAPICredentialStoring {
     let service: String
     let account: String
+    let usesDataProtectionKeychain: Bool
 
     init(
         service: String = "dev.local.Nativ.server-api-key",
-        account: String = "nativ-server"
+        account: String = "nativ-server",
+        usesDataProtectionKeychain: Bool = true
     ) {
         self.service = service
         self.account = account
+        self.usesDataProtectionKeychain = usesDataProtectionKeychain
     }
 
     func load() throws -> String? {
@@ -77,12 +80,15 @@ struct ServerAPIKeychain: ServerAPICredentialStoring {
     }
 
     private var baseQuery: [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrAccount as String: account
         ]
+        if usesDataProtectionKeychain {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
     }
 }
 
