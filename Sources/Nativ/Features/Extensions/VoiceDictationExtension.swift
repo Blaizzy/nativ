@@ -30,6 +30,7 @@ final class VoiceDictationExtension: NativHostExtension {
             context.showMainWindow()
         }
         coordinator.start()
+        audioCaptureLibrary.start()
         isActive = true
     }
 
@@ -123,7 +124,7 @@ final class VoiceDictationExtension: NativHostExtension {
                 .init(
                     id: "com.nativ.voice-dictation.transcribe",
                     title: "Transcribe",
-                    defaultShortcut: "Control+Option+Command"
+                    defaultShortcut: "Fn+Control"
                 ),
                 .init(
                     id: "com.nativ.voice-dictation.retranscribe",

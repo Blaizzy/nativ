@@ -78,6 +78,7 @@ struct ArtifactsView: View {
     @State private var semanticMatches: [UUID]?
     @State private var searchDebounce: Task<Void, Never>?
     @State private var showsSemanticPopover = false
+    @State private var isConfirmingSemanticModelRemoval = false
     @AppStorage("artifactSemanticSearchOffered") private var semanticSearchOffered = false
     @AppStorage("smartSearchEnabled") private var smartSearchEnabled = true
 
@@ -222,8 +223,7 @@ struct ArtifactsView: View {
                         .foregroundStyle(.tertiary)
                     Divider()
                     Button("Remove model", role: .destructive) {
-                        config.onRemove()
-                        showsSemanticPopover = false
+                        isConfirmingSemanticModelRemoval = true
                     }
                     .controlSize(.small)
                     .help("Deletes the model and turns Smart search off")
@@ -468,9 +468,20 @@ struct ArtifactsView: View {
                     isSelecting = false
                 }
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
             Text("This removes the file from the artifact and from its chat history. It can't be undone.")
+        }
+        .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
+            Button("Remove Model", role: .destructive) {
+                semanticSearch?.onRemove()
+                showsSemanticPopover = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the on-device Smart Search model and turns Smart Search off.")
         }
         .overlay {
             if let albumSessionID {

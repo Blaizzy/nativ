@@ -121,12 +121,24 @@ final class VoiceCaptureCoordinator {
             guard let self else {
                 return
             }
-            let isAuthorized = Self.hasMicrophoneAccess()
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            let granted: Bool
+            switch status {
+            case .authorized:
+                granted = true
+            case .notDetermined:
+                granted = await AVCaptureDevice.requestAccess(for: .audio)
+            default:
+                granted = false
+            }
             guard !Task.isCancelled, self.isShortcutHeld else {
                 return
             }
-            guard isAuthorized else {
+            guard granted else {
                 self.overlay.showFailure()
+                if status == .denied || status == .restricted {
+                    self.presentMicrophonePermissionAlert()
+                }
                 return
             }
 
@@ -598,7 +610,28 @@ final class VoiceCaptureCoordinator {
         }
     }
 
-    private static func hasMicrophoneAccess() -> Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    private func presentMicrophonePermissionAlert() {
+        guard !isPresentingAlert else {
+            return
+        }
+        isPresentingAlert = true
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Microphone Access Needed"
+        alert.informativeText = """
+        Nativ needs microphone access to record dictation. Enable Nativ under \
+        Microphone in System Settings, then try the shortcut again.
+        """
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Not Now")
+        let response = alert.runModal()
+        isPresentingAlert = false
+        shortcutMonitor.resynchronizeAfterModalInteraction()
+
+        if response == .alertFirstButtonReturn {
+            NativSystemPermissionController.openMicrophoneSettings()
+        }
     }
 }

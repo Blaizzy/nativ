@@ -15,6 +15,7 @@ struct RoutineEditor: View {
     @State private var time: Date
     @State private var kitID: String?
     @State private var notifyOnFinish: Bool
+    @State private var isConfirmingDelete = false
 
     init(
         draft: RoutineDraft,
@@ -58,7 +59,9 @@ struct RoutineEditor: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let onDelete {
-                    Button("Delete", role: .destructive, action: onDelete)
+                    Button("Delete", role: .destructive) {
+                        isConfirmingDelete = true
+                    }
                         .buttonStyle(.borderless)
                         .foregroundStyle(.red)
                 }
@@ -126,6 +129,15 @@ struct RoutineEditor: View {
             .padding(16)
         }
         .frame(minWidth: 540, minHeight: 620)
+        .alert("Delete routine?", isPresented: $isConfirmingDelete) {
+            Button("Delete", role: .destructive) {
+                onDelete?()
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This routine and its schedule will be permanently deleted.")
+        }
     }
 
     @ViewBuilder

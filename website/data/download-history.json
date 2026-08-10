@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "assetIndex": {
+    "483709399": {
+      "release": "v0.0.1",
+      "name": "Nativ-0.0.1.dmg",
+      "type": "dmg"
+    },
+    "491919221": {
+      "release": "v0.1.0",
+      "name": "Nativ-0.1.0.dmg",
+      "type": "dmg"
+    },
+    "491919462": {
+      "release": "v0.1.0",
+      "name": "appcast.xml",
+      "type": "appcast"
+    },
+    "500485232": {
+      "release": "v0.2.0",
+      "name": "Nativ-0.2.0.dmg",
+      "type": "dmg"
+    },
+    "500485455": {
+      "release": "v0.2.0",
+      "name": "appcast.xml",
+      "type": "appcast"
+    },
+    "500665246": {
+      "release": "v0.2.1",
+      "name": "Nativ-0.2.1.dmg",
+      "type": "dmg"
+    },
+    "500665434": {
+      "release": "v0.2.1",
+      "name": "appcast.xml",
+      "type": "appcast"
+    },
+    "501540527": {
+      "release": "v0.2.2",
+      "name": "Nativ-0.2.2.dmg",
+      "type": "dmg"
+    },
+    "501540749": {
+      "release": "v0.2.2",
+      "name": "appcast.xml",
+      "type": "appcast"
+    }
+  },
+  "snapshots": [
+    {
+      "capturedAt": "2026-08-10T09:55:26.518Z",
+      "counts": {
+        "483709399": 4854,
+        "491919221": 870,
+        "491919462": 719,
+        "500485232": 64,
+        "500485455": 26,
+        "500665246": 181,
+        "500665434": 198,
+        "501540527": 698,
+        "501540749": 1292
+      }
+    }
+  ]
+}

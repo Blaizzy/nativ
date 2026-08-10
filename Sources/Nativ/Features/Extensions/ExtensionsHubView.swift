@@ -163,36 +163,24 @@ private struct ExtensionsSectionView: View {
             title: "Extensions",
             subtitle: "Packages that add features to Nativ."
         ) {
-            Button {
-                installPackage()
-            } label: {
-                Label("Install\u{2026}", systemImage: "plus")
-            }
+            EmptyView()
         } content: {
             if manager.records.isEmpty {
                 HubEmptyHint(
                     icon: "square.stack.3d.up.slash",
-                    text: "No extensions installed. Install a .nativextension package to add features."
+                    text: "No extensions installed."
                 )
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(manager.records.enumerated()), id: \.element.id) { index, record in
-                        if index > 0 { Divider() }
+                VStack(spacing: 12) {
+                    ForEach(manager.records) { record in
                         ExtensionRow(record: record, manager: manager)
                     }
                 }
             }
         }
-    }
-
-    private func installPackage() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Install"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        manager.installPackage(at: url)
+        .onAppear {
+            manager.refreshPermissionStatuses()
+        }
     }
 }
 
@@ -201,32 +189,195 @@ private struct ExtensionRow: View {
     @ObservedObject var manager: NativExtensionManager
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: record.manifest.systemImage)
-                .font(.system(size: 15))
-                .frame(width: 24)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record.manifest.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                Text(record.manifest.summary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 12)
-            Toggle(
-                "",
-                isOn: Binding(
-                    get: { record.isEnabled },
-                    set: { manager.setEnabled($0, extensionID: record.id) }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                NativTintedIconTile(symbol: record.manifest.systemImage, size: 44)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(record.manifest.displayName)
+                            .font(.system(size: 14, weight: .semibold))
+                        if record.isIncluded { includedBadge }
+                    }
+                    Text(record.manifest.summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Version \(record.manifest.version)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 1)
+                }
+                Spacer(minLength: 12)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { record.isEnabled },
+                        set: { manager.setEnabled($0, extensionID: record.id) }
+                    )
                 )
-            )
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+            if !record.manifest.permissions.isEmpty {
+                Divider()
+                    .padding(.vertical, 14)
+                permissions
+            }
         }
-        .padding(.vertical, 11)
+        .padding(16)
+        .background(
+            Color.primary.opacity(0.03),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+    }
+
+    private var includedBadge: some View {
+        Text("INCLUDED")
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.4)
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.accentColor.opacity(0.12), in: Capsule())
+    }
+
+    private var permissions: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Permissions")
+                .font(.subheadline.weight(.semibold))
+            FlowLayout(spacing: 8) {
+                ForEach(record.manifest.permissions, id: \.self) { permission in
+                    permissionBadge(permission, extensionIsEnabled: record.isEnabled)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func permissionBadge(
+        _ permission: NativExtensionPermission,
+        extensionIsEnabled: Bool
+    ) -> some View {
+        let status = manager.permissionStatus(permission)
+        let actionTitle = extensionIsEnabled
+            ? manager.permissionActionTitle(permission)
+            : nil
+        if let actionTitle {
+            Button {
+                manager.requestPermission(permission)
+            } label: {
+                permissionBadgeLabel(
+                    permission: permission,
+                    status: status,
+                    actionTitle: actionTitle
+                )
+            }
+            .buttonStyle(.plain)
+            .help("\(actionTitle) \(permission.displayName) permission")
+        } else {
+            permissionBadgeLabel(
+                permission: permission,
+                status: status,
+                actionTitle: nil
+            )
+        }
+    }
+
+    private func permissionBadgeLabel(
+        permission: NativExtensionPermission,
+        status: NativExtensionPermissionStatus,
+        actionTitle: String?
+    ) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(status.color)
+                .frame(width: 7, height: 7)
+            Text(permission.displayName)
+            Text("· \(status.title)")
+                .foregroundStyle(.secondary)
+            if let actionTitle {
+                Text(actionTitle)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(
+            Color.primary.opacity(0.045),
+            in: Capsule()
+        )
+        .contentShape(Capsule())
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(
+            proposal: proposal,
+            subviews: subviews
+        ).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+            subviews: subviews
+        )
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> (size: CGSize, points: [CGPoint]) {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var points: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+
+        return (
+            CGSize(
+                width: proposal.width ?? max(0, x - spacing),
+                height: y + lineHeight
+            ),
+            points
+        )
     }
 }
 
@@ -235,6 +386,7 @@ private struct ExtensionRow: View {
 private struct SkillsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: NativSkill?
+    @State private var pendingDelete: NativSkill?
 
     var body: some View {
         HubSectionScaffold(
@@ -261,7 +413,7 @@ private struct SkillsSectionView: View {
                         skill: skill,
                         onToggle: { toggle(skill) },
                         onEdit: { editing = skill },
-                        onDelete: { delete(skill) }
+                        onDelete: { pendingDelete = skill }
                     )
                 }
             }
@@ -273,6 +425,25 @@ private struct SkillsSectionView: View {
             } onCancel: {
                 editing = nil
             }
+        }
+        .alert(
+            "Delete skill?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { skill in
+            Button("Delete", role: .destructive) {
+                delete(skill)
+                pendingDelete = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { skill in
+            Text("“\(skill.name.isEmpty ? "This skill" : skill.name)” will be permanently deleted.")
         }
     }
 

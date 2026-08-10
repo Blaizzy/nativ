@@ -1207,12 +1207,17 @@ def install_metrics_overlay() -> None:
 
         if isinstance(payload, dict) and apply_per_model_request_defaults(payload):
             body = json.dumps(payload).encode("utf-8")
+            # Serve the modified body downstream through the cached-body branch of
+            # starlette's BaseHTTPMiddleware `_CachedRequest.wrapped_receive`, which
+            # reads `request._body` and never touches the underlying receive.
+            #
+            # Do NOT also replace `request._receive`: `wrapped_receive` falls back
+            # to `self.receive()` in its "body consumed, waiting for disconnect"
+            # state (used by StreamingResponse.listen_for_disconnect), and a fake
+            # receive that always returns http.request raises
+            # `RuntimeError: Unexpected message received: http.request`, killing
+            # every streaming response when a per-model config is applied.
             request._body = body
-
-            async def _receive() -> dict[str, Any]:
-                return {"type": "http.request", "body": body, "more_body": False}
-
-            request._receive = _receive
 
         observation = parse_request_observation(request, payload)
         TRACKER.record_started(observation)
