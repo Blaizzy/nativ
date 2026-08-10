@@ -57,6 +57,8 @@ final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
+    @Published private(set) var imageModelDiscoveryRequest = 0
+    @Published private(set) var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
     @Published private(set) var collapseAllSectionsRequest = 0
     private var consumedNewChatRequest = 0
     private var consumedToggleSidebarRequest = 0
@@ -74,6 +76,12 @@ final class ControlPanelNavigation: ObservableObject {
 
     func openSpeechModelDiscovery() {
         speechModelDiscoveryRequest += 1
+        requestedTab = .models
+    }
+
+    func openImageModelDiscovery(for operation: ChatImageOperation) {
+        imageModelDiscoveryCapability = operation.requiredCapability
+        imageModelDiscoveryRequest += 1
         requestedTab = .models
     }
 
@@ -1953,7 +1961,8 @@ struct ControlPanelView: View {
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
-                    : ControlPanelLayout.titlebarHeight
+                    : ControlPanelLayout.titlebarHeight,
+                onExploreImageModels: navigation.openImageModelDiscovery
             )
         case .artifacts:
             ArtifactsView(
@@ -2000,7 +2009,9 @@ struct ControlPanelView: View {
                 model: model,
                 showsConfiguration: $isModelConfigurationVisible,
                 titleLeadingInset: detailTitleLeadingInset,
-                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
+                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest,
+                imageModelDiscoveryRequest: navigation.imageModelDiscoveryRequest,
+                imageModelDiscoveryCapability: navigation.imageModelDiscoveryCapability
             )
             .equatable()
         case .extensions:
@@ -2408,6 +2419,7 @@ private struct ChatWorkspaceView: View {
     @ObservedObject var imageGeneration: ImageGenerationViewModel
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
+    let onExploreImageModels: (ChatImageOperation) -> Void
 
     var body: some View {
         Group {
@@ -2420,7 +2432,8 @@ private struct ChatWorkspaceView: View {
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
-                    conversationWidthReduction: conversationWidthReduction
+                    conversationWidthReduction: conversationWidthReduction,
+                    onExploreImageModels: onExploreImageModels
                 )
             case .images:
                 ImageGenerationView(
