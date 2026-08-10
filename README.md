@@ -29,7 +29,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 |---|---|
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Image generation and editing** | Generate and edit images locally with compatible MLX image models in a dedicated Images tab. |
-| **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, speech, and embedding models at once, with a warning if the combination would exceed your Mac's memory. |
+| **Model library** | Search and manage installed MLX models, or browse compatible Safetensors models on Hugging Face by popularity, recency, size, capability, and access. Download, pause, resume, or remove models; inspect memory-fit warnings and capabilities; and preload separate language, image-generation, speech, and embedding models. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, SMART health, and thermal and power sensors. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, embeddings, and model endpoints, plus Anthropic Messages endpoints. |
@@ -88,6 +88,17 @@ On first launch:
 3. Grant microphone, accessibility, and screen recording permissions up front, or change them later in Settings.
 4. Open **Models** to download or select a compatible model.
 5. Start chatting, inspect analytics, or connect one of the supported coding tools.
+
+### Manage models
+
+Open **Models** and switch between **Installed** and **Discover**. Installed models can be
+searched and filtered by language, image, speech, or embedding capability, then preloaded,
+revealed in Finder, or deleted when they are not in use.
+
+Discover searches the Hugging Face Safetensors catalog. Sort results by downloads,
+trending score, likes, recent updates, or size; combine capability and access filters; and
+review download size, model capabilities, and memory-fit warnings before installing. Active
+downloads can be paused, resumed, or cancelled without leaving the page.
 
 Nativ asks for Accessibility permission so it can detect the default Control + Option + Command
 double-tap outside the app, and for Microphone permission the first time you record. Recordings are
