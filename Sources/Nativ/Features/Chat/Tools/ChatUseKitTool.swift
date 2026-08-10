@@ -15,7 +15,7 @@ enum ChatUseKitToolRegistry {
         let choices = kits.map { "\($0.id) (\($0.name)): \($0.summary)" }.joined(separator: "; ")
         return [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
             name: toolName,
-            description: "Enable one of the user's saved Kits. Use this only when the user explicitly asks to use or enable a Kit. Available Kits: \(choices). The app asks for confirmation before changing anything.",
+            description: "Enable one of the available Kits. Use this only when the user explicitly asks to use or enable a Kit. Available Kits: \(choices). The app asks for confirmation before changing anything.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
