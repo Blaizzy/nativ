@@ -194,7 +194,7 @@ struct ModelsView: View {
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
     @State private var hubQuery = ""
-    @State private var hubSort: HuggingFaceModelSort = .downloads
+    @State private var hubSort: HuggingFaceModelSort = .trending
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
