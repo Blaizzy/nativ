@@ -40,6 +40,29 @@ final class NativExtensionManifestTests: XCTestCase {
         XCTAssertTrue(manifest.permissions.contains(.systemAudioCapture))
     }
 
+    func testSamplePackageManifestIsValid() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let repositoryRoot = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let manifestURL = repositoryRoot
+            .appendingPathComponent("Examples")
+            .appendingPathComponent("Sample.nativextension")
+            .appendingPathComponent("Manifest.json")
+        let manifest = try JSONDecoder().decode(
+            NativExtensionManifest.self,
+            from: Data(contentsOf: manifestURL)
+        )
+
+        try NativExtensionManifestValidator.validate(
+            manifest,
+            hostVersion: "0.2.2"
+        )
+        XCTAssertFalse(manifest.included)
+        XCTAssertEqual(manifest.displayName, "Sample Extension")
+    }
+
     func testValidManifestPassesValidation() throws {
         let manifest = makeManifest()
 

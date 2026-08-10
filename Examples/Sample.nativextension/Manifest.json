@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.nativ.sample",
+  "version": "1.0.0",
+  "minimumNativVersion": "0.1.0",
+  "displayName": "Sample Extension",
+  "summary": "A manifest-only package for testing Nativ extension installation.",
+  "developer": "Nativ",
+  "systemImage": "puzzlepiece.extension",
+  "included": false,
+  "runtime": "extensionFoundation",
+  "extensionPoint": "com.nativ.extension",
+  "runtimeBundleIdentifier": "com.example.nativ.sample.runtime",
+  "contributions": {
+    "sidebar": [],
+    "commands": [],
+    "shortcuts": [],
+    "settings": []
+  },
+  "permissions": []
+}

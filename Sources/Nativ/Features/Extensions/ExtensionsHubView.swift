@@ -2,6 +2,7 @@ import AppKit
 import NativExtensionSDK
 import NativServerKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
@@ -157,18 +158,24 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
+    @State private var installNotice: ExtensionInstallNotice?
 
     var body: some View {
         HubSectionScaffold(
             title: "Extensions",
             subtitle: "Packages that add features to Nativ."
         ) {
-            EmptyView()
+            Button {
+                choosePackage()
+            } label: {
+                Label("Install extension…", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
         } content: {
             if manager.records.isEmpty {
                 HubEmptyHint(
                     icon: "square.stack.3d.up.slash",
-                    text: "No extensions installed."
+                    text: "Install an extension package to add features to Nativ."
                 )
             } else {
                 VStack(spacing: 12) {
@@ -181,7 +188,49 @@ private struct ExtensionsSectionView: View {
         .onAppear {
             manager.refreshPermissionStatuses()
         }
+        .alert(item: $installNotice) { notice in
+            Alert(
+                title: Text(notice.title),
+                message: Text(notice.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
     }
+
+    private func choosePackage() {
+        let panel = NSOpenPanel()
+        panel.title = "Install extension"
+        panel.message = "Choose a .nativextension package."
+        panel.prompt = "Install"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "nativextension") ?? .folder,
+        ]
+        guard panel.runModal() == .OK, let packageURL = panel.url else {
+            return
+        }
+        guard let record = manager.installPackage(at: packageURL) else {
+            installNotice = ExtensionInstallNotice(
+                title: "Couldn’t install extension",
+                message: manager.lastErrorMessage ?? "Choose a valid .nativextension package."
+            )
+            return
+        }
+        installNotice = ExtensionInstallNotice(
+            title: "Extension installed",
+            message: record.hasRuntime
+                ? "\(record.manifest.displayName) is installed and disabled. Review it here before enabling it."
+                : "\(record.manifest.displayName) is installed. A matching runtime must be available before it can be enabled."
+        )
+    }
+}
+
+private struct ExtensionInstallNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
 
 private struct ExtensionRow: View {
@@ -218,6 +267,15 @@ private struct ExtensionRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .disabled(!record.hasRuntime)
+                .help(record.hasRuntime ? "Enable extension" : "Extension runtime unavailable")
+            }
+            if let errorMessage = record.errorMessage {
+                Divider()
+                    .padding(.vertical, 14)
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if !record.manifest.permissions.isEmpty {
                 Divider()

@@ -259,7 +259,8 @@ final class NativExtensionManager: ObservableObject {
         }
     }
 
-    func installPackage(at sourceURL: URL) {
+    @discardableResult
+    func installPackage(at sourceURL: URL) -> NativExtensionRecord? {
         let didAccess = sourceURL.startAccessingSecurityScopedResource()
         defer {
             if didAccess {
@@ -267,6 +268,14 @@ final class NativExtensionManager: ObservableObject {
             }
         }
 
+        lastErrorMessage = nil
+        let stagingURL = extensionsDirectory
+            .appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            if fileManager.fileExists(atPath: stagingURL.path) {
+                try? fileManager.removeItem(at: stagingURL)
+            }
+        }
         do {
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory),
@@ -289,8 +298,6 @@ final class NativExtensionManager: ObservableObject {
                 at: extensionsDirectory,
                 withIntermediateDirectories: true
             )
-            let stagingURL = extensionsDirectory
-                .appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
             let destinationURL = extensionsDirectory
                 .appendingPathComponent("\(manifest.id).nativextension", isDirectory: true)
             try fileManager.copyItem(at: sourceURL, to: stagingURL)
@@ -305,8 +312,10 @@ final class NativExtensionManager: ObservableObject {
             stateStore.set(.disabled, for: manifest.id)
             reloadInstalledPackages()
             reconcileLifecycle()
+            return records.first { $0.id == manifest.id }
         } catch {
             lastErrorMessage = error.localizedDescription
+            return nil
         }
     }
 
