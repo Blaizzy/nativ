@@ -194,16 +194,6 @@ private struct BrowsingConfigurationView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .overlay(alignment: .topTrailing) {
-            Button(action: dismiss.callAsFunction) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.borderless)
-            .help("Close")
-            .padding(12)
-        }
         .background(Color.nativMainContentBackground)
         .onExitCommand(perform: dismiss.callAsFunction)
     }
