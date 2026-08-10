@@ -153,6 +153,35 @@
           </div>
         </div>
 
+        <section class="download-progress reveal" aria-labelledby="download-progress-title" aria-live="polite">
+          <div class="download-progress-heading">
+            <p class="kicker" id="download-progress-title">/ DOWNLOAD GROWTH</p>
+            <span data-progress-scope>All assets · all releases</span>
+          </div>
+          <div class="download-progress-grid">
+            <article>
+              <span>DAILY · 24H</span>
+              <strong data-progress-value="day">—</strong>
+              <p data-progress-note="day">Collecting history</p>
+            </article>
+            <article>
+              <span>WEEKLY · 7D</span>
+              <strong data-progress-value="week">—</strong>
+              <p data-progress-note="week">Collecting history</p>
+            </article>
+            <article>
+              <span>MONTHLY · 30D</span>
+              <strong data-progress-value="month">—</strong>
+              <p data-progress-note="month">Collecting history</p>
+            </article>
+            <article>
+              <span>YEARLY · 365D</span>
+              <strong data-progress-value="year">—</strong>
+              <p data-progress-note="year">Collecting history</p>
+            </article>
+          </div>
+        </section>
+
         <div class="download-result reveal" aria-live="polite">
           <div>
             <span data-result-label>All assets · all releases</span>
@@ -178,6 +207,32 @@
             </tbody>
           </table>
         </div>
+
+        <section class="download-chart reveal" aria-labelledby="download-chart-title">
+          <div class="download-chart-heading">
+            <div>
+              <p class="kicker">/ DOWNLOAD HISTORY</p>
+              <h3 id="download-chart-title">One year,<br /><em>at a glance.</em></h3>
+            </div>
+            <div>
+              <span>CUMULATIVE DOWNLOADS</span>
+              <strong data-chart-scope>All assets · all releases</strong>
+            </div>
+          </div>
+          <div class="download-chart-frame">
+            <div class="download-chart-plot" data-download-chart role="img" aria-label="Download history chart">
+              <div class="download-chart-axis" data-chart-axis aria-hidden="true"></div>
+              <div class="download-chart-lines" data-chart-lines aria-hidden="true"></div>
+              <span class="download-chart-date download-chart-date-start" data-chart-start aria-hidden="true">—</span>
+              <span class="download-chart-date download-chart-date-end" data-chart-end aria-hidden="true">—</span>
+            </div>
+            <div class="download-chart-empty" data-chart-empty>
+              <strong>COLLECTING HISTORY</strong>
+              <span>The chart appears as daily snapshots accumulate.</span>
+            </div>
+          </div>
+          <p class="download-chart-summary" data-chart-summary>Waiting for download history.</p>
+        </section>
 
         <div class="download-notes reveal">
           <a href="https://github.com/Blaizzy/nativ/releases" target="_blank" rel="noreferrer">Inspect every release on GitHub <span>↗</span></a>

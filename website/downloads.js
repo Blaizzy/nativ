@@ -63,7 +63,10 @@ const filterLabels = {
 const state = {
   releases: fallbackReleases,
   assetType: 'all',
-  release: 'all'
+  release: 'all',
+  history: null,
+  historyStatus: 'loading',
+  liveData: false
 };
 
 const rowsContainer = document.querySelector('[data-download-rows]');
@@ -76,6 +79,25 @@ const resultLabel = document.querySelector('[data-result-label]');
 const resultCount = document.querySelector('[data-result-count]');
 const dataStatus = document.querySelector('[data-data-status]');
 const refreshedAt = document.querySelector('[data-refreshed-at]');
+const progressScope = document.querySelector('[data-progress-scope]');
+const chartPlot = document.querySelector('[data-download-chart]');
+const chartLines = document.querySelector('[data-chart-lines]');
+const chartAxis = document.querySelector('[data-chart-axis]');
+const chartStart = document.querySelector('[data-chart-start]');
+const chartEnd = document.querySelector('[data-chart-end]');
+const chartEmpty = document.querySelector('[data-chart-empty]');
+const chartSummary = document.querySelector('[data-chart-summary]');
+const chartScope = document.querySelector('[data-chart-scope]');
+
+const progressPeriods = [
+  { key: 'day', days: 1, unavailableLabel: 'Available after 24 hours' },
+  { key: 'week', days: 7, unavailableLabel: 'Available after 7 days' },
+  { key: 'month', days: 30, unavailableLabel: 'Available after 30 days' },
+  { key: 'year', days: 365, unavailableLabel: 'Available after 1 year' }
+];
+
+let chartPoints = [];
+let chartFrame = null;
 
 const getAssetType = (asset) => {
   const name = asset.name.toLowerCase();
@@ -101,6 +123,12 @@ const sumDownloads = (assets) => assets.reduce(
   0
 );
 
+const getFilteredAssets = (assets) => assets.filter((asset) => {
+  const typeMatches = state.assetType === 'all' || asset.type === state.assetType;
+  const releaseMatches = state.release === 'all' || asset.release === state.release;
+  return typeMatches && releaseMatches;
+});
+
 const setText = (selector, value) => {
   document.querySelectorAll(selector).forEach((node) => {
     node.textContent = value;
@@ -124,6 +152,230 @@ const updateSummaryMetrics = (assets) => {
     setText(`[data-filter-count="${type}"]`, numberFormatter.format(total));
   });
 };
+
+const setProgressState = (period, value, note, title = '') => {
+  const valueNode = document.querySelector(`[data-progress-value="${period.key}"]`);
+  const noteNode = document.querySelector(`[data-progress-note="${period.key}"]`);
+  if (valueNode) {
+    valueNode.textContent = value;
+    valueNode.title = title;
+  }
+  if (noteNode) noteNode.textContent = note;
+};
+
+const getHistoryAssetKey = (asset) => {
+  if (!state.history?.assetIndex) return null;
+  const idKey = asset.id == null ? null : String(asset.id);
+  if (idKey && state.history.assetIndex[idKey]) return idKey;
+
+  const matchingEntry = Object.entries(state.history.assetIndex).find(([, metadata]) => (
+    metadata.release === asset.release && metadata.name === asset.name
+  ));
+  return matchingEntry?.[0] || idKey;
+};
+
+const renderProgress = (assets) => {
+  const releaseLabel = state.release === 'all' ? 'all releases' : state.release;
+  if (progressScope) progressScope.textContent = `${filterLabels[state.assetType]} · ${releaseLabel}`;
+
+  if (!state.liveData) {
+    progressPeriods.forEach((period) => setProgressState(period, '—', 'Waiting for live data'));
+    return;
+  }
+
+  if (state.historyStatus === 'loading') {
+    progressPeriods.forEach((period) => setProgressState(period, '—', 'Loading history'));
+    return;
+  }
+
+  if (state.historyStatus === 'error') {
+    progressPeriods.forEach((period) => setProgressState(period, '—', 'History unavailable'));
+    return;
+  }
+
+  const snapshots = (state.history?.snapshots || [])
+    .filter((snapshot) => Number.isFinite(new Date(snapshot.capturedAt).getTime()))
+    .sort((left, right) => new Date(left.capturedAt) - new Date(right.capturedAt));
+  const now = Date.now();
+
+  progressPeriods.forEach((period) => {
+    const cutoff = now - (period.days * 24 * 60 * 60 * 1000);
+    const baseline = [...snapshots]
+      .reverse()
+      .find((snapshot) => new Date(snapshot.capturedAt).getTime() <= cutoff);
+
+    if (!baseline) {
+      setProgressState(period, '—', period.unavailableLabel);
+      return;
+    }
+
+    let baselineTotal = 0;
+    let delta = 0;
+    assets.forEach((asset) => {
+      const currentCount = Number(asset.download_count || 0);
+      const key = getHistoryAssetKey(asset);
+      const baselineCount = key ? Number(baseline.counts?.[key] || 0) : 0;
+      baselineTotal += baselineCount;
+      delta += Math.max(currentCount - baselineCount, 0);
+    });
+
+    const percentage = baselineTotal > 0 ? (delta / baselineTotal) * 100 : null;
+    const formattedDelta = delta > 0 ? `+${numberFormatter.format(delta)}` : '0';
+    const note = percentage == null
+      ? (delta > 0 ? 'New downloads' : 'No change')
+      : `${percentage < 0.1 && percentage > 0 ? percentage.toFixed(2) : percentage.toFixed(1)}% growth`;
+    const baselineDate = new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(new Date(baseline.capturedAt));
+
+    setProgressState(period, formattedDelta, note, `Compared with the ${baselineDate} snapshot`);
+  });
+};
+
+const setChartEmptyState = (message) => {
+  chartPoints = [];
+  if (chartPlot) chartPlot.hidden = true;
+  if (chartEmpty) chartEmpty.hidden = false;
+  if (chartSummary) chartSummary.textContent = message;
+};
+
+const drawDownloadChart = () => {
+  if (!chartPlot || !chartLines || chartPoints.length < 2 || chartPlot.hidden) return;
+  const bounds = chartLines.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) return;
+
+  const compactNumber = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+  const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+  const firstTime = chartPoints[0].date.getTime();
+  const lastTime = chartPoints.at(-1).date.getTime();
+  const values = chartPoints.map((point) => point.value);
+  const rawMinimum = Math.min(...values);
+  const rawMaximum = Math.max(...values);
+  const rawRange = rawMaximum - rawMinimum;
+  const rangePadding = rawRange > 0 ? rawRange * 0.12 : Math.max(rawMaximum * 0.04, 1);
+  const minimum = Math.max(0, rawMinimum - rangePadding);
+  const maximum = rawMaximum + rangePadding;
+  const valueRange = Math.max(maximum - minimum, 1);
+  const timeRange = Math.max(lastTime - firstTime, 1);
+  const toX = (date) => ((date.getTime() - firstTime) / timeRange) * bounds.width;
+  const toY = (value) => (1 - ((value - minimum) / valueRange)) * bounds.height;
+  const coordinates = chartPoints.map((point) => ({ x: toX(point.date), y: toY(point.value) }));
+  const fragment = document.createDocumentFragment();
+
+  const area = document.createElement('i');
+  area.className = 'download-chart-area';
+  const polygonPoints = coordinates
+    .map(({ x, y }) => `${(x / bounds.width) * 100}% ${(y / bounds.height) * 100}%`)
+    .join(', ');
+  area.style.clipPath = `polygon(${polygonPoints}, 100% 100%, 0 100%)`;
+  fragment.append(area);
+
+  coordinates.slice(0, -1).forEach((point, index) => {
+    const nextPoint = coordinates[index + 1];
+    const deltaX = nextPoint.x - point.x;
+    const deltaY = nextPoint.y - point.y;
+    const segment = document.createElement('i');
+    segment.className = 'download-chart-segment';
+    segment.style.left = `${point.x}px`;
+    segment.style.top = `${point.y}px`;
+    segment.style.width = `${Math.hypot(deltaX, deltaY)}px`;
+    segment.style.transform = `rotate(${Math.atan2(deltaY, deltaX)}rad)`;
+    fragment.append(segment);
+  });
+
+  const latestCoordinates = coordinates.at(-1);
+  const latestMarker = document.createElement('i');
+  latestMarker.className = 'download-chart-point';
+  latestMarker.style.left = `${latestCoordinates.x}px`;
+  latestMarker.style.top = `${latestCoordinates.y}px`;
+  fragment.append(latestMarker);
+  chartLines.replaceChildren(fragment);
+
+  if (chartAxis) {
+    const labels = Array.from({ length: 5 }, (_, index) => {
+      const label = document.createElement('span');
+      const value = maximum - ((index / 4) * valueRange);
+      label.textContent = compactNumber.format(Math.max(value, 0));
+      return label;
+    });
+    chartAxis.replaceChildren(...labels);
+  }
+  if (chartStart) chartStart.textContent = shortDate.format(chartPoints[0].date);
+  if (chartEnd) chartEnd.textContent = shortDate.format(chartPoints.at(-1).date);
+};
+
+const scheduleChartDraw = () => {
+  if (chartFrame) window.cancelAnimationFrame(chartFrame);
+  chartFrame = window.requestAnimationFrame(drawDownloadChart);
+};
+
+const renderDownloadChart = (assets) => {
+  const releaseLabel = state.release === 'all' ? 'all releases' : state.release;
+  const scopeLabel = `${filterLabels[state.assetType]} · ${releaseLabel}`;
+  if (chartScope) chartScope.textContent = scopeLabel;
+
+  if (!state.liveData) {
+    setChartEmptyState('Waiting for live download data.');
+    return;
+  }
+  if (state.historyStatus === 'loading') {
+    setChartEmptyState('Loading download history.');
+    return;
+  }
+  if (state.historyStatus === 'error') {
+    setChartEmptyState('Download history is unavailable.');
+    return;
+  }
+
+  const cutoff = Date.now() - (365 * 24 * 60 * 60 * 1000);
+  const points = (state.history?.snapshots || [])
+    .map((snapshot) => ({
+      date: new Date(snapshot.capturedAt),
+      value: assets.reduce((total, asset) => {
+        const key = getHistoryAssetKey(asset);
+        return total + (key ? Number(snapshot.counts?.[key] || 0) : 0);
+      }, 0)
+    }))
+    .filter((point) => Number.isFinite(point.date.getTime()) && point.date.getTime() >= cutoff)
+    .sort((left, right) => left.date - right.date);
+
+  const currentPoint = { date: new Date(), value: sumDownloads(assets) };
+  const latestPoint = points.at(-1);
+  if (!latestPoint || currentPoint.date.getTime() - latestPoint.date.getTime() > 60 * 60 * 1000) {
+    points.push(currentPoint);
+  } else if (latestPoint) {
+    latestPoint.value = currentPoint.value;
+  }
+
+  if (points.length < 2) {
+    setChartEmptyState('The chart appears after another snapshot is recorded.');
+    return;
+  }
+
+  chartPoints = points;
+  if (chartPlot) {
+    chartPlot.hidden = false;
+    const netChange = points.at(-1).value - points[0].value;
+    chartPlot.setAttribute(
+      'aria-label',
+      `${scopeLabel} cumulative download history. ${numberFormatter.format(points.at(-1).value)} downloads, ${netChange >= 0 ? '+' : ''}${numberFormatter.format(netChange)} over the displayed period.`
+    );
+  }
+  if (chartEmpty) chartEmpty.hidden = true;
+
+  const netChange = points.at(-1).value - points[0].value;
+  const firstDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(points[0].date);
+  if (chartSummary) {
+    chartSummary.textContent = `${numberFormatter.format(points.length)} snapshots · ${netChange >= 0 ? '+' : ''}${numberFormatter.format(netChange)} downloads since ${firstDate}`;
+  }
+  scheduleChartDraw();
+};
+
+window.addEventListener('resize', scheduleChartDraw);
 
 const makeCell = (content, className) => {
   const cell = document.createElement('td');
@@ -224,15 +476,13 @@ const selectRelease = (value) => {
 
 const render = () => {
   const allAssets = flattenAssets(state.releases);
-  const filteredAssets = allAssets.filter((asset) => {
-    const typeMatches = state.assetType === 'all' || asset.type === state.assetType;
-    const releaseMatches = state.release === 'all' || asset.release === state.release;
-    return typeMatches && releaseMatches;
-  });
+  const filteredAssets = getFilteredAssets(allAssets);
   const total = sumDownloads(filteredAssets);
   const releaseCount = new Set(filteredAssets.map((asset) => asset.release)).size;
 
   updateSummaryMetrics(allAssets);
+  renderProgress(filteredAssets);
+  renderDownloadChart(filteredAssets);
   renderRows(filteredAssets, total);
 
   if (resultTotal) resultTotal.textContent = numberFormatter.format(total);
@@ -355,10 +605,32 @@ const fetchAllReleases = async () => {
   return releases;
 };
 
+const fetchDownloadHistory = async () => {
+  const response = await fetch('data/download-history.json', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`History returned ${response.status}`);
+  const history = await response.json();
+  if (history.version !== 1 || typeof history.assetIndex !== 'object' || !Array.isArray(history.snapshots)) {
+    throw new Error('Unsupported download history schema');
+  }
+  return history;
+};
+
+fetchDownloadHistory()
+  .then((history) => {
+    state.history = history;
+    state.historyStatus = 'ready';
+    render();
+  })
+  .catch(() => {
+    state.historyStatus = 'error';
+    render();
+  });
+
 fetchAllReleases()
   .then((releases) => {
     if (!releases.length) throw new Error('No published releases found');
     state.releases = releases;
+    state.liveData = true;
     populateReleaseFilter();
     render();
     if (dataStatus) dataStatus.textContent = 'Live from GitHub';
