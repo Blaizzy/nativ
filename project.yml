@@ -120,7 +120,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.2.2
+        MARKETING_VERSION: 0.2.3
         CURRENT_PROJECT_VERSION: 4
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
@@ -141,7 +141,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.2.2
+        MARKETING_VERSION: 0.2.3
         CURRENT_PROJECT_VERSION: 4
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
