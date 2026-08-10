@@ -1614,6 +1614,19 @@ def install_metrics_overlay() -> None:
             "loaded_models": snapshot.get("loaded_models", {}),
         }
 
+    @base.app.get("/models/active-generations", include_in_schema=False)
+    @base.app.get("/v1/models/active-generations")
+    def active_generations_endpoint(request: Request):
+        """For callers whose action affects every resident model at once
+        (a restart), not just one cache_key's eviction."""
+        require_api_key = getattr(base, "_require_management_api_key", None)
+        if require_api_key is not None:
+            require_api_key(request)
+
+        with _POOL_LOCK:
+            active = _TENANTS.any_active()
+        return {"active": active}
+
     @base.app.post("/routines/{routine_id}/run", include_in_schema=False)
     @base.app.post("/v1/routines/{routine_id}/run")
     def run_routine_endpoint(routine_id: str, request: Request):

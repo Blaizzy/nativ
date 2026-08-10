@@ -101,6 +101,13 @@ class TenantTable:
     def active_count(self, key: CacheKey) -> int:
         return self._active_counts.get(key, 0)
 
+    def any_active(self) -> bool:
+        """Whether *any* resident model, not just a specific key, currently
+        has an in-flight generation against it. For callers whose action
+        would affect every resident model at once (e.g. a full server
+        restart) rather than a single cache_key's eviction."""
+        return any(count > 0 for count in self._active_counts.values())
+
     def last_released_at(self, key: CacheKey) -> float:
         # Never-released entries sort as "just released", not "oldest".
         return self._last_released_at.get(key, self._time_fn())

@@ -32,6 +32,8 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
     private(set) var switchCallCount = 0
     var onSwitch: ((String?) -> Void)?
     var memoryWarning: ModelPreloadMemoryWarning?
+    var activeGenerations = false
+    var activeGenerationsError: Error?
 
     init(languageModelID: String?, isRunning: Bool = true) {
         settings = NativSettings(languageModelID: languageModelID)
@@ -45,6 +47,13 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
         } else {
             settings.languageModelID = modelID
         }
+    }
+
+    func hasActiveTextGenerations() async throws -> Bool {
+        if let activeGenerationsError {
+            throw activeGenerationsError
+        }
+        return activeGenerations
     }
 
     func preloadMemoryWarning(forLanguageModelID modelID: String, availableModels: [LocalModel]) -> ModelPreloadMemoryWarning? {
@@ -1199,6 +1208,44 @@ final class ChatSwitchModelToolExecutorTests: XCTestCase {
             XCTFail("expected ChatSwitchModelToolError, got \(error)")
         }
         XCTAssertEqual(fake.switchCallCount, 0, "a rejected switch must never restart the server")
+    }
+
+    func testActiveGenerationsRejectsCleanlyWithoutAttemptingTheSwitch() async {
+        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
+        fake.activeGenerations = true
+        do {
+            _ = try await ChatSwitchModelToolExecutor().execute(
+                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
+                appModel: fake
+            )
+            XCTFail("a switch must be rejected while any generation is in flight -- the restart would kill it")
+        } catch let error as ChatSwitchModelToolError {
+            guard case .activeGenerationsInProgress = error else {
+                return XCTFail("expected .activeGenerationsInProgress, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+        XCTAssertEqual(fake.switchCallCount, 0, "a rejected switch must never restart the server")
+    }
+
+    func testActiveGenerationsQueryFailureFailsClosedRatherThanProceeding() async {
+        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
+        fake.activeGenerationsError = FakeToolError()
+        do {
+            _ = try await ChatSwitchModelToolExecutor().execute(
+                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
+                appModel: fake
+            )
+            XCTFail("an unverifiable active-generations query must block the switch, not proceed")
+        } catch let error as ChatSwitchModelToolError {
+            guard case .unableToVerifyNoActiveGenerations = error else {
+                return XCTFail("expected .unableToVerifyNoActiveGenerations, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+        XCTAssertEqual(fake.switchCallCount, 0, "an unverifiable query must never allow the restart to proceed")
     }
 
     private func decode(_ json: String) throws -> [String: Any] {

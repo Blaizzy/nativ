@@ -185,6 +185,19 @@ class TenantTableTests(unittest.TestCase):
         self.assertEqual(table.active_count(MODEL_A), 0)
         self.assertEqual(table.last_released_at(MODEL_A), 5.0)
 
+    def test_any_active_is_false_when_nothing_is_in_flight(self) -> None:
+        table = TenantTable(time_fn=lambda: 0.0)
+        self.assertFalse(table.any_active())
+        table.acquire(MODEL_A)
+        table.release(MODEL_A)
+        self.assertFalse(table.any_active())
+
+    def test_any_active_is_true_for_any_key_not_just_a_queried_one(self) -> None:
+        table = TenantTable(time_fn=lambda: 0.0)
+        table.acquire(MODEL_B)
+        self.assertFalse(table.active_count(MODEL_A) > 0)
+        self.assertTrue(table.any_active())
+
 
 class SizeCacheTests(unittest.TestCase):
     def test_estimate_falls_back_before_any_measurement(self) -> None:

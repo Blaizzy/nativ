@@ -602,6 +602,24 @@ public final class NativChatClient {
         )
     }
 
+    /// For a caller whose action affects every resident model at once
+    /// (e.g. a restart), not just one via per-model tenant protection.
+    public func hasActiveTextGenerations() async throws -> Bool {
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/models/active-generations"))
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativChatError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NativChatError.httpStatus(httpResponse.statusCode, String(decoding: data, as: UTF8.self))
+        }
+        return try decoder.decode(ActiveGenerationsResponse.self, from: data).active
+    }
+
     public func streamChat(
         _ request: MLXChatCompletionRequest,
         repetitionDetector: MLXChatRepetitionDetector? = nil,
@@ -879,6 +897,10 @@ private struct ChatCompletionResponse: Decodable {
             case message
         }
     }
+}
+
+private struct ActiveGenerationsResponse: Decodable {
+    let active: Bool
 }
 
 private struct ChatStreamErrorEvent: Decodable {

@@ -655,6 +655,14 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         return preloadMemoryWarning(for: candidate, slot: .language, availableModels: availableModels)
     }
 
+    /// Queries the server directly -- the app doesn't track this itself.
+    func hasActiveTextGenerations() async throws -> Bool {
+        try await NativChatClient(
+            baseURL: settings.serverBaseURL,
+            apiKey: settings.serverAPIKey
+        ).hasActiveTextGenerations()
+    }
+
     private func preloadMemoryWarning(
         for candidate: LocalModel,
         slot: ModelPreloadSlot,
