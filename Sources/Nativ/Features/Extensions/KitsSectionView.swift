@@ -511,6 +511,20 @@ private struct KitEditor: View {
     }
 
     var body: some View {
+        if let picker {
+            KitComponentPickerView(
+                kind: picker,
+                kit: $kit,
+                manager: manager,
+                model: model,
+                onDone: { self.picker = nil }
+            )
+        } else {
+            editor
+        }
+    }
+
+    private var editor: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(kit.name.isEmpty ? "Create kit" : "Edit kit")
@@ -579,9 +593,6 @@ private struct KitEditor: View {
         }
         .padding(20)
         .frame(width: 480)
-        .sheet(item: $picker) { picker in
-            KitComponentPickerView(kind: picker, kit: $kit, manager: manager, model: model)
-        }
     }
 
     private func count(for kind: KitComponentPicker) -> Int {
@@ -598,20 +609,20 @@ private struct KitComponentPickerView: View {
     @Binding var kit: UserNativKit
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var model: NativModel
-    @Environment(\.dismiss) private var dismiss
+    let onDone: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Choose \(kind.title.lowercased())")
+                    Text("Choose \(kind.title)")
                         .font(.system(size: 16, weight: .semibold))
                     Text("A component can belong to more than one kit.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                NativHoverCloseButton { dismiss() }
+                NativHoverCloseButton(action: onDone)
             }
             .padding(20)
             Divider()
@@ -664,7 +675,7 @@ private struct KitComponentPickerView: View {
             .listStyle(.inset)
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done", action: onDone)
                     .buttonStyle(.borderedProminent)
             }
             .padding(16)
