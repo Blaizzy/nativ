@@ -4,14 +4,18 @@ import SwiftUI
 struct MCPSectionView: View {
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
+    @Binding var requestedCapability: NativKitCapabilityReference?
     @State private var editing: MCPServerConfig?
     @State private var showingCatalog = false
     @State private var pendingDelete: MCPServerConfig?
+    @State private var focusedServerID: UUID?
+    @State private var focusedCatalogEntryID: String?
 
     var body: some View {
         HubSectionScaffold(
             title: "MCP",
-            subtitle: "Connect Model Context Protocol servers so tool-capable models can use their tools."
+            subtitle: "Connect Model Context Protocol servers so tool-capable models can use their tools.",
+            scrollTarget: focusedServerID.map(Self.serverAnchor)
         ) {
             HStack(spacing: 8) {
                 Button {
@@ -41,8 +45,10 @@ struct MCPSectionView: View {
                             onToggle: { toggle(server) },
                             onReconnect: { host.reconnect(server.id) },
                             onEdit: { editing = server },
-                            onDelete: { pendingDelete = server }
+                            onDelete: { pendingDelete = server },
+                            isFocused: focusedServerID == server.id
                         )
+                        .id(Self.serverAnchor(server.id))
                     }
                 }
             }
@@ -57,7 +63,8 @@ struct MCPSectionView: View {
         }
         .sheet(isPresented: $showingCatalog) {
             MCPCatalogView(
-                installedNames: Set(model.settings.mcpServers.map(\.name))
+                installedNames: Set(model.settings.mcpServers.map(\.name)),
+                focusedEntryID: focusedCatalogEntryID
             ) { entry in
                 save(entry.makeConfig())
             }
@@ -80,6 +87,10 @@ struct MCPSectionView: View {
             }
         } message: { server in
             Text("“\(server.name.isEmpty ? "This server" : server.name)” and its configuration will be removed.")
+        }
+        .onAppear(perform: consumeCapabilityRequest)
+        .onChange(of: requestedCapability) { _, _ in
+            consumeCapabilityRequest()
         }
     }
 
@@ -107,6 +118,29 @@ struct MCPSectionView: View {
             model.settings.mcpServers.append(server)
         }
     }
+
+    private func consumeCapabilityRequest() {
+        guard case .mcp(let reference) = requestedCapability else { return }
+        requestedCapability = nil
+        switch reference {
+        case .configured(let id):
+            focusedServerID = id
+        case .catalog(let id):
+            guard let entry = MCPCatalogEntry.catalog.first(where: { $0.id == id }) else {
+                return
+            }
+            if let server = entry.configuredServer(in: model.settings.mcpServers) {
+                focusedServerID = server.id
+            } else {
+                focusedCatalogEntryID = id
+                showingCatalog = true
+            }
+        }
+    }
+
+    private static func serverAnchor(_ id: UUID) -> String {
+        "mcp:\(id.uuidString)"
+    }
 }
 
 // MARK: - Server row
@@ -118,6 +152,7 @@ private struct MCPServerRow: View {
     let onReconnect: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let isFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -160,6 +195,10 @@ private struct MCPServerRow: View {
                 .controlSize(.small)
         }
         .padding(.vertical, 11)
+        .background(
+            isFocused ? Color.accentColor.opacity(0.08) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
     }
 
     private var isConnecting: Bool {
@@ -401,52 +440,16 @@ private struct MCPServerEditor: View {
 // one tool — before it can merge. Until a logo asset exists we render a tinted
 // glyph tile so the grid always looks complete. See Docs/mcp-catalog.md.
 
-struct MCPCatalogEntry: Identifiable, Decodable {
-    let id: String
-    let name: String
-    let summary: String
-    let command: String
-    let arguments: [String]
-    let symbol: String
-    let tint: Color
+private extension MCPCatalogEntry {
+    var tint: Color { .nativTint(tintName) }
     var logoAssetName: String { "MCPLogo-\(name)" }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, name, summary, command
-        case arguments = "args"
-        case symbol, tint
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        name = try c.decode(String.self, forKey: .name)
-        summary = try c.decode(String.self, forKey: .summary)
-        command = try c.decode(String.self, forKey: .command)
-        arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
-        symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? "server.rack"
-        let tintName = try c.decodeIfPresent(String.self, forKey: .tint) ?? "accent"
-        tint = .nativTint(tintName)
-    }
-
-    func makeConfig() -> MCPServerConfig {
-        MCPServerConfig(name: name, command: command, arguments: arguments, isEnabled: true)
-    }
-
-    /// The community catalog, decoded once from the bundled `MCPCatalog.json`.
-    static let catalog: [MCPCatalogEntry] = {
-        guard let url = Bundle.main.url(forResource: "MCPCatalog", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let entries = try? JSONDecoder().decode([MCPCatalogEntry].self, from: data)
-        else { return [] }
-        return entries
-    }()
 }
 
 private let mcpCatalog = MCPCatalogEntry.catalog
 
 private struct MCPCatalogView: View {
     let installedNames: Set<String>
+    let focusedEntryID: String?
     let onAdd: (MCPCatalogEntry) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -468,27 +471,41 @@ private struct MCPCatalogView: View {
             }
             .padding(24)
 
-            ScrollView {
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                    ForEach(mcpCatalog) { entry in
-                        MCPCatalogCard(
-                            entry: entry,
-                            isAdded: installedNames.contains(entry.name),
-                            onAdd: { onAdd(entry) }
-                        )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                        ForEach(mcpCatalog) { entry in
+                            MCPCatalogCard(
+                                entry: entry,
+                                isAdded: installedNames.contains(entry.name),
+                                isFocused: focusedEntryID == entry.id,
+                                onAdd: { onAdd(entry) }
+                            )
+                            .id(Self.entryAnchor(entry.id))
+                        }
                     }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                .task(id: focusedEntryID) {
+                    guard let focusedEntryID else { return }
+                    await Task.yield()
+                    proxy.scrollTo(Self.entryAnchor(focusedEntryID), anchor: .center)
+                }
             }
         }
         .frame(width: 720, height: 560)
+    }
+
+    private static func entryAnchor(_ id: String) -> String {
+        "mcp-catalog:\(id)"
     }
 }
 
 private struct MCPCatalogCard: View {
     let entry: MCPCatalogEntry
     let isAdded: Bool
+    let isFocused: Bool
     let onAdd: () -> Void
     @State private var hovering = false
 
@@ -528,10 +545,18 @@ private struct MCPCatalogCard: View {
         }
         .padding(14)
         .frame(height: 168, alignment: .topLeading)
-        .background(Color.primary.opacity(hovering ? 0.05 : 0.025), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(
+            isFocused
+                ? Color.accentColor.opacity(0.1)
+                : Color.primary.opacity(hovering ? 0.05 : 0.025),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .stroke(
+                    isFocused ? Color.accentColor : Color(nsColor: .separatorColor),
+                    lineWidth: isFocused ? 1 : 0.5
+                )
         )
         .onHover { hovering = $0 }
     }

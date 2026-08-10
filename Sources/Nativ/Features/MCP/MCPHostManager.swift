@@ -9,6 +9,15 @@ enum MCPServerConnectionState: Equatable {
     case failed(String)
 }
 
+struct MCPHostedTool: Identifiable {
+    let serverID: UUID
+    let name: String
+    let runtimeName: String
+    let definition: MLXChatToolDefinition
+
+    var id: String { "\(serverID.uuidString):\(name)" }
+}
+
 @MainActor
 final class MCPHostManager: ObservableObject {
     @Published private(set) var states: [UUID: MCPServerConnectionState] = [:]
@@ -40,10 +49,32 @@ final class MCPHostManager: ObservableObject {
     }
 
     func tools(forServer id: UUID) -> [(name: String, displayName: String)] {
-        guard let connection = connections[id] else { return [] }
-        return connection.tools.map {
-            (name: Self.toolName(slug: connection.slug, tool: $0.name), displayName: $0.name)
+        hostedTools(forServer: id).map {
+            (name: $0.runtimeName, displayName: $0.name)
         }
+    }
+
+    func hostedTools(forServer id: UUID) -> [MCPHostedTool] {
+        guard let connection = connections[id] else { return [] }
+        return connection.tools.map { tool in
+            let runtimeName = Self.toolName(slug: connection.slug, tool: tool.name)
+            return MCPHostedTool(
+                serverID: id,
+                name: tool.name,
+                runtimeName: runtimeName,
+                definition: MLXChatToolDefinition(
+                    function: MLXChatFunctionDefinition(
+                        name: runtimeName,
+                        description: tool.description,
+                        parameters: tool.parameters
+                    )
+                )
+            )
+        }
+    }
+
+    func hostedTool(serverID: UUID, name: String) -> MCPHostedTool? {
+        hostedTools(forServer: serverID).first { $0.name == name }
     }
 
     func handlesTool(named name: String) -> Bool {
@@ -61,6 +92,14 @@ final class MCPHostManager: ObservableObject {
         guard servers != appliedServers else { return }
         appliedServers = servers
         scheduleReload(servers: servers, debounce: true)
+    }
+
+    func ensureReloaded(servers: [MCPServerConfig]) async {
+        if servers != appliedServers {
+            appliedServers = servers
+            scheduleReload(servers: servers, debounce: false)
+        }
+        await reloadTask?.value
     }
 
     func reconnect(_ serverID: UUID) {

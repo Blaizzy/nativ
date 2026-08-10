@@ -153,6 +153,10 @@ targets:
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
+      - path: Sources/Nativ/Features/Kits/NativKit.swift
+      - path: Sources/Nativ/Features/Kits/NativKitCatalog.swift
+      - path: Sources/Nativ/Features/Kits/NativKitStore.swift
+      - path: Sources/Nativ/Features/Routines/RoutineKitResolver.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift

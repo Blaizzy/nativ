@@ -104,6 +104,8 @@ enum RoutineLaunchAgent {
 enum RoutineHeadlessRun {
     private static var retainedRunner: RoutineRunner?
     private static var retainedModel: NativModel?
+    private static var retainedExtensionManager: NativExtensionManager?
+    private static var retainedMCPHost: MCPHostManager?
 
     static func execute(routineID: String) {
         MainActor.assumeIsolated {
@@ -116,19 +118,40 @@ enum RoutineHeadlessRun {
                 exit(EXIT_SUCCESS)
             }
             let model = NativModel()
+            let extensionManager = NativExtensionManager(
+                builtInExtensions: [VoiceDictationExtension()]
+            )
+            extensionManager.launch(
+                context: NativExtensionHostContext(
+                    transcriptionConfiguration: { nil },
+                    openSpeechModels: {},
+                    showMainWindow: {}
+                )
+            )
+            let mcpHost = MCPHostManager()
+            let kitStore = NativKitStore.shared
+            kitStore.migrateLegacySettings(mcpServers: model.settings.mcpServers)
             let runner = RoutineRunner(
                 model: model,
                 store: RoutineStore.shared,
-                sessionStore: ChatSessionStore()
+                sessionStore: ChatSessionStore(),
+                kitStore: kitStore,
+                mcpHost: mcpHost
             )
             retainedModel = model
+            retainedExtensionManager = extensionManager
+            retainedMCPHost = mcpHost
             retainedRunner = runner
             runner.onRunCompleted = { _, _ in
                 model.stopServer()
+                mcpHost.shutdown()
+                extensionManager.shutdown()
                 exit(EXIT_SUCCESS)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
                 MainActor.assumeIsolated { retainedModel?.stopServer() }
+                MainActor.assumeIsolated { retainedMCPHost?.shutdown() }
+                MainActor.assumeIsolated { retainedExtensionManager?.shutdown() }
                 exit(EXIT_SUCCESS)
             }
             runner.run(routine, source: .scheduled)

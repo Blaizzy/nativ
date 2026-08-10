@@ -4,6 +4,7 @@ import SwiftUI
 struct ToolsSectionView: View {
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
+    @Binding var requestedCapability: NativKitCapabilityReference?
     @State private var inspecting: ToolItem?
     @State private var showsAddTool = false
     @State private var editingTool: CustomTool?
@@ -11,11 +12,13 @@ struct ToolsSectionView: View {
     @State private var toolManagementError: String?
     @State private var webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
     @State private var pendingWebSearchActivation = false
+    @State private var focusedToolID: String?
 
     var body: some View {
         HubSectionScaffold(
             title: "Tools",
-            subtitle: "Built-in capabilities, custom tools, and tools from connected servers."
+            subtitle: "Built-in capabilities, custom tools, and tools from connected servers.",
+            scrollTarget: focusedToolID
         ) {
             Button {
                 showsAddTool = true
@@ -88,6 +91,10 @@ struct ToolsSectionView: View {
         } message: {
             Text(toolManagementError ?? "An unexpected error occurred.")
         }
+        .onAppear(perform: consumeCapabilityRequest)
+        .onChange(of: requestedCapability) { _, _ in
+            consumeCapabilityRequest()
+        }
     }
 
     private var enabledServers: [MCPServerConfig] {
@@ -108,8 +115,10 @@ struct ToolsSectionView: View {
                     isOn: binding(for: tool),
                     onInspect: { inspecting = tool },
                     onEdit: editAction(for: tool),
-                    onRemove: removeAction(for: tool)
+                    onRemove: removeAction(for: tool),
+                    isFocused: focusedToolID == tool.focusID
                 )
+                .id(tool.focusID)
             }
         }
     }
@@ -232,10 +241,50 @@ struct ToolsSectionView: View {
             )
         }
     }
+
+    private func consumeCapabilityRequest() {
+        guard let requestedCapability else { return }
+        switch requestedCapability {
+        case .mcpTool(let serverReference, let toolName):
+            self.requestedCapability = nil
+            let inventory = NativKitCapabilityInventory(settings: model.settings, host: host)
+            guard let server = inventory.configuredServer(for: serverReference),
+                  let tool = host.hostedTool(serverID: server.id, name: toolName)
+            else {
+                return
+            }
+            focusedToolID = "mcp-tool:\(tool.runtimeName)"
+        case .nativeTool(let name):
+            self.requestedCapability = nil
+            guard let tool = nativeTools.first(where: { $0.name == name }) else { return }
+            focusedToolID = tool.focusID
+            if tool.configuration == .webSearch, !webSearchIsConfigured {
+                inspecting = tool
+            }
+        case .customTool(let id):
+            self.requestedCapability = nil
+            guard let configuredTool = model.settings.customTools.first(where: { $0.id == id }),
+                  let tool = customTools.first(where: { $0.customToolID == id })
+            else {
+                return
+            }
+            focusedToolID = tool.focusID
+            if (try? configuredTool.definition()) == nil {
+                editingTool = configuredTool
+            }
+        default:
+            return
+        }
+    }
+
 }
 
 struct ToolItem: Identifiable {
     var id: String { name }
+    var focusID: String {
+        if let customToolID { return "custom-tool:\(customToolID.uuidString)" }
+        return isBuiltIn ? "native-tool:\(name)" : "mcp-tool:\(name)"
+    }
     let name: String
     let title: String
     let detail: String
@@ -253,6 +302,7 @@ private struct ToolRow: View {
     let onInspect: () -> Void
     var onEdit: (() -> Void)?
     var onRemove: (() -> Void)?
+    let isFocused: Bool
     @State private var hovering = false
 
     var body: some View {
@@ -300,6 +350,10 @@ private struct ToolRow: View {
                 .controlSize(.small)
         }
         .padding(.vertical, 9)
+        .background(
+            isFocused ? Color.accentColor.opacity(0.08) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
         .contentShape(.rect)
         .onHover { hovering = $0 }
         .onTapGesture(perform: onInspect)

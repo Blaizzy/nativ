@@ -25,6 +25,7 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
@@ -40,6 +41,8 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
+                kitStore: kitStore,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction,
@@ -60,6 +63,7 @@ struct ChatView: View {
         .background(Color.nativMainContentBackground)
         .onAppear {
             chat.mcpHost = mcpHost
+            chat.kitStore = kitStore
             chat.refreshPendingImageModelSelections()
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
@@ -103,6 +107,8 @@ private struct ChatTranscriptView: View {
 
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
@@ -163,6 +169,8 @@ private struct ChatTranscriptView: View {
             ChatComposerContainer(
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
+                kitStore: kitStore,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction,
@@ -250,6 +258,8 @@ private struct ChatTranscriptView: View {
 private struct ChatComposerContainer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
@@ -259,12 +269,22 @@ private struct ChatComposerContainer: View {
         model.settings.normalized().languageModelID
     }
 
+    private var kitUnavailableReason: String? {
+        guard let kitID = chat.currentKitID else { return nil }
+        guard let kit = kitStore.kit(id: kitID) else { return "The selected Kit is no longer available." }
+        return NativKitCapabilityInventory(settings: model.settings, host: mcpHost)
+            .evaluation(of: kit).summary
+    }
+
     var body: some View {
         ChatComposer(
             model: model,
             viewModel: chat,
+            kitStore: kitStore,
+            mcpHost: mcpHost,
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+                ?? kitUnavailableReason
                 ?? model.settings.structuredOutputValidationError,
             canCompose: model.isRunning
                 && !model.isModelLoading
@@ -272,6 +292,7 @@ private struct ChatComposerContainer: View {
                 && model.settings.structuredOutputValidationError == nil,
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
+                && kitUnavailableReason == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
@@ -297,6 +318,7 @@ private struct ChatComposerContainer: View {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    weak var kitStore: NativKitStore?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -307,6 +329,7 @@ final class ChatViewModel: ObservableObject {
         let assistantMessageID: UUID
         let settings: NativSettings
         let imageGenerationModelID: String?
+        let kitID: String?
         let languageModelSupportsTools: Bool
     }
 
@@ -324,6 +347,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
+    @Published private(set) var currentKitID: String?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
     @Published var draft = ""
@@ -397,6 +421,13 @@ final class ChatViewModel: ObservableObject {
 
     var hasPendingRequests: Bool {
         activeRequestSessionID != nil || !requestQueue.isEmpty
+    }
+
+    func selectKit(_ id: String?) {
+        guard !hasPendingRequests else { return }
+        currentKitID = id
+        currentSession?.kitID = id
+        persistCurrentSession(updateTimestamp: false)
     }
 
     var visibleMessages: [ChatTranscriptMessage] {
@@ -888,6 +919,7 @@ final class ChatViewModel: ObservableObject {
             settings: settings,
             imageGenerationModelID: imageGenerationModelID(for: sessionID)
                 ?? settings.imageGenerationModelID,
+            kitID: currentSession?.kitID,
             languageModelSupportsTools: languageModelSupportsTools
         ))
         bumpScroll()
@@ -1021,6 +1053,46 @@ final class ChatViewModel: ObservableObject {
 
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
         await toolConsentGate.awaitDecision(for: toolMessageID)
+    }
+
+    private func requestToolConsent(
+        for toolMessageID: UUID,
+        call: MLXChatToolCall,
+        remainingCalls: [MLXChatToolCall],
+        after insertionAnchor: UUID,
+        in sessionID: UUID,
+        promptContent: String = ""
+    ) async throws -> Bool {
+        updateToolMessage(
+            toolMessageID,
+            in: sessionID,
+            status: .awaitingConsent,
+            content: promptContent,
+            attachments: []
+        )
+        let approved = await awaitToolConsent(for: toolMessageID)
+        switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+        case .cancelled:
+            cancelToolMessages(
+                currentID: toolMessageID,
+                currentCall: call,
+                remainingCalls: remainingCalls,
+                after: insertionAnchor,
+                in: sessionID
+            )
+            throw CancellationError()
+        case .declined:
+            return false
+        case .approved:
+            updateToolMessage(
+                toolMessageID,
+                in: sessionID,
+                status: .running,
+                content: "",
+                attachments: []
+            )
+            return true
+        }
     }
 
     func cancel() {
@@ -1227,6 +1299,7 @@ final class ChatViewModel: ObservableObject {
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
+        let kitPlan = try kitExecutionPlan(for: queuedRequest)
 
         while true {
             try Task.checkCancellation()
@@ -1235,7 +1308,8 @@ final class ChatViewModel: ObservableObject {
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
-                settings: activeSettings
+                settings: activeSettings,
+                kitPlan: kitPlan
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -1284,29 +1358,33 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
+                if let kitPlan,
+                   let toolName = toolCall.function?.name,
+                   !kitPlan.allowedToolNames.contains(toolName) {
+                    throw NativKitExecutionError.notReady(
+                        kitPlan.kit.name,
+                        [NativKitIssue(
+                            componentID: "tool:\(toolName)",
+                            componentName: toolName,
+                            capability: nil,
+                            reason: .componentRemoved
+                        )]
+                    )
+                }
+
                 let customTool = toolCall.function?.name.flatMap { toolName in
-                    queuedRequest.settings.customTools.first { $0.toolName == toolName }
+                    kitPlan?.customToolsByName[toolName]
+                        ?? queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
                 if customTool?.kind == .script {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
+                    let approved = try await requestToolConsent(
+                        for: toolMessageID,
+                        call: toolCall,
+                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        after: insertionAnchor,
+                        in: queuedRequest.sessionID
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
+                    guard approved else {
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1315,37 +1393,18 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                         continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
                     }
                 }
 
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
+                    let approved = try await requestToolConsent(
+                        for: toolMessageID,
+                        call: toolCall,
+                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        after: insertionAnchor,
+                        in: queuedRequest.sessionID
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
+                    guard approved else {
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1354,14 +1413,6 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                         continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
                     }
                     guard let appModel else {
                         updateToolMessage(
@@ -1470,7 +1521,8 @@ final class ChatViewModel: ObservableObject {
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else if let host = mcpHost,
                               let toolName = toolCall.function?.name,
-                              host.handlesTool(named: toolName) {
+                              (kitPlan?.mcpToolsByName[toolName] != nil
+                                || (kitPlan == nil && host.handlesTool(named: toolName))) {
                         let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
@@ -1534,7 +1586,8 @@ final class ChatViewModel: ObservableObject {
         for queuedRequest: QueuedChatRequest,
         before assistantMessageID: UUID,
         advertisesTools: Bool,
-        settings: NativSettings
+        settings: NativSettings,
+        kitPlan: NativKitExecutionPlan?
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
@@ -1547,12 +1600,14 @@ final class ChatViewModel: ObservableObject {
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
-            ? ChatToolRegistry.definitions(
+        var toolDefinitions: [MLXChatToolDefinition] = if advertisesToolsForModel {
+            kitPlan?.toolDefinitions ?? ChatToolRegistry.definitions(
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
-            : []
-        if advertisesToolsForModel {
+        } else {
+            []
+        }
+        if advertisesToolsForModel, kitPlan == nil {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
@@ -1572,7 +1627,8 @@ final class ChatViewModel: ObservableObject {
         if !toolDefinitions.isEmpty {
             systemParts.append(NativSkill.builtInToolGuide.instructions)
         }
-        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+        let skills = kitPlan?.skills ?? settings.skills.filter(\.isEnabled)
+        for skill in skills where !skill.instructions.isEmpty {
             systemParts.append(skill.instructions)
         }
         if !systemParts.isEmpty {
@@ -1603,6 +1659,24 @@ final class ChatViewModel: ObservableObject {
             toolChoice: tools == nil ? nil : "auto",
             stream: true
         )
+    }
+
+    private func kitExecutionPlan(
+        for queuedRequest: QueuedChatRequest
+    ) throws -> NativKitExecutionPlan? {
+        guard let kitID = queuedRequest.kitID else { return nil }
+        guard let kitStore, let mcpHost else { throw NativKitExecutionError.removed }
+        guard let kit = kitStore.kit(id: kitID) else { throw NativKitExecutionError.removed }
+        let canEditImage = sessionMessages(for: queuedRequest.sessionID)?
+            .contains { !$0.imageAttachments.isEmpty } == true
+        let plan = NativKitCapabilityInventory(
+            settings: queuedRequest.settings,
+            host: mcpHost
+        ).plan(for: kit, context: .chat, canEditImage: canEditImage)
+        guard plan.isReady else {
+            throw NativKitExecutionError.notReady(kit.name, plan.issues)
+        }
+        return plan
     }
 
     private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {
@@ -2067,6 +2141,7 @@ final class ChatViewModel: ObservableObject {
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
+        currentKitID = session.kitID
         messages = ChatSessionLoadPolicy.shouldNormalizeOnApply(
             sessionID: session.id,
             activeRequestSessionID: activeRequestSessionID
@@ -2133,6 +2208,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         session.messages = messages
+        session.kitID = currentKitID
         session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
         if updateTimestamp {
             session.updatedAt = Date()
@@ -3600,6 +3676,7 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        kitStore: .init(),
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
