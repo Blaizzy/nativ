@@ -56,9 +56,9 @@ final class WebSearchSettingsViewModel: ObservableObject {
         }
     }
 
-    func testAndConnect() async {
+    func testAndConnect() async -> Bool {
         let apiKey = draftAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty, !isTesting else { return }
+        guard !apiKey.isEmpty, !isTesting else { return false }
         let provider = selectedProvider
         isTesting = true
         status = nil
@@ -75,14 +75,16 @@ final class WebSearchSettingsViewModel: ObservableObject {
                 revealsKey = false
                 status = .connected("Connected to \(provider.metadata.displayName).")
             }
+            return true
         } catch {
             if selectedProvider == provider {
                 status = .failure(error.localizedDescription)
             }
+            return false
         }
     }
 
-    func removeKey() {
+    func removeKey() -> Bool {
         let provider = selectedProvider
         do {
             try credentials.remove(for: provider)
@@ -91,8 +93,10 @@ final class WebSearchSettingsViewModel: ObservableObject {
             draftAPIKey = ""
             revealsKey = false
             status = nil
+            return true
         } catch {
             status = .failure(error.localizedDescription)
+            return false
         }
     }
 
@@ -121,13 +125,21 @@ final class WebSearchSettingsViewModel: ObservableObject {
 @MainActor
 struct WebSearchSettingsView: View {
     @StateObject private var viewModel: WebSearchSettingsViewModel
+    private let onConfigurationChanged: (Bool) -> Void
 
-    init() {
+    init(
+        onConfigurationChanged: @escaping (Bool) -> Void = { _ in }
+    ) {
         _viewModel = StateObject(wrappedValue: WebSearchSettingsViewModel())
+        self.onConfigurationChanged = onConfigurationChanged
     }
 
-    init(viewModel: WebSearchSettingsViewModel) {
+    init(
+        viewModel: WebSearchSettingsViewModel,
+        onConfigurationChanged: @escaping (Bool) -> Void = { _ in }
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        self.onConfigurationChanged = onConfigurationChanged
     }
 
     var body: some View {
@@ -154,7 +166,12 @@ struct WebSearchSettingsView: View {
 
     private func providerRow(_ provider: WebSearchProvider) -> some View {
         HStack(spacing: 4) {
-            Button { viewModel.select(provider) } label: {
+            Button {
+                viewModel.select(provider)
+                if viewModel.selectedConnectionState == .connected {
+                    onConfigurationChanged(true)
+                }
+            } label: {
                 HStack(spacing: 10) {
                     ProviderLogo(provider: provider, size: 24)
                     Text(provider.metadata.displayName)
@@ -225,13 +242,19 @@ struct WebSearchSettingsView: View {
 
             HStack {
                 Button(viewModel.isTesting ? "Testing…" : "Test & connect") {
-                    Task { await viewModel.testAndConnect() }
+                    Task {
+                        if await viewModel.testAndConnect() {
+                            onConfigurationChanged(true)
+                        }
+                    }
                 }
                 .disabled(!viewModel.canConnect)
 
                 if viewModel.selectedConnectionState != .disconnected {
                     Button("Remove key", role: .destructive) {
-                        viewModel.removeKey()
+                        if viewModel.removeKey() {
+                            onConfigurationChanged(false)
+                        }
                     }
                     .disabled(viewModel.isTesting)
                 }

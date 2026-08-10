@@ -4,6 +4,13 @@ import NativServerKit
 enum ChatWebSearchToolRegistry {
     static let toolName = "web_search"
 
+    static func isConfigured(
+        credentials: any WebSearchCredentialStoring = KeychainWebSearchCredentialStore(),
+        preferences: WebSearchPreferences = WebSearchPreferences()
+    ) -> Bool {
+        (try? credentials.load(for: preferences.activeProvider)) != nil
+    }
+
     static let definition: MLXChatToolDefinition = {
         MLXChatToolDefinition(function: MLXChatFunctionDefinition(
             name: toolName,

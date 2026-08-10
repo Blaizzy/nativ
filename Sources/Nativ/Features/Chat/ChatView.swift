@@ -1418,9 +1418,12 @@ final class ChatViewModel: ObservableObject {
         if advertisesToolsForModel {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            // Honor the per-tool switches from the Tools section for every
-            // source, built-in and MCP alike.
-            toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
+            let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+            toolDefinitions.removeAll {
+                settings.disabledToolNames.contains($0.function.name)
+                    || ($0.function.name == ChatWebSearchToolRegistry.toolName
+                        && !webSearchIsConfigured)
+            }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
