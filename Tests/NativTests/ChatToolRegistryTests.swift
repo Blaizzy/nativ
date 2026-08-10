@@ -50,7 +50,8 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
 private func makeContext(
     imageModelID: String? = nil,
     modelSearchPath: String = "",
-    mcpHost: MCPHostManager? = nil
+    mcpHost: MCPHostManager? = nil,
+    disabledToolNames: [String] = []
 ) -> ChatToolExecutionContext {
     ChatToolExecutionContext(
         imageGenerationModelID: imageModelID,
@@ -62,7 +63,8 @@ private func makeContext(
         analyticsDatabaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathComponent("Analytics.sqlite3"),
-        mcpHost: mcpHost
+        mcpHost: mcpHost,
+        disabledToolNames: disabledToolNames
     )
 }
 
@@ -117,6 +119,16 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(names.count, Set(names).count)
     }
 
+    func testDefinitionsOmitDisabledTools() {
+        let names = ChatToolRegistry.definitions(
+            context: makeContext(disabledToolNames: [ChatSystemMonitorToolRegistry.toolName]),
+            canEditImage: true
+        ).map(\.function.name)
+
+        XCTAssertFalse(names.contains(ChatSystemMonitorToolRegistry.toolName))
+        XCTAssertTrue(names.contains(ChatServerStatsToolRegistry.toolName), "only the disabled tool should be omitted, not everything")
+    }
+
     func testImageToolSchemasAreGoldenPinned() throws {
         let golden = #"""
             [{"function":{"description":"Create one or more new images from a detailed text prompt. Image-model selection is handled by the app; do not ask for or provide a model identifier.","name":"generate_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"},{"function":{"description":"Edit the most recently attached or generated image using a text instruction. Image-model selection is handled by the app; do not ask for or provide a model identifier.","name":"edit_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"}]
@@ -127,7 +139,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let data = try encoder.encode(ChatImageToolRegistry.definitions(canEdit: true))
         let actual = String(decoding: data, as: UTF8.self)
 
-        XCTAssertEqual(actual, golden, "generate_image/edit_image's schema must match the intended schema exactly -- if this fails, either the schema drifted unintentionally or this pin needs updating alongside a deliberate schema change")
+        XCTAssertEqual(actual, golden, "generate_image/edit_image's schema must match the intended schema exactly — if this fails, either the schema drifted unintentionally or this pin needs updating alongside a deliberate schema change")
     }
 
     func testImageToolKeepsModelSelectionOutOfTheLLMProtocol() throws {
@@ -1240,7 +1252,6 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {
-        // Predates toolArguments existing on disk at all -- must not fail to decode.
         let oldJSON = """
             {
                 "id": "8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B",
@@ -1391,14 +1402,7 @@ final class ChatSpawnAgentToolExecutorTests: XCTestCase {
     }
 
     func testUnrecognizedExplicitModelOverrideThrowsUnknownModelBeforeAnyNetworkCall() async {
-        // Integration proof of the real wiring: an explicit `model` override
-        // that isn't among the locally-installed models must fail fast via
-        // ChatSpawnAgentModelResolver.isKnownModel against a real
-        // LocalModelDiscovery.scan of this machine's actual model cache
-        // (makeContext's empty modelSearchPath expands to
-        // NativSettings.defaultModelSearchPath), not reach the network at
-        // all. No literal model name on this dev machine will ever plausibly
-        // be "definitely-not-a-real-model-xyz-12345".
+        // Runs against a real LocalModelDiscovery.scan, not a mock.
         do {
             _ = try await ChatSpawnAgentToolExecutor().execute(
                 call: makeCall(
@@ -1429,8 +1433,7 @@ final class ChatSpawnAgentToolExecutorTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(
             object["error"] as? String,
-            "Only \(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound) sub-agents may run per round.",
-            "this string must always match the real cap -- it went stale once already (Phase 1's one-per-round wording survived the loosening to 5)"
+            "Only \(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound) sub-agents may run per round."
         )
         XCTAssertNil(object["result"])
     }
@@ -1454,7 +1457,7 @@ final class ChatSpawnAgentToolExecutorTests: XCTestCase {
                 appModel: nil,
                 onSubMessagesChange: { _ in }
             )
-            XCTFail("a whitespace-only model argument must not count as a real override -- with no coordinator model either, this must still throw")
+            XCTFail("a whitespace-only model argument must not count as a real override — with no coordinator model either, this must still throw")
         } catch let error as ChatSpawnAgentToolError {
             guard case .noModelConfigured = error else {
                 return XCTFail("expected .noModelConfigured, got \(error)")
@@ -1467,6 +1470,33 @@ final class ChatSpawnAgentToolExecutorTests: XCTestCase {
     private func decode(_ json: String) throws -> [String: Any] {
         let data = try XCTUnwrap(json.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+final class ChatSpawnAgentToolErrorInsufficientMemoryDetectionTests: XCTestCase {
+    func testDetectsTheServersStructuredInsufficientMemoryRejection() {
+        let body = #"{"detail":{"error":"insufficient_memory","model":"org/big-model","message":"model requires 900 bytes; only 100 bytes free"}}"#
+        let error = ChatSpawnAgentToolError.from(NativChatError.httpStatus(507, body), modelID: "org/big-model")
+        guard case .insufficientMemory(let modelID, let message) = error else {
+            return XCTFail("expected .insufficientMemory, got \(String(describing: error))")
+        }
+        XCTAssertEqual(modelID, "org/big-model")
+        XCTAssertEqual(message, "model requires 900 bytes; only 100 bytes free")
+    }
+
+    func testIgnoresA507WithADifferentErrorKind() {
+        let body = #"{"detail":{"error":"some_other_error","message":"unrelated"}}"#
+        XCTAssertNil(ChatSpawnAgentToolError.from(NativChatError.httpStatus(507, body), modelID: "org/model"))
+    }
+
+    func testIgnoresANonMatchingStatusCodeEvenWithTheRightBody() {
+        let body = #"{"detail":{"error":"insufficient_memory","message":"..."}}"#
+        XCTAssertNil(ChatSpawnAgentToolError.from(NativChatError.httpStatus(500, body), modelID: "org/model"))
+    }
+
+    func testIgnoresNonHTTPStatusErrors() {
+        XCTAssertNil(ChatSpawnAgentToolError.from(NativChatError.invalidResponse, modelID: "org/model"))
+        XCTAssertNil(ChatSpawnAgentToolError.from(CancellationError(), modelID: "org/model"))
     }
 }
 
@@ -1527,10 +1557,6 @@ final class ChatSpawnAgentModelResolverTests: XCTestCase {
     }
 
     func testIsKnownModelFalseForTheDisplayStringMissingItsOrgPrefix() {
-        // Live-caught 2026-08-06: the composer's own picker displays models
-        // without the org prefix -- an easy string for a model to guess/
-        // hallucinate. Matching must be exact, not a suffix/contains match,
-        // or this exact false-positive would slip back in.
         let known = [fakeLocalModel(repoID: "mlx-community/Qwen3-1.7B-4bit")]
         XCTAssertFalse(ChatSpawnAgentModelResolver.isKnownModel("Qwen3-1.7B-4bit", among: known))
     }
@@ -1572,6 +1598,23 @@ final class ChatCompletionRequestBuilderTests: XCTestCase {
         XCTAssertEqual(request.tools?.map(\.function.name).contains(ChatSpawnAgentToolRegistry.toolName), true)
     }
 
+    func testDisabledToolsAreOmittedFromASubAgentsAdvertisedTools() {
+        var settings = NativSettings(languageModelID: "org/model")
+        settings.disabledToolNames = [ChatSystemMonitorToolRegistry.toolName]
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: settings,
+            advertisesTools: true,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        let names = request.tools?.map(\.function.name) ?? []
+        XCTAssertFalse(names.contains(ChatSystemMonitorToolRegistry.toolName), "a disabled tool must not be advertised to a sub-agent")
+        XCTAssertTrue(names.contains(ChatSpawnAgentToolRegistry.toolName), "other, non-disabled tools must remain advertised")
+    }
+
     func testAllowsSpawningFalseOmitsSpawnAgentFromAdvertisedTools() {
         let request = ChatCompletionRequestBuilder.make(
             modelID: "org/model",
@@ -1585,7 +1628,7 @@ final class ChatCompletionRequestBuilderTests: XCTestCase {
         XCTAssertEqual(
             request.tools?.map(\.function.name).contains(ChatSpawnAgentToolRegistry.toolName),
             false,
-            "a sub-agent's own request must never advertise spawn_agent -- this is the depth-1 cap's actual wire-level enforcement"
+            "a sub-agent's own request must never advertise spawn_agent — this is the depth-1 cap's actual wire-level enforcement"
         )
     }
 
@@ -1631,6 +1674,36 @@ final class ChatCompletionRequestBuilderTests: XCTestCase {
         )
         XCTAssertEqual(request.messages.count, 1)
         XCTAssertEqual(request.messages.first?.role, "user")
+    }
+
+    func testSystemPromptIncludesBuiltInToolGuideWhenToolsAreAdvertised() {
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: NativSettings(languageModelID: "org/model"),
+            advertisesTools: true,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        let systemText = request.messages.first(where: { $0.role == "system" })?.content?.textValue ?? ""
+        XCTAssertTrue(systemText.contains(NativSkill.builtInToolGuide.instructions))
+    }
+
+    func testSystemPromptOmitsBuiltInToolGuideWhenToolsAreNotAdvertised() {
+        var settings = NativSettings(languageModelID: "org/model")
+        settings.systemPrompt = "Be terse."
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: settings,
+            advertisesTools: false,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        let systemText = request.messages.first(where: { $0.role == "system" })?.content?.textValue ?? ""
+        XCTAssertEqual(systemText, "Be terse.")
     }
 }
 
@@ -1728,16 +1801,12 @@ final class ChatConcurrentSpawnRunnerTests: XCTestCase {
         }
     }
 
-    /// The whole point of this feature: N sub-agents must genuinely overlap
-    /// in wall-clock time, not run one-after-another disguised as "using a
-    /// TaskGroup". 3 spawns that each take ~500ms must finish in well under
-    /// 3x500ms if they actually started together.
-    func testThreeSpawnsRunConcurrentlyNotSequentially() async throws {
+    func testThreeSpawnsRunConcurrentlyNotSequentially() async {
         let pending = makePending(count: 3)
         let clock = ContinuousClock()
         let start = clock.now
 
-        let outcomes = try await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
             try await Task.sleep(for: .milliseconds(500))
             return "result-for-\(spawn.toolMessageID)"
         }
@@ -1747,13 +1816,13 @@ final class ChatConcurrentSpawnRunnerTests: XCTestCase {
         XCTAssertLessThan(
             elapsed,
             .milliseconds(1200),
-            "3 concurrent ~500ms spawns took \(elapsed) -- this is consistent with them running sequentially (~1500ms), not concurrently (~500ms). If this fails, something is serializing the TaskGroup's children."
+            "3 concurrent ~500ms spawns took \(elapsed) — this is consistent with them running sequentially (~1500ms), not concurrently (~500ms). If this fails, something is serializing the TaskGroup's children."
         )
     }
 
-    func testEachSpawnsOwnFailureBecomesAFailureOutcomeNotAThrow() async throws {
+    func testEachSpawnsOwnFailureBecomesAFailureOutcomeNotAThrow() async {
         let pending = makePending(count: 2)
-        let outcomes = try await ChatConcurrentSpawnRunner.runAll(pending) { _ in
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { _ in
             throw FakeToolError()
         }
         XCTAssertEqual(outcomes.count, 2, "one spawn's own failure must not prevent its sibling's outcome from being reported")
@@ -1764,11 +1833,11 @@ final class ChatConcurrentSpawnRunnerTests: XCTestCase {
         }
     }
 
-    func testMixedSuccessAndFailureOutcomesAreReportedIndependently() async throws {
+    func testMixedSuccessAndFailureOutcomesAreReportedIndependently() async {
         let pending = makePending(count: 2)
         let succeedingID = pending[0].toolMessageID
 
-        let outcomes = try await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
             if spawn.toolMessageID == succeedingID {
                 return "ok"
             }
@@ -1787,22 +1856,35 @@ final class ChatConcurrentSpawnRunnerTests: XCTestCase {
         }
     }
 
-    func testCancellationPropagatesOutOfTheGroup() async throws {
-        let pending = makePending(count: 1)
-        do {
-            _ = try await ChatConcurrentSpawnRunner.runAll(pending) { _ in
-                throw CancellationError()
+    func testOneSpawnsCancellationDoesNotDiscardItsSiblingsSuccessfulOutcome() async {
+        let pending = makePending(count: 2)
+        let succeedingID = pending[0].toolMessageID
+        let cancelledID = pending[1].toolMessageID
+
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
+            if spawn.toolMessageID == succeedingID {
+                return "the real result"
             }
-            XCTFail("expected CancellationError to propagate out of runAll")
-        } catch is CancellationError {
-        } catch {
-            XCTFail("expected CancellationError, got \(error)")
+            throw CancellationError()
+        }
+
+        XCTAssertEqual(outcomes.count, 2, "the cancelled sibling must not cause the successful one's outcome to be lost")
+
+        let succeeded = outcomes.first { $0.toolMessageID == succeedingID }
+        guard case .success(let value) = succeeded?.result else {
+            return XCTFail("expected the first spawn's real result to survive its sibling's cancellation, got \(String(describing: succeeded?.result))")
+        }
+        XCTAssertEqual(value, "the real result")
+
+        let cancelled = outcomes.first { $0.toolMessageID == cancelledID }
+        guard case .failure(let error) = cancelled?.result, error is CancellationError else {
+            return XCTFail("expected the second spawn's own cancellation to surface as its own outcome, got \(String(describing: cancelled?.result))")
         }
     }
 
-    func testEmptyPendingListReturnsEmptyOutcomesWithoutCallingExecute() async throws {
+    func testEmptyPendingListReturnsEmptyOutcomesWithoutCallingExecute() async {
         var callCount = 0
-        let outcomes = try await ChatConcurrentSpawnRunner.runAll([]) { _ in
+        let outcomes = await ChatConcurrentSpawnRunner.runAll([]) { _ in
             callCount += 1
             return "unreachable"
         }
@@ -1813,7 +1895,7 @@ final class ChatConcurrentSpawnRunnerTests: XCTestCase {
 
 final class ChatMCPHostBridgeTests: XCTestCase {
     func testDeclinedPayloadShape() throws {
-        let payload = ChatMCPHostBridge.declinedPayload(toolName: "mcp__websearch__search")
+        let payload = ChatMCPHostBridge.declinedPayload()
         let object = try decode(payload)
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["declined"] as? Bool, true)
@@ -1821,7 +1903,7 @@ final class ChatMCPHostBridgeTests: XCTestCase {
     }
 
     func testFailurePayloadShape() throws {
-        let payload = ChatMCPHostBridge.failurePayload(toolName: "mcp__websearch__search", error: FakeToolError())
+        let payload = ChatMCPHostBridge.failurePayload(error: FakeToolError())
         let object = try decode(payload)
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["declined"] as? Bool, false)

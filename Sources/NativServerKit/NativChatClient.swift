@@ -6,6 +6,7 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
     case missingAssistantContent
     case malformedStreamEvent(String)
     case serverError(String)
+    case repetitionLoopDetected
 
     public var description: String {
         switch self {
@@ -24,6 +25,8 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
         case .serverError(let message):
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? "The server reported an error." : trimmed
+        case .repetitionLoopDetected:
+            return "The model got stuck repeating itself and generation was stopped early."
         }
     }
 
@@ -601,17 +604,21 @@ public final class NativChatClient {
 
     public func streamChat(
         _ request: MLXChatCompletionRequest,
+        repetitionDetector: MLXChatRepetitionDetector? = nil,
         onDelta: @escaping (String) async -> Void
     ) async throws -> MLXChatCompletion {
-        try await streamChat(request, onEvent: { event in
+        try await streamChat(request, repetitionDetector: repetitionDetector, onEvent: { event in
             if let content = event.content, !content.isEmpty {
                 await onDelta(content)
             }
         })
     }
 
+    /// `repetitionDetector` is opt-in — the coordinator's own top-level
+    /// responses can legitimately repeat a phrase a few times on request.
     public func streamChat(
         _ request: MLXChatCompletionRequest,
+        repetitionDetector: MLXChatRepetitionDetector? = nil,
         onEvent: @escaping (MLXChatStreamDelta) async -> Void
     ) async throws -> MLXChatCompletion {
         var payload = request
@@ -639,6 +646,7 @@ public final class NativChatClient {
         var firstGeneratedTokenAt: Date?
         var lastGeneratedTokenAt: Date?
         var toolCallAccumulator = MLXChatToolCallAccumulator()
+        var charactersSinceLastRepetitionCheck = 0
 
         func cumulativeDecodeTokensPerSecond() -> Double? {
             guard streamedGeneratedTokens > 1,
@@ -690,6 +698,17 @@ public final class NativChatClient {
                 let toolCallDeltas = choice.delta.toolCalls
                 if let contentDelta, !contentDelta.isEmpty {
                     content += contentDelta
+                    // Scoped to content, not reasoningContent — a thinking
+                    // model's chain-of-thought loops back legitimately.
+                    if let repetitionDetector {
+                        charactersSinceLastRepetitionCheck += contentDelta.count
+                        if ChatRepetitionCheckThrottle.shouldCheck(charactersSinceLastCheck: charactersSinceLastRepetitionCheck) {
+                            charactersSinceLastRepetitionCheck = 0
+                            if repetitionDetector.isDegenerateRepetition(inTailOf: content) {
+                                throw NativChatError.repetitionLoopDetected
+                            }
+                        }
+                    }
                 }
                 if let reasoningDelta, !reasoningDelta.isEmpty {
                     reasoningContent += reasoningDelta
@@ -732,6 +751,13 @@ public final class NativChatClient {
                     )
                 )
             }
+        }
+
+        // Catch-up check: the throttled stride can leave the final stretch
+        // unchecked when the stream ends.
+        if let repetitionDetector, charactersSinceLastRepetitionCheck > 0,
+           repetitionDetector.isDegenerateRepetition(inTailOf: content) {
+            throw NativChatError.repetitionLoopDetected
         }
 
         let resolvedContent = try validatedAssistantContent(
@@ -873,6 +899,69 @@ private struct ChatStreamErrorEvent: Decodable {
         enum CodingKeys: String, CodingKey {
             case message
         }
+    }
+}
+
+/// Detects a degenerate repetition loop in accumulating streamed content: a
+/// model can spiral on one phrase well under the `max_tokens` ceiling.
+public struct MLXChatRepetitionDetector {
+    /// Shortest repeating unit to consider, in characters — catches
+    /// short/word-level loops (e.g. "the the the the").
+    let minimumPeriod: Int
+    /// Longest repeating unit to consider, in characters — catches
+    /// sentence-level loops without searching unboundedly.
+    let maximumPeriod: Int
+    /// How many consecutive identical copies of a unit count as a genuine
+    /// loop rather than a coincidence.
+    let requiredRepeats: Int
+
+    public static let `default` = MLXChatRepetitionDetector(minimumPeriod: 6, maximumPeriod: 320, requiredRepeats: 4)
+
+    /// Whether the tail of `text` contains `requiredRepeats` consecutive,
+    /// identical, non-trivial copies of some unit between `minimumPeriod` and
+    /// `maximumPeriod` characters long.
+    func isDegenerateRepetition(inTailOf text: String) -> Bool {
+        guard minimumPeriod > 0, maximumPeriod >= minimumPeriod, requiredRepeats > 1 else {
+            return false
+        }
+
+        // Bounds the work to the search window, not the total generated length.
+        let tailCharacters = Array(text.suffix(maximumPeriod * requiredRepeats))
+
+        for period in minimumPeriod...maximumPeriod {
+            let requiredLength = period * requiredRepeats
+            guard tailCharacters.count >= requiredLength else {
+                continue
+            }
+
+            let window = Array(tailCharacters.suffix(requiredLength))
+            let unit = window[0..<period]
+
+            // Whitespace-only or single-character units (dividers, padding)
+            // are common and legitimate — require real content to flag.
+            let distinctNonWhitespaceCharacters = Set(unit.filter { !$0.isWhitespace })
+            guard distinctNonWhitespaceCharacters.count > 1 else {
+                continue
+            }
+
+            let allRepeatsMatch = (1..<requiredRepeats).allSatisfy { repeatIndex in
+                let start = repeatIndex * period
+                return window[start..<(start + period)].elementsEqual(unit)
+            }
+            if allRepeatsMatch {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// Throttles the scan rather than re-running it on every single delta.
+enum ChatRepetitionCheckThrottle {
+    static let checkStride = 32
+
+    static func shouldCheck(charactersSinceLastCheck: Int) -> Bool {
+        charactersSinceLastCheck >= checkStride
     }
 }
 

@@ -18,6 +18,7 @@ struct ChatToolExecutionContext {
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
     var mcpHost: MCPHostManager? = nil
+    var disabledToolNames: [String] = []
 }
 
 struct ChatToolExecutionOutcome {
@@ -49,13 +50,6 @@ struct ChatNativeToolDescriptor {
     let configuration: ChatNativeToolConfiguration?
 }
 
-/// Bounds how many `spawn_agent` calls one coordinator round may fire
-/// concurrently. Loosened from a hard one-per-round cap for the
-/// concurrent-research scenario (coordinator fans out to several sub-agents
-/// at once), but deliberately still bounded, not unlimited -- a per-round
-/// tool count can spiral with this dev/test model; this cap is this
-/// feature's bounded contribution to that same risk category, sized with
-/// headroom above a concrete 3-sub-agent demo scenario, not left open-ended.
 enum ChatConcurrentSpawnGate {
     static let maximumConcurrentSpawnsPerRound = 5
 
@@ -64,15 +58,9 @@ enum ChatConcurrentSpawnGate {
     }
 }
 
-/// Fires every pending `spawn_agent` call in a round concurrently via a
-/// `TaskGroup` and returns once all have settled (succeeded or failed) --
-/// this is what actually makes sub-agents run in parallel rather than one
-/// blocking the next. A child's own failure becomes a `.failure` outcome,
-/// not a thrown error, so one sub-agent failing never aborts its siblings.
-/// `CancellationError` is the one exception: it propagates out of the
-/// group, and Swift's structured concurrency cancels every other in-flight
-/// child automatically when the group scope exits early -- the caller does
-/// not need its own cancellation fan-out for that case.
+/// Runs every pending `spawn_agent` call in a round concurrently, capturing
+/// each child's outcome (including its own cancellation) as a `Result`
+/// rather than rethrowing and discarding already-settled siblings.
 enum ChatConcurrentSpawnRunner {
     struct PendingSpawn {
         let toolMessageID: UUID
@@ -87,17 +75,13 @@ enum ChatConcurrentSpawnRunner {
     static func runAll(
         _ pending: [PendingSpawn],
         execute: @escaping (PendingSpawn) async throws -> String
-    ) async throws -> [SpawnOutcome] {
-        try await withThrowingTaskGroup(of: SpawnOutcome.self) { group in
+    ) async -> [SpawnOutcome] {
+        await withTaskGroup(of: SpawnOutcome.self) { group in
             for spawn in pending {
                 group.addTask {
                     do {
                         let result = try await execute(spawn)
                         return SpawnOutcome(toolMessageID: spawn.toolMessageID, result: .success(result))
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch let error as URLError where error.code == .cancelled {
-                        throw CancellationError()
                     } catch {
                         return SpawnOutcome(toolMessageID: spawn.toolMessageID, result: .failure(error))
                     }
@@ -106,7 +90,7 @@ enum ChatConcurrentSpawnRunner {
 
             var outcomes: [SpawnOutcome] = []
             outcomes.reserveCapacity(pending.count)
-            for try await outcome in group {
+            for await outcome in group {
                 outcomes.append(outcome)
             }
             return outcomes
@@ -146,6 +130,11 @@ enum ChatToolRegistry {
             definition: ChatWebSearchToolRegistry.definition,
             configuration: .webSearch
         ))
+        // Filtered here, once, rather than per-caller, so there's only one
+        // place this can drift out of sync.
+        if let disabledToolNames = context?.disabledToolNames, !disabledToolNames.isEmpty {
+            tools.removeAll { disabledToolNames.contains($0.definition.function.name) }
+        }
         return tools
     }
 }
@@ -178,13 +167,13 @@ struct ChatMCPHostBridge {
         return ChatToolExecutionOutcome(content: result, attachments: [])
     }
 
-    static func declinedPayload(toolName: String) -> String {
+    static func declinedPayload() -> String {
         let payload = ChatMCPToolResultPayload(ok: false, declined: true, error: "The user declined this action.")
         return (try? encodedPayload(payload))
             ?? #"{"ok":false,"declined":true,"error":"The user declined this action."}"#
     }
 
-    static func failurePayload(toolName: String, error: Error) -> String {
+    static func failurePayload(error: Error) -> String {
         let payload = ChatMCPToolResultPayload(ok: false, declined: false, error: error.localizedDescription)
         return (try? encodedPayload(payload))
             ?? #"{"ok":false,"declined":false,"error":"MCP tool failed."}"#
@@ -257,7 +246,7 @@ enum ChatToolDispatcher {
             return handler(toolName, error)
         }
         if toolName.hasPrefix(MCPToolNaming.qualifiedPrefix) {
-            return ChatMCPHostBridge.failurePayload(toolName: toolName, error: error)
+            return ChatMCPHostBridge.failurePayload(error: error)
         }
         return ChatImageToolExecutor().failurePayload(operation: toolName, error: error)
     }
@@ -351,10 +340,6 @@ enum ChatToolDispatcher {
     }
 }
 
-/// Builds the wire-format completion request from a message history + settings.
-/// Shared by the coordinator's own loop (session-array-backed) and `ChatAgentLoop`
-/// (a sub-agent's private, in-memory-array-backed loop) so the two never drift on
-/// how settings map to request fields.
 enum ChatCompletionRequestBuilder {
     @MainActor
     static func make(
@@ -368,12 +353,6 @@ enum ChatCompletionRequestBuilder {
         mcpHost: MCPHostManager? = nil
     ) -> MLXChatCompletionRequest {
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !settings.systemPrompt.isEmpty {
-            requestMessages.insert(
-                MLXChatMessage(role: "system", content: settings.systemPrompt),
-                at: 0
-            )
-        }
 
         let advertisesToolsForModel = advertisesTools && languageModelSupportsTools
         let toolDefinitions = advertisesToolsForModel
@@ -385,13 +364,32 @@ enum ChatCompletionRequestBuilder {
                     imageReferences: [],
                     modelSearchPath: settings.expandedModelSearchPath,
                     additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                    mcpHost: mcpHost
+                    mcpHost: mcpHost,
+                    disabledToolNames: settings.disabledToolNames
                 ),
                 canEditImage: canEditImage,
                 allowsSpawning: allowsSpawning
             )
             : []
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
+
+        var systemParts: [String] = []
+        if !settings.systemPrompt.isEmpty {
+            systemParts.append(settings.systemPrompt)
+        }
+        if !toolDefinitions.isEmpty {
+            systemParts.append(NativSkill.builtInToolGuide.instructions)
+        }
+        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+            systemParts.append(skill.instructions)
+        }
+        if !systemParts.isEmpty {
+            requestMessages.insert(
+                MLXChatMessage(role: "system", content: systemParts.joined(separator: "\n\n")),
+                at: 0
+            )
+        }
+
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -417,9 +415,6 @@ enum ChatCompletionRequestBuilder {
     }
 }
 
-/// Assigns wire-required index/id/type defaults to a raw model completion's tool
-/// calls. Pure transformation, shared by the coordinator's own loop and
-/// `ChatAgentLoop` so both normalize identically.
 enum ChatToolCallNormalizer {
     static func normalize(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {
         toolCalls.enumerated().map { index, call in
@@ -431,13 +426,9 @@ enum ChatToolCallNormalizer {
             if normalized.type?.isEmpty != false {
                 normalized.type = "function"
             }
-            // Some models' streamed tool-call name deltas (accumulated via
-            // NativChatClient's fragment-merging) can leave stray leading/
-            // trailing whitespace that's invisible once rendered but fails
-            // every exact-string dispatch check downstream (switch_model,
-            // spawn_agent's own coordinator-level route, MCP's qualified-name
-            // lookup) -- trim it here, once, at the single seam all of those
-            // checks read from, rather than patching each comparison site.
+            // Streamed name deltas can leave stray whitespace that fails
+            // every exact-string dispatch check downstream — trim once here
+            // rather than patching each comparison site.
             if let rawName = normalized.function?.name {
                 normalized.function?.name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
             }
@@ -467,7 +458,7 @@ enum ChatSpawnAgentToolRegistry {
                     ]),
                     "model": .object([
                         "type": .string("string"),
-                        "description": .string("Optional: run this sub-agent on a different model than your own (e.g. a smaller model for a simple task). Must be the exact full repo ID of a model already installed locally (e.g. \"mlx-community/Qwen3-0.6B-4bit\", not just \"Qwen3-0.6B-4bit\") -- use list_models if unsure. Omit to use your own model. Loading a different model evicts whichever model is currently loaded, including your own -- expect a reload pause on both the switch and the return.")
+                        "description": .string("Optional: run this sub-agent on a different model than your own (e.g. a smaller model for a simple task). Must be the exact full repo ID of a model already installed locally (e.g. \"mlx-community/Qwen3-0.6B-4bit\", not just \"Qwen3-0.6B-4bit\") — use list_models if unsure. Omit to use your own model. Loading a different model evicts whichever model is currently loaded, including your own — expect a reload pause on both the switch and the return.")
                     ])
                 ]),
                 "required": .array([.string("task")])
@@ -494,6 +485,7 @@ enum ChatSpawnAgentToolError: LocalizedError {
     case unknownModel(String)
     case tooManyPerRound
     case noFinalAnswer
+    case insufficientMemory(modelID: String, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -502,31 +494,37 @@ enum ChatSpawnAgentToolError: LocalizedError {
         case .noModelConfigured:
             return "No language model is configured to run the sub-agent."
         case .unknownModel(let modelID):
-            return "Unknown model: \(modelID). This model is not installed locally -- use one of the models already available, or omit \"model\" to use your own."
+            return "Unknown model: \(modelID). This model is not installed locally — use one of the models already available, or omit \"model\" to use your own."
         case .tooManyPerRound:
             return "Only \(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound) sub-agents may run per round."
         case .noFinalAnswer:
             return "Sub-agent did not produce an answer."
+        case .insufficientMemory(let modelID, let message):
+            return "Not enough memory to load \(modelID): \(message)"
         }
+    }
+
+    /// Re-maps the server's structured HTTP 507 rejection to this error's
+    /// own case, rather than letting the raw JSON body reach the user.
+    static func from(_ error: Error, modelID: String) -> ChatSpawnAgentToolError? {
+        guard case NativChatError.httpStatus(507, let body) = error,
+              NativServerErrorMessage.errorKind(from: body) == ChatServerInsufficientMemory.errorKind,
+              let message = NativServerErrorMessage.detail(from: body)
+        else {
+            return nil
+        }
+        return .insufficientMemory(modelID: modelID, message: message)
     }
 }
 
-/// Decides whether an accumulating stream of text deltas should flush into the
-/// visible message now or wait, at a capped cadence. Pure and stateless --
-/// the caller tracks its own "time since last flush" and passes it in,
-/// rather than this type owning a `Date`, so it's trivially testable with
-/// fixed `TimeInterval` values instead of real-clock timing.
-///
-/// `flushInterval` lives here (not in `ChatViewModel`, which owns the
-/// coordinator's own equivalent, `append(event:)`'s token-stream throttle)
-/// specifically so `ChatToolRegistry.swift` doesn't need to reference
-/// `ChatView.swift` -- `NativTests` compiles this file on its own, without
-/// `ChatView.swift`, so a dependency in that direction wouldn't build.
-/// `ChatViewModel.streamFlushInterval` references this constant instead,
-/// the direction that *does* compile (`ChatView.swift` is only ever built
-/// as part of the full app target, together with this file) -- so the two
-/// cadences still can't drift apart, just via one shared constant read from
-/// the other direction.
+/// Kept as a named constant so the Swift and Python sides can't drift apart.
+enum ChatServerInsufficientMemory {
+    static let errorKind = "insufficient_memory"
+}
+
+/// Decides whether an accumulating stream of text deltas should flush into
+/// the visible message now or wait, at a capped cadence. Lives here, not in
+/// `ChatViewModel`, so `NativTests` can compile it standalone.
 enum ChatAgentStreamThrottle {
     static let flushInterval: TimeInterval = 1.0 / 15.0
 
@@ -538,24 +536,8 @@ enum ChatAgentStreamThrottle {
     }
 }
 
-/// A sub-agent's own round-loop: same shape as the coordinator's, over a private,
-/// in-memory message array instead of a session-backed one. Deliberately NOT
-/// wired into `ChatViewModel.runChatLoop` -- reusing that method's
-/// session-array/live-UI-throttling machinery for a fresh in-memory array would
-/// have meant refactoring the coordinator's proven, load-bearing loop, which is
-/// higher regression risk than this focused reimplementation. `ChatCompletionRequestBuilder`
-/// and `ChatToolCallNormalizer` are shared so the two loops can't drift on request
-/// construction or tool-call normalization, the parts most worth not duplicating.
-///
-/// A sub-agent's assistant text streams token-by-token into its own message,
-/// mirroring the coordinator's UI, via `ChatAgentStreamThrottle` -- a second,
-/// independent throttle instance kept local to this loop rather than sharing
-/// `ChatViewModel`'s dictionary-based, per-message-ID machinery. That's
-/// deliberate, not an oversight: this loop only ever streams one message at a
-/// time (its current round), so a single pair of local buffer/timestamp
-/// variables is sufficient and doesn't need the coordinator's multi-message
-/// bookkeeping -- reusing that machinery would mean the exact refactor of the
-/// coordinator's proven loop the comment above already rejected.
+/// A sub-agent's own round-loop, over a private in-memory message array
+/// instead of a session-backed one.
 @MainActor
 struct ChatAgentLoop {
     struct Configuration {
@@ -611,45 +593,47 @@ struct ChatAgentLoop {
             var pendingReasoning = ""
             var lastFlushDate: Date?
 
-            let completion = try await client.streamChat(request, onEvent: { event in
-                await MainActor.run {
-                    if let content = event.content, !content.isEmpty {
-                        pendingContent += content
-                    }
-                    if let reasoning = event.reasoningContent, !reasoning.isEmpty {
-                        pendingReasoning += reasoning
-                    }
-                    guard !pendingContent.isEmpty || !pendingReasoning.isEmpty else {
-                        return
-                    }
+            let completion: MLXChatCompletion
+            do {
+                completion = try await client.streamChat(request, repetitionDetector: .default, onEvent: { event in
+                    await MainActor.run {
+                        if let content = event.content, !content.isEmpty {
+                            pendingContent += content
+                        }
+                        if let reasoning = event.reasoningContent, !reasoning.isEmpty {
+                            pendingReasoning += reasoning
+                        }
+                        guard !pendingContent.isEmpty || !pendingReasoning.isEmpty else {
+                            return
+                        }
 
-                    let elapsed = lastFlushDate.map { Date().timeIntervalSince($0) }
-                    guard ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: elapsed) else {
-                        return
-                    }
-                    lastFlushDate = Date()
+                        let elapsed = lastFlushDate.map { Date().timeIntervalSince($0) }
+                        guard ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: elapsed) else {
+                            return
+                        }
+                        lastFlushDate = Date()
 
-                    guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else {
-                        return
+                        guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else {
+                            return
+                        }
+                        if !pendingContent.isEmpty, !messages[index].reasoningContent.isEmpty,
+                           messages[index].thinkingDuration == nil {
+                            messages[index].thinkingDuration = Date().timeIntervalSince(messages[index].createdAt)
+                        }
+                        messages[index].content += pendingContent
+                        messages[index].reasoningContent += pendingReasoning
+                        pendingContent = ""
+                        pendingReasoning = ""
+                        onMessagesChange(messages)
                     }
-                    if !pendingContent.isEmpty, !messages[index].reasoningContent.isEmpty,
-                       messages[index].thinkingDuration == nil {
-                        messages[index].thinkingDuration = Date().timeIntervalSince(messages[index].createdAt)
-                    }
-                    messages[index].content += pendingContent
-                    messages[index].reasoningContent += pendingReasoning
-                    pendingContent = ""
-                    pendingReasoning = ""
-                    onMessagesChange(messages)
-                }
-            })
+                })
+            } catch {
+                throw ChatSpawnAgentToolError.from(error, modelID: configuration.modelID) ?? error
+            }
             let toolCalls = ChatToolCallNormalizer.normalize(completion.toolCalls)
 
-            // Finalize with the authoritative full content/reasoning, covering
-            // whatever was still sitting in the throttle's buffer when the
-            // stream ended -- the coalesced-but-unflushed remainder, plus
-            // anything the server only reports in the final envelope, not
-            // per-delta.
+            // Overwrite with the authoritative full content — covers
+            // whatever was still unflushed in the throttle's buffer.
             if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
                 if !completion.content.isEmpty, !(completion.reasoningContent ?? "").isEmpty,
                    messages[index].thinkingDuration == nil {
@@ -721,6 +705,13 @@ struct ChatAgentLoop {
             }
             onMessagesChange(messages)
             throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .cancelled
+                $0.content = ChatToolDispatcher.failurePayload(toolName: toolCall.function?.name, error: CancellationError())
+            }
+            onMessagesChange(messages)
+            throw CancellationError()
         } catch {
             update(&messages, id: toolMessageID) {
                 $0.toolStatus = .failed
@@ -781,6 +772,20 @@ struct ChatAgentLoop {
                 $0.toolStatus = .succeeded
                 $0.content = content
             }
+        } catch is CancellationError {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .cancelled
+                $0.content = action.failurePayload(error: CancellationError())
+            }
+            onMessagesChange(messages)
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            update(&messages, id: toolMessageID) {
+                $0.toolStatus = .cancelled
+                $0.content = action.failurePayload(error: CancellationError())
+            }
+            onMessagesChange(messages)
+            throw CancellationError()
         } catch {
             update(&messages, id: toolMessageID) {
                 $0.toolStatus = .failed
@@ -802,30 +807,15 @@ struct ChatAgentLoop {
     }
 }
 
-/// Resolves which model a `spawn_agent` call should run its sub-agent on: the
-/// call's own optional `model` argument when present and non-blank, else the
-/// coordinator's own model. Pure and separately testable so the fallback/
-/// trimming behavior doesn't need a live network call to verify.
 enum ChatSpawnAgentModelResolver {
     static func resolve(argumentModel: String?, coordinatorModelID: String?) -> String? {
         trimmedNonBlank(argumentModel) ?? coordinatorModelID
     }
 
-    /// Whether the call explicitly requested a model override, as opposed to
-    /// falling back to the coordinator's own model. Used to scope model-
-    /// existence validation to just the override path -- the coordinator's
-    /// own configured model is already known-good (it came from the same
-    /// local scan that populates the settings picker), so re-validating it
-    /// on every single spawn_agent call would be wasted work.
     static func isExplicitOverride(argumentModel: String?) -> Bool {
         trimmedNonBlank(argumentModel) != nil
     }
 
-    /// Exact match only, deliberately -- no case-folding or prefix/suffix
-    /// matching. A model ID either is or isn't one of the repos actually
-    /// installed locally; a loose match risks silently accepting a
-    /// plausible-but-wrong guess, exactly the failure mode this exists to
-    /// catch in the first place.
     static func isKnownModel(_ modelID: String, among knownModels: [LocalModel]) -> Bool {
         knownModels.contains { $0.repoID == modelID }
     }
@@ -856,20 +846,9 @@ struct ChatSpawnAgentToolExecutor {
         else {
             throw ChatSpawnAgentToolError.invalidArguments
         }
-        // The server holds exactly one text-generation model at a time (confirmed by
-        // reading nativ_server.py / mlx_vlm's get_cached_model + the chat-completions
-        // handler): every request's own `model` field is resolved per-request, and a
-        // mismatch evicts whatever's cached -- stopping its response_generator and
-        // clearing its prefix cache -- before loading the new one. So a differently-
-        // modeled sub-agent needs no explicit swap orchestration here; it just needs to
-        // send its own `model` on every request it makes, which `ChatAgentLoop` already
-        // does via `configuration.modelID` (kept distinct from `settings.languageModelID`
-        // for exactly this purpose). The coordinator's own next round after this sub-agent
-        // returns still requests `settings.languageModelID` unconditionally (unchanged),
-        // which evicts the sub-agent's model and reloads the coordinator's the same way --
-        // same reload cost the existing switch_model tool already pays today, not a new
-        // regression. Conversation history for both sides survives regardless, since these
-        // are stateless per-request completions with the full message list resent each time.
+        // The server holds one text-generation model at a time and swaps on
+        // every request's own `model` field, so a sub-agent needs no explicit
+        // swap orchestration -- just its own `model` on each request.
         guard let modelID = ChatSpawnAgentModelResolver.resolve(
             argumentModel: arguments.model,
             coordinatorModelID: settings.languageModelID
@@ -877,16 +856,9 @@ struct ChatSpawnAgentToolExecutor {
             throw ChatSpawnAgentToolError.noModelConfigured
         }
 
-        // Live-caught 2026-08-06: a coordinator can hallucinate a plausible-
-        // but-wrong `model` argument (e.g. "Qwen3-1.7B-4bit", the composer's
-        // own picker DISPLAY string, missing the real "mlx-community/" repo
-        // prefix) on a prompt that never mentioned models at all. Passing
-        // that straight into a completion request's `model` field isn't a
-        // fast local failure -- the server treats an unrecognized model ID as
-        // a real remote lookup and it 401s minutes later. Only validate an
-        // *explicit* override, not the coordinator's own model (already
-        // known-good, and re-scanning on every single spawn_agent call would
-        // be wasted work for the common, unremarkable case).
+        // A hallucinated model argument would otherwise 401 minutes later
+        // instead of failing fast locally. Only the explicit-override path
+        // needs this — the coordinator's own model is already known-good.
         if ChatSpawnAgentModelResolver.isExplicitOverride(argumentModel: arguments.model) {
             let knownModels = try await LocalModelDiscovery.scan(
                 path: toolExecutionContext.modelSearchPath,
@@ -986,13 +958,6 @@ enum ChatToolConsentRouter {
     }
 }
 
-/// Generalizes consent-gating over both `switch_model` and MCP tool calls for
-/// `ChatAgentLoop` (a sub-agent's own loop can encounter either). The
-/// coordinator's own loop (`ChatView.swift`) keeps its existing, separate
-/// inline `switch_model` consent branch untouched -- not refactored onto
-/// this enum -- to avoid touching that proven, already-shipped code; this
-/// type exists specifically for `ChatAgentLoop`, which needs one abstraction
-/// covering both cases since a sub-agent can call either.
 enum ChatConsentGatedAction {
     case switchModel(call: MLXChatToolCall)
     case mcpTool(call: MLXChatToolCall, bridge: ChatMCPHostBridge)
@@ -1030,8 +995,8 @@ enum ChatConsentGatedAction {
         switch self {
         case .switchModel:
             return ChatSwitchModelToolExecutor().declinedPayload()
-        case .mcpTool(let call, _):
-            return ChatMCPHostBridge.declinedPayload(toolName: call.function?.name ?? "tool")
+        case .mcpTool:
+            return ChatMCPHostBridge.declinedPayload()
         }
     }
 
@@ -1042,8 +1007,8 @@ enum ChatConsentGatedAction {
                 operation: call.function?.name ?? ChatSwitchModelToolRegistry.toolName,
                 error: error
             )
-        case .mcpTool(let call, _):
-            return ChatMCPHostBridge.failurePayload(toolName: call.function?.name ?? "tool", error: error)
+        case .mcpTool:
+            return ChatMCPHostBridge.failurePayload(error: error)
         }
     }
 }
@@ -1120,28 +1085,10 @@ enum ChatToolPresentation {
         }
     }
 
-    /// Whether a step-cell should force its details open while its own tool
-    /// call is running, independent of the user's manual expand/collapse
-    /// toggle -- scoped to `spawn_agent` specifically, since that's the only
-    /// tool whose `subMessages` populate live mid-run; other tools have
-    /// nothing nested to force open and would just flicker for near-instant
-    /// calls.
     static func showsDetailsWhileRunning(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> Bool {
         toolName == ChatSpawnAgentToolRegistry.toolName && status == .running
     }
 
-    /// Whether a step-cell should auto-expand itself the instant its own tool
-    /// call transitions into a settled state -- so the result the user was
-    /// just watching stream in doesn't vanish the moment it's ready, instead
-    /// of reverting to the manual toggle's default-collapsed state. Fires
-    /// only on the actual transition *into* `.succeeded`/`.failed` from
-    /// `.running` (not on every render while already settled), so a later
-    /// manual collapse sticks: `spawn_agent`'s coordinator-level tool message
-    /// is set to `.running` once on insert and its terminal status exactly
-    /// once via `updateToolMessage`, never revisited, so this genuinely can't
-    /// re-fire and undo a user's later explicit collapse. Doesn't cover
-    /// `.cancelled`/`.declined` -- succeeded/failed specifically; a
-    /// cancelled/declined run has no completed result worth force-revealing.
     static func shouldAutoExpandOnSettle(
         toolName: String?,
         previousStatus: ChatTranscriptMessage.ToolStatus?,
