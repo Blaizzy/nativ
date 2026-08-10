@@ -157,6 +157,7 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
+    @State private var configuringExtensionID: String?
 
     var body: some View {
         HubSectionScaffold(
@@ -173,7 +174,13 @@ private struct ExtensionsSectionView: View {
             } else {
                 VStack(spacing: 12) {
                     ForEach(manager.records) { record in
-                        ExtensionRow(record: record, manager: manager)
+                        ExtensionRow(
+                            record: record,
+                            manager: manager,
+                            onConfigure: {
+                                configuringExtensionID = record.id
+                            }
+                        )
                     }
                 }
             }
@@ -181,12 +188,29 @@ private struct ExtensionsSectionView: View {
         .onAppear {
             manager.refreshPermissionStatuses()
         }
+        .sheet(
+            isPresented: Binding(
+                get: { configuringExtensionID != nil },
+                set: { isPresented in
+                    if !isPresented { configuringExtensionID = nil }
+                }
+            )
+        ) {
+            if let configuringExtensionID,
+               let configuration = manager.makeConfigurationView(
+                for: configuringExtensionID
+               ) {
+                configuration
+                    .frame(width: 660, height: 430)
+            }
+        }
     }
 }
 
 private struct ExtensionRow: View {
     let record: NativExtensionRecord
     @ObservedObject var manager: NativExtensionManager
+    let onConfigure: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -208,6 +232,14 @@ private struct ExtensionRow: View {
                         .padding(.top, 1)
                 }
                 Spacer(minLength: 12)
+                if manager.hasConfiguration(for: record.id) {
+                    Button(action: onConfigure) {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Configure \(record.manifest.displayName)")
+                }
                 Toggle(
                     "",
                     isOn: Binding(

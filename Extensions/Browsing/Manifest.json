@@ -12,14 +12,7 @@
   "runtime": "builtIn",
   "extensionPoint": "com.nativ.extension",
   "contributions": {
-    "sidebar": [
-      {
-        "id": "com.nativ.browsing.page",
-        "title": "Browsing",
-        "systemImage": "globe",
-        "order": 260
-      }
-    ],
+    "sidebar": [],
     "commands": [],
     "shortcuts": [],
     "settings": []

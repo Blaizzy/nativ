@@ -46,12 +46,14 @@ protocol NativHostExtension: AnyObject {
     func deactivate()
     func makePage(id: String, context: NativExtensionPageContext) -> AnyView?
     func performCommand(id: String)
+    func makeConfigurationView() -> AnyView?
     func toolDefinitions() -> [MLXChatToolDefinition]
     func executeTool(call: MLXChatToolCall) async throws -> String?
 }
 
 extension NativHostExtension {
     func performCommand(id: String) {}
+    func makeConfigurationView() -> AnyView? { nil }
     func toolDefinitions() -> [MLXChatToolDefinition] { [] }
     func executeTool(call: MLXChatToolCall) async throws -> String? { nil }
 }
@@ -159,6 +161,14 @@ final class NativExtensionManager: ObservableObject {
         activeExtensionIDs
             .sorted()
             .flatMap { builtIns[$0]?.toolDefinitions() ?? [] }
+    }
+
+    func hasConfiguration(for extensionID: String) -> Bool {
+        builtIns[extensionID]?.makeConfigurationView() != nil
+    }
+
+    func makeConfigurationView(for extensionID: String) -> AnyView? {
+        builtIns[extensionID]?.makeConfigurationView()
     }
 
     func handlesTool(named name: String) -> Bool {
