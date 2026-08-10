@@ -401,46 +401,9 @@ private struct MCPServerEditor: View {
 // one tool — before it can merge. Until a logo asset exists we render a tinted
 // glyph tile so the grid always looks complete. See Docs/mcp-catalog.md.
 
-struct MCPCatalogEntry: Identifiable, Decodable {
-    let id: String
-    let name: String
-    let summary: String
-    let command: String
-    let arguments: [String]
-    let symbol: String
-    let tint: Color
+private extension MCPCatalogEntry {
+    var tint: Color { .nativTint(tintName) }
     var logoAssetName: String { "MCPLogo-\(name)" }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, name, summary, command
-        case arguments = "args"
-        case symbol, tint
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        name = try c.decode(String.self, forKey: .name)
-        summary = try c.decode(String.self, forKey: .summary)
-        command = try c.decode(String.self, forKey: .command)
-        arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
-        symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? "server.rack"
-        let tintName = try c.decodeIfPresent(String.self, forKey: .tint) ?? "accent"
-        tint = .nativTint(tintName)
-    }
-
-    func makeConfig() -> MCPServerConfig {
-        MCPServerConfig(name: name, command: command, arguments: arguments, isEnabled: true)
-    }
-
-    /// The community catalog, decoded once from the bundled `MCPCatalog.json`.
-    static let catalog: [MCPCatalogEntry] = {
-        guard let url = Bundle.main.url(forResource: "MCPCatalog", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let entries = try? JSONDecoder().decode([MCPCatalogEntry].self, from: data)
-        else { return [] }
-        return entries
-    }()
 }
 
 private let mcpCatalog = MCPCatalogEntry.catalog

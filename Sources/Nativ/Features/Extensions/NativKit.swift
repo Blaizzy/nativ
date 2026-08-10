@@ -1,192 +1,225 @@
-import NativServerKit
-import SwiftUI
+import Foundation
 
-// A Kit is a ready-made setup: a curated bundle of MCP servers, their tools,
-// skills, and extensions for a role or use-case. Enabling one fans out across
-// all four primitives at once; each part stays individually manageable after.
+enum NativKitMCPServer: Equatable, Sendable {
+    case catalog(String)
+    case configured(UUID)
+}
 
-struct NativKit: Identifiable {
+struct NativKitMCPTool: Codable, Equatable, Hashable, Sendable {
+    let serverID: UUID
+    let name: String
+}
+
+enum NativKitSkillReference: Equatable, Sendable {
+    case builtIn(NativSkill)
+    case configured(UUID)
+}
+
+struct UserNativKit: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID
+    var name: String
+    var summary: String
+    var mcpServerIDs: [UUID]
+    var mcpTools: [NativKitMCPTool]
+    var builtInToolNames: [String]
+    var customToolIDs: [UUID]
+    var skillIDs: [UUID]
+    var extensionIDs: [String]
+
+    init(
+        id: UUID = UUID(),
+        name: String = "",
+        summary: String = "",
+        mcpServerIDs: [UUID] = [],
+        mcpTools: [NativKitMCPTool] = [],
+        builtInToolNames: [String] = [],
+        customToolIDs: [UUID] = [],
+        skillIDs: [UUID] = [],
+        extensionIDs: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.mcpServerIDs = mcpServerIDs
+        self.mcpTools = mcpTools
+        self.builtInToolNames = builtInToolNames
+        self.customToolIDs = customToolIDs
+        self.skillIDs = skillIDs
+        self.extensionIDs = extensionIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, summary, mcpServerIDs, mcpTools, builtInToolNames
+        case customToolIDs, skillIDs, extensionIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        mcpServerIDs = try container.decodeIfPresent([UUID].self, forKey: .mcpServerIDs) ?? []
+        mcpTools = try container.decodeIfPresent([NativKitMCPTool].self, forKey: .mcpTools) ?? []
+        builtInToolNames = try container.decodeIfPresent([String].self, forKey: .builtInToolNames) ?? []
+        customToolIDs = try container.decodeIfPresent([UUID].self, forKey: .customToolIDs) ?? []
+        skillIDs = try container.decodeIfPresent([UUID].self, forKey: .skillIDs) ?? []
+        extensionIDs = try container.decodeIfPresent([String].self, forKey: .extensionIDs) ?? []
+    }
+
+    var isComplete: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!mcpServerIDs.isEmpty
+                || !mcpTools.isEmpty
+                || !builtInToolNames.isEmpty
+                || !customToolIDs.isEmpty
+                || !skillIDs.isEmpty
+                || !extensionIDs.isEmpty)
+    }
+
+    func normalized() -> UserNativKit {
+        var kit = self
+        kit.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        kit.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        kit.mcpTools = mcpTools.uniqued()
+        kit.mcpServerIDs = (mcpServerIDs + kit.mcpTools.map(\.serverID)).uniqued()
+        kit.builtInToolNames = builtInToolNames.uniqued()
+        kit.customToolIDs = customToolIDs.uniqued()
+        kit.skillIDs = skillIDs.uniqued()
+        kit.extensionIDs = extensionIDs.uniqued()
+        return kit
+    }
+
+    func resolved() -> NativKit {
+        let normalized = normalized()
+        return NativKit(
+            id: normalized.id.uuidString,
+            name: normalized.name,
+            summary: normalized.summary,
+            isBuiltIn: false,
+            mcpServers: normalized.mcpServerIDs.map(NativKitMCPServer.configured),
+            mcpTools: normalized.mcpTools,
+            builtInToolNames: normalized.builtInToolNames,
+            customToolIDs: normalized.customToolIDs,
+            skills: normalized.skillIDs.map(NativKitSkillReference.configured),
+            extensionIDs: normalized.extensionIDs
+        )
+    }
+}
+
+struct NativKit: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let summary: String
-    let symbol: String
-    let tint: Color
-    let mcpServerIDs: [String]
+    let isBuiltIn: Bool
+    let mcpServers: [NativKitMCPServer]
+    let mcpTools: [NativKitMCPTool]
+    let builtInToolNames: [String]
+    let customToolIDs: [UUID]
+    let skills: [NativKitSkillReference]
     let extensionIDs: [String]
-    let skills: [NativSkill]
 
-    /// Catalog MCP entries this kit references, in listed order.
-    var mcpEntries: [MCPCatalogEntry] {
-        mcpServerIDs.compactMap { id in MCPCatalogEntry.catalog.first { $0.id == id } }
-    }
-
-    /// A one-line inventory of what the kit turns on.
     var inventory: String {
         var parts: [String] = []
-        let servers = mcpEntries.count
-        if servers > 0 { parts.append("\(servers) MCP server\(servers == 1 ? "" : "s")") }
-        if !skills.isEmpty { parts.append("\(skills.count) skill\(skills.count == 1 ? "" : "s")") }
-        if !extensionIDs.isEmpty { parts.append("\(extensionIDs.count) extension\(extensionIDs.count == 1 ? "" : "s")") }
+        if !extensionIDs.isEmpty {
+            parts.append(Self.count(extensionIDs.count, singular: "extension"))
+        }
+        if !mcpServers.isEmpty {
+            parts.append(Self.count(mcpServers.count, singular: "MCP server"))
+        }
+        let toolCount = mcpTools.count + builtInToolNames.count + customToolIDs.count
+        if toolCount > 0 {
+            parts.append(Self.count(toolCount, singular: "tool"))
+        }
+        if !skills.isEmpty {
+            parts.append(Self.count(skills.count, singular: "skill"))
+        }
         return parts.joined(separator: " · ")
     }
 
-    /// The abilities a person gets when every part of this kit is enabled.
-    var capabilityNames: [String] {
-        mcpEntries.map(\.name) + skills.map(\.name) + extensionIDs
+    private static func count(_ count: Int, singular: String) -> String {
+        "\(count) \(singular)\(count == 1 ? "" : "s")"
     }
 }
 
 private extension NativSkill {
-    /// A kit skill with a stable identity so enabling a kit twice never duplicates it.
     static func kit(_ uuid: String, _ name: String, _ instructions: String) -> NativSkill {
-        NativSkill(id: UUID(uuidString: uuid)!, name: name, instructions: instructions, isEnabled: true)
+        NativSkill(
+            id: UUID(uuidString: uuid)!,
+            name: name,
+            instructions: instructions,
+            isEnabled: true
+        )
     }
 }
 
 extension NativKit {
-    /// The curated kits shown at the top of the Extensions hub.
-    static let all: [NativKit] = [
-        NativKit(
-            id: "engineering",
-            name: "Engineering",
-            summary: "Read code, work with Git and GitHub, and pull in docs while you build.",
-            symbol: "chevron.left.forwardslash.chevron.right",
-            tint: .indigo,
-            mcpServerIDs: ["git", "github", "filesystem", "fetch"],
-            extensionIDs: [],
-            skills: [
-                .kit(
-                    "A1000000-0000-4000-8000-000000000001",
-                    "Working in a codebase",
-                    """
-                    You're helping with software. Ground every answer in the actual \
-                    repository, not assumptions.
+    static let builtIns: [NativKit] = [engineering, research]
 
-                    - Use the Git and filesystem tools to read real files, history, and \
-                    diffs before proposing changes; cite concrete paths and symbols.
-                    - When you touch GitHub, prefer read-only queries (issues, PRs, code \
-                    search) and summarize findings precisely.
-                    - Match the project's existing style and conventions. Keep changes \
-                    minimal and explain the reasoning.
-                    - Fetch documentation when an API or library detail is uncertain \
-                    rather than guessing.
-                    """
-                )
-            ]
-        ),
-        NativKit(
-            id: "research",
-            name: "Research",
-            summary: "Gather sources from the web, keep notes, and query your own data.",
-            symbol: "magnifyingglass",
-            tint: .purple,
-            mcpServerIDs: ["fetch", "memory", "sqlite"],
-            extensionIDs: [],
-            skills: [
-                .kit(
-                    "A2000000-0000-4000-8000-000000000002",
-                    "Researching with sources",
-                    """
-                    You're doing careful research. Prioritize accuracy and traceability.
+    private static let engineering = NativKit(
+        id: "engineering",
+        name: "Engineering",
+        summary: "Read code, work with Git and GitHub, and pull in docs while you build.",
+        isBuiltIn: true,
+        mcpServers: ["git", "github", "filesystem", "fetch"].map(NativKitMCPServer.catalog),
+        mcpTools: [],
+        builtInToolNames: [],
+        customToolIDs: [],
+        skills: [
+            .builtIn(.kit(
+                "A1000000-0000-4000-8000-000000000001",
+                "Working in a codebase",
+                """
+                You're helping with software. Ground every answer in the actual \
+                repository, not assumptions.
 
-                    - Use the fetch tool to read primary sources; quote or paraphrase \
-                    with a link back to where each claim came from.
-                    - Record durable findings in the memory tool so they carry across \
-                    the conversation, and recall them before re-fetching.
-                    - Query the SQLite tool for anything in the user's own dataset \
-                    instead of estimating.
-                    - Separate what the sources say from your own inference, and flag \
-                    uncertainty plainly.
-                    """
-                )
-            ]
-        ),
-    ]
+                - Use the Git and filesystem tools to read real files, history, and \
+                diffs before proposing changes; cite concrete paths and symbols.
+                - When you touch GitHub, prefer read-only queries (issues, PRs, code \
+                search) and summarize findings precisely.
+                - Match the project's existing style and conventions. Keep changes \
+                minimal and explain the reasoning.
+                - Fetch documentation when an API or library detail is uncertain \
+                rather than guessing.
+                """
+            )),
+        ],
+        extensionIDs: []
+    )
+
+    private static let research = NativKit(
+        id: "research",
+        name: "Research",
+        summary: "Gather sources from the web, keep notes, and query your own data.",
+        isBuiltIn: true,
+        mcpServers: ["fetch", "memory", "sqlite"].map(NativKitMCPServer.catalog),
+        mcpTools: [],
+        builtInToolNames: [],
+        customToolIDs: [],
+        skills: [
+            .builtIn(.kit(
+                "A2000000-0000-4000-8000-000000000002",
+                "Researching with sources",
+                """
+                You're doing careful research. Prioritize accuracy and traceability.
+
+                - Use the fetch tool to read primary sources; quote or paraphrase \
+                with a link back to where each claim came from.
+                - Record durable findings in the memory tool so they carry across \
+                the conversation, and recall them before re-fetching.
+                - Query the SQLite tool for anything in the user's own dataset \
+                instead of estimating.
+                - Separate what the sources say from your own inference, and flag \
+                uncertainty plainly.
+                """
+            )),
+        ],
+        extensionIDs: []
+    )
 }
 
-// MARK: - Activation
-
-/// How much of a kit is currently switched on, derived from its live pieces.
-enum NativKitState: Equatable {
-    case off
-    case partial
-    case enabled
-}
-
-/// Turns a kit's MCP servers, skills, and extensions on or off together, driving
-/// the same settings the individual sections do. Enabling appends any missing
-/// pieces; disabling switches them off without deleting the user's edits.
-@MainActor
-enum NativKitActivation {
-    static func setEnabled(
-        _ enabled: Bool,
-        kit: NativKit,
-        model: NativModel,
-        manager: NativExtensionManager
-    ) {
-        for entry in kit.mcpEntries {
-            if let index = matchingServerIndex(for: entry, in: model.settings.mcpServers) {
-                model.settings.mcpServers[index].isEnabled = enabled
-            } else if enabled {
-                model.settings.mcpServers.append(entry.makeConfig())
-            }
-        }
-
-        for skill in kit.skills {
-            if let index = model.settings.skills.firstIndex(where: { $0.id == skill.id }) {
-                model.settings.skills[index].isEnabled = enabled
-            } else if enabled {
-                model.settings.skills.append(skill)
-            }
-        }
-
-        for extensionID in kit.extensionIDs {
-            manager.setEnabled(enabled, extensionID: extensionID)
-        }
-    }
-
-    /// The kit's activation derived from the actual state of its pieces, so the UI
-    /// cannot drift out of sync with the individual switches.
-    static func state(of kit: NativKit, model: NativModel, manager: NativExtensionManager) -> NativKitState {
-        let inactive = inactivePartNames(of: kit, model: model, manager: manager)
-        guard inactive.count < kit.capabilityNames.count else { return .off }
-        return inactive.isEmpty ? .enabled : .partial
-    }
-
-    /// Names the parts a person still needs to turn on for this kit.
-    static func inactivePartNames(
-        of kit: NativKit,
-        model: NativModel,
-        manager: NativExtensionManager
-    ) -> [String] {
-        var names: [String] = []
-
-        for entry in kit.mcpEntries where !isServerEnabled(entry, in: model) {
-            names.append(entry.name)
-        }
-        for skill in kit.skills where model.settings.skills.first(where: { $0.id == skill.id })?.isEnabled != true {
-            names.append(skill.name)
-        }
-        for extensionID in kit.extensionIDs where !manager.isEnabled(extensionID: extensionID) {
-            let name = manager.records.first { $0.id == extensionID }?.manifest.displayName ?? extensionID
-            names.append(name)
-        }
-
-        return names
-    }
-
-    /// Matches a catalog entry to a configured server by launch identity
-    /// (command + arguments), so a kit never toggles an unrelated server that
-    /// merely shares a name.
-    private static func matchingServerIndex(
-        for entry: MCPCatalogEntry,
-        in servers: [MCPServerConfig]
-    ) -> Int? {
-        servers.firstIndex { $0.command == entry.command && $0.arguments == entry.arguments }
-    }
-
-    private static func isServerEnabled(_ entry: MCPCatalogEntry, in model: NativModel) -> Bool {
-        guard let index = matchingServerIndex(for: entry, in: model.settings.mcpServers) else { return false }
-        return model.settings.mcpServers[index].isEnabled
+private extension Array where Element: Hashable {
+    func uniqued() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }

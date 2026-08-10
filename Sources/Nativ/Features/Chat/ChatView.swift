@@ -25,6 +25,8 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var kitStore: NativKitStore
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -52,7 +54,11 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
-        .onAppear { chat.mcpHost = mcpHost }
+        .onAppear {
+            chat.mcpHost = mcpHost
+            chat.extensionManager = extensionManager
+            chat.kitStore = kitStore
+        }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
         }
@@ -275,6 +281,8 @@ private struct ChatComposerContainer: View {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    weak var extensionManager: NativExtensionManager?
+    weak var kitStore: NativKitStore?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -900,6 +908,46 @@ final class ChatViewModel: ObservableObject {
         await toolConsentGate.awaitDecision(for: toolMessageID)
     }
 
+    private func requestToolConsent(
+        for toolMessageID: UUID,
+        call: MLXChatToolCall,
+        remainingCalls: [MLXChatToolCall],
+        after insertionAnchor: UUID,
+        in sessionID: UUID,
+        promptContent: String = ""
+    ) async throws -> Bool {
+        updateToolMessage(
+            toolMessageID,
+            in: sessionID,
+            status: .awaitingConsent,
+            content: promptContent,
+            attachments: []
+        )
+        let approved = await awaitToolConsent(for: toolMessageID)
+        switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+        case .cancelled:
+            cancelToolMessages(
+                currentID: toolMessageID,
+                currentCall: call,
+                remainingCalls: remainingCalls,
+                after: insertionAnchor,
+                in: sessionID
+            )
+            throw CancellationError()
+        case .declined:
+            return false
+        case .approved:
+            updateToolMessage(
+                toolMessageID,
+                in: sessionID,
+                status: .running,
+                content: "",
+                attachments: []
+            )
+            return true
+        }
+    }
+
     func cancel() {
         activeTask?.cancel()
     }
@@ -1165,25 +1213,14 @@ final class ChatViewModel: ObservableObject {
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
                 if customTool?.kind == .script {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
+                    let approved = try await requestToolConsent(
+                        for: toolMessageID,
+                        call: toolCall,
+                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        after: insertionAnchor,
+                        in: queuedRequest.sessionID
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
+                    guard approved else {
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1192,37 +1229,109 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                         continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
                     }
                 }
 
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
+                if toolCall.function?.name == ChatUseKitToolRegistry.toolName {
+                    let descriptors = kitDescriptors()
+                    let selected: ChatKitDescriptor
+                    do {
+                        selected = try ChatUseKitToolExecutor().selectedKit(
+                            call: toolCall,
+                            kits: descriptors
                         )
-                        throw CancellationError()
-                    case .declined:
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatUseKitToolExecutor().failurePayload(
+                                operation: ChatUseKitToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+
+                    let approved = try await requestToolConsent(
+                        for: toolMessageID,
+                        call: toolCall,
+                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        after: insertionAnchor,
+                        in: queuedRequest.sessionID,
+                        promptContent: selected.name
+                    )
+                    guard approved else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatUseKitToolExecutor().declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    }
+
+                    guard let appModel, let extensionManager, let mcpHost, let kitStore else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatUseKitToolExecutor().failurePayload(
+                                operation: ChatUseKitToolRegistry.toolName,
+                                error: ChatUseKitToolError.activationUnavailable
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+
+                    do {
+                        guard let kit = kitStore.kit(id: selected.id) else {
+                            throw ChatUseKitToolError.unknownKit(selected.id)
+                        }
+                        let result = await NativKitActivationCoordinator(
+                            model: appModel,
+                            manager: extensionManager,
+                            host: mcpHost
+                        ).activate(kit)
+                        activeSettings = appModel.settings
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: ChatUseKitToolExecutor().enabledPayload(
+                                kit: selected,
+                                componentsEnabled: result.enabledComponentCount,
+                                unavailableComponents: result.unavailableComponents
+                            ),
+                            attachments: []
+                        )
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatUseKitToolExecutor().failurePayload(
+                                operation: ChatUseKitToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
+
+                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
+                    let approved = try await requestToolConsent(
+                        for: toolMessageID,
+                        call: toolCall,
+                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        after: insertionAnchor,
+                        in: queuedRequest.sessionID
+                    )
+                    guard approved else {
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1231,14 +1340,6 @@ final class ChatViewModel: ObservableObject {
                             attachments: []
                         )
                         continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
                     }
                     guard let appModel else {
                         updateToolMessage(
@@ -1412,7 +1513,8 @@ final class ChatViewModel: ObservableObject {
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty },
+                kits: kitDescriptors()
             )
             : []
         if advertisesToolsForModel {
@@ -1463,6 +1565,12 @@ final class ChatViewModel: ObservableObject {
             toolChoice: tools == nil ? nil : "auto",
             stream: true
         )
+    }
+
+    private func kitDescriptors() -> [ChatKitDescriptor] {
+        (kitStore?.availableKits ?? []).map {
+            ChatKitDescriptor(id: $0.id, name: $0.name, summary: $0.summary)
+        }
     }
 
     private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {
@@ -3365,6 +3473,8 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        extensionManager: .init(builtInExtensions: []),
+        kitStore: .init(),
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )

@@ -260,9 +260,10 @@ struct ControlPanelView: View {
     // the entire control panel (including the Models result list).
     let runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
-    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
@@ -641,6 +642,7 @@ struct ControlPanelView: View {
             RoutineEditor(
                 draft: draft,
                 availableModelIDs: availableModelIDs,
+                kitStore: kitStore,
                 onSave: { routine in
                     saveScheduledRoutine(routine)
                     schedulingRoutineDraft = nil
@@ -1938,6 +1940,8 @@ struct ControlPanelView: View {
                 model: model,
                 chat: chat,
                 mcpHost: mcpHost,
+                extensionManager: extensionManager,
+                kitStore: kitStore,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
@@ -1996,7 +2000,8 @@ struct ControlPanelView: View {
             ExtensionsHubView(
                 manager: extensionManager,
                 host: mcpHost,
-                model: model
+                model: model,
+                kitStore: kitStore
             )
         case .dev:
             DevHubView(
@@ -4186,6 +4191,8 @@ private extension View {
         navigation: .init(),
         runtime: .init(),
         extensionManager: .init(builtInExtensions: []),
+        mcpHost: .init(),
+        kitStore: .init(),
         softwareUpdater: .init()
     )
 }

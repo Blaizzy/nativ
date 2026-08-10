@@ -7,8 +7,8 @@ struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
+    @ObservedObject var kitStore: NativKitStore
     @State private var section: HubSection = .kits
-    @State private var didLaunch = false
 
     enum HubSection: String, CaseIterable, Identifiable {
         case kits = "Kits"
@@ -36,21 +36,6 @@ struct ExtensionsHubView: View {
             Divider()
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .task {
-            guard !didLaunch else { return }
-            didLaunch = true
-            manager.launch(
-                context: NativExtensionHostContext(
-                    transcriptionConfiguration: { nil },
-                    openSpeechModels: {},
-                    showMainWindow: {}
-                )
-            )
-            host.reload(servers: model.settings.mcpServers)
-        }
-        .onChange(of: model.settings.mcpServers) { _, servers in
-            host.reload(servers: servers)
         }
     }
 
@@ -88,7 +73,7 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, host: host, model: model)
+            KitsSectionView(manager: manager, host: host, model: model, store: kitStore)
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:

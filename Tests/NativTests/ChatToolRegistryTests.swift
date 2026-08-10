@@ -98,6 +98,25 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(names.count, Set(names).count)
     }
 
+    func testUseKitDefinitionIncludesEveryAvailableKit() throws {
+        let kits = [
+            ChatKitDescriptor(id: "engineering", name: "Engineering", summary: "Build software."),
+            ChatKitDescriptor(id: "release", name: "Release", summary: "Prepare a release."),
+        ]
+        let definition = try XCTUnwrap(
+            ChatToolRegistry.definitions(canEditImage: false, kits: kits)
+                .first { $0.function.name == ChatUseKitToolRegistry.toolName }
+        )
+        let data = try JSONEncoder().encode(definition)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let function = try XCTUnwrap(object["function"] as? [String: Any])
+        let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+        let kitID = try XCTUnwrap(properties["kit_id"] as? [String: Any])
+
+        XCTAssertEqual(kitID["enum"] as? [String], ["engineering", "release"])
+    }
+
     func testImageToolSchemasAreGoldenPinned() throws {
         let golden = #"""
             [{"function":{"description":"Create one or more new images from a detailed text prompt. Image-model selection is handled by the app; do not ask for or provide a model identifier.","name":"generate_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"},{"function":{"description":"Edit the most recently attached or generated image using a text instruction. Image-model selection is handled by the app; do not ask for or provide a model identifier.","name":"edit_image","parameters":{"additionalProperties":false,"properties":{"count":{"maximum":4,"minimum":1,"type":"integer"},"height":{"maximum":2048,"minimum":256,"type":"integer"},"prompt":{"description":"A specific visual description or edit instruction.","type":"string"},"seed":{"type":["integer","null"]},"width":{"maximum":2048,"minimum":256,"type":"integer"}},"required":["prompt"],"type":"object"}},"type":"function"}]
@@ -670,6 +689,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "Model switch",
                 .awaitingConsent: "Switch model?", .declined: "Model switch declined",
             ],
+            ChatUseKitToolRegistry.toolName: [
+                nil: "Kit tool", .preparing: "Making Kit available…",
+                .running: "Making Kit available…", .succeeded: "Kit available",
+                .failed: "Use Kit", .cancelled: "Use Kit",
+                .awaitingImageModelSelection: "Use Kit",
+                .awaitingConsent: "Use Kit?", .declined: "Kit activation declined",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -700,6 +726,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatUseKitToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -709,6 +736,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            ChatUseKitToolRegistry.toolName: "shippingbox",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -840,6 +868,34 @@ final class ChatSwitchModelToolExecutorTests: XCTestCase {
     private func decode(_ json: String) throws -> [String: Any] {
         let data = try XCTUnwrap(json.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+final class ChatUseKitToolExecutorTests: XCTestCase {
+    func testSelectsKitByStableIdentifier() throws {
+        let kit = ChatKitDescriptor(id: "release", name: "Release", summary: "Prepare a release.")
+
+        let selected = try ChatUseKitToolExecutor().selectedKit(
+            call: makeCall(
+                name: ChatUseKitToolRegistry.toolName,
+                arguments: #"{"kit_id":"release"}"#
+            ),
+            kits: [kit]
+        )
+
+        XCTAssertEqual(selected, kit)
+    }
+
+    func testUnknownKitFailsInsteadOfActivatingFallback() {
+        XCTAssertThrowsError(try ChatUseKitToolExecutor().selectedKit(
+            call: makeCall(
+                name: ChatUseKitToolRegistry.toolName,
+                arguments: #"{"kit_id":"removed"}"#
+            ),
+            kits: []
+        )) { error in
+            XCTAssertEqual(error as? ChatUseKitToolError, .unknownKit("removed"))
+        }
     }
 }
 

@@ -124,7 +124,7 @@ struct ToolsSectionView: View {
         definitions += ChatServerStatsToolRegistry.definitions()
         definitions += ChatSwitchModelToolRegistry.definitions()
         definitions += ChatImageToolRegistry.definitions(canEdit: false)
-        return definitions.map {
+        var tools = definitions.map {
             ToolItem(
                 name: $0.function.name,
                 title: $0.function.name,
@@ -134,6 +134,14 @@ struct ToolsSectionView: View {
                 isBuiltIn: true
             )
         }
+        tools.append(ToolItem(
+            name: ChatUseKitToolRegistry.toolName,
+            title: ChatUseKitToolRegistry.toolName,
+            detail: "Makes a Kit's capabilities available after user confirmation.",
+            isRunnable: false,
+            isBuiltIn: true
+        ))
+        return tools
     }
 
     private var customTools: [ToolItem] {
