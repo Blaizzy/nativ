@@ -6,6 +6,7 @@ struct MCPSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: MCPServerConfig?
     @State private var showingCatalog = false
+    @State private var pendingDelete: MCPServerConfig?
 
     var body: some View {
         HubSectionScaffold(
@@ -40,7 +41,7 @@ struct MCPSectionView: View {
                             onToggle: { toggle(server) },
                             onReconnect: { host.reconnect(server.id) },
                             onEdit: { editing = server },
-                            onDelete: { delete(server) }
+                            onDelete: { pendingDelete = server }
                         )
                     }
                 }
@@ -60,6 +61,25 @@ struct MCPSectionView: View {
             ) { entry in
                 save(entry.makeConfig())
             }
+        }
+        .alert(
+            "Delete MCP server?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { server in
+            Button("Delete", role: .destructive) {
+                delete(server)
+                pendingDelete = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { server in
+            Text("“\(server.name.isEmpty ? "This server" : server.name)” and its configuration will be removed.")
         }
     }
 
