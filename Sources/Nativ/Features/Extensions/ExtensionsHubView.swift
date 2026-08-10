@@ -201,7 +201,8 @@ private struct ExtensionsSectionView: View {
                 for: configuringExtensionID
                ) {
                 configuration
-                    .frame(width: 660, height: 430)
+                    .frame(width: 660, height: 350)
+                    .interactiveDismissDisabled(false)
             }
         }
     }

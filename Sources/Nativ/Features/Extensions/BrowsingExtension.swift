@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativExtensionSDK
 import NativServerKit
@@ -95,48 +96,13 @@ private enum BrowsingProvider: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var summary: String {
+    var logoFileName: String {
         switch self {
-        case .brave: "Fast web results from an independent search index."
-        case .exa: "Semantic web search tuned for research and discovery."
-        case .nimble: "Search with concise results and optional extracted content."
-        case .firecrawl: "Web search with clean page extraction when you need it."
-        case .perplexity: "Fresh ranked web results with concise snippets."
-        }
-    }
-
-    var documentationURL: URL {
-        switch self {
-        case .brave:
-            URL(string: "https://api-dashboard.search.brave.com/documentation/quickstart")!
-        case .exa:
-            URL(string: "https://exa.ai/docs/reference/search")!
-        case .nimble:
-            URL(string: "https://docs.nimbleway.com/api-reference/search/search")!
-        case .firecrawl:
-            URL(string: "https://docs.firecrawl.dev/api-reference/endpoint/search")!
-        case .perplexity:
-            URL(string: "https://docs.perplexity.ai/docs/search/quickstart")!
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .brave: "B"
-        case .exa: "E"
-        case .nimble: "N"
-        case .firecrawl: "F"
-        case .perplexity: "P"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .brave: Color(red: 0.94, green: 0.29, blue: 0.15)
-        case .exa: Color(red: 0.26, green: 0.33, blue: 0.93)
-        case .nimble: Color(red: 0.15, green: 0.63, blue: 0.43)
-        case .firecrawl: Color(red: 0.93, green: 0.37, blue: 0.13)
-        case .perplexity: Color(red: 0.09, green: 0.61, blue: 0.63)
+        case .brave: "Brave"
+        case .exa: "Exa"
+        case .nimble: "Nimble"
+        case .firecrawl: "Firecrawl"
+        case .perplexity: "Perplexity"
         }
     }
 }
@@ -174,7 +140,7 @@ private enum BrowsingCredentials {
     static func maskedKey(for provider: BrowsingProvider) -> String? {
         guard let key = load(for: provider) else { return nil }
         let suffix = key.count > 4 ? String(key.suffix(4)) : key
-        return "••••••••(suffix)"
+        return "••••••••\(suffix)"
     }
 
     static func migrateLegacyBraveKeyIfNeeded() {
@@ -195,50 +161,62 @@ private enum BrowsingCredentials {
 }
 
 private struct BrowsingConfigurationView: View {
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedProvider = BrowsingProviderSettings.active
     @State private var apiKey = ""
     @State private var revealsKey = false
     @State private var isTesting = false
     @State private var status: Status?
-    @State private var showsRemoveConfirmation = false
-
     private enum Status {
         case connected
         case failure(String)
     }
 
-    private var savedKey: String? { BrowsingCredentials.maskedKey(for: selectedProvider) }
-
     var body: some View {
-        HStack(spacing: 0) {
-            providerRail
-            Divider()
-            setupPane
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Spacer()
+                Button(action: dismiss.callAsFunction) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .help("Close")
+            }
+
+            HStack(alignment: .top, spacing: 16) {
+                providerPicker
+                    .frame(width: 238)
+                keySetup
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: dismiss.callAsFunction)
+                    .keyboardShortcut(.cancelAction)
+                Button("OK", action: dismiss.callAsFunction)
+                    .keyboardShortcut(.defaultAction)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.nativMainContentBackground)
-        .alert("Remove API key?", isPresented: $showsRemoveConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove", role: .destructive) { removeKey() }
-                .keyboardShortcut(.defaultAction)
-        } message: {
-            Text("This disconnects \(selectedProvider.name) from Browsing on this Mac.")
-        }
+        .onExitCommand(perform: dismiss.callAsFunction)
     }
 
-    private var providerRail: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("SEARCH PROVIDERS")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.5)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
+    private var providerPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Providers")
+                .font(.system(size: 13, weight: .semibold))
 
             ForEach(BrowsingProvider.allCases) { provider in
                 Button { select(provider) } label: {
                     HStack(spacing: 10) {
-                        ProviderMark(provider: provider, size: 28)
+                        ProviderLogo(provider: provider, size: 24)
                         Text(provider.name)
                             .font(.system(size: 12, weight: provider == selectedProvider ? .semibold : .regular))
                         Spacer(minLength: 0)
@@ -257,80 +235,42 @@ private struct BrowsingConfigurationView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Spacer()
         }
-        .padding(.vertical, 18)
-        .frame(width: 176)
+        .padding(12)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var setupPane: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 12) {
-                ProviderMark(provider: selectedProvider, size: 42)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Connect \(selectedProvider.name)")
-                        .font(.system(size: 18, weight: .semibold))
-                    Text(selectedProvider.summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Link("API docs", destination: selectedProvider.documentationURL)
-                    .font(.system(size: 11))
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("API key")
-                    .font(.system(size: 12, weight: .medium))
-                HStack(spacing: 8) {
-                    keyField
-                    Button { revealsKey.toggle(); revealSavedKeyIfNeeded() } label: {
-                        Image(systemName: revealsKey ? "eye.slash" : "eye")
-                            .frame(width: 26, height: 26)
-                    }
-                    .buttonStyle(.borderless)
-                    .help(revealsKey ? "Hide API key" : "Show API key")
-                }
-                Text(savedKey == nil
-                    ? "Paste a key, then test the connection."
-                    : "Saved key: \(savedKey!).")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
-
+    private var keySetup: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Button(isTesting ? "Testing…" : "Test & connect") { testAndConnect() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isTesting || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if savedKey != nil {
-                    Button("Remove key", role: .destructive) {
-                        showsRemoveConfirmation = true
-                    }
+                keyField
+                Button { revealsKey.toggle(); revealSavedKeyIfNeeded() } label: {
+                    Image(systemName: revealsKey ? "eye.slash" : "eye")
+                        .frame(width: 28, height: 28)
                 }
+                .buttonStyle(.borderless)
+                .help(revealsKey ? "Hide API key" : "Show API key")
+            }
+
+            HStack {
+                Button(isTesting ? "Testing…" : "Test & connect") { testAndConnect() }
+                    .disabled(isTesting || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
-                Text("One compact web_search(query) tool")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Color.accentColor)
             }
 
             statusView
-            Spacer()
-            Text("Nativ sends your key only to \(selectedProvider.name). It stays in this Mac’s Keychain and is never shown to models.")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
         }
-        .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(16)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     @ViewBuilder
     private var keyField: some View {
         if revealsKey {
-            TextField("\(selectedProvider.name) API key", text: $apiKey)
+            TextField("API key", text: $apiKey)
                 .textFieldStyle(.roundedBorder)
         } else {
-            SecureField("\(selectedProvider.name) API key", text: $apiKey)
+            SecureField("API key", text: $apiKey)
                 .textFieldStyle(.roundedBorder)
         }
     }
@@ -383,28 +323,27 @@ private struct BrowsingConfigurationView: View {
         }
     }
 
-    private func removeKey() {
-        do {
-            try BrowsingCredentials.save(nil, for: selectedProvider)
-            apiKey = ""
-            revealsKey = false
-            status = nil
-        } catch {
-            status = .failure("Nativ could not remove the API key from Keychain.")
-        }
-    }
 }
 
-private struct ProviderMark: View {
+private struct ProviderLogo: View {
     let provider: BrowsingProvider
     let size: CGFloat
 
     var body: some View {
-        Text(provider.symbol)
-            .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(provider.color, in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
+        Group {
+            if let image = NSImage(contentsOf: logoURL) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private var logoURL: URL {
+        Bundle.main.resourceURL!
+            .appendingPathComponent("Browsing/Assets/\(provider.logoFileName).png")
     }
 }
 
