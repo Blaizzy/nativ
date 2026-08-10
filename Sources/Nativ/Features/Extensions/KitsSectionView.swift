@@ -548,32 +548,34 @@ private struct KitEditor: View {
     }
 
     var body: some View {
-        Group {
-            if let picker {
-                KitComponentPickerView(
-                    kind: picker,
-                    kit: $kit,
-                    manager: manager,
-                    host: host,
-                    model: model,
-                    onDone: { self.picker = nil }
-                )
-            } else {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
                 editor
             }
+            Divider()
+            footer
         }
-        .frame(width: 500, height: 480)
+        .frame(width: 680, height: 680)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(kit.name.isEmpty ? "Create kit" : "Edit kit")
+                .font(.system(size: 21, weight: .semibold))
+            Text("Build a reusable setup from the parts you use together.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 28)
+        .padding(.top, 28)
+        .padding(.bottom, 22)
     }
 
     private var editor: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(kit.name.isEmpty ? "Create kit" : "Edit kit")
-                    .font(.system(size: 17, weight: .semibold))
-                Text("Pick the pieces you already use together. You can change each one later in its own section.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
+        VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Name")
                     .font(.system(size: 11))
@@ -588,52 +590,68 @@ private struct KitEditor: View {
                 TextField("What is this setup for?", text: $kit.summary)
                     .textFieldStyle(.roundedBorder)
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text("Includes")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Choose only the components that belong in this setup.")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Add components below. A component can belong to more than one kit.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                ForEach([KitComponentPicker.extensions, .mcpServers, .tools, .skills]) { kind in
-                    Button {
-                        picker = kind
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: kind.symbol)
-                                .frame(width: 18)
-                                .foregroundStyle(Color.accentColor)
-                            Text(kind.title)
-                            Spacer()
-                            Text("\(count(for: kind))")
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tertiary)
+                componentSection(.extensions) {
+                    ForEach(kit.extensionIDs, id: \.self) { id in
+                        componentTag(
+                            title: extensions.first(where: { $0.id == id })?.manifest.displayName ?? id,
+                            kind: .extensions
+                        ) {
+                            remove(id, from: \.extensionIDs)
                         }
-                        .font(.system(size: 13, weight: .medium))
-                        .padding(.vertical, 8)
-                        .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
-                    if kind != .skills { Divider() }
                 }
-            }
-            .padding(12)
-            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Save kit") {
-                    kit.name = kit.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    kit.summary = kit.summary.trimmingCharacters(in: .whitespacesAndNewlines)
-                    onSave(kit)
+                componentSection(.mcpServers) {
+                    ForEach(kit.mcpServerIDs, id: \.self) { id in
+                        componentTag(
+                            title: servers.first(where: { $0.id == id })?.name ?? "Unavailable server",
+                            kind: .mcpServers
+                        ) {
+                            remove(id, from: \.mcpServerIDs)
+                        }
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!kit.isComplete)
+                componentSection(.tools) {
+                    ForEach(kit.toolNames, id: \.self) { name in
+                        componentTag(title: name, kind: .tools) {
+                            remove(name, from: \.toolNames)
+                        }
+                    }
+                }
+                componentSection(.skills) {
+                    ForEach(kit.skillIDs, id: \.self) { id in
+                        componentTag(
+                            title: skills.first(where: { $0.id == id })?.name ?? "Unavailable skill",
+                            kind: .skills
+                        ) {
+                            remove(id, from: \.skillIDs)
+                        }
+                    }
+                }
             }
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(28)
+    }
+
+    private var footer: some View {
+        HStack {
+            Spacer()
+            Button("Cancel", action: onCancel)
+            Button("Save kit") {
+                kit.name = kit.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                kit.summary = kit.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                onSave(kit)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!kit.isComplete)
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 16)
     }
 
     private func count(for kind: KitComponentPicker) -> Int {
@@ -644,41 +662,110 @@ private struct KitEditor: View {
         case .skills: kit.skillIDs.count
         }
     }
+
+    @ViewBuilder
+    private func componentSection<Content: View>(
+        _ kind: KitComponentPicker,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: kind.symbol)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 16)
+                Text(kind.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button {
+                    picker = kind
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Add \(kind.title.lowercased())")
+            }
+            if count(for: kind) == 0 {
+                Text("Nothing added yet.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                KitTagFlowLayout(spacing: 7) {
+                    content()
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .popover(
+            isPresented: Binding(
+                get: { picker == kind },
+                set: { if !$0 { picker = nil } }
+            ),
+            arrowEdge: .trailing
+        ) {
+            KitComponentPickerPopover(
+                kind: kind,
+                kit: $kit,
+                manager: manager,
+                host: host,
+                model: model,
+                onDismiss: { picker = nil }
+            )
+        }
+    }
+
+    private func componentTag(
+        title: String,
+        kind: KitComponentPicker,
+        onRemove: @escaping () -> Void
+    ) -> some View {
+        KitComponentTag(title: title, symbol: kind.symbol, onRemove: onRemove)
+    }
+
+    private func remove<Value: Equatable>(
+        _ value: Value,
+        from keyPath: WritableKeyPath<UserNativKit, [Value]>
+    ) {
+        kit[keyPath: keyPath].removeAll { $0 == value }
+    }
+
+    private var servers: [MCPServerConfig] {
+        model.settings.mcpServers
+    }
+
+    private var extensions: [NativExtensionRecord] {
+        manager.records.filter { !$0.isRemoved }
+    }
+
+    private var skills: [NativSkill] {
+        model.settings.skills
+    }
 }
 
-private struct KitComponentPickerView: View {
+private struct KitComponentPickerPopover: View {
     let kind: KitComponentPicker
     @Binding var kit: UserNativKit
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
-    let onDone: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Button(action: onDone) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Back to kit")
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(kind.title)
-                        .font(.system(size: 16, weight: .semibold))
-                    if kind != .mcpServers {
-                        Text("A component can belong to more than one kit.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                }
+            HStack {
+                Text("Add \(kind.title.lowercased())")
+                    .font(.system(size: 14, weight: .semibold))
                 Spacer()
+                Button("Done", action: onDismiss)
+                    .controlSize(.small)
             }
-            .padding(20)
+            .padding(14)
             Divider()
-            List {
+            ScrollView {
+                VStack(spacing: 0) {
                 switch kind {
                 case .extensions:
                     if extensions.isEmpty {
@@ -737,16 +824,11 @@ private struct KitComponentPickerView: View {
                         }
                     }
                 }
+                }
+                .padding(.vertical, 4)
             }
-            .listStyle(.inset)
-            HStack {
-                Spacer()
-                Button("Done", action: onDone)
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(16)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: 330, height: 320)
     }
 
     private var servers: [MCPServerConfig] {
@@ -756,7 +838,7 @@ private struct KitComponentPickerView: View {
     }
 
     private var extensions: [NativExtensionRecord] {
-        manager.records.filter { !$0.isRemoved && $0.hasRuntime }
+        manager.records.filter { !$0.isRemoved }
     }
 
     private var tools: [ToolItem] {
@@ -784,7 +866,7 @@ private struct KitComponentPickerView: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -801,6 +883,8 @@ private struct KitComponentPickerView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
     }
 
     private func toggle<Value: Equatable>(_ value: Value, in keyPath: WritableKeyPath<UserNativKit, [Value]>) {
@@ -809,5 +893,89 @@ private struct KitComponentPickerView: View {
         } else {
             kit[keyPath: keyPath].append(value)
         }
+    }
+}
+
+private struct KitComponentTag: View {
+    let title: String
+    let symbol: String
+    let onRemove: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onRemove) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                Text(title)
+                    .lineLimit(1)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .opacity(isHovering ? 0.85 : 0)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.primary.opacity(isHovering ? 0.09 : 0.055), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Remove \(title)")
+        .onHover { isHovering = $0 }
+    }
+}
+
+private struct KitTagFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(proposal: proposal, subviews: subviews)
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> (size: CGSize, points: [CGPoint]) {
+        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var width: CGFloat = 0
+        var points: [CGPoint] = []
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > availableWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            width = max(width, x - spacing)
+            rowHeight = max(rowHeight, size.height)
+        }
+
+        return (CGSize(width: width, height: y + rowHeight), points)
     }
 }
