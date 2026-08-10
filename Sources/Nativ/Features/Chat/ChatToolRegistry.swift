@@ -33,14 +33,18 @@ enum ChatToolRoundGate {
 
 enum ChatToolRegistry {
     static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
+        catalogDefinitions(canEditImage: canEditImage).filter {
+            $0.function.name != BrowsingSearchTool.name || BrowsingSearchTool.isConfigured
+        }
+    }
+
+    static func catalogDefinitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
         tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
         tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
-        if BrowsingSearchTool.isConfigured {
-            tools.append(BrowsingSearchTool.definition)
-        }
+        tools.append(BrowsingSearchTool.definition)
         return tools
     }
 }

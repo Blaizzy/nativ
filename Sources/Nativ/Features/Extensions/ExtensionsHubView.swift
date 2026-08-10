@@ -13,7 +13,6 @@ struct ExtensionsHubView: View {
     enum HubSection: String, CaseIterable, Identifiable {
         case kits = "Kits"
         case extensions = "Extensions"
-        case browsing = "Browsing"
         case mcp = "MCP"
         case tools = "Tools"
         case skills = "Skills"
@@ -24,7 +23,6 @@ struct ExtensionsHubView: View {
             switch self {
             case .kits: "shippingbox"
             case .extensions: "square.stack.3d.up"
-            case .browsing: "globe"
             case .mcp: "server.rack"
             case .tools: "hammer"
             case .skills: "sparkles"
@@ -93,8 +91,6 @@ struct ExtensionsHubView: View {
             KitsSectionView(manager: manager, host: host, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
-        case .browsing:
-            BrowsingSectionView()
         case .mcp:
             MCPSectionView(host: host, model: model)
         case .tools:

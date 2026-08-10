@@ -1,19 +1,6 @@
 import AppKit
 import SwiftUI
 
-struct BrowsingSectionView: View {
-    var body: some View {
-        HubSectionScaffold(
-            title: "Browsing",
-            subtitle: "Choose a provider and connect the API key that web search uses."
-        ) {
-            EmptyView()
-        } content: {
-            BrowsingSettingsView()
-        }
-    }
-}
-
 struct BrowsingSettingsView: View {
     @State private var selectedProvider = BrowsingProviderSettings.active
     @State private var apiKey = BrowsingCredentials.load(for: BrowsingProviderSettings.active) ?? ""

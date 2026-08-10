@@ -25,7 +25,11 @@ struct ToolsSectionView: View {
             }
         }
         .sheet(item: $inspecting) { tool in
-            ToolInspectorView(tool: tool, host: host)
+            if tool.name == BrowsingSearchTool.name {
+                BrowsingToolConfigurationView()
+            } else {
+                ToolInspectorView(tool: tool, host: host)
+            }
         }
     }
 
@@ -65,7 +69,7 @@ struct ToolsSectionView: View {
     }
 
     private var nativeTools: [ToolItem] {
-        ChatToolRegistry.definitions(canEditImage: false).map {
+        ChatToolRegistry.catalogDefinitions(canEditImage: false).map {
             ToolItem(
                 name: $0.function.name,
                 title: $0.function.name,
@@ -120,12 +124,12 @@ private struct ToolRow: View {
             }
             Spacer(minLength: 12)
             Button(action: onInspect) {
-                Image(systemName: "info.circle")
+                Image(systemName: tool.name == BrowsingSearchTool.name ? "gearshape" : "info.circle")
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0.35)
-            .help("Inspect / try")
+            .help(tool.name == BrowsingSearchTool.name ? "Configure web search" : "Inspect / try")
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -135,6 +139,35 @@ private struct ToolRow: View {
         .contentShape(.rect)
         .onHover { hovering = $0 }
         .onTapGesture(perform: onInspect)
+    }
+}
+
+private struct BrowsingToolConfigurationView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("web_search")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    Text("Choose the provider Nativ uses when a model searches the web.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 16)
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            BrowsingSettingsView()
+        }
+        .padding(20)
+        .frame(width: 660)
     }
 }
 
