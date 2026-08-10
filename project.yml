@@ -155,6 +155,7 @@ targets:
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
+      - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift

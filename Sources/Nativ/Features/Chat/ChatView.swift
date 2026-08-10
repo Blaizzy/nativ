@@ -27,6 +27,7 @@ struct ChatView: View {
     @ObservedObject var mcpHost: MCPHostManager
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
 
     var body: some View {
@@ -37,7 +38,8 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
-                conversationWidthReduction: conversationWidthReduction
+                conversationWidthReduction: conversationWidthReduction,
+                onExploreImageModels: onExploreImageModels
             )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachImages(fromURLs: urls)
@@ -52,9 +54,15 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
-        .onAppear { chat.mcpHost = mcpHost }
+        .onAppear {
+            chat.mcpHost = mcpHost
+            chat.refreshPendingImageModelSelections()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            chat.refreshPendingImageModelSelections()
         }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
@@ -92,6 +100,7 @@ private struct ChatTranscriptView: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
     let conversationWidthReduction: CGFloat
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var followsLatestMessage = true
@@ -129,7 +138,8 @@ private struct ChatTranscriptView: View {
                             onConfirmToolConsent: chat.confirmToolConsent,
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
-                            onCancelImageModelSelection: chat.cancelImageModelSelection
+                            onCancelImageModelSelection: chat.cancelImageModelSelection,
+                            onExploreImageModels: onExploreImageModels
                         )
                         .equatable()
                         .id(message.id)
@@ -293,6 +303,12 @@ final class ChatViewModel: ObservableObject {
         let attachments: [ChatImageAttachment]
     }
 
+    private struct ImageModelPreparationContext {
+        let modelSearchPath: String
+        let additionalModelSearchPaths: [String]
+        let huggingFaceToken: String?
+    }
+
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
@@ -327,6 +343,9 @@ final class ChatViewModel: ObservableObject {
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
     private let imageModelSelectionGate = ChatImageModelSelectionGate()
+    private var imageModelPreparationTasks: [UUID: Task<Void, Never>] = [:]
+    private var imageModelPreparationContexts: [UUID: ImageModelPreparationContext] = [:]
+    private var imageModelRefreshTask: Task<Void, Never>?
     private var composerSnapshot: ComposerSnapshot?
 
     init() {
@@ -879,21 +898,113 @@ final class ChatViewModel: ObservableObject {
 
     func selectImageModel(_ toolMessageID: UUID, _ modelID: String) {
         guard let request = imageModelSelectionRequests[toolMessageID],
-              ChatImageModelSelection.selectedModel(
+              let selectedModel = ChatImageModelSelection.selectedModel(
                   withID: modelID,
                   from: request
-              ) != nil
+              )
         else {
             return
         }
-        imageModelSelectionGate.select(modelID: modelID, for: toolMessageID)
+
+        guard !selectedModel.isInstalled else {
+            imageModelSelectionGate.select(modelID: modelID, for: toolMessageID)
+            return
+        }
+        guard let preparationContext = imageModelPreparationContexts[toolMessageID] else {
+            return
+        }
+
+        imageModelPreparationTasks[toolMessageID]?.cancel()
+        imageModelPreparationTasks[toolMessageID] = Task { @MainActor [weak self] in
+            defer {
+                self?.imageModelPreparationTasks.removeValue(forKey: toolMessageID)
+            }
+            do {
+                try await HuggingFaceDownloadManager.shared.downloadIfNeeded(
+                    repoID: selectedModel.modelID,
+                    sizeBytes: selectedModel.downloadSizeBytes,
+                    cachePath: preparationContext.modelSearchPath,
+                    token: preparationContext.huggingFaceToken
+                )
+                try Task.checkCancellation()
+                let installedModels = try await ChatImageModelSelection.installedOptions(
+                    modelSearchPath: preparationContext.modelSearchPath,
+                    additionalModelSearchPaths: preparationContext.additionalModelSearchPaths
+                )
+                guard ChatImageModelSelection.isPrepared(
+                    modelID: selectedModel.modelID,
+                    for: request.operation,
+                    installedModels: installedModels
+                ) else {
+                    HuggingFaceDownloadManager.shared.reportError(
+                        "The downloaded model is not compatible with \(request.operation.capabilityName).",
+                        for: selectedModel.modelID
+                    )
+                    return
+                }
+                guard self?.imageModelSelectionRequests[toolMessageID] != nil else {
+                    return
+                }
+                self?.imageModelSelectionGate.select(
+                    modelID: selectedModel.modelID,
+                    for: toolMessageID
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                HuggingFaceDownloadManager.shared.reportError(
+                    error.localizedDescription,
+                    for: selectedModel.modelID
+                )
+            }
+        }
     }
 
     func cancelImageModelSelection(_ toolMessageID: UUID) {
         guard imageModelSelectionRequests[toolMessageID] != nil else {
             return
         }
+        imageModelPreparationTasks.removeValue(forKey: toolMessageID)?.cancel()
         imageModelSelectionGate.cancel(toolMessageID)
+    }
+
+    func refreshPendingImageModelSelections() {
+        guard !imageModelSelectionRequests.isEmpty else {
+            return
+        }
+
+        let pendingRequests = imageModelSelectionRequests.compactMap { id, request in
+            imageModelPreparationContexts[id].map { (id, request.operation, $0) }
+        }
+        imageModelRefreshTask?.cancel()
+        imageModelRefreshTask = Task { @MainActor [weak self] in
+            for (toolMessageID, operation, context) in pendingRequests {
+                do {
+                    let models = try await ChatImageModelSelection.availableOptions(
+                        for: operation,
+                        modelSearchPath: context.modelSearchPath,
+                        additionalModelSearchPaths: context.additionalModelSearchPaths,
+                        huggingFaceToken: context.huggingFaceToken
+                    )
+                    try Task.checkCancellation()
+                    guard self?.imageModelSelectionRequests[toolMessageID]?.operation
+                            == operation
+                    else {
+                        continue
+                    }
+                    self?.imageModelSelectionRequests[toolMessageID] =
+                        ChatImageModelSelectionRequest(
+                            operation: operation,
+                            models: models
+                        )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // Keep the last known choices if the local cache cannot be
+                    // scanned. Hub failures are already handled as offline mode.
+                }
+            }
+        }
     }
 
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
@@ -1284,6 +1395,11 @@ final class ChatViewModel: ObservableObject {
                         beforeOrAt: toolMessageID,
                         in: queuedRequest.sessionID
                     )
+                    let imageModelPreparationContext = ImageModelPreparationContext(
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        huggingFaceToken: appModel?.effectiveHuggingFaceToken
+                    )
                     let context = ChatToolExecutionContext(
                         imageGenerationModelID: activeImageModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
@@ -1291,12 +1407,19 @@ final class ChatViewModel: ObservableObject {
                         imageReferences: references,
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
                         additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
                             }
                             defer {
+                                self.imageModelPreparationTasks
+                                    .removeValue(forKey: toolMessageID)?
+                                    .cancel()
                                 self.imageModelSelectionRequests.removeValue(
+                                    forKey: toolMessageID
+                                )
+                                self.imageModelPreparationContexts.removeValue(
                                     forKey: toolMessageID
                                 )
                             }
@@ -1304,6 +1427,8 @@ final class ChatViewModel: ObservableObject {
                             let selectedModelID = await self.imageModelSelectionGate
                                 .awaitSelection(for: toolMessageID) {
                                     self.imageModelSelectionRequests[toolMessageID] = request
+                                    self.imageModelPreparationContexts[toolMessageID] =
+                                        imageModelPreparationContext
                                     self.setToolMessageStatus(
                                         toolMessageID,
                                         in: queuedRequest.sessionID,
@@ -1588,6 +1713,7 @@ final class ChatViewModel: ObservableObject {
         }
         if status != .awaitingImageModelSelection {
             imageModelSelectionRequests.removeValue(forKey: id)
+            imageModelPreparationContexts.removeValue(forKey: id)
         }
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
@@ -1605,6 +1731,7 @@ final class ChatViewModel: ObservableObject {
         }
         if status != .awaitingImageModelSelection {
             imageModelSelectionRequests.removeValue(forKey: id)
+            imageModelPreparationContexts.removeValue(forKey: id)
         }
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
@@ -1702,6 +1829,7 @@ final class ChatViewModel: ObservableObject {
             message.toolStatus = .running
         }
         imageModelSelectionRequests.removeValue(forKey: toolMessageID)
+        imageModelPreparationContexts.removeValue(forKey: toolMessageID)
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
             bumpScroll()
@@ -2115,6 +2243,7 @@ private struct ChatMessageRow: View, Equatable {
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -2141,7 +2270,8 @@ private struct ChatMessageRow: View, Equatable {
                     onConfirm: onConfirmToolConsent,
                     onDeny: onDenyToolConsent,
                     onSelectImageModel: onSelectImageModel,
-                    onCancelImageModelSelection: onCancelImageModelSelection
+                    onCancelImageModelSelection: onCancelImageModelSelection,
+                    onExploreImageModels: onExploreImageModels
                 )
             }
 
@@ -2416,6 +2546,7 @@ private struct ChatAgentStepCell: View {
     let onDeny: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isExpanded = false
 
     private var isAwaitingConsent: Bool {
@@ -2558,54 +2689,57 @@ private struct ChatAgentStepCell: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(request.models) { model in
-                        Button {
-                            onSelectImageModel(message.id, model.modelID)
-                        } label: {
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(model.displayName)
-                                        .font(.callout.weight(.medium))
-                                        .foregroundStyle(.primary)
-                                    Text(model.modelID)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer(minLength: 12)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .contentShape(.rect)
-                            .background(
-                                Color(nsColor: .controlBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 7)
-                                    .stroke(
-                                        Color(nsColor: .separatorColor),
-                                        lineWidth: 0.5
-                                    )
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Use \(model.displayName)")
-                    }
+                if request.models.isEmpty {
+                    Text("No compatible downloaded models are available.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
 
-                Button("Cancel") {
-                    onCancelImageModelSelection(message.id)
+                if !request.installedModels.isEmpty {
+                    imageModelSection(
+                        title: "Downloaded",
+                        models: request.installedModels
+                    )
                 }
-                .buttonStyle(.bordered)
+
+                if !request.downloadableModels.isEmpty {
+                    imageModelSection(
+                        title: "Available to download",
+                        models: request.downloadableModels
+                    )
+                }
+
+                HStack(spacing: 8) {
+                    Button("Cancel") {
+                        onCancelImageModelSelection(message.id)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Explore models") {
+                        onExploreImageModels(request.operation)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 7)
+        }
+    }
+
+    private func imageModelSection(
+        title: String,
+        models: [ChatImageModelOption]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            ForEach(models) { model in
+                ChatImageModelOptionRow(model: model) {
+                    onSelectImageModel(message.id, model.modelID)
+                }
+            }
         }
     }
 
@@ -2716,6 +2850,92 @@ private struct ChatAgentStepCell: View {
             return nil
         }
         return object["error"] as? String
+    }
+}
+
+private struct ChatImageModelOptionRow: View {
+    private static let downloadButtonLabelWidth: CGFloat = 180
+
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+
+    let model: ChatImageModelOption
+    let onChoose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.displayName)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(model.modelID)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 12)
+                trailingControl
+            }
+
+            if let error = downloadManager.errorByModelID[model.modelID] {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControl: some View {
+        if model.isInstalled {
+            Button(action: onChoose) {
+                Label("Use", systemImage: "chevron.right")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Use \(model.displayName)")
+        } else if downloadManager.isDownloading(model.modelID) {
+            ModelDownloadProgressControl(
+                progress: downloadManager.progress(for: model.modelID),
+                isPaused: downloadManager.isPaused(for: model.modelID),
+                onPauseResume: {
+                    if downloadManager.isPaused(for: model.modelID) {
+                        downloadManager.resumeDownload(model.modelID)
+                    } else {
+                        downloadManager.pauseDownload(model.modelID)
+                    }
+                },
+                onRemove: { downloadManager.removeDownload(model.modelID) }
+            )
+        } else {
+            Button(action: onChoose) {
+                Label(downloadTitle, systemImage: "arrow.down.circle")
+                    .frame(width: Self.downloadButtonLabelWidth)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Download and use \(model.displayName)")
+        }
+    }
+
+    private var downloadTitle: String {
+        guard let sizeBytes = model.downloadSizeBytes else {
+            return "Download"
+        }
+        let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        return "Download · \(size)"
     }
 }
 
@@ -3369,6 +3589,7 @@ private struct ChatEmptyTranscriptView: View {
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
         showsConfiguration: .constant(true),
-        conversationWidthReduction: 0
+        conversationWidthReduction: 0,
+        onExploreImageModels: { _ in }
     )
 }
