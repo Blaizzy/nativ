@@ -27,7 +27,7 @@ struct ToolsSectionView: View {
         .sheet(item: $inspecting) { tool in
             switch tool.configuration {
             case .webSearch:
-                WebSearchToolConfigurationView(toolName: tool.name)
+                WebSearchToolConfigurationView(toolName: tool.title)
             case nil:
                 ToolInspectorView(tool: tool, host: host)
             }
@@ -73,7 +73,7 @@ struct ToolsSectionView: View {
         ChatToolRegistry.descriptors(canEditImage: false).map {
             ToolItem(
                 name: $0.definition.function.name,
-                title: $0.definition.function.name,
+                title: $0.configuration?.displayName ?? $0.definition.function.name,
                 detail: $0.definition.function.description,
                 parameters: $0.definition.function.parameters,
                 isRunnable: false,

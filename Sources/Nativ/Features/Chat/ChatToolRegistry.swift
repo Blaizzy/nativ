@@ -33,6 +33,13 @@ enum ChatToolRoundGate {
 
 enum ChatNativeToolConfiguration: Equatable {
     case webSearch
+
+    var displayName: String {
+        switch self {
+        case .webSearch:
+            "Web Search"
+        }
+    }
 }
 
 struct ChatNativeToolDescriptor {

@@ -82,6 +82,7 @@ final class ChatToolRegistryTests: XCTestCase {
         }
 
         XCTAssertEqual(descriptor?.configuration, .webSearch)
+        XCTAssertEqual(descriptor?.configuration?.displayName, "Web Search")
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
