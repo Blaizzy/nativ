@@ -31,13 +31,40 @@ enum ChatToolRoundGate {
     }
 }
 
+enum ChatNativeToolConfiguration: Equatable {
+    case webSearch
+
+    var displayName: String {
+        switch self {
+        case .webSearch:
+            "Web Search"
+        }
+    }
+}
+
+struct ChatNativeToolDescriptor {
+    let definition: MLXChatToolDefinition
+    let configuration: ChatNativeToolConfiguration?
+}
+
 enum ChatToolRegistry {
     static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
-        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
-        tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
-        tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
-        tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
-        tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
+        descriptors(canEditImage: canEditImage).map(\.definition)
+    }
+
+    static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
+        var definitions = ChatImageToolRegistry.definitions(canEdit: canEditImage)
+        definitions += ChatSystemMonitorToolRegistry.definitions()
+        definitions += ChatModelLibraryToolRegistry.definitions()
+        definitions += ChatServerStatsToolRegistry.definitions()
+        definitions += ChatSwitchModelToolRegistry.definitions()
+        var tools = definitions.map {
+            ChatNativeToolDescriptor(definition: $0, configuration: nil)
+        }
+        tools.append(ChatNativeToolDescriptor(
+            definition: ChatWebSearchToolRegistry.definition,
+            configuration: .webSearch
+        ))
         return tools
     }
 }
@@ -52,6 +79,7 @@ enum ChatToolDispatcher {
         ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
         ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
         ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
+        ChatWebSearchToolRegistry.toolName: executeWebSearchTool,
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -68,6 +96,9 @@ enum ChatToolDispatcher {
         },
         ChatSwitchModelToolRegistry.toolName: { name, error in
             ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
+        },
+        ChatWebSearchToolRegistry.toolName: { _, error in
+            ChatWebSearchToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -161,6 +192,14 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeWebSearchTool(
+        call: MLXChatToolCall,
+        context _: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatWebSearchToolExecutor().execute(call: call)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -228,6 +267,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case ChatWebSearchToolRegistry.toolName:
+            return webSearchTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -258,6 +299,8 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case ChatWebSearchToolRegistry.toolName:
+                return "globe"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -336,6 +379,19 @@ enum ChatToolPresentation {
             return "Model switch"
         case nil:
             return "Model switch tool"
+        }
+    }
+
+    private static func webSearchTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Searching the web…"
+        case .succeeded:
+            return "Searched the web"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Web search"
+        case nil:
+            return "Web search"
         }
     }
 

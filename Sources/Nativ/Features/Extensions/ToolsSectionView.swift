@@ -9,6 +9,8 @@ struct ToolsSectionView: View {
     @State private var editingTool: CustomTool?
     @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
+    @State private var webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+    @State private var pendingWebSearchActivation = false
 
     var body: some View {
         HubSectionScaffold(
@@ -37,8 +39,16 @@ struct ToolsSectionView: View {
                 }
             }
         }
-        .sheet(item: $inspecting) { tool in
-            ToolInspectorView(tool: tool, host: host)
+        .sheet(item: $inspecting, onDismiss: cancelPendingWebSearchActivation) { tool in
+            switch tool.configuration {
+            case .webSearch:
+                WebSearchToolConfigurationView(
+                    toolName: tool.title,
+                    onConfigurationChanged: updateWebSearchConfiguration
+                )
+            case nil:
+                ToolInspectorView(tool: tool, host: host)
+            }
         }
         .sheet(isPresented: $showsAddTool) {
             CustomToolEditorSheet(model: model)
@@ -95,7 +105,7 @@ struct ToolsSectionView: View {
                 if index > 0 { Divider() }
                 ToolRow(
                     tool: tool,
-                    isOn: binding(for: tool.name),
+                    isOn: binding(for: tool),
                     onInspect: { inspecting = tool },
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool)
@@ -104,36 +114,67 @@ struct ToolsSectionView: View {
         }
     }
 
-    private func binding(for name: String) -> Binding<Bool> {
+    private func binding(for tool: ToolItem) -> Binding<Bool> {
         Binding(
-            get: { !model.settings.disabledToolNames.contains(name) },
+            get: {
+                !model.settings.disabledToolNames.contains(tool.name)
+                    && (tool.configuration != .webSearch || webSearchIsConfigured)
+            },
             set: { enabled in
-                if enabled {
-                    model.settings.disabledToolNames.removeAll { $0 == name }
-                } else if !model.settings.disabledToolNames.contains(name) {
-                    model.settings.disabledToolNames.append(name)
+                if enabled, tool.configuration == .webSearch, !webSearchIsConfigured {
+                    setTool(tool.name, enabled: false)
+                    pendingWebSearchActivation = true
+                    inspecting = tool
+                } else {
+                    setTool(tool.name, enabled: enabled)
                 }
             }
         )
     }
 
+    private func setTool(_ name: String, enabled: Bool) {
+        if enabled {
+            model.settings.disabledToolNames.removeAll { $0 == name }
+        } else if !model.settings.disabledToolNames.contains(name) {
+            model.settings.disabledToolNames.append(name)
+        }
+    }
+
+    private func updateWebSearchConfiguration(_ configured: Bool) {
+        webSearchIsConfigured = configured
+        if configured, pendingWebSearchActivation {
+            pendingWebSearchActivation = false
+            setTool(ChatWebSearchToolRegistry.toolName, enabled: true)
+            inspecting = nil
+        } else if !configured {
+            setTool(ChatWebSearchToolRegistry.toolName, enabled: false)
+        }
+    }
+
+    private func cancelPendingWebSearchActivation() {
+        guard pendingWebSearchActivation else { return }
+        pendingWebSearchActivation = false
+        setTool(ChatWebSearchToolRegistry.toolName, enabled: false)
+    }
+
     private var nativeTools: [ToolItem] {
-        var definitions: [MLXChatToolDefinition] = []
-        definitions += ChatSystemMonitorToolRegistry.definitions()
-        definitions += ChatModelLibraryToolRegistry.definitions()
-        definitions += ChatServerStatsToolRegistry.definitions()
-        definitions += ChatSwitchModelToolRegistry.definitions()
-        definitions += ChatImageToolRegistry.definitions(canEdit: false)
-        return definitions.map {
+        ChatToolRegistry.descriptors(canEditImage: false).map {
             ToolItem(
-                name: $0.function.name,
-                title: $0.function.name,
-                detail: $0.function.description,
-                parameters: $0.function.parameters,
+                name: $0.definition.function.name,
+                title: $0.configuration?.displayName ?? humanized($0.definition.function.name),
+                detail: $0.definition.function.description,
+                parameters: $0.definition.function.parameters,
                 isRunnable: false,
-                isBuiltIn: true
+                isBuiltIn: true,
+                configuration: $0.configuration
             )
         }
+    }
+
+    private func humanized(_ name: String) -> String {
+        name.split(separator: "_")
+            .map { String($0).capitalized }
+            .joined(separator: " ")
     }
 
     private var customTools: [ToolItem] {
@@ -203,6 +244,7 @@ struct ToolItem: Identifiable {
     var isBuiltIn: Bool = false
     var customToolID: UUID?
     var executionHint: String?
+    var configuration: ChatNativeToolConfiguration? = nil
 }
 
 private struct ToolRow: View {
@@ -233,12 +275,12 @@ private struct ToolRow: View {
             }
             Spacer(minLength: 12)
             Button(action: onInspect) {
-                Image(systemName: "info.circle")
+                Image(systemName: tool.configuration == nil ? "info.circle" : "gearshape")
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0.35)
-            .help("Inspect / try")
+            .help(tool.configuration == nil ? "Inspect / try" : "Configure")
             if let onEdit, let onRemove {
                 Menu {
                     Button("Edit", action: onEdit)
@@ -261,6 +303,39 @@ private struct ToolRow: View {
         .contentShape(.rect)
         .onHover { hovering = $0 }
         .onTapGesture(perform: onInspect)
+    }
+}
+
+private struct WebSearchToolConfigurationView: View {
+    let toolName: String
+    let onConfigurationChanged: (Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(toolName)
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    Text("Choose the provider Nativ uses when a model searches the web.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 16)
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            WebSearchSettingsView(
+                onConfigurationChanged: onConfigurationChanged
+            )
+        }
+        .padding(20)
+        .frame(width: 660)
     }
 }
 
