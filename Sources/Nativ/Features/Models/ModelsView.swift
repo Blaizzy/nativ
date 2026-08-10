@@ -56,6 +56,8 @@ struct ModelsView: View {
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
     var speechModelDiscoveryRequest = 0
+    var imageModelDiscoveryRequest = 0
+    var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     // Keep download progress observation in the banner and individual rows.
@@ -71,6 +73,7 @@ struct ModelsView: View {
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
+    @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
 
     var body: some View {
@@ -96,9 +99,13 @@ struct ModelsView: View {
         }
         .onAppear {
             openSpeechModelDiscoveryIfRequested()
+            openImageModelDiscoveryIfRequested()
         }
         .onChange(of: speechModelDiscoveryRequest) { _, _ in
             openSpeechModelDiscoveryIfRequested()
+        }
+        .onChange(of: imageModelDiscoveryRequest) { _, _ in
+            openImageModelDiscoveryIfRequested()
         }
         .onChange(of: section) { _, newSection in
             // Let the segmented control commit before replacing the toolbar
@@ -142,6 +149,18 @@ struct ModelsView: View {
         typeFilter = .speech
         hubQuery = ""
         hubCapabilityFilters = [.speechToText]
+        hubAccessFilter = .all
+    }
+
+    private func openImageModelDiscoveryIfRequested() {
+        guard imageModelDiscoveryRequest > handledImageModelDiscoveryRequest else {
+            return
+        }
+        handledImageModelDiscoveryRequest = imageModelDiscoveryRequest
+        section = .discover
+        typeFilter = .image
+        hubQuery = ""
+        hubCapabilityFilters = [imageModelDiscoveryCapability]
         hubAccessFilter = .all
     }
 
@@ -1518,7 +1537,7 @@ private struct HubModelRowContainer: View {
     }
 }
 
-private struct ModelDownloadProgressControl: View {
+struct ModelDownloadProgressControl: View {
     let progress: Double
     let isPaused: Bool
     let onPauseResume: () -> Void

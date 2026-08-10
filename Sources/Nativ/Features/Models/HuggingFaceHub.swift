@@ -494,6 +494,23 @@ private struct HuggingFaceModelPage: Sendable {
     let nextPageURL: URL?
 }
 
+enum HuggingFaceModelCatalog {
+    static func popularModels(
+        with capability: LocalModelCapability,
+        token: String?
+    ) async throws -> [HuggingFaceModel] {
+        let hubCapability: LocalModelCapability = capability == .imageEditing
+            ? .imageGeneration
+            : capability
+        return try await HuggingFaceHubClient().search(
+            query: "mlx",
+            sort: .downloads,
+            capabilities: [hubCapability],
+            token: token
+        ).models
+    }
+}
+
 private struct HubErrorPayload: Decodable {
     let error: String
 }
@@ -770,6 +787,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     func state(for modelID: String) -> DownloadState? {
         downloads.first { $0.modelID == modelID }?.state
+    }
+
+    func reportError(_ message: String, for modelID: String) {
+        errorByModelID[modelID] = message
     }
 
     func capacityBlocker(sizeBytes: Int64?, cachePath: String) -> String? {

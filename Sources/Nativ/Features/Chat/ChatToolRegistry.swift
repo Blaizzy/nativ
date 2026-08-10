@@ -12,6 +12,7 @@ struct ChatToolExecutionContext {
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
+    var huggingFaceToken: String? = nil
     var analyticsDatabaseURL: URL? = nil
     var imageToolDependencies = ChatImageToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
@@ -96,21 +97,26 @@ enum ChatToolDispatcher {
             call: call,
             hasImageReference: !context.imageReferences.isEmpty
         )
-        let installedModels = try await context.imageToolDependencies.discoverModels(
+        let availableModels = try await context.imageToolDependencies.discoverModels(
+            imageRequest.operation,
             context.modelSearchPath,
-            context.additionalModelSearchPaths
+            context.additionalModelSearchPaths,
+            context.huggingFaceToken,
+            context.imageGenerationModelID
         )
         let imageModelID: String
         switch ChatImageModelSelection.resolve(
             operation: imageRequest.operation,
             selectedModelID: context.imageGenerationModelID,
-            installedModels: installedModels
+            availableModels: availableModels
         ) {
         case .selected(let model):
             imageModelID = model.modelID
         case .selectionRequired(let selectionRequest):
             guard let requestSelection = context.imageModelSelection else {
-                throw ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
+                throw selectionRequest.models.isEmpty
+                    ? ChatImageToolError.noCompatibleModels(imageRequest.operation)
+                    : ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
             }
             let selectedModelID = try await requestSelection(selectionRequest)
             guard let selectedModel = ChatImageModelSelection.selectedModel(
@@ -120,8 +126,6 @@ enum ChatToolDispatcher {
                 throw ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
             }
             imageModelID = selectedModel.modelID
-        case .installationRequired:
-            throw ChatImageToolError.noCompatibleModels(imageRequest.operation)
         }
         await context.imageExecutionWillStart?(imageModelID)
         let result = try await context.imageToolDependencies.execute(
