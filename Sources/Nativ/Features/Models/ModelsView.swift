@@ -1463,6 +1463,15 @@ private struct ActiveDownloadBannerView: View {
     }
 }
 
+private struct HubModelMemoryFitWarning: Equatable {
+    let title: String
+    let message: String
+
+    var accessibilityText: String {
+        "\(title). \(message)"
+    }
+}
+
 private struct HubModelRow: View, Equatable {
     let model: HuggingFaceModel
     let downloadSizeBytes: Int64?
@@ -1487,9 +1496,20 @@ private struct HubModelRow: View, Equatable {
             && lhs.downloadError == rhs.downloadError
     }
 
-    private var memoryFitWarning: String? {
+    private var memoryFitWarning: HubModelMemoryFitWarning? {
         if let estimate = model.memoryEstimate, !estimate.isUsable {
-            return "Pre-download estimate. \(estimate.explanation)"
+            let required = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: estimate.workingSetBytes),
+                countStyle: .memory
+            )
+            let total = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: estimate.totalMemoryBytes),
+                countStyle: .memory
+            )
+            return HubModelMemoryFitWarning(
+                title: "May not fit in memory",
+                message: "Needs about \(required); this Mac has \(total). Try a smaller or quantized model."
+            )
         }
         if let sizeBytes = model.sizeBytes, sizeBytes > 0 {
             let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
@@ -1498,7 +1518,10 @@ private struct HubModelRow: View, Equatable {
                 let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .memory)
                 let total = ByteCountFormatter.string(
                     fromByteCount: Int64(clamping: totalMemoryBytes), countStyle: .memory)
-                return "Pre-download estimate. Model weights are ~\(size), larger than your \(total) of unified memory."
+                return HubModelMemoryFitWarning(
+                    title: "May not fit in memory",
+                    message: "About \(size) of model data; this Mac has \(total) of memory. Try a smaller or quantized model."
+                )
             }
         }
         return nil
@@ -1539,16 +1562,7 @@ private struct HubModelRow: View, Equatable {
                             )
                         }
                         if let memoryFitWarning {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(Color.red)
-                                )
-                                .help(memoryFitWarning)
+                            HubModelMemoryWarningBadge(warning: memoryFitWarning)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1607,6 +1621,67 @@ private struct HubModelRow: View, Equatable {
         return model.isGated
             ? "Gated models require Hugging Face authentication."
             : "Download to the configured cache"
+    }
+}
+
+private struct HubModelMemoryWarningBadge: View {
+    let warning: HubModelMemoryFitWarning
+
+    @State private var isTooltipPresented = false
+    @State private var pendingTooltip: Task<Void, Never>?
+
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.red)
+            )
+            .contentShape(Rectangle())
+            .onHover(perform: handleHover)
+            .popover(isPresented: $isTooltipPresented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(warning.title, systemImage: "memorychip")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text(warning.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(width: 230, alignment: .leading)
+                .padding(10)
+            }
+            .accessibilityLabel("Memory warning")
+            .accessibilityValue(warning.accessibilityText)
+            .onDisappear {
+                pendingTooltip?.cancel()
+                pendingTooltip = nil
+                isTooltipPresented = false
+            }
+    }
+
+    private func handleHover(_ isHovering: Bool) {
+        pendingTooltip?.cancel()
+        pendingTooltip = nil
+
+        guard isHovering else {
+            isTooltipPresented = false
+            return
+        }
+
+        pendingTooltip = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(80))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            isTooltipPresented = true
+        }
     }
 }
 
