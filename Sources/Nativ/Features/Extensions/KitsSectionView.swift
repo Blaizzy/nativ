@@ -686,6 +686,21 @@ private struct KitEditor: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Add \(kind.title.lowercased())")
+                .popover(
+                    isPresented: Binding(
+                        get: { picker == kind },
+                        set: { if !$0 { picker = nil } }
+                    ),
+                    arrowEdge: .top
+                ) {
+                    KitComponentPickerPopover(
+                        kind: kind,
+                        kit: $kit,
+                        manager: manager,
+                        host: host,
+                        model: model
+                    )
+                }
             }
             if count(for: kind) == 0 {
                 Text("Nothing added yet.")
@@ -699,21 +714,6 @@ private struct KitEditor: View {
         }
         .padding(14)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .popover(
-            isPresented: Binding(
-                get: { picker == kind },
-                set: { if !$0 { picker = nil } }
-            ),
-            arrowEdge: .top
-        ) {
-            KitComponentPickerPopover(
-                kind: kind,
-                kit: $kit,
-                manager: manager,
-                host: host,
-                model: model
-            )
-        }
     }
 
     private func componentTag(
