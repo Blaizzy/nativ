@@ -344,9 +344,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()
-    private let browsingExtension = BrowsingExtension()
     private lazy var extensionManager = NativExtensionManager(
-        builtInExtensions: [voiceDictationExtension, browsingExtension]
+        builtInExtensions: [voiceDictationExtension]
     )
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
@@ -375,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private weak var highlightedMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        BrowsingCredentials.migrateLegacyBraveKeyIfNeeded()
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()
         }

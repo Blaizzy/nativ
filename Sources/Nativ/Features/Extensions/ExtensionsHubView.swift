@@ -13,6 +13,7 @@ struct ExtensionsHubView: View {
     enum HubSection: String, CaseIterable, Identifiable {
         case kits = "Kits"
         case extensions = "Extensions"
+        case browsing = "Browsing"
         case mcp = "MCP"
         case tools = "Tools"
         case skills = "Skills"
@@ -23,6 +24,7 @@ struct ExtensionsHubView: View {
             switch self {
             case .kits: "shippingbox"
             case .extensions: "square.stack.3d.up"
+            case .browsing: "globe"
             case .mcp: "server.rack"
             case .tools: "hammer"
             case .skills: "sparkles"
@@ -91,10 +93,12 @@ struct ExtensionsHubView: View {
             KitsSectionView(manager: manager, host: host, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
+        case .browsing:
+            BrowsingSectionView()
         case .mcp:
             MCPSectionView(host: host, model: model)
         case .tools:
-            ToolsSectionView(host: host, model: model, manager: manager)
+            ToolsSectionView(host: host, model: model)
         case .skills:
             SkillsSectionView(model: model)
         }
@@ -157,7 +161,6 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
-    @State private var configuringExtensionID: String?
 
     var body: some View {
         HubSectionScaffold(
@@ -174,13 +177,7 @@ private struct ExtensionsSectionView: View {
             } else {
                 VStack(spacing: 12) {
                     ForEach(manager.records) { record in
-                        ExtensionRow(
-                            record: record,
-                            manager: manager,
-                            onConfigure: {
-                                configuringExtensionID = record.id
-                            }
-                        )
+                        ExtensionRow(record: record, manager: manager)
                     }
                 }
             }
@@ -188,30 +185,12 @@ private struct ExtensionsSectionView: View {
         .onAppear {
             manager.refreshPermissionStatuses()
         }
-        .sheet(
-            isPresented: Binding(
-                get: { configuringExtensionID != nil },
-                set: { isPresented in
-                    if !isPresented { configuringExtensionID = nil }
-                }
-            )
-        ) {
-            if let configuringExtensionID,
-               let configuration = manager.makeConfigurationView(
-                for: configuringExtensionID
-               ) {
-                configuration
-                    .frame(width: 660, height: 350)
-                    .interactiveDismissDisabled(false)
-            }
-        }
     }
 }
 
 private struct ExtensionRow: View {
     let record: NativExtensionRecord
     @ObservedObject var manager: NativExtensionManager
-    let onConfigure: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -233,14 +212,6 @@ private struct ExtensionRow: View {
                         .padding(.top, 1)
                 }
                 Spacer(minLength: 12)
-                if manager.hasConfiguration(for: record.id) {
-                    Button(action: onConfigure) {
-                        Image(systemName: "ellipsis")
-                            .frame(width: 26, height: 26)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Configure \(record.manifest.displayName)")
-                }
                 Toggle(
                     "",
                     isOn: Binding(

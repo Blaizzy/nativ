@@ -38,6 +38,9 @@ enum ChatToolRegistry {
         tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
         tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
         tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
+        if BrowsingSearchTool.isConfigured {
+            tools.append(BrowsingSearchTool.definition)
+        }
         return tools
     }
 }
@@ -52,6 +55,7 @@ enum ChatToolDispatcher {
         ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
         ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
         ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
+        BrowsingSearchTool.name: executeBrowsingSearchTool,
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -68,6 +72,9 @@ enum ChatToolDispatcher {
         },
         ChatSwitchModelToolRegistry.toolName: { name, error in
             ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
+        },
+        BrowsingSearchTool.name: { _, error in
+            BrowsingSearchTool.failurePayload(error: error)
         },
     ]
 
@@ -161,6 +168,14 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeBrowsingSearchTool(
+        call: MLXChatToolCall,
+        context _: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await BrowsingSearchTool.execute(call: call)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -228,6 +243,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case BrowsingSearchTool.name:
+            return browsingTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -258,6 +275,8 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case BrowsingSearchTool.name:
+                return "globe"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -336,6 +355,19 @@ enum ChatToolPresentation {
             return "Model switch"
         case nil:
             return "Model switch tool"
+        }
+    }
+
+    private static func browsingTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Searching the web…"
+        case .succeeded:
+            return "Searched the web"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Web search"
+        case nil:
+            return "Web search"
         }
     }
 

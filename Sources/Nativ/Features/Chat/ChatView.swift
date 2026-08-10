@@ -25,7 +25,6 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
-    @ObservedObject var extensionManager: NativExtensionManager
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     @State private var isDropTargeted = false
@@ -55,7 +54,6 @@ struct ChatView: View {
         .background(Color.nativMainContentBackground)
         .onAppear {
             chat.mcpHost = mcpHost
-            chat.extensionManager = extensionManager
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -279,8 +277,6 @@ private struct ChatComposerContainer: View {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
-    /// Included extensions can contribute tools through the extension platform.
-    weak var extensionManager: NativExtensionManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -1292,11 +1288,6 @@ final class ChatViewModel: ObservableObject {
                     if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
                         let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else if let extensionManager,
-                              let toolName = toolCall.function?.name,
-                              extensionManager.handlesTool(named: toolName),
-                              let result = try await extensionManager.executeTool(call: toolCall) {
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
                         outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
                     }
@@ -1378,7 +1369,6 @@ final class ChatViewModel: ObservableObject {
             : []
         if advertisesToolsForModel {
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            toolDefinitions += extensionManager?.toolDefinitions ?? []
             // Honor the per-tool switches from the Tools section for every
             // source, built-in and MCP alike.
             toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
@@ -3319,7 +3309,6 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
-        extensionManager: NativExtensionManager(builtInExtensions: []),
         showsConfiguration: .constant(true),
         conversationWidthReduction: 0
     )

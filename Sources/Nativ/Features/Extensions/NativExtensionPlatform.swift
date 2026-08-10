@@ -3,7 +3,6 @@ import AVFoundation
 import ExtensionFoundation
 import Foundation
 import NativExtensionSDK
-import NativServerKit
 import Observation
 import SwiftUI
 
@@ -46,16 +45,10 @@ protocol NativHostExtension: AnyObject {
     func deactivate()
     func makePage(id: String, context: NativExtensionPageContext) -> AnyView?
     func performCommand(id: String)
-    func makeConfigurationView() -> AnyView?
-    func toolDefinitions() -> [MLXChatToolDefinition]
-    func executeTool(call: MLXChatToolCall) async throws -> String?
 }
 
 extension NativHostExtension {
     func performCommand(id: String) {}
-    func makeConfigurationView() -> AnyView? { nil }
-    func toolDefinitions() -> [MLXChatToolDefinition] { [] }
-    func executeTool(call: MLXChatToolCall) async throws -> String? { nil }
 }
 
 enum NativExtensionPackageError: LocalizedError {
@@ -153,39 +146,6 @@ final class NativExtensionManager: ObservableObject {
                 }
                 return $0.order < $1.order
             }
-    }
-
-    /// Tools are contributed by active included extensions. Provider-specific
-    /// implementation stays inside the extension; chat only knows this bridge.
-    var toolDefinitions: [MLXChatToolDefinition] {
-        activeExtensionIDs
-            .sorted()
-            .flatMap { builtIns[$0]?.toolDefinitions() ?? [] }
-    }
-
-    func hasConfiguration(for extensionID: String) -> Bool {
-        builtIns[extensionID]?.makeConfigurationView() != nil
-    }
-
-    func makeConfigurationView(for extensionID: String) -> AnyView? {
-        builtIns[extensionID]?.makeConfigurationView()
-    }
-
-    func handlesTool(named name: String) -> Bool {
-        toolDefinitions.contains { $0.function.name == name }
-    }
-
-    func executeTool(call: MLXChatToolCall) async throws -> String? {
-        guard let name = call.function?.name else { return nil }
-        for extensionID in activeExtensionIDs.sorted() {
-            guard let hostExtension = builtIns[extensionID],
-                  hostExtension.toolDefinitions().contains(where: { $0.function.name == name })
-            else {
-                continue
-            }
-            return try await hostExtension.executeTool(call: call)
-        }
-        return nil
     }
 
     func isEnabled(extensionID: String) -> Bool {
