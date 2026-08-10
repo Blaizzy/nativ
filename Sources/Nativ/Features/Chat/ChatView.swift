@@ -1283,7 +1283,16 @@ final class ChatViewModel: ObservableObject {
                         }
                     )
                     let outcome: ChatToolExecutionOutcome
-                    if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
+                    if let toolName = toolCall.function?.name,
+                       let customTool = queuedRequest.settings.customTools.first(where: { $0.toolName == toolName }) {
+                        let result = try await CustomHTTPToolExecutor.execute(
+                            customTool,
+                            argumentsJSON: toolCall.function?.arguments
+                        )
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else if let host = mcpHost,
+                              let toolName = toolCall.function?.name,
+                              host.handlesTool(named: toolName) {
                         let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
@@ -1366,6 +1375,7 @@ final class ChatViewModel: ObservableObject {
             )
             : []
         if advertisesToolsForModel {
+            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             // Honor the per-tool switches from the Tools section for every
             // source, built-in and MCP alike.
