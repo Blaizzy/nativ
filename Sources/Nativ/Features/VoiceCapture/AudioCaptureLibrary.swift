@@ -1,8 +1,36 @@
 import AppKit
 import AVFoundation
+import CoreAudio
+import Darwin
 import Foundation
 import NativServerKit
 import ScreenCaptureKit
+
+enum AudioCapturePreferences {
+    static let automaticallySummarizeKey = "audio.capture.automaticallySummarize"
+    static let includeSystemAudioKey = "audio.capture.includeSystemAudio"
+    static let suggestMeetingTranscriptionKey = "audio.capture.suggestMeetingTranscription"
+
+    static func registerDefaults() {
+        UserDefaults.standard.register(defaults: [
+            automaticallySummarizeKey: true,
+            includeSystemAudioKey: true,
+            suggestMeetingTranscriptionKey: false,
+        ])
+    }
+
+    static var automaticallySummarize: Bool {
+        UserDefaults.standard.bool(forKey: automaticallySummarizeKey)
+    }
+
+    static var includeSystemAudio: Bool {
+        UserDefaults.standard.bool(forKey: includeSystemAudioKey)
+    }
+
+    static var suggestMeetingTranscription: Bool {
+        UserDefaults.standard.bool(forKey: suggestMeetingTranscriptionKey)
+    }
+}
 
 enum AudioCapturePhase: Equatable {
     case idle
@@ -79,6 +107,8 @@ final class AudioCaptureLibrary: ObservableObject {
     private let voiceRecorder = VoiceAudioRecorder()
     private let meetingRecorder = SystemAudioMeetingRecorder()
     private let recordingOverlay = VoiceCaptureOverlayController()
+    private let meetingJoinMonitor = MeetingJoinMonitor()
+    private let meetingSuggestion = MeetingTranscriptionSuggestionController()
     private let analytics: AudioAnalyticsStore
     private var elapsedTimer: Timer?
     private var captureStartedAt: Date?
@@ -88,7 +118,26 @@ final class AudioCaptureLibrary: ObservableObject {
     private var lastMeterPublishAt = Date.distantPast
 
     init(analytics: AudioAnalyticsStore? = nil) {
+        AudioCapturePreferences.registerDefaults()
         self.analytics = analytics ?? .shared
+        meetingJoinMonitor.onMeetingJoined = { [weak self] application in
+            self?.offerMeetingTranscription(for: application) ?? false
+        }
+        meetingSuggestion.onStart = { [weak self] in
+            guard let self else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                await self.start(
+                    .meeting,
+                    automaticallySummarize: AudioCapturePreferences.automaticallySummarize,
+                    includeSystemAudio: AudioCapturePreferences.includeSystemAudio
+                )
+            }
+        }
         recordingOverlay.setAudioCaptureActions(
             complete: { [weak self] in
                 Task { @MainActor [weak self] in
@@ -118,6 +167,10 @@ final class AudioCaptureLibrary: ObservableObject {
             }
             self.publishMeter(level: level, elapsed: self.elapsed)
         }
+    }
+
+    func start() {
+        meetingJoinMonitor.start()
     }
 
     static var recordingsDirectory: URL {
@@ -464,6 +517,8 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func shutdown() {
+        meetingJoinMonitor.stop()
+        meetingSuggestion.dismiss()
         activeTask?.cancel()
         activeTask = nil
         stopElapsedTimer()
@@ -474,6 +529,16 @@ final class AudioCaptureLibrary: ObservableObject {
             await meetingRecorder.cancel()
         }
         resetCaptureState()
+    }
+
+    private func offerMeetingTranscription(for application: MeetingApplication) -> Bool {
+        guard AudioCapturePreferences.suggestMeetingTranscription,
+              phase == .idle
+        else {
+            return false
+        }
+        meetingSuggestion.show(for: application.displayName)
+        return true
     }
 
     private func processRecording(
@@ -789,5 +854,272 @@ final class AudioCaptureLibrary: ObservableObject {
             start = end
         }
         return chunks
+    }
+}
+
+struct MeetingApplication: Equatable {
+    let processIdentifier: pid_t
+    let displayName: String
+}
+
+@MainActor
+final class MeetingJoinMonitor {
+    var onMeetingJoined: ((MeetingApplication) -> Bool)?
+
+    private var timer: Timer?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var promptedProcessIdentifiers = Set<pid_t>()
+    private var inputActivitySamples: [pid_t: Int] = [:]
+
+    private static let pollingInterval: TimeInterval = 0.5
+    private static let requiredInputActivitySamples = 2
+
+    func start() {
+        guard timer == nil else {
+            return
+        }
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for notificationName in [
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+        ] {
+            workspaceObservers.append(
+                workspaceCenter.addObserver(
+                    forName: notificationName,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.evaluate()
+                    }
+                }
+            )
+        }
+        workspaceObservers.append(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let application = notification.userInfo?[
+                    NSWorkspace.applicationUserInfoKey
+                ] as? NSRunningApplication else {
+                    return
+                }
+                Task { @MainActor [weak self] in
+                    self?.resetState(for: application.processIdentifier)
+                }
+            }
+        )
+
+        let timer = Timer(timeInterval: Self.pollingInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.evaluate()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        evaluate()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceObservers.forEach { workspaceCenter.removeObserver($0) }
+        workspaceObservers.removeAll()
+        promptedProcessIdentifiers.removeAll()
+        inputActivitySamples.removeAll()
+    }
+
+    private func evaluate() {
+        guard AudioCapturePreferences.suggestMeetingTranscription else {
+            promptedProcessIdentifiers.removeAll()
+            inputActivitySamples.removeAll()
+            return
+        }
+
+        clearInactiveMeetingStates()
+
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              let bundleIdentifier = application.bundleIdentifier,
+              Self.meetingApplicationNames[bundleIdentifier] != nil,
+              application.activationPolicy == .regular
+        else {
+            return
+        }
+
+        let processIdentifier = application.processIdentifier
+        guard Self.isInputRunning(forProcessIdentifier: processIdentifier) else {
+            inputActivitySamples[processIdentifier] = 0
+            promptedProcessIdentifiers.remove(processIdentifier)
+            return
+        }
+
+        let sampleCount = min(
+            Self.requiredInputActivitySamples,
+            (inputActivitySamples[processIdentifier] ?? 0) + 1
+        )
+        inputActivitySamples[processIdentifier] = sampleCount
+        guard sampleCount >= Self.requiredInputActivitySamples,
+              !promptedProcessIdentifiers.contains(processIdentifier)
+        else {
+            return
+        }
+
+        let displayName = Self.meetingApplicationNames[bundleIdentifier]
+            ?? application.localizedName
+            ?? "the meeting app"
+        let shouldRememberPrompt = onMeetingJoined?(
+            MeetingApplication(
+                processIdentifier: processIdentifier,
+                displayName: displayName
+            )
+        ) ?? false
+        if shouldRememberPrompt {
+            promptedProcessIdentifiers.insert(processIdentifier)
+        }
+    }
+
+    private func clearInactiveMeetingStates() {
+        for processIdentifier in promptedProcessIdentifiers
+            where !Self.isInputRunning(forProcessIdentifier: processIdentifier)
+        {
+            resetState(for: processIdentifier)
+        }
+    }
+
+    private func resetState(for processIdentifier: pid_t) {
+        promptedProcessIdentifiers.remove(processIdentifier)
+        inputActivitySamples.removeValue(forKey: processIdentifier)
+    }
+
+    private static let meetingApplicationNames: [String: String] = [
+        "us.zoom.xos": "Zoom",
+        "com.microsoft.teams2": "Microsoft Teams",
+        "com.microsoft.teams": "Microsoft Teams",
+        "com.cisco.webexmeetingsapp": "Webex",
+        "com.tinyspeck.slackmacgap": "Slack",
+        "com.hnc.Discord": "Discord",
+        "com.apple.FaceTime": "FaceTime",
+        "com.google.Chrome": "Google Meet",
+        "com.apple.Safari": "Google Meet",
+        "org.mozilla.firefox": "Google Meet",
+        "com.microsoft.edgemac": "Google Meet",
+        "company.thebrowser.Browser": "Google Meet",
+        "com.brave.Browser": "Google Meet",
+    ]
+
+    private static func isInputRunning(forProcessIdentifier rootProcessIdentifier: pid_t) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else {
+            return false
+        }
+
+        let processCount = Int(dataSize) / MemoryLayout<AudioObjectID>.stride
+        guard processCount > 0 else {
+            return false
+        }
+        var processObjects = [AudioObjectID](repeating: 0, count: processCount)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &processObjects
+        ) == noErr else {
+            return false
+        }
+
+        for processObject in processObjects {
+            guard let processIdentifier = processIdentifier(for: processObject),
+                  isDescendant(processIdentifier, of: rootProcessIdentifier),
+                  isProcessInputRunning(processObject)
+            else {
+                continue
+            }
+            return true
+        }
+        return false
+    }
+
+    private static func processIdentifier(for processObject: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var processIdentifier: pid_t = 0
+        var dataSize = UInt32(MemoryLayout<pid_t>.size)
+        guard AudioObjectGetPropertyData(
+            processObject,
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &processIdentifier
+        ) == noErr else {
+            return nil
+        }
+        return processIdentifier
+    }
+
+    private static func isProcessInputRunning(_ processObject: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningInput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var isRunning: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(
+            processObject,
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &isRunning
+        ) == noErr && isRunning != 0
+    }
+
+    private static func isDescendant(_ processIdentifier: pid_t, of rootProcessIdentifier: pid_t) -> Bool {
+        var currentProcessIdentifier = processIdentifier
+        var visited = Set<pid_t>()
+        while currentProcessIdentifier > 1,
+              visited.insert(currentProcessIdentifier).inserted
+        {
+            if currentProcessIdentifier == rootProcessIdentifier {
+                return true
+            }
+
+            var processInfo = proc_bsdinfo()
+            let result = withUnsafeMutablePointer(to: &processInfo) { pointer in
+                proc_pidinfo(
+                    currentProcessIdentifier,
+                    PROC_PIDTBSDINFO,
+                    0,
+                    pointer,
+                    Int32(MemoryLayout<proc_bsdinfo>.size)
+                )
+            }
+            guard result == Int32(MemoryLayout<proc_bsdinfo>.size) else {
+                return false
+            }
+            currentProcessIdentifier = pid_t(processInfo.pbi_ppid)
+        }
+        return false
     }
 }

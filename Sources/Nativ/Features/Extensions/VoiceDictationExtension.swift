@@ -30,6 +30,7 @@ final class VoiceDictationExtension: NativHostExtension {
             context.showMainWindow()
         }
         coordinator.start()
+        audioCaptureLibrary.start()
         isActive = true
     }
 
