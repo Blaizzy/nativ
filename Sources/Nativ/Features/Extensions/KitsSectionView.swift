@@ -821,7 +821,7 @@ private struct KitComponentPickerPopover: View {
                 .padding(.vertical, 4)
             }
         }
-        .frame(width: 330, height: 320)
+        .frame(width: 330, height: 240)
     }
 
     private var servers: [MCPServerConfig] {
@@ -877,7 +877,7 @@ private struct KitComponentPickerPopover: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.vertical, 7)
     }
 
     private func toggle<Value: Equatable>(_ value: Value, in keyPath: WritableKeyPath<UserNativKit, [Value]>) {
