@@ -400,21 +400,21 @@ private struct SkillsSectionView: View {
             }
         } content: {
             VStack(spacing: 0) {
-                SkillRow(
-                    skill: NativSkill.builtInToolGuide,
-                    isBuiltIn: true,
-                    onToggle: {},
-                    onEdit: {},
-                    onDelete: {}
-                )
-                ForEach(model.settings.skills) { skill in
-                    Divider()
-                    SkillRow(
-                        skill: skill,
-                        onToggle: { toggle(skill) },
-                        onEdit: { editing = skill },
-                        onDelete: { pendingDelete = skill }
+                if model.settings.skills.isEmpty {
+                    HubEmptyHint(
+                        icon: "sparkles",
+                        text: "No skills yet. Add reusable instructions the model can apply."
                     )
+                } else {
+                    ForEach(Array(model.settings.skills.enumerated()), id: \.element.id) { index, skill in
+                        if index > 0 { Divider() }
+                        SkillRow(
+                            skill: skill,
+                            onToggle: { toggle(skill) },
+                            onEdit: { editing = skill },
+                            onDelete: { pendingDelete = skill }
+                        )
+                    }
                 }
             }
         }

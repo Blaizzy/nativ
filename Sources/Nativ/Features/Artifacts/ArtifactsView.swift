@@ -820,6 +820,7 @@ struct ArtifactsView: View {
             .fixedSize()
                 }
                 .padding(.vertical, 2)
+                .padding(.trailing, 24)
             }
             .mask(
                 LinearGradient(

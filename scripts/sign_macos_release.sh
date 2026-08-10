@@ -238,14 +238,21 @@ resolve_app_entitlements() {
 
     resolved_entitlements_file="$(mktemp "${TMPDIR:-/tmp}/nativ-entitlements.XXXXXX.plist")"
     cp "$source_entitlements" "$resolved_entitlements_file"
-    /usr/libexec/PlistBuddy \
-        -c "Set :keychain-access-groups:0 $signing_team_id.$app_bundle_identifier" \
-        "$resolved_entitlements_file"
 
     if [[ "$is_developer_id" == true || -n "$provisioning_profile" ]]; then
         /usr/libexec/PlistBuddy \
+            -c "Set :keychain-access-groups:0 $signing_team_id.$app_bundle_identifier" \
+            "$resolved_entitlements_file"
+        /usr/libexec/PlistBuddy \
             -c "Add :com.apple.application-identifier string $signing_team_id.$app_bundle_identifier" \
             -c "Add :com.apple.developer.team-identifier string $signing_team_id" \
+            "$resolved_entitlements_file"
+    else
+        # A profile-less Apple Development signature cannot claim a restricted
+        # keychain sharing group. Nativ's local Keychain queries do not request
+        # an access group, so use the normal macOS Keychain behavior instead.
+        /usr/libexec/PlistBuddy \
+            -c "Delete :keychain-access-groups" \
             "$resolved_entitlements_file"
     fi
 
@@ -276,7 +283,11 @@ prepare_provisioning_profile() {
             fail "could not decode the Developer ID provisioning profile"
         resolved_provisioning_profile="$decoded_profile_file"
     else
-        return
+        # Apple Development signatures do not require an embedded Developer ID
+        # provisioning profile. Return success explicitly: a bare `return`
+        # inherits the failed `is_developer_id` test above, and `set -e` would
+        # abort before the app is signed with its entitlements.
+        return 0
     fi
 
     decoded_profile_plist="$(mktemp "${TMPDIR:-/tmp}/nativ-profile.XXXXXX.plist")"
@@ -443,7 +454,8 @@ fi
 if [[ "$app_entitlements" != *"com.apple.security.device.audio-input"* ]]; then
     fail "the signed app is missing the audio-input entitlement"
 fi
-if [[ "$app_entitlements" != *"keychain-access-groups"* ]]; then
+if [[ ("$is_developer_id" == true || -n "$provisioning_profile") && \
+      "$app_entitlements" != *"keychain-access-groups"* ]]; then
     fail "the signed app is missing its keychain access group"
 fi
 if [[ "$is_developer_id" == true ]]; then

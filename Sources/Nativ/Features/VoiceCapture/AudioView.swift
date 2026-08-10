@@ -1800,7 +1800,7 @@ struct AudioView: View {
             return "Hold while speaking; release to transcribe."
         }
         return shortcuts.recordShortcut.keyCode == nil
-            ? "Double-tap to start; double-tap again to transcribe."
+            ? "Tap once to start; tap again to transcribe."
             : "Press once to start; press again to transcribe."
     }
 
