@@ -202,8 +202,8 @@ private struct ExtensionsSectionView: View {
         panel.title = "Install extension"
         panel.message = "Choose a .nativextension package."
         panel.prompt = "Install"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [
             UTType(filenameExtension: "nativextension") ?? .folder,
