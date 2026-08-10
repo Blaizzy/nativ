@@ -69,11 +69,19 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
-    func testCatalogIncludesWebSearchBeforeItIsConfigured() {
-        let names = ChatToolRegistry.catalogDefinitions(canEditImage: false)
+    func testDefinitionsAlwaysAdvertiseWebSearch() {
+        let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
 
-        XCTAssertTrue(names.contains(BrowsingSearchTool.name))
+        XCTAssertTrue(names.contains(ChatWebSearchToolRegistry.toolName))
+    }
+
+    func testWebSearchCarriesConfigurationMetadata() {
+        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
+            $0.definition.function.name == ChatWebSearchToolRegistry.toolName
+        }
+
+        XCTAssertEqual(descriptor?.configuration, .webSearch)
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {

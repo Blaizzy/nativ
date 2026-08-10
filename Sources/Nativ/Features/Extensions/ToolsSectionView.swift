@@ -25,9 +25,10 @@ struct ToolsSectionView: View {
             }
         }
         .sheet(item: $inspecting) { tool in
-            if tool.name == BrowsingSearchTool.name {
-                BrowsingToolConfigurationView()
-            } else {
+            switch tool.configuration {
+            case .webSearch:
+                WebSearchToolConfigurationView(toolName: tool.name)
+            case nil:
                 ToolInspectorView(tool: tool, host: host)
             }
         }
@@ -69,13 +70,14 @@ struct ToolsSectionView: View {
     }
 
     private var nativeTools: [ToolItem] {
-        ChatToolRegistry.catalogDefinitions(canEditImage: false).map {
+        ChatToolRegistry.descriptors(canEditImage: false).map {
             ToolItem(
-                name: $0.function.name,
-                title: $0.function.name,
-                detail: $0.function.description,
-                parameters: $0.function.parameters,
-                isRunnable: false
+                name: $0.definition.function.name,
+                title: $0.definition.function.name,
+                detail: $0.definition.function.description,
+                parameters: $0.definition.function.parameters,
+                isRunnable: false,
+                configuration: $0.configuration
             )
         }
     }
@@ -102,6 +104,7 @@ struct ToolItem: Identifiable {
     let detail: String
     var parameters: MLXJSONValue?
     var isRunnable: Bool = false
+    var configuration: ChatNativeToolConfiguration? = nil
 }
 
 private struct ToolRow: View {
@@ -124,12 +127,12 @@ private struct ToolRow: View {
             }
             Spacer(minLength: 12)
             Button(action: onInspect) {
-                Image(systemName: tool.name == BrowsingSearchTool.name ? "gearshape" : "info.circle")
+                Image(systemName: tool.configuration == nil ? "info.circle" : "gearshape")
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0.35)
-            .help(tool.name == BrowsingSearchTool.name ? "Configure web search" : "Inspect / try")
+            .help(tool.configuration == nil ? "Inspect / try" : "Configure")
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -142,14 +145,15 @@ private struct ToolRow: View {
     }
 }
 
-private struct BrowsingToolConfigurationView: View {
+private struct WebSearchToolConfigurationView: View {
+    let toolName: String
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("web_search")
+                    Text(toolName)
                         .font(.system(size: 16, weight: .semibold, design: .monospaced))
                     Text("Choose the provider Nativ uses when a model searches the web.")
                         .font(.system(size: 12))
@@ -164,7 +168,7 @@ private struct BrowsingToolConfigurationView: View {
                 .foregroundStyle(.secondary)
             }
 
-            BrowsingSettingsView()
+            WebSearchSettingsView()
         }
         .padding(20)
         .frame(width: 660)

@@ -374,7 +374,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private weak var highlightedMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        BrowsingCredentials.migrateLegacyBraveKeyIfNeeded()
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()
         }

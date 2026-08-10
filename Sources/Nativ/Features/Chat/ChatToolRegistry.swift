@@ -31,20 +31,33 @@ enum ChatToolRoundGate {
     }
 }
 
+enum ChatNativeToolConfiguration: Equatable {
+    case webSearch
+}
+
+struct ChatNativeToolDescriptor {
+    let definition: MLXChatToolDefinition
+    let configuration: ChatNativeToolConfiguration?
+}
+
 enum ChatToolRegistry {
     static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
-        catalogDefinitions(canEditImage: canEditImage).filter {
-            $0.function.name != BrowsingSearchTool.name || BrowsingSearchTool.isConfigured
-        }
+        descriptors(canEditImage: canEditImage).map(\.definition)
     }
 
-    static func catalogDefinitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
-        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
-        tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
-        tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
-        tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
-        tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
-        tools.append(BrowsingSearchTool.definition)
+    static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
+        var definitions = ChatImageToolRegistry.definitions(canEdit: canEditImage)
+        definitions += ChatSystemMonitorToolRegistry.definitions()
+        definitions += ChatModelLibraryToolRegistry.definitions()
+        definitions += ChatServerStatsToolRegistry.definitions()
+        definitions += ChatSwitchModelToolRegistry.definitions()
+        var tools = definitions.map {
+            ChatNativeToolDescriptor(definition: $0, configuration: nil)
+        }
+        tools.append(ChatNativeToolDescriptor(
+            definition: ChatWebSearchToolRegistry.definition,
+            configuration: .webSearch
+        ))
         return tools
     }
 }
@@ -59,7 +72,7 @@ enum ChatToolDispatcher {
         ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
         ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
         ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
-        BrowsingSearchTool.name: executeBrowsingSearchTool,
+        ChatWebSearchToolRegistry.toolName: executeWebSearchTool,
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -77,8 +90,8 @@ enum ChatToolDispatcher {
         ChatSwitchModelToolRegistry.toolName: { name, error in
             ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
         },
-        BrowsingSearchTool.name: { _, error in
-            BrowsingSearchTool.failurePayload(error: error)
+        ChatWebSearchToolRegistry.toolName: { _, error in
+            ChatWebSearchToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -172,11 +185,11 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
-    private static func executeBrowsingSearchTool(
+    private static func executeWebSearchTool(
         call: MLXChatToolCall,
         context _: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        let content = try await BrowsingSearchTool.execute(call: call)
+        let content = try await ChatWebSearchToolExecutor().execute(call: call)
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
@@ -247,8 +260,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
-        case BrowsingSearchTool.name:
-            return browsingTitle(status: status)
+        case ChatWebSearchToolRegistry.toolName:
+            return webSearchTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -279,7 +292,7 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
-            case BrowsingSearchTool.name:
+            case ChatWebSearchToolRegistry.toolName:
                 return "globe"
             default:
                 return "wrench.and.screwdriver"
@@ -362,7 +375,7 @@ enum ChatToolPresentation {
         }
     }
 
-    private static func browsingTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+    private static func webSearchTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch status {
         case .preparing, .running:
             return "Searching the web…"

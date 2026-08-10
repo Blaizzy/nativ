@@ -52,9 +52,7 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
-        .onAppear {
-            chat.mcpHost = mcpHost
-        }
+        .onAppear { chat.mcpHost = mcpHost }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
         }
