@@ -274,71 +274,57 @@ final class FnRetryShortcutStateTests: XCTestCase {
 }
 
 final class VoiceModifierToggleShortcutStateTests: XCTestCase {
-    private let origin = Date(timeIntervalSinceReferenceDate: 0)
-
     @discardableResult
     private func tap(
         _ state: inout VoiceModifierToggleShortcutState,
-        shortcut: VoiceShortcutModifiers = [.option],
-        at time: Date
+        shortcut: VoiceShortcutModifiers = [.option]
     ) -> Bool {
-        _ = state.update(activeModifiers: shortcut, shortcutModifiers: shortcut, now: time)
-        return state.update(activeModifiers: [], shortcutModifiers: shortcut, now: time)
+        _ = state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        return state.update(activeModifiers: [], shortcutModifiers: shortcut)
     }
 
-    func testSingleTapDoesNotToggle() {
+    func testSingleTapToggles() {
         var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertTrue(tap(&state))
         XCTAssertFalse(state.isHeld)
     }
 
-    func testDoubleTapWithinWindowToggles() {
+    func testEachCleanTapToggles() {
         var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.2)))
+        XCTAssertTrue(tap(&state))
+        XCTAssertTrue(tap(&state))
     }
 
-    func testSecondTapAfterWindowDoesNotToggle() {
-        var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(1.0)))
-    }
-
-    func testExtraModifierDoesNotInvalidateDoubleTap() {
+    func testExtraModifierDoesNotInvalidateTap() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option, .shift],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             state.update(
                 activeModifiers: [],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.1)))
     }
 
-    func testKeyPressDoesNotArmDoubleTap() {
+    func testKeyPressDoesNotToggle() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
         state.noteKeyDown()
@@ -346,26 +332,10 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertFalse(
             state.update(
                 activeModifiers: [],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
-    }
-
-    func testCanToggleAgainAfterCompletingDoubleTap() {
-        var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.2)))
-
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(2)))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(2.2)))
-    }
-
-    func testDoubleTapWithinWidenedWindowToggles() {
-        var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.5)))
+        XCTAssertTrue(tap(&state))
     }
 
     func testEntersHeldWithExtraModifier() {
@@ -374,15 +344,14 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.control, .option, .command, .shift],
-                shortcutModifiers: shortcut,
-                now: origin
+                shortcutModifiers: shortcut
             )
         )
         XCTAssertTrue(state.isHeld)
-        XCTAssertFalse(
-            state.update(activeModifiers: [], shortcutModifiers: shortcut, now: origin)
+        XCTAssertTrue(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut)
         )
-        XCTAssertTrue(tap(&state, shortcut: shortcut, at: origin.addingTimeInterval(0.2)))
+        XCTAssertTrue(tap(&state, shortcut: shortcut))
     }
 }
 

@@ -226,9 +226,9 @@ private struct MCPServerJSON: Codable {
 
 private let mcpJSONScaffold = """
 {
-  "name": "",
-  "command": "",
-  "args": [],
+  "name": "filesystem",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"],
   "env": {}
 }
 """

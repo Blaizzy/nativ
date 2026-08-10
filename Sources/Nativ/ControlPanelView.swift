@@ -1985,12 +1985,13 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .models:
-            ModelsView(
+            ModelsViewHost(
                 model: model,
                 showsConfiguration: $isModelConfigurationVisible,
                 titleLeadingInset: detailTitleLeadingInset,
                 speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
             )
+            .equatable()
         case .extensions:
             ExtensionsHubView(
                 manager: extensionManager,

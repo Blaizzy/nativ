@@ -31,6 +31,11 @@ private func voiceCaptureFinishProgress(
 
 @MainActor
 final class VoiceCaptureOverlayModel: ObservableObject {
+    enum VisibleSurface: Equatable {
+        case waveform
+        case island
+    }
+
     enum Presentation: Equatable {
         case dictation
         case audioCapture(AudioRecordKind)
@@ -62,6 +67,7 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     @Published var islandStyle: VoiceCaptureAnimationStyle = .gradientIsland
     @Published var showsNoSpeechFeedback = false
     @Published var presentation: Presentation = .dictation
+    @Published var visibleSurface: VisibleSurface?
 
     var completeAudioCapture: (() -> Void)?
     var restartAudioCapture: (() -> Void)?
@@ -217,12 +223,15 @@ final class VoiceCaptureOverlayController {
 
         switch activeStyle {
         case .cursorWaveform:
+            model.visibleSurface = .waveform
             positionWaveformPanel(near: cursorPosition)
             waveformPanel.orderFrontRegardless()
         case .gradientIsland, .notchShelf:
+            model.visibleSurface = .island
             positionIslandPanel(on: screen(containing: cursorPosition))
             islandPanel.orderFrontRegardless()
         case .verticalRecorder:
+            model.visibleSurface = .island
             positionVerticalRecorderPanel(on: screen(containing: cursorPosition))
             islandPanel.orderFrontRegardless()
         }
@@ -340,6 +349,7 @@ final class VoiceCaptureOverlayController {
             }
             self.waveformPanel.orderOut(nil)
             self.islandPanel.orderOut(nil)
+            self.model.visibleSurface = nil
             self.model.elapsed = 0
             self.model.showsNoSpeechFeedback = false
             self.dismissalTask = nil
@@ -356,6 +366,7 @@ final class VoiceCaptureOverlayController {
         guard overlayWasVisible else {
             waveformPanel.orderOut(nil)
             islandPanel.orderOut(nil)
+            model.visibleSurface = nil
             model.elapsed = 0
             model.showsNoSpeechFeedback = false
             didPlayStartCue = false
@@ -379,6 +390,7 @@ final class VoiceCaptureOverlayController {
             }
             self.waveformPanel.orderOut(nil)
             self.islandPanel.orderOut(nil)
+            self.model.visibleSurface = nil
             self.model.elapsed = 0
             self.model.showsNoSpeechFeedback = false
             self.dismissalTask = nil
@@ -1105,7 +1117,14 @@ private struct VoiceCapturePrimaryVisual: View {
 private struct VoiceCaptureOverlayView: View {
     @ObservedObject var model: VoiceCaptureOverlayModel
 
+    @ViewBuilder
     var body: some View {
+        if model.visibleSurface == .waveform {
+            animatedContent
+        }
+    }
+
+    private var animatedContent: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             let finishProgress = voiceCaptureFinishProgress(
                 state: model.state,
@@ -1397,7 +1416,14 @@ private struct VoiceOrbLoadingLayer: View {
 private struct VoiceCaptureIslandView: View {
     @ObservedObject var model: VoiceCaptureOverlayModel
 
+    @ViewBuilder
     var body: some View {
+        if model.visibleSurface == .island {
+            islandContent
+        }
+    }
+
+    private var islandContent: some View {
         Group {
             if model.islandStyle == .verticalRecorder,
                model.presentation.audioCaptureKind != nil
