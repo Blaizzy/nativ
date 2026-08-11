@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import XCTest
 @testable import NativServerKit
@@ -227,6 +228,86 @@ final class AudioAnalyticsStoreTests: XCTestCase {
             storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
         )
         XCTAssertEqual(reloaded.records.first?.displayTitle, "Product launch idea")
+    }
+
+    func testPersistsImportedAudioKind() throws {
+        let recordingURL = temporaryDirectory.appendingPathComponent("imported.wav")
+        try Data([0x00]).write(to: recordingURL)
+
+        store.addCapture(
+            recordingURL: recordingURL,
+            kind: .imported,
+            title: "Planning call",
+            durationSeconds: 20
+        )
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        XCTAssertEqual(reloaded.records.first?.resolvedKind, .imported)
+        XCTAssertEqual(reloaded.records.first?.displayTitle, "Planning call")
+    }
+}
+
+final class AudioFileImporterTests: XCTestCase {
+    private var temporaryDirectory: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    override func tearDownWithError() throws {
+        try FileManager.default.removeItem(at: temporaryDirectory)
+        temporaryDirectory = nil
+        try super.tearDownWithError()
+    }
+
+    func testConvertsToPCMWithoutChangingRateOrChannels() async throws {
+        let source = temporaryDirectory.appendingPathComponent("source.wav")
+        let sampleRate = 44_100.0
+        let channelCount: AVAudioChannelCount = 2
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                standardFormatWithSampleRate: sampleRate,
+                channels: channelCount
+            )
+        )
+        let frameCount: AVAudioFrameCount = 4_410
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+        )
+        buffer.frameLength = frameCount
+        for channel in 0 ..< Int(channelCount) {
+            let samples = try XCTUnwrap(buffer.floatChannelData?[channel])
+            for frame in 0 ..< Int(frameCount) {
+                samples[frame] = sin(Float(frame) * 0.02)
+            }
+        }
+        var sourceFile: AVAudioFile? = try AVAudioFile(
+            forWriting: source,
+            settings: format.settings
+        )
+        try sourceFile?.write(from: buffer)
+        sourceFile = nil
+
+        let imported = try await AudioFileImporter().importFile(
+            from: source,
+            into: temporaryDirectory.appendingPathComponent("library", isDirectory: true)
+        )
+        let output = try AVAudioFile(forReading: imported.url)
+
+        XCTAssertEqual(imported.title, "source")
+        XCTAssertEqual(imported.duration, 0.1, accuracy: 0.001)
+        XCTAssertEqual(output.fileFormat.commonFormat, .pcmFormatInt16)
+        XCTAssertEqual(output.fileFormat.sampleRate, sampleRate)
+        XCTAssertEqual(output.fileFormat.channelCount, channelCount)
+        XCTAssertGreaterThan(output.length, 0)
     }
 }
 

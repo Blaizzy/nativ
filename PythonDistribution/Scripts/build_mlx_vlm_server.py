@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from generate_audio_model_manifest import (
+    MANIFEST_FILENAME as AUDIO_MODEL_MANIFEST_FILENAME,
+)
+from generate_audio_model_manifest import generate_audio_model_manifest
 from generate_image_model_manifest import (
     MANIFEST_FILENAME as IMAGE_MODEL_MANIFEST_FILENAME,
 )
@@ -29,6 +33,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_DISTRIBUTION_ROOT = REPO_ROOT / "PythonDistribution"
 LAUNCHER_SOURCE = PYTHON_DISTRIBUTION_ROOT / "Launcher" / "mlx_vlm_server_launcher.c"
 OVERLAY_SERVER = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py"
+AUDIO_MODEL_MANIFEST_GENERATOR = Path(__file__).with_name(
+    "generate_audio_model_manifest.py"
+)
 IMAGE_MODEL_MANIFEST_GENERATOR = Path(__file__).with_name(
     "generate_image_model_manifest.py"
 )
@@ -267,7 +274,7 @@ def build_signature(
     skip_install: bool,
 ) -> dict[str, object]:
     return {
-        "version": 6,
+        "version": 7,
         "asset": asset.name,
         "python_version": python_version,
         "pbs_release": pbs_release,
@@ -310,6 +317,9 @@ def build_signature(
         ),
         "launcher_sha256": file_sha256(LAUNCHER_SOURCE),
         "overlay_server_sha256": file_sha256(OVERLAY_SERVER),
+        "audio_model_manifest_generator_sha256": file_sha256(
+            AUDIO_MODEL_MANIFEST_GENERATOR
+        ),
         "image_model_manifest_generator_sha256": file_sha256(
             IMAGE_MODEL_MANIFEST_GENERATOR
         ),
@@ -625,6 +635,12 @@ def install_image_model_manifest(output: Path) -> None:
     generate_image_model_manifest(site_packages_dir(output), destination)
 
 
+def install_audio_model_manifest(output: Path) -> None:
+    destination = output / AUDIO_MODEL_MANIFEST_FILENAME
+    log(f"Generating audio model capability manifest {destination.name}")
+    generate_audio_model_manifest(site_packages_dir(output), destination)
+
+
 def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
     python = python_executable(output / "python")
     launcher = output / "bin" / "mlx-vlm-server"
@@ -663,6 +679,25 @@ def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
         ):
             raise SystemExit(
                 f"Invalid image model capability manifest contents: {manifest_path}"
+            )
+        audio_manifest_path = output / AUDIO_MODEL_MANIFEST_FILENAME
+        if not audio_manifest_path.exists():
+            raise SystemExit(
+                f"Missing audio model capability manifest: {audio_manifest_path}"
+            )
+        try:
+            audio_manifest = json.loads(audio_manifest_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise SystemExit(
+                f"Invalid audio model capability manifest: {audio_manifest_path}: {error}"
+            ) from error
+        if (
+            audio_manifest.get("schema_version") != 1
+            or not audio_manifest.get("speech_to_text_model_types")
+            or not audio_manifest.get("text_to_speech_model_types")
+        ):
+            raise SystemExit(
+                f"Invalid audio model capability manifest contents: {audio_manifest_path}"
             )
     if not launcher.exists():
         raise SystemExit(f"Missing launcher: {launcher}")
@@ -842,6 +877,7 @@ def main() -> None:
                 extra_pip_args=args.pip_arg,
             )
         install_overlay(output)
+        install_audio_model_manifest(output)
         install_image_model_manifest(output)
 
     launcher = write_or_build_launcher(output)

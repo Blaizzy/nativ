@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import Charts
 import SwiftUI
 import Textual
+import UniformTypeIdentifiers
 
 private enum AudioDestination: String, CaseIterable, Identifiable {
     case overview
@@ -68,6 +69,7 @@ struct AudioView: View {
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
     @State private var isConfirmingClearAllDictations = false
+    @State private var isPresentingAudioImporter = false
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -141,6 +143,25 @@ struct AudioView: View {
                     shortcutConflict = nil
                 }
             )
+        }
+        .fileImporter(
+            isPresented: $isPresentingAudioImporter,
+            allowedContentTypes: AudioFileImporter.supportedContentTypes
+        ) { result in
+            switch result {
+            case .success(let url):
+                Task {
+                    let hasSecurityScopedAccess = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if hasSecurityScopedAccess {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    await captureLibrary.importFile(from: url)
+                }
+            case .failure(let error):
+                captureLibrary.lastErrorMessage = error.localizedDescription
+            }
         }
         .alert(
             "Audio Capture",
@@ -1924,25 +1945,47 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    destination = .record
-                } label: {
-                    Label("New recording", systemImage: "plus")
+                if !captureRecords.isEmpty {
+                    Button {
+                        isPresentingAudioImporter = true
+                    } label: {
+                        if captureLibrary.isImporting {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Importing")
+                            }
+                        } else {
+                            Label("Import file", systemImage: "square.and.arrow.down")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureLibrary.isImporting)
+
+                    Button {
+                        destination = .record
+                    } label: {
+                        Label("New recording", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
 
             if captureRecords.isEmpty {
                 ContentUnavailableView {
                     Label("No saved recordings", systemImage: "waveform.badge.plus")
                 } description: {
-                    Text("Start a recording to create your local audio library.")
+                    Text("Record audio or import a file to create your local audio library.")
                 } actions: {
                     Button("Record audio") {
                         destination = .record
                     }
                     .buttonStyle(.borderedProminent)
+                    Button("Import a file") {
+                        isPresentingAudioImporter = true
+                    }
+                    .disabled(captureLibrary.isImporting)
                 }
                 .frame(maxWidth: .infinity, minHeight: 170)
             } else {

@@ -83,6 +83,8 @@ private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
 
 @MainActor
 final class AudioCaptureLibrary: ObservableObject {
+    private static let importedAudioTranscriptionTimeout: TimeInterval = 60 * 60
+
     @Published private(set) var phase: AudioCapturePhase = .idle
     @Published private(set) var activeKind: AudioRecordKind?
     @Published private(set) var elapsed: TimeInterval = 0
@@ -93,6 +95,7 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var shouldOfferScreenCaptureSettings = false
     @Published private(set) var playingRecordID: String?
     @Published private(set) var isPlaybackPaused = false
+    @Published private(set) var isImporting = false
 
     var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
 
@@ -110,6 +113,7 @@ final class AudioCaptureLibrary: ObservableObject {
     private let meetingJoinMonitor = MeetingJoinMonitor()
     private let meetingSuggestion = MeetingTranscriptionSuggestionController()
     private let analytics: AudioAnalyticsStore
+    private let fileImporter = AudioFileImporter()
     private var elapsedTimer: Timer?
     private var captureStartedAt: Date?
     private var shouldSummarizeCurrentCapture = false
@@ -257,7 +261,7 @@ final class AudioCaptureLibrary: ObservableObject {
                     )
                     activeBackend = .microphone
                 }
-            case .dictation:
+            case .dictation, .imported:
                 return
             }
             captureStartedAt = Date()
@@ -412,6 +416,49 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
+    func importFile(from url: URL) async {
+        guard !isImporting else {
+            return
+        }
+        clearLastError()
+        isImporting = true
+        defer { isImporting = false }
+
+        let imported: ImportedAudioFile
+        do {
+            imported = try await fileImporter.importFile(
+                from: url,
+                into: Self.recordingsDirectory
+            )
+        } catch is CancellationError {
+            return
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return
+        }
+
+        analytics.addCapture(
+            recordingURL: imported.url,
+            kind: .imported,
+            title: imported.title,
+            durationSeconds: imported.duration
+        )
+        let recordID = imported.url.deletingPathExtension().lastPathComponent
+        processingRecordIDs.insert(recordID)
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.processRecording(
+                imported.url,
+                kind: .imported,
+                title: imported.title,
+                duration: imported.duration,
+                automaticallySummarize: AudioCapturePreferences.automaticallySummarize
+            )
+        }
+    }
+
     func audioURL(for record: AudioTranscriptionRecord) -> URL? {
         guard let audioFileName = record.audioFileName,
               let directory = try? Self.recordingsDirectory
@@ -554,7 +601,10 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         do {
-            let (transcript, modelID) = try await transcribe(recordingURL)
+            let (transcript, modelID) = try await transcribe(
+                recordingURL,
+                timeout: kind == .imported ? Self.importedAudioTranscriptionTimeout : nil
+            )
             let transcriptURL = recordingURL
                 .deletingPathExtension()
                 .appendingPathExtension("txt")
@@ -584,7 +634,10 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
-    private func transcribe(_ recordingURL: URL) async throws -> (String, String) {
+    private func transcribe(
+        _ recordingURL: URL,
+        timeout: TimeInterval? = nil
+    ) async throws -> (String, String) {
         guard let configuration = transcriptionConfigurationProvider?() else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
@@ -603,10 +656,18 @@ final class AudioCaptureLibrary: ObservableObject {
         ) else {
             throw AudioCaptureLibraryError.missingSpeechModel
         }
-        let client = NativAudioClient(
-            baseURL: configuration.serverBaseURL,
-            apiKey: configuration.serverAPIKey
-        )
+        let client = if let timeout {
+            NativAudioClient(
+                baseURL: configuration.serverBaseURL,
+                apiKey: configuration.serverAPIKey,
+                timeout: timeout
+            )
+        } else {
+            NativAudioClient(
+                baseURL: configuration.serverBaseURL,
+                apiKey: configuration.serverAPIKey
+            )
+        }
         let result = try await client.transcribe(fileURL: recordingURL, model: modelID)
         let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else {

@@ -1179,6 +1179,10 @@ enum LocalModelDiscovery {
         let keys = recursiveKeys(in: config).union(recursiveKeys(in: modelIndex))
         let descriptors = [modelDescriptors(in: config), modelDescriptors(in: modelIndex)]
             .joined(separator: " ")
+        let backendAudioCapabilities = MLXAudioModelResolver.shared.capabilities(
+            config: config,
+            modelIndex: modelIndex
+        )
         let primaryTask = ModelPrimaryTaskResolver.resolve(
             model: model,
             config: config
@@ -1194,12 +1198,18 @@ enum LocalModelDiscovery {
             "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
         ]
         let generativeArchitectures = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
-        if primaryTask.includesLanguageCapability(
+        let backendIdentifiesExclusiveSpeech = !backendAudioCapabilities.isDisjoint(
+            with: [.speechToText, .textToSpeech]
+        )
+        if !backendIdentifiesExclusiveSpeech,
+           primaryTask.includesLanguageCapability(
             fallbackMatch: textDescriptors.contains(where: descriptors.contains)
                 || generativeArchitectures.contains(where: descriptors.contains)
         ) {
             capabilities.insert(.text)
         }
+
+        capabilities.formUnion(backendAudioCapabilities)
 
         switch primaryTask {
         case .textToSpeech:
@@ -1262,21 +1272,11 @@ enum LocalModelDiscovery {
             "tts_model_type"
         ]
         let audioDescriptors = [
-            "audio", "speech", "whisper", "asr", "tts", "transcribe", "omni"
+            "audio", "speech", "asr", "tts", "transcribe", "omni"
         ]
         if !keys.isDisjoint(with: audioKeys)
             || audioDescriptors.contains(where: descriptors.contains) {
             capabilities.insert(.audio)
-        }
-
-        let speechToTextDescriptors = ["whisper", "asr", "transcribe", "speechrecognition"]
-        if speechToTextDescriptors.contains(where: descriptors.contains) {
-            capabilities.insert(.speechToText)
-        }
-
-        let textToSpeechDescriptors = ["tts", "texttospeech", "speechsynthesis"]
-        if textToSpeechDescriptors.contains(where: descriptors.contains) {
-            capabilities.insert(.textToSpeech)
         }
 
         if let embeddingStamp = config["mlx_embeddings"] as? [String: Any],

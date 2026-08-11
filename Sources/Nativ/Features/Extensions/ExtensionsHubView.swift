@@ -40,13 +40,6 @@ struct ExtensionsHubView: View {
         .task {
             guard !didLaunch else { return }
             didLaunch = true
-            manager.launch(
-                context: NativExtensionHostContext(
-                    transcriptionConfiguration: { nil },
-                    openSpeechModels: {},
-                    showMainWindow: {}
-                )
-            )
             host.reload(servers: model.settings.mcpServers)
         }
         .onChange(of: model.settings.mcpServers) { _, servers in

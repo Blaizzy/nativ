@@ -104,6 +104,8 @@ public enum NativServerErrorMessage {
 public enum NativError: Error, CustomStringConvertible {
     case missingDistribution(Bundle)
     case missingExecutable(URL)
+    case missingAudioModelCapabilityManifest(URL)
+    case invalidAudioModelCapabilityManifest(URL)
     case missingImageModelCapabilityManifest(URL)
     case invalidImageModelCapabilityManifest(URL)
     case alreadyRunning
@@ -116,6 +118,10 @@ public enum NativError: Error, CustomStringConvertible {
             return "Missing mlx-vlm-server resource in \(bundle.bundlePath)"
         case .missingExecutable(let url):
             return "Missing mlx-vlm-server executable at \(url.path)"
+        case .missingAudioModelCapabilityManifest(let url):
+            return "Missing audio model capability manifest at \(url.path)"
+        case .invalidAudioModelCapabilityManifest(let url):
+            return "Invalid audio model capability manifest at \(url.path)"
         case .missingImageModelCapabilityManifest(let url):
             return "Missing image model capability manifest at \(url.path)"
         case .invalidImageModelCapabilityManifest(let url):
@@ -131,6 +137,8 @@ public enum NativError: Error, CustomStringConvertible {
 }
 
 public enum Nativ {
+    private static let audioModelCapabilityManifestFilename =
+        "audio-model-capabilities.json"
     private static let imageModelCapabilityManifestFilename =
         "image-model-capabilities.json"
 
@@ -167,6 +175,29 @@ public enum Nativ {
             throw NativError.invalidImageModelCapabilityManifest(manifestURL)
         }
         return Set(manifest.modelTypes)
+    }
+
+    public static func audioModelCapabilities() throws -> NativAudioModelCapabilities {
+        let manifestURL = try distributionURL()
+            .appendingPathComponent(audioModelCapabilityManifestFilename)
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            throw NativError.missingAudioModelCapabilityManifest(manifestURL)
+        }
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(
+                  AudioModelCapabilityManifest.self,
+                  from: data
+              ),
+              manifest.schemaVersion == 1,
+              !manifest.speechToTextModelTypes.isEmpty,
+              !manifest.textToSpeechModelTypes.isEmpty
+        else {
+            throw NativError.invalidAudioModelCapabilityManifest(manifestURL)
+        }
+        return NativAudioModelCapabilities(
+            speechToTextModelTypes: Set(manifest.speechToTextModelTypes),
+            textToSpeechModelTypes: Set(manifest.textToSpeechModelTypes)
+        )
     }
 
     public static func makeProcess(
@@ -222,6 +253,31 @@ public enum Nativ {
             throw NativError.launchFailed(process.terminationStatus, output)
         }
         return output
+    }
+}
+
+public struct NativAudioModelCapabilities: Equatable, Sendable {
+    public let speechToTextModelTypes: Set<String>
+    public let textToSpeechModelTypes: Set<String>
+
+    public init(
+        speechToTextModelTypes: Set<String>,
+        textToSpeechModelTypes: Set<String>
+    ) {
+        self.speechToTextModelTypes = speechToTextModelTypes
+        self.textToSpeechModelTypes = textToSpeechModelTypes
+    }
+}
+
+private struct AudioModelCapabilityManifest: Decodable {
+    let schemaVersion: Int
+    let speechToTextModelTypes: [String]
+    let textToSpeechModelTypes: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case speechToTextModelTypes = "speech_to_text_model_types"
+        case textToSpeechModelTypes = "text_to_speech_model_types"
     }
 }
 

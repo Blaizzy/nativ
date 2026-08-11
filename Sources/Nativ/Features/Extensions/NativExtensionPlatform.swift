@@ -155,6 +155,9 @@ final class NativExtensionManager: ObservableObject {
     }
 
     func launch(context: NativExtensionHostContext) {
+        guard hostContext == nil else {
+            return
+        }
         hostContext = context
         permissionSnapshot = currentPermissionSnapshot()
         if applicationActivationObserver == nil {
