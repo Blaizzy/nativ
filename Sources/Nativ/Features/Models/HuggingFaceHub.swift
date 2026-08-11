@@ -72,6 +72,22 @@ enum HuggingFaceSortDirection: Int, CaseIterable, Hashable, Identifiable, Sendab
     }
 }
 
+enum HuggingFaceCapabilityFilter {
+    /// Reasoning and tool calling are Hub model tags rather than pipeline tasks.
+    /// Apply them to the API request so Discover searches the full matching
+    /// catalog instead of filtering a small window of unrelated trending models.
+    static func hubTags(for capabilities: Set<LocalModelCapability>) -> [String] {
+        var tags: [String] = []
+        if capabilities.contains(.reasoning) {
+            tags.append("reasoning")
+        }
+        if capabilities.contains(.tools) {
+            tags.append("tool-calling")
+        }
+        return tags
+    }
+}
+
 struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let id: String
     let downloads: Int
@@ -403,8 +419,10 @@ private struct HuggingFaceHubClient: Sendable {
         components.host = "huggingface.co"
         components.path = "/api/models"
 
+        let hubFilters = ["safetensors"]
+            + HuggingFaceCapabilityFilter.hubTags(for: capabilities)
         var queryItems = [
-            URLQueryItem(name: "filter", value: "safetensors"),
+            URLQueryItem(name: "filter", value: hubFilters.joined(separator: ",")),
             URLQueryItem(name: "sort", value: sort.apiSortValue),
             // The Hub API currently rejects ascending requests for every sort.
             // Ascending results are prepared locally by the library below.

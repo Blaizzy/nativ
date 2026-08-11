@@ -118,3 +118,26 @@ final class LocalModelProviderTests: XCTestCase {
         XCTAssertEqual(provider, .blackForestLabs)
     }
 }
+
+final class HuggingFaceCapabilityFilterTests: XCTestCase {
+    func testReasoningUsesCanonicalHubFilter() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTags(for: [.reasoning]),
+            ["reasoning"]
+        )
+    }
+
+    func testToolCallingUsesCanonicalHubFilter() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTags(for: [.tools]),
+            ["tool-calling"]
+        )
+    }
+
+    func testCombinedCapabilitiesUseBothCanonicalHubFilters() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTags(for: [.tools, .reasoning]),
+            ["reasoning", "tool-calling"]
+        )
+    }
+}
