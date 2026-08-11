@@ -223,15 +223,51 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         )
     }
 
+    func testGGUFTaggedSafetensorsRepositoryRemainsVisible() throws {
+        let model = try decodeModel(
+            id: "test/model-GGUF",
+            pipelineTag: "text-generation",
+            tags: ["safetensors", "gguf"],
+            safetensors: ["parameters": ["F16": 1_000]]
+        )
+
+        XCTAssertTrue(
+            HuggingFaceCapabilityFilter.matches(model, capabilities: [.text])
+        )
+    }
+
+    func testGGUFArtifactsAreExcludedFromSnapshotDownloads() {
+        XCTAssertEqual(
+            HuggingFaceDownloadFilePolicy.ignoredPatterns,
+            ["*.[gG][gG][uU][fF]"]
+        )
+        XCTAssertTrue(HuggingFaceDownloadFilePolicy.shouldIgnore(path: "model.gguf"))
+        XCTAssertTrue(HuggingFaceDownloadFilePolicy.shouldIgnore(path: "weights/Model.GGUF"))
+        XCTAssertFalse(
+            HuggingFaceDownloadFilePolicy.shouldIgnore(path: "model.safetensors")
+        )
+    }
+
     private func capabilities(
         for pipelineTag: String,
         tags: [String] = []
     ) throws -> Set<LocalModelCapability> {
-        let data = try JSONSerialization.data(withJSONObject: [
-            "id": "test/model",
+        try decodeModel(pipelineTag: pipelineTag, tags: tags).capabilities
+    }
+
+    private func decodeModel(
+        id: String = "test/model",
+        pipelineTag: String,
+        tags: [String] = [],
+        safetensors: [String: Any]? = nil
+    ) throws -> HuggingFaceModel {
+        var payload: [String: Any] = [
+            "id": id,
             "pipeline_tag": pipelineTag,
             "tags": tags,
-        ])
-        return try JSONDecoder().decode(HuggingFaceModel.self, from: data).capabilities
+        ]
+        payload["safetensors"] = safetensors
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
     }
 }

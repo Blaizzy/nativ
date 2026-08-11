@@ -940,10 +940,13 @@ struct ModelsView: View {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
         return { hubModel in
-            guard !hubModel.isGGUF else { return false }
-            let matchesCapability = capabilities.allSatisfy {
-                hubModel.capabilities.contains($0)
-            }
+            // Search results are already restricted to the Hub's SafeTensors
+            // index. Mixed repositories remain visible; the downloader skips
+            // any optional GGUF files they also contain.
+            let matchesCapability = HuggingFaceCapabilityFilter.matches(
+                hubModel,
+                capabilities: capabilities
+            )
             let matchesAccess: Bool
             switch access {
             case .all:

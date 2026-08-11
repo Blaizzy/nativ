@@ -121,6 +121,28 @@ enum HuggingFaceCapabilityFilter {
             return nil
         }
     }
+
+    static func matches(
+        _ model: HuggingFaceModel,
+        capabilities: Set<LocalModelCapability>
+    ) -> Bool {
+        capabilities.allSatisfy { model.capabilities.contains($0) }
+    }
+}
+
+enum HuggingFaceDownloadFilePolicy {
+    /// Repositories are selected through the Hub's SafeTensors index. A mixed
+    /// repository can still contain optional GGUF artifacts, so exclude those
+    /// files from the snapshot instead of hiding the entire repository.
+    static let ignoredPatterns = ["*.[gG][gG][uU][fF]"]
+
+    static var pythonListLiteral: String {
+        "[" + ignoredPatterns.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
+    }
+
+    static func shouldIgnore(path: String) -> Bool {
+        path.lowercased().hasSuffix(".gguf")
+    }
 }
 
 struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
@@ -140,12 +162,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let sizeBytes: Int64?
     let capabilities: Set<LocalModelCapability>
     let memoryEstimate: LocalModelMemoryEstimate?
-
-    var isGGUF: Bool {
-        id.localizedCaseInsensitiveContains("gguf")
-            || libraryName?.localizedCaseInsensitiveContains("gguf") == true
-            || tags.contains { $0.localizedCaseInsensitiveContains("gguf") }
-    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1206,12 +1222,14 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         from tqdm.auto import tqdm
         from huggingface_hub import snapshot_download
 
+        ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
         expected_bytes = 0
         try:
             pending_files = snapshot_download(
                 repo_id=sys.argv[1],
                 cache_dir=sys.argv[2],
                 dry_run=True,
+                ignore_patterns=ignored_patterns,
             )
             expected_bytes = sum(
                 item.file_size for item in pending_files if item.will_download
@@ -1254,6 +1272,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         snapshot_download(
             repo_id=sys.argv[1],
             cache_dir=sys.argv[2],
+            ignore_patterns=ignored_patterns,
             tqdm_class=MLXProgressTqdm,
         )
         """
