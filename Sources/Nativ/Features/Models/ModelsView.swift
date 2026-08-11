@@ -47,6 +47,7 @@ private struct HubSearchTaskID: Hashable {
     let section: ModelsPageSection
     let query: String
     let sort: HuggingFaceModelSort
+    let direction: HuggingFaceSortDirection
     let capabilities: Set<LocalModelCapability>
     let access: HubAccessFilter
     let authenticationToken: String?
@@ -195,6 +196,7 @@ struct ModelsView: View {
     @State private var localQuery = ""
     @State private var hubQuery = ""
     @State private var hubSort: HuggingFaceModelSort = .trending
+    @State private var hubSortDirection: HuggingFaceSortDirection = .descending
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
@@ -272,6 +274,7 @@ struct ModelsView: View {
             hubLibrary.search(
                 query: hubQuery,
                 sort: hubSort,
+                direction: hubSortDirection,
                 capabilities: hubCapabilityFilters,
                 predicate: hubVisibilityPredicate,
                 token: modelState.effectiveHuggingFaceToken
@@ -801,6 +804,7 @@ struct ModelsView: View {
     private var discoverFilterBar: some View {
         HStack(spacing: 12) {
             hubSortPicker
+            hubSortDirectionPicker
             hubCapabilityPicker
             hubAccessPicker
             Spacer(minLength: 8)
@@ -814,6 +818,17 @@ struct ModelsView: View {
             ForEach(HuggingFaceModelSort.allCases) { sort in
                 Label(sort.displayName, systemImage: sort.systemImage)
                     .tag(sort)
+            }
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
+    }
+
+    private var hubSortDirectionPicker: some View {
+        Picker("Order", selection: $hubSortDirection) {
+            ForEach(HuggingFaceSortDirection.allCases) { direction in
+                Label(direction.displayName, systemImage: direction.systemImage)
+                    .tag(direction)
             }
         }
         .pickerStyle(.menu)
@@ -900,25 +915,9 @@ struct ModelsView: View {
 
     private var discoverResultsHeader: some View {
         HStack(spacing: 12) {
-            discoverResultsTitle
             Spacer(minLength: 8)
-            discoverSortStatus
             openHubLink
         }
-    }
-
-    private var discoverResultsTitle: some View {
-        Text(hubQuery.isEmpty ? "Safetensors models on Hugging Face" : "Search results")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .fixedSize()
-    }
-
-    private var discoverSortStatus: some View {
-        Label("Sorted by \(hubSort.displayName.lowercased())", systemImage: hubSort.systemImage)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize()
     }
 
     private var openHubLink: some View {
@@ -933,6 +932,7 @@ struct ModelsView: View {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
         return { hubModel in
+            guard !hubModel.isGGUF else { return false }
             let matchesCapability = capabilities.allSatisfy {
                 hubModel.capabilities.contains($0)
             }
@@ -1026,6 +1026,7 @@ struct ModelsView: View {
             section: renderedSection,
             query: hubQuery,
             sort: hubSort,
+            direction: hubSortDirection,
             capabilities: hubCapabilityFilters,
             access: hubAccessFilter,
             authenticationToken: modelState.effectiveHuggingFaceToken
@@ -2209,6 +2210,20 @@ extension LocalModelProvider {
         case .liquidAI:
             .primary
         case .zAI:
+            .primary
+        case .inclusionAI:
+            .primary
+        case .miniMax:
+            .primary
+        case .baidu:
+            .primary
+        case .moonshotAI:
+            .primary
+        case .stabilityAI:
+            .primary
+        case .thinkingMachines:
+            .primary
+        case .meituanLongCat:
             .primary
         }
     }

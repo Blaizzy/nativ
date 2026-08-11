@@ -20,6 +20,13 @@ enum LocalModelProvider: String, Hashable, Sendable {
     case ibm
     case liquidAI
     case zAI
+    case inclusionAI
+    case miniMax
+    case baidu
+    case moonshotAI
+    case stabilityAI
+    case thinkingMachines
+    case meituanLongCat
 
     var displayName: String {
         switch self {
@@ -42,6 +49,13 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .ibm: "IBM"
         case .liquidAI: "Liquid AI"
         case .zAI: "Z.ai"
+        case .inclusionAI: "InclusionAI"
+        case .miniMax: "MiniMax"
+        case .baidu: "Baidu"
+        case .moonshotAI: "Moonshot AI"
+        case .stabilityAI: "Stability AI"
+        case .thinkingMachines: "Thinking Machines"
+        case .meituanLongCat: "Meituan LongCat"
         }
     }
 
@@ -66,6 +80,13 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .ibm: "ModelProviderIcon-ibm"
         case .liquidAI: "ModelProviderIcon-liquid"
         case .zAI: "ModelProviderIcon-zai"
+        case .inclusionAI: "ModelProviderIcon-inclusionai"
+        case .miniMax: "ModelProviderIcon-minimax"
+        case .baidu: "ModelProviderIcon-baidu"
+        case .moonshotAI: "ModelProviderIcon-moonshot"
+        case .stabilityAI: "ModelProviderIcon-stability"
+        case .thinkingMachines: "ModelProviderIcon-thinking-machines"
+        case .meituanLongCat: "ModelProviderIcon-longcat"
         }
     }
 
@@ -90,12 +111,21 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .ibm: "IBM"
         case .liquidAI: "L"
         case .zAI: "Z"
+        case .inclusionAI: "I"
+        case .miniMax: "M"
+        case .baidu: "B"
+        case .moonshotAI: "M"
+        case .stabilityAI: "S"
+        case .thinkingMachines: "TM"
+        case .meituanLongCat: "LC"
         }
     }
 
     var preservesIconColors: Bool {
         switch self {
-        case .google, .mistral, .microsoft, .cohere, .openBMB, .openMOSS, .poolside, .prismML:
+        case .google, .mistral, .microsoft, .cohere, .openBMB, .openMOSS, .poolside,
+             .prismML, .inclusionAI, .miniMax, .baidu, .stabilityAI,
+             .thinkingMachines, .meituanLongCat:
             true
         default:
             false
@@ -103,12 +133,14 @@ enum LocalModelProvider: String, Hashable, Sendable {
     }
 
     var needsLightIconBackgroundInDarkMode: Bool {
-        self == .prismML
+        self == .prismML || self == .meituanLongCat
     }
 
     var iconTintColor: NSColor {
         switch self {
-        case .google, .openAI, .mistral, .microsoft, .cohere, .apple, .liquidAI, .zAI:
+        case .google, .openAI, .mistral, .microsoft, .cohere, .apple, .liquidAI, .zAI,
+             .inclusionAI, .miniMax, .baidu, .moonshotAI, .stabilityAI,
+             .thinkingMachines, .meituanLongCat:
             .labelColor
         case .meta:
             NSColor(srgbRed: 0 / 255, green: 129 / 255, blue: 251 / 255, alpha: 1)
@@ -163,7 +195,16 @@ enum LocalModelProviderResolver {
         ModelFamilyMapping(provider: .apple, identifiers: ["openelm"]),
         ModelFamilyMapping(provider: .ibm, identifiers: ["granite"]),
         ModelFamilyMapping(provider: .liquidAI, identifiers: ["lfm"]),
-        ModelFamilyMapping(provider: .zAI, identifiers: ["glm", "cogvlm", "cogvideo"])
+        ModelFamilyMapping(provider: .zAI, identifiers: ["glm", "cogvlm", "cogvideo"]),
+        ModelFamilyMapping(provider: .miniMax, identifiers: ["minimax"]),
+        ModelFamilyMapping(provider: .baidu, identifiers: ["ernie", "qianfan"]),
+        ModelFamilyMapping(provider: .moonshotAI, identifiers: ["kimi", "moonlight"]),
+        ModelFamilyMapping(
+            provider: .stabilityAI,
+            identifiers: ["stablediffusion", "stablelm", "stableaudio", "stablevideo", "stablecascade", "sdxl"]
+        ),
+        ModelFamilyMapping(provider: .thinkingMachines, identifiers: ["inkling"]),
+        ModelFamilyMapping(provider: .meituanLongCat, identifiers: ["longcat"])
     ]
 
     private static let organizationMappings: [String: LocalModelProvider] = [
@@ -172,6 +213,7 @@ enum LocalModelProviderResolver {
         "openai": .openAI,
         "meta": .meta,
         "metallama": .meta,
+        "metamodels": .meta,
         "facebook": .meta,
         "mistralai": .mistral,
         "qwen": .qwen,
@@ -200,7 +242,16 @@ enum LocalModelProviderResolver {
         "zai": .zAI,
         "zaiorg": .zAI,
         "zhipuai": .zAI,
-        "thudm": .zAI
+        "thudm": .zAI,
+        "inclusionai": .inclusionAI,
+        "minimaxai": .miniMax,
+        "minimax": .miniMax,
+        "baidu": .baidu,
+        "moonshotai": .moonshotAI,
+        "stabilityai": .stabilityAI,
+        "thinkingmachines": .thinkingMachines,
+        "thinkingmachineslab": .thinkingMachines,
+        "meituanlongcat": .meituanLongCat
     ]
 
     static func resolve(

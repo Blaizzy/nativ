@@ -50,6 +50,28 @@ enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendabl
     }
 }
 
+enum HuggingFaceSortDirection: Int, CaseIterable, Hashable, Identifiable, Sendable {
+    case descending = -1
+    case ascending = 1
+
+    var id: Int { rawValue }
+    var apiValue: String { String(rawValue) }
+
+    var displayName: String {
+        switch self {
+        case .descending: "Descending"
+        case .ascending: "Ascending"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .descending: "arrow.down"
+        case .ascending: "arrow.up"
+        }
+    }
+}
+
 struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let id: String
     let downloads: Int
@@ -67,6 +89,12 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let sizeBytes: Int64?
     let capabilities: Set<LocalModelCapability>
     let memoryEstimate: LocalModelMemoryEstimate?
+
+    var isGGUF: Bool {
+        id.localizedCaseInsensitiveContains("gguf")
+            || libraryName?.localizedCaseInsensitiveContains("gguf") == true
+            || tags.contains { $0.localizedCaseInsensitiveContains("gguf") }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -378,7 +406,9 @@ private struct HuggingFaceHubClient: Sendable {
         var queryItems = [
             URLQueryItem(name: "filter", value: "safetensors"),
             URLQueryItem(name: "sort", value: sort.apiSortValue),
-            URLQueryItem(name: "direction", value: "-1"),
+            // The Hub API currently rejects ascending requests for every sort.
+            // Ascending results are prepared locally by the library below.
+            URLQueryItem(name: "direction", value: HuggingFaceSortDirection.descending.apiValue),
             URLQueryItem(name: "limit", value: "50")
         ]
         if let pipelineTag = Self.pipelineTag(for: capabilities) {
@@ -526,6 +556,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var buffer: [HuggingFaceModel] = []
     private var activeSort: HuggingFaceModelSort = .downloads
+    private var activeDirection: HuggingFaceSortDirection = .descending
     private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURL: URL?
     private let pageSize = 24
@@ -539,6 +570,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     func search(
         query: String,
         sort: HuggingFaceModelSort,
+        direction: HuggingFaceSortDirection,
         capabilities: Set<LocalModelCapability>,
         predicate: @escaping (HuggingFaceModel) -> Bool,
         token: String?
@@ -551,6 +583,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         nextPageURL = nil
         pageNumber = 1
         activeSort = sort
+        activeDirection = direction
         visibilityPredicate = predicate
 
         searchTask = Task { [weak self] in
@@ -565,7 +598,15 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 try Task.checkCancellation()
                 self.buffer = page.models
                 self.nextPageURL = page.nextPageURL
-                try await self.fillBuffer(upTo: self.pageSize, token: token)
+                let needsStableLocalOrdering = sort.sortsBySize || direction == .ascending
+                let targetCount = needsStableLocalOrdering
+                    ? self.maximumPageCount * self.pageSize : self.pageSize
+                try await self.fillBuffer(upTo: targetCount, token: token)
+                if needsStableLocalOrdering {
+                    // Local ordering spans Nativ's complete five-page window.
+                    // Stop here so later pagination cannot reshuffle earlier pages.
+                    self.nextPageURL = nil
+                }
                 try Task.checkCancellation()
                 self.models = self.slice(forPage: 1)
                 self.error = nil
@@ -591,6 +632,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         nextPageURL = nil
         pageNumber = 1
         activeSort = .downloads
+        activeDirection = .descending
         visibilityPredicate = { _ in true }
 
         searchTask = Task { [weak self] in
@@ -693,16 +735,21 @@ final class HuggingFaceModelLibrary: ObservableObject {
         return Array(ordered[start..<min(start + pageSize, ordered.count)])
     }
 
-    /// Buffered results in display order; `.size` re-sorts locally (smallest first).
+    /// Buffered results in display order. The Hub only provides descending
+    /// server-side results, so ascending and size ordering are applied locally
+    /// after the complete app-sized result window has been fetched.
     private var orderedBuffer: [HuggingFaceModel] {
-        guard activeSort.sortsBySize else { return buffer }
-        return buffer.sorted { lhs, rhs in
-            switch (lhs.sizeBytes, rhs.sizeBytes) {
-            case let (lhsSize?, rhsSize?): return lhsSize < rhsSize
-            case (nil, _): return false
-            case (_, nil): return true
+        if activeSort.sortsBySize {
+            return buffer.sorted { lhs, rhs in
+                switch (lhs.sizeBytes, rhs.sizeBytes) {
+                case let (lhsSize?, rhsSize?):
+                    return activeDirection == .ascending ? lhsSize < rhsSize : lhsSize > rhsSize
+                case (nil, _): return false
+                case (_, nil): return true
+                }
             }
         }
+        return activeDirection == .ascending ? Array(buffer.reversed()) : buffer
     }
 
     private var orderedVisible: [HuggingFaceModel] {
