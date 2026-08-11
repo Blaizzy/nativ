@@ -213,6 +213,45 @@ struct IntegrationToolStatus: Equatable, Sendable {
     static let unavailable = IntegrationToolStatus(executableURL: nil, version: nil, isConfigured: false)
 }
 
+enum IntegrationDiscoveryPhase: Equatable, Sendable {
+    case notChecked
+    case checking
+    case checked
+}
+
+enum IntegrationDiscoveryTrigger: Sendable {
+    case viewAppeared
+    case userRequested
+    case modelLibraryChanged
+}
+
+struct IntegrationDiscoveryRequest: Equatable, Sendable {
+    let scansModels: Bool
+    let probesTools: Bool
+}
+
+struct IntegrationDiscoveryCoordinator: Sendable {
+    private(set) var phase: IntegrationDiscoveryPhase = .notChecked
+
+    mutating func request(for trigger: IntegrationDiscoveryTrigger) -> IntegrationDiscoveryRequest? {
+        switch trigger {
+        case .viewAppeared, .modelLibraryChanged:
+            // Lifecycle events never authorize local discovery. The user must
+            // explicitly start every scan from the Integrations page.
+            return nil
+        case .userRequested:
+            guard phase != .checking else { return nil }
+            phase = .checking
+            return IntegrationDiscoveryRequest(scansModels: true, probesTools: true)
+        }
+    }
+
+    mutating func complete() {
+        guard phase == .checking else { return }
+        phase = .checked
+    }
+}
+
 enum IntegrationServiceError: LocalizedError {
     case missingExecutable(IntegrationTool)
     case invalidConfiguration(URL)

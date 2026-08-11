@@ -23,6 +23,7 @@ final class IntegrationsViewModel: ObservableObject {
     @Published private(set) var statuses = Dictionary(
         uniqueKeysWithValues: IntegrationTool.allCases.map { ($0, IntegrationToolStatus.unavailable) }
     )
+    @Published private(set) var discoveryPhase = IntegrationDiscoveryPhase.notChecked
     @Published private(set) var isRefreshingStatuses = false
     @Published private(set) var activeOperation: IntegrationTool?
     @Published var errorMessage: String?
@@ -30,6 +31,7 @@ final class IntegrationsViewModel: ObservableObject {
     let library = LocalModelLibrary()
     private let serverModel: NativModel
     private let defaults = UserDefaults.standard
+    private var discoveryCoordinator = IntegrationDiscoveryCoordinator()
     private var libraryObservation: AnyCancellable?
 
     init(serverModel: NativModel) {
@@ -62,12 +64,12 @@ final class IntegrationsViewModel: ObservableObject {
 
     var isBusy: Bool { activeOperation != nil }
 
-    var integrationEndpoint: String {
-        profiles.openAIBaseURL
+    var isDiscovering: Bool {
+        discoveryPhase == .checking || isRefreshingStatuses || library.isScanning
     }
 
-    var modelSearchPaths: LocalModelSearchPaths {
-        serverModel.settings.localModelSearchPaths
+    var integrationEndpoint: String {
+        profiles.openAIBaseURL
     }
 
     private var integrationServerBaseURL: URL {
@@ -86,11 +88,15 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     func appear() {
-        refreshStatuses()
+        handleDiscovery(.viewAppeared)
     }
 
     func modelsDidChange() {
-        scanModels()
+        handleDiscovery(.modelLibraryChanged)
+    }
+
+    func requestDiscovery() {
+        handleDiscovery(.userRequested)
     }
 
     func select(_ tool: IntegrationTool) {
@@ -113,7 +119,18 @@ final class IntegrationsViewModel: ObservableObject {
         }
     }
 
-    func refreshStatuses() {
+    private func handleDiscovery(_ trigger: IntegrationDiscoveryTrigger) {
+        guard let request = discoveryCoordinator.request(for: trigger) else { return }
+        discoveryPhase = discoveryCoordinator.phase
+        if request.scansModels {
+            library.scan(searchPaths: serverModel.settings.localModelSearchPaths)
+        }
+        if request.probesTools {
+            refreshStatuses()
+        }
+    }
+
+    private func refreshStatuses() {
         guard !isRefreshingStatuses else { return }
         isRefreshingStatuses = true
         let baseURL = integrationServerBaseURL
@@ -141,6 +158,8 @@ final class IntegrationsViewModel: ObservableObject {
             }
             statuses = refreshed
             isRefreshingStatuses = false
+            discoveryCoordinator.complete()
+            discoveryPhase = discoveryCoordinator.phase
         }
     }
 
@@ -238,10 +257,6 @@ final class IntegrationsViewModel: ObservableObject {
         guard let command = launchCommand(for: tool, workingDirectory: workingDirectory) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
-    }
-
-    private func scanModels() {
-        library.scan(searchPaths: serverModel.settings.localModelSearchPaths)
     }
 
     private func configureProfile(tool: IntegrationTool, selectedModelID: String) throws {
@@ -387,9 +402,6 @@ struct IntegrationsView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear(perform: viewModel.appear)
-        .task(id: viewModel.modelSearchPaths) {
-            viewModel.modelsDidChange()
-        }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             viewModel.modelsDidChange()
         }
@@ -426,17 +438,23 @@ private struct IntegrationCatalogView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    viewModel.refreshStatuses()
-                } label: {
-                    if viewModel.isRefreshingStatuses {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Refresh", systemImage: "arrow.clockwise")
+                if viewModel.discoveryPhase != .notChecked {
+                    Button {
+                        viewModel.requestDiscovery()
+                    } label: {
+                        if viewModel.isDiscovering {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Checking…")
+                            }
+                        } else {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isDiscovering)
+                    .help("Scan the configured model folders and check installed integrations")
                 }
-                .buttonStyle(.bordered)
-                .disabled(viewModel.isRefreshingStatuses)
             }
             .padding(.horizontal, 22)
             .padding(.leading, titleLeadingInset)
@@ -445,19 +463,38 @@ private struct IntegrationCatalogView: View {
 
             Divider()
 
-            ScrollView {
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-                    ForEach(IntegrationTool.allCases) { tool in
-                        IntegrationCard(
-                            tool: tool,
-                            status: viewModel.statuses[tool] ?? .unavailable,
-                            isLoading: viewModel.isRefreshingStatuses
-                        ) {
-                            viewModel.select(tool)
+            if viewModel.discoveryPhase == .notChecked {
+                ContentUnavailableView {
+                    Label("Check installed models and tools", systemImage: "hand.raised.fill")
+                } description: {
+                    Text(
+                        "Nativ will scan your configured model folders, run your login shell, read known integration configuration files, and execute installed tools with --version. It will not start an interactive agent session or choose a project folder."
+                    )
+                } actions: {
+                    Button("Check integrations") {
+                        viewModel.requestDiscovery()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityHint("Starts the disclosed local model and integration checks")
+                }
+                .frame(maxWidth: 620, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(32)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                        ForEach(IntegrationTool.allCases) { tool in
+                            IntegrationCard(
+                                tool: tool,
+                                status: viewModel.statuses[tool] ?? .unavailable,
+                                isLoading: viewModel.isDiscovering
+                            ) {
+                                viewModel.select(tool)
+                            }
                         }
                     }
+                    .padding(24)
                 }
-                .padding(24)
             }
         }
     }
@@ -525,8 +562,18 @@ private struct IntegrationCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
+        .disabled(isLoading)
         .onHover { isHovering = $0 }
-        .accessibilityLabel("Configure \(tool.displayName)")
+        .accessibilityLabel("\(tool.displayName), \(accessibilityStatus)")
+        .accessibilityHint(isLoading ? "Wait for the integration check to finish" : "Opens integration setup")
+    }
+
+    private var accessibilityStatus: String {
+        if isLoading { return "checking" }
+        if tool.isGuidedSetup { return "guided setup" }
+        if status.executableURL == nil { return "not installed" }
+        if status.isConfigured { return "configured" }
+        return "ready to configure"
     }
 }
 
@@ -570,7 +617,9 @@ private struct IntegrationDetailView: View {
                     if tool.isGuidedSetup {
                         guidedSetupPanel
                         modelPanel
-                    } else if status.executableURL == nil, !viewModel.isRefreshingStatuses {
+                    } else if viewModel.isDiscovering {
+                        discoveryProgressPanel
+                    } else if status.executableURL == nil {
                         missingToolPanel
                     } else {
                         modelPanel
@@ -588,6 +637,16 @@ private struct IntegrationDetailView: View {
         .onAppear {
             workingDirectory = viewModel.workingDirectory(for: tool)
                 ?? FileManager.default.homeDirectoryForCurrentUser
+        }
+    }
+
+    private var discoveryProgressPanel: some View {
+        IntegrationPanel(title: "Checking integrations", systemImage: "magnifyingglass") {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Checking installed models and tools…")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -648,8 +707,8 @@ private struct IntegrationDetailView: View {
                     NSWorkspace.shared.open(tool.installURL)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Check again") {
-                    viewModel.refreshStatuses()
+                Button("Refresh integrations") {
+                    viewModel.requestDiscovery()
                 }
                 .buttonStyle(.bordered)
             }

@@ -4,6 +4,11 @@ Nativ serves local models over standard APIs, so external agents and editors tha
 Anthropic can point straight at it. The **Integrations** page writes each tool's configuration
 automatically; the per-tool sections below document what each one needs for manual setup.
 
+The **Integrations** page does not start model or tool discovery when opened. Choose **Check
+integrations** to scan the configured model folders, run the login shell, read known tool
+configuration files, and execute installed tools with `--version`. The check does not start an
+interactive agent session or choose a project folder; **Refresh** repeats it explicitly.
+
 ## Connection details
 
 - OpenAI-compatible base URL: `http://127.0.0.1:8080/v1`

@@ -72,6 +72,59 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(Set(IntegrationTool.allCases), Self.coveredTools)
     }
 
+    func testViewAppearanceDoesNotRequestIntegrationDiscovery() {
+        var discovery = IntegrationDiscoveryCoordinator()
+
+        XCTAssertNil(discovery.request(for: .viewAppeared))
+        XCTAssertEqual(discovery.phase, .notChecked)
+    }
+
+    func testModelChangeDoesNotRequestDiscoveryBeforeUserApproval() {
+        var discovery = IntegrationDiscoveryCoordinator()
+
+        XCTAssertNil(discovery.request(for: .modelLibraryChanged))
+        XCTAssertEqual(discovery.phase, .notChecked)
+    }
+
+    func testExplicitUserCheckRequestsModelAndToolDiscovery() {
+        var discovery = IntegrationDiscoveryCoordinator()
+
+        XCTAssertEqual(
+            discovery.request(for: .userRequested),
+            IntegrationDiscoveryRequest(scansModels: true, probesTools: true)
+        )
+        XCTAssertEqual(discovery.phase, .checking)
+    }
+
+    func testDuplicateUserCheckIsIgnoredWhileDiscoveryIsRunning() {
+        var discovery = IntegrationDiscoveryCoordinator()
+        _ = discovery.request(for: .userRequested)
+
+        XCTAssertNil(discovery.request(for: .userRequested))
+        XCTAssertEqual(discovery.phase, .checking)
+    }
+
+    func testModelChangeDoesNotRequestDiscoveryAfterUserApproval() {
+        var discovery = IntegrationDiscoveryCoordinator()
+        _ = discovery.request(for: .userRequested)
+        discovery.complete()
+
+        XCTAssertNil(discovery.request(for: .modelLibraryChanged))
+        XCTAssertEqual(discovery.phase, .checked)
+    }
+
+    func testExplicitRefreshRepeatsModelAndToolDiscovery() {
+        var discovery = IntegrationDiscoveryCoordinator()
+        _ = discovery.request(for: .userRequested)
+        discovery.complete()
+
+        XCTAssertEqual(
+            discovery.request(for: .userRequested),
+            IntegrationDiscoveryRequest(scansModels: true, probesTools: true)
+        )
+        XCTAssertEqual(discovery.phase, .checking)
+    }
+
     func testConfiguredServerAPIKeyIsUsedByProfilesAndLaunchEnvironment() throws {
         manager = IntegrationProfileManager(
             serverBaseURL: serverBaseURL,
