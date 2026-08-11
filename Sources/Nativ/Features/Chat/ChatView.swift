@@ -116,6 +116,9 @@ private struct ChatTranscriptView: View {
     }
 
     var body: some View {
+        let forkableAssistantResponseIDs = chat.forkableAssistantResponseIDs
+        let latestUserMessageID = chat.latestUserMessageID
+
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
@@ -130,7 +133,7 @@ private struct ChatTranscriptView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
-                        let showsEditUserMessage = chat.isLatestUserMessage(message.id)
+                        let showsEditUserMessage = message.id == latestUserMessageID
                         let editUnavailableReason = showsEditUserMessage
                             ? userPromptEditingUnavailableReason(for: message)
                             : nil
@@ -143,7 +146,9 @@ private struct ChatTranscriptView: View {
                             canEditUserMessage: editUnavailableReason == nil,
                             editUserMessageUnavailableReason: editUnavailableReason,
                             isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
-                            canForkAssistantResponse: chat.canForkAssistantResponse(message.id),
+                            canForkAssistantResponse: forkableAssistantResponseIDs.contains(
+                                message.id
+                            ),
                             onEditUserMessage: chat.beginEditingUserMessage,
                             onForkAssistantResponse: chat.forkAssistantResponse,
                             onConfirmToolConsent: chat.confirmToolConsent,
@@ -450,15 +455,15 @@ final class ChatViewModel: ObservableObject {
     func canEditUserMessage(_ messageID: UUID) -> Bool {
         guard let currentSessionID,
               !isSessionBusy(currentSessionID),
-              isLatestUserMessage(messageID)
+              latestUserMessageID == messageID
         else {
             return false
         }
         return true
     }
 
-    func isLatestUserMessage(_ messageID: UUID) -> Bool {
-        ChatConversationBranch.latestUserMessageID(in: messages) == messageID
+    var latestUserMessageID: UUID? {
+        ChatPromptRevision.latestUserMessageID(in: messages)
     }
 
     func beginEditingUserMessage(_ messageID: UUID) {
@@ -496,23 +501,21 @@ final class ChatViewModel: ObservableObject {
         composerSnapshot = nil
     }
 
-    func canForkAssistantResponse(_ messageID: UUID) -> Bool {
-        ChatConversationBranch.throughAssistantResponse(messageID, in: messages) != nil
+    var forkableAssistantResponseIDs: Set<UUID> {
+        ChatConversationBranch.forkableAssistantResponseIDs(in: messages)
     }
 
     func forkAssistantResponse(_ messageID: UUID) {
-        guard let sourceSession = currentSession,
-              let branchMessages = ChatConversationBranch.throughAssistantResponse(
+        guard let sourceSession = currentSessionSnapshot,
+              let branch = ChatConversationBranch.throughAssistantResponse(
                 messageID,
-                in: messages
+                in: sourceSession
               )
         else {
             return
         }
 
-        persistCurrentSession(updateTimestamp: false)
-        let branch = makeBranchSession(from: sourceSession, messages: branchMessages)
-        switchToBranch(branch)
+        activateBranch(branch)
     }
 
     func unavailableReason(isRunning: Bool, selectedModelID: String?) -> String? {
@@ -845,25 +848,26 @@ final class ChatViewModel: ObservableObject {
         let imageAttachments = pendingImageAttachments
 
         if let promptEditContext {
-            let revisedMessageID = UUID()
             guard canEditUserMessage(promptEditContext.messageID),
-                  let branchMessages = ChatConversationBranch.replacingLatestUserMessage(
-                    promptEditContext.messageID,
-                    with: prompt,
+                  let sourceSession = currentSessionSnapshot,
+                  let revision = ChatPromptRevision.make(
+                    messageID: promptEditContext.messageID,
+                    content: prompt,
                     attachments: imageAttachments,
                     modelID: modelID,
-                    newMessageID: revisedMessageID,
-                    in: messages
+                    in: sourceSession.messages
                   )
             else {
                 return
             }
 
-            persistCurrentSession(updateTimestamp: false)
-            let branch = makeBranchSession(from: currentSession, messages: branchMessages)
-            switchToBranch(branch)
+            let branch = ChatConversationBranch.make(
+                from: sourceSession,
+                messages: revision.messages
+            )
+            activateBranch(branch, restoring: composerSnapshot)
             enqueueGeneration(
-                for: revisedMessageID,
+                for: promptEditContext.messageID,
                 in: branch.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
@@ -2155,28 +2159,23 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
-    private func makeBranchSession(
-        from sourceSession: ChatSession,
-        messages: [ChatTranscriptMessage],
-        createdAt: Date = Date()
-    ) -> ChatSession {
-        var branch = sourceSession
-        branch.id = UUID()
-        branch.title = ChatSession.defaultTitle(for: messages, createdAt: createdAt)
-        branch.customTitle = nil
-        branch.createdAt = createdAt
-        branch.updatedAt = createdAt
-        branch.messages = messages
-        branch.pinned = false
-        branch.pinnedOrder = nil
-        branch.sessionOrder = nil
-        return branch
+    private var currentSessionSnapshot: ChatSession? {
+        guard var session = currentSession else {
+            return nil
+        }
+        session.messages = messages
+        return session
     }
 
-    private func switchToBranch(_ branch: ChatSession) {
+    private func activateBranch(
+        _ branch: ChatSession,
+        restoring composer: ComposerSnapshot? = nil
+    ) {
+        persistCurrentSession(updateTimestamp: false)
+
+        draft = composer?.draft ?? ""
+        pendingImageAttachments = composer?.attachments ?? []
         discardPromptEditing()
-        draft = ""
-        pendingImageAttachments.removeAll()
         upsertStoredSession(branch)
         sessionStore.saveSession(branch)
         applyCurrentSession(branch)
@@ -2372,7 +2371,7 @@ private struct ChatMessageRow: View, Equatable {
 
                         if showsEditUserMessage {
                             ChatMessageActionButton(
-                                systemImage: "square.and.pencil",
+                                icon: .system("square.and.pencil"),
                                 title: editActionTitle,
                                 isActive: isEditingUserMessage,
                                 isEnabled: canEditUserMessage
@@ -2383,7 +2382,7 @@ private struct ChatMessageRow: View, Equatable {
 
                         if canForkAssistantResponse {
                             ChatMessageActionButton(
-                                systemImage: "arrow.triangle.branch",
+                                icon: .asset("ChatForkIcon"),
                                 title: "Fork conversation from this response",
                                 isActive: false,
                                 isEnabled: true
@@ -3089,7 +3088,12 @@ private struct ChatCopyMessageButton: View {
 }
 
 private struct ChatMessageActionButton: View {
-    let systemImage: String
+    enum Icon {
+        case system(String)
+        case asset(String)
+    }
+
+    let icon: Icon
     let title: String
     let isActive: Bool
     let isEnabled: Bool
@@ -3098,8 +3102,7 @@ private struct ChatMessageActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
+            iconView
                 .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
                 .frame(width: 30, height: 28)
                 .contentShape(.rect)
@@ -3111,6 +3114,21 @@ private struct ChatMessageActionButton: View {
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: isActive)
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        switch icon {
+        case let .system(name):
+            Image(systemName: name)
+                .font(.system(size: 13, weight: .medium))
+        case let .asset(name):
+            Image(name)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
+                .offset(y: 1)
+        }
     }
 }
 
