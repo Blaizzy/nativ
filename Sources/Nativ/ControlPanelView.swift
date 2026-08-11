@@ -3985,7 +3985,6 @@ private struct ControlPanelRecentSessionRow: View {
         .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
         .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
         .onHover { isHovering = $0 }
-        .animation(.easeInOut, value: isHovering)
         .contextMenu {
             rowMenuContents
         }
