@@ -757,6 +757,34 @@ final class NativChatToolProtocolTests: XCTestCase {
         )
     }
 
+    func testServerErrorMessageExtractsNestedFastAPIDetailObject() {
+        let body =
+            #"{"detail":{"error":"insufficient_memory","model":"org/big-model","message":"model requires 900 bytes; only 100 bytes free"}}"#
+
+        XCTAssertEqual(
+            NativServerErrorMessage.detail(from: body),
+            "model requires 900 bytes; only 100 bytes free"
+        )
+        XCTAssertEqual(
+            NativServerErrorMessage.errorKind(from: body),
+            "insufficient_memory"
+        )
+        XCTAssertEqual(
+            NativChatError.httpStatus(507, body).localizedDescription,
+            "model requires 900 bytes; only 100 bytes free"
+        )
+    }
+
+    func testServerErrorMessageErrorKindIsNilForPlainStringDetail() {
+        XCTAssertNil(
+            NativServerErrorMessage.errorKind(
+                from: #"{"detail":"Failed to load model: Model type bert not supported."}"#
+            )
+        )
+        XCTAssertNil(NativServerErrorMessage.errorKind(from: ""))
+        XCTAssertNil(NativServerErrorMessage.errorKind(from: "not json"))
+    }
+
     func testServerErrorMessagePreservesHTTPFallback() {
         XCTAssertEqual(
             NativServerErrorMessage.endpointFailure(

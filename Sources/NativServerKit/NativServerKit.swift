@@ -23,11 +23,31 @@ public enum NativServerErrorMessage {
         if let detail = normalized(object["detail"] as? String) {
             return detail
         }
+        // FastAPI's `HTTPException(detail={...})` can wrap a structured dict
+        // under "detail" too, not just a plain string.
+        if let detailObject = object["detail"] as? [String: Any],
+           let message = normalized(detailObject["message"] as? String) {
+            return message
+        }
         if let error = object["error"] as? [String: Any],
            let message = normalized(error["message"] as? String) {
             return message
         }
         return normalized(object["error"] as? String)
+    }
+
+    /// For callers that need to branch on which error occurred, not just
+    /// display it. `nil` for a plain-string `detail` or any other shape.
+    public static func errorKind(from responseBody: String) -> String? {
+        let trimmedBody = responseBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBody.isEmpty,
+              let data = trimmedBody.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detailObject = object["detail"] as? [String: Any]
+        else {
+            return nil
+        }
+        return normalized(detailObject["error"] as? String)
     }
 
     public static func endpointFailure(
