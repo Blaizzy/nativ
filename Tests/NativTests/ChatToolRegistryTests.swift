@@ -49,7 +49,8 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
 
 private func makeContext(
     imageModelID: String? = nil,
-    modelSearchPath: String = ""
+    modelSearchPath: String = "",
+    mcpHost: MCPHostManager? = nil
 ) -> ChatToolExecutionContext {
     ChatToolExecutionContext(
         imageGenerationModelID: imageModelID,
@@ -60,7 +61,8 @@ private func makeContext(
         additionalModelSearchPaths: [],
         analyticsDatabaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathComponent("Analytics.sqlite3")
+            .appendingPathComponent("Analytics.sqlite3"),
+        mcpHost: mcpHost
     )
 }
 
@@ -68,6 +70,7 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
     MLXChatToolCall(id: "1", function: MLXChatFunctionCall(name: name, arguments: arguments))
 }
 
+@MainActor
 final class ChatToolRegistryTests: XCTestCase {
     func testDefinitionsAlwaysAdvertiseWebSearch() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
@@ -86,7 +89,7 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
-        let names = ChatToolRegistry.definitions(canEditImage: false)
+        let names = ChatToolRegistry.definitions(context: makeContext(), canEditImage: false)
             .map(\.function.name)
 
         XCTAssertTrue(names.contains(ChatImageToolRegistry.generateToolName))
@@ -97,18 +100,18 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testDefinitionsOfferEditOnlyWhenAnImageIsAvailable() {
-        let withoutEdit = ChatToolRegistry.definitions(canEditImage: false)
+        let withoutEdit = ChatToolRegistry.definitions(context: makeContext(), canEditImage: false)
             .map(\.function.name)
         XCTAssertTrue(withoutEdit.contains(ChatImageToolRegistry.generateToolName))
         XCTAssertFalse(withoutEdit.contains(ChatImageToolRegistry.editToolName))
 
-        let withEdit = ChatToolRegistry.definitions(canEditImage: true)
+        let withEdit = ChatToolRegistry.definitions(context: makeContext(), canEditImage: true)
             .map(\.function.name)
         XCTAssertTrue(withEdit.contains(ChatImageToolRegistry.editToolName))
     }
 
     func testDefinitionsNeverAdvertiseDuplicateToolNames() {
-        let names = ChatToolRegistry.definitions(canEditImage: true)
+        let names = ChatToolRegistry.definitions(context: makeContext(), canEditImage: true)
             .map(\.function.name)
 
         XCTAssertEqual(names.count, Set(names).count)
@@ -887,6 +890,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "some_unknown_tool",
                 .awaitingConsent: "some_unknown_tool", .declined: "some_unknown_tool",
             ],
+            "mcp__websearch__search": [
+                nil: "search (websearch)", .preparing: "Running search (websearch)…",
+                .running: "Running search (websearch)…", .succeeded: "Ran search (websearch)",
+                .failed: "search (websearch)", .cancelled: "search (websearch)",
+                .awaitingImageModelSelection: "search (websearch)",
+                .awaitingConsent: "Run search (websearch)?", .declined: "search (websearch) declined",
+            ],
         ]
 
         for (toolName, byStatus) in expected {
@@ -910,6 +920,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            "mcp__websearch__search",
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -919,6 +930,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            "mcp__websearch__search": "puzzlepiece.extension",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -936,6 +948,24 @@ final class ChatToolPresentationTests: XCTestCase {
             XCTAssertEqual(ChatToolPresentation.symbolName(toolName: toolName, status: .running), successLikeSymbol[toolName])
             XCTAssertEqual(ChatToolPresentation.symbolName(toolName: toolName, status: nil), successLikeSymbol[toolName])
         }
+    }
+
+    func testMCPConsentDescriptionNamesTheActualToolAndServer() {
+        XCTAssertEqual(
+            ChatToolPresentation.mcpConsentDescription(toolName: "mcp__websearch__search"),
+            "The model wants to run search (websearch)."
+        )
+    }
+
+    func testMCPConsentDescriptionFallsBackForANonMCPOrMissingToolName() {
+        XCTAssertEqual(
+            ChatToolPresentation.mcpConsentDescription(toolName: nil),
+            "The model wants to run this tool."
+        )
+        XCTAssertEqual(
+            ChatToolPresentation.mcpConsentDescription(toolName: "not_mcp_shaped"),
+            "The model wants to run this tool."
+        )
     }
 }
 
@@ -1187,5 +1217,28 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
         XCTAssertEqual(decoded, original)
+    }
+}
+
+final class ChatMCPHostBridgeTests: XCTestCase {
+    func testDeclinedPayloadShape() throws {
+        let payload = ChatMCPHostBridge.declinedPayload(toolName: "mcp__websearch__search")
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["declined"] as? Bool, true)
+        XCTAssertEqual(object["error"] as? String, "The user declined this action.")
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = ChatMCPHostBridge.failurePayload(toolName: "mcp__websearch__search", error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["declined"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "fake failure")
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
