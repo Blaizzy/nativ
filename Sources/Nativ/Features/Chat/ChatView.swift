@@ -1402,6 +1402,85 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
 
+                // MCPHostManager.callTool has no consent concept of its own,
+                // so every MCP call needs this gate unconditionally.
+                if let host = mcpHost, host.handlesTool(named: toolCall.function?.name ?? "") {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatMCPHostBridge.declinedPayload(toolName: toolCall.function?.name ?? "tool"),
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                    do {
+                        let outcome = try await ChatMCPHostBridge(host: host).execute(call: toolCall)
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: outcome.content,
+                            attachments: outcome.attachments
+                        )
+                        appModel?.refreshMetricsIfRunning(force: true)
+                    } catch is CancellationError {
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    } catch let error as URLError where error.code == .cancelled {
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatMCPHostBridge.failurePayload(toolName: toolCall.function?.name ?? "tool", error: error),
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
+
                 do {
                     let references = latestImageReferences(
                         beforeOrAt: toolMessageID,
@@ -1459,7 +1538,8 @@ final class ChatViewModel: ObservableObject {
                                 modelID: selectedModelID,
                                 in: queuedRequest.sessionID
                             )
-                        }
+                        },
+                        mcpHost: mcpHost
                     )
                     let outcome: ChatToolExecutionOutcome
                     if let customTool {
@@ -1468,12 +1548,8 @@ final class ChatViewModel: ObservableObject {
                             argumentsJSON: toolCall.function?.arguments
                         )
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else if let host = mcpHost,
-                              let toolName = toolCall.function?.name,
-                              host.handlesTool(named: toolName) {
-                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
+                        // MCP calls never reach here — consent-gated above already.
                         outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
                     }
                     updateToolMessage(
@@ -1549,12 +1625,23 @@ final class ChatViewModel: ObservableObject {
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
+                context: ChatToolExecutionContext(
+                    imageGenerationModelID: nil,
+                    baseURL: settings.serverBaseURL,
+                    apiKey: settings.serverAPIKey,
+                    imageReferences: [],
+                    modelSearchPath: settings.expandedModelSearchPath,
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                    mcpHost: mcpHost
+                ),
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
         if advertisesToolsForModel {
+            // mcpHost's own tool definitions already flow in via
+            // ChatToolRegistry.definitions(context:) above -- appending them
+            // again here would double-register every MCP tool.
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             toolDefinitions.removeAll {
                 settings.disabledToolNames.contains($0.function.name)
@@ -2689,6 +2776,9 @@ private struct ChatAgentStepCell: View {
             return Text("The model wants to switch to ")
                 + Text(verbatim: requestedModelID).bold()
                 + Text(". The server restarts briefly; your session is kept.")
+        }
+        if let toolName = message.toolName, toolName.hasPrefix(MCPToolNaming.qualifiedPrefix) {
+            return Text(ChatToolPresentation.mcpConsentDescription(toolName: toolName))
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
