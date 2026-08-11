@@ -95,11 +95,16 @@ struct ChatView: View {
     }
 }
 
+private enum ChatTranscriptLayout {
+    static let conversationMaxWidth: CGFloat = 680
+    static let horizontalPadding: CGFloat = 32
+    static let messageHorizontalInset: CGFloat = 32
+    static let composerHorizontalInset: CGFloat = 12
+    static let composerClearance: CGFloat = 48
+    static let composerFadeExtension: CGFloat = 40
+}
+
 private struct ChatTranscriptView: View {
-    private enum Layout {
-        static let conversationMaxWidth: CGFloat = 680
-        static let horizontalPadding: CGFloat = 32
-    }
 
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
@@ -152,31 +157,46 @@ private struct ChatTranscriptView: View {
                     }
                 }
             }
-            .frame(maxWidth: Layout.conversationMaxWidth - conversationWidthReduction)
+            .frame(
+                maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                    - conversationWidthReduction
+                    - (ChatTranscriptLayout.messageHorizontalInset * 2)
+            )
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, Layout.horizontalPadding)
+            .padding(
+                .horizontal,
+                ChatTranscriptLayout.horizontalPadding
+                    + ChatTranscriptLayout.messageHorizontalInset
+            )
             .padding(.top, 18)
-            .padding(.bottom, max(18, composerHeight))
+            .padding(
+                .bottom,
+                max(18, composerHeight + ChatTranscriptLayout.composerClearance)
+            )
         }
         .scrollPosition($transcriptScrollPosition)
         .overlay(alignment: .bottom) {
-            ChatComposerContainer(
-                model: model,
-                chat: chat,
-                workspaceMode: workspaceMode,
-                onSelectWorkspaceMode: onSelectWorkspaceMode,
-                conversationWidthReduction: conversationWidthReduction,
-                onHeightChange: { height in
-                    let isInitialMeasurement = composerHeight == 0
-                    composerHeight = height
-                    if isInitialMeasurement {
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(50))
-                            transcriptScrollPosition.scrollTo(edge: .bottom)
+            ZStack(alignment: .bottom) {
+                composerBackdrop
+
+                ChatComposerContainer(
+                    model: model,
+                    chat: chat,
+                    workspaceMode: workspaceMode,
+                    onSelectWorkspaceMode: onSelectWorkspaceMode,
+                    conversationWidthReduction: conversationWidthReduction,
+                    onHeightChange: { height in
+                        let isInitialMeasurement = composerHeight == 0
+                        composerHeight = height
+                        if isInitialMeasurement {
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(50))
+                                transcriptScrollPosition.scrollTo(edge: .bottom)
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
         }
         .onScrollPhaseChange { _, newPhase, context in
             switch newPhase {
@@ -220,6 +240,26 @@ private struct ChatTranscriptView: View {
 
     private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
         geometry.visibleRect.maxY >= geometry.contentSize.height - 8
+    }
+
+    private var composerBackdrop: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [
+                    Color.nativMainContentBackground.opacity(0),
+                    Color.nativMainContentBackground.opacity(0.84),
+                    Color.nativMainContentBackground,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: ChatTranscriptLayout.composerFadeExtension)
+
+            Color.nativMainContentBackground
+                .frame(height: max(72, composerHeight))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func userPromptEditingUnavailableReason(
@@ -282,9 +322,17 @@ private struct ChatComposerContainer: View {
                 )
             }
         )
-        .frame(maxWidth: 680 - conversationWidthReduction)
+        .frame(
+            maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                - conversationWidthReduction
+                - (ChatTranscriptLayout.composerHorizontalInset * 2)
+        )
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 32)
+        .padding(
+            .horizontal,
+            ChatTranscriptLayout.horizontalPadding
+                + ChatTranscriptLayout.composerHorizontalInset
+        )
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
