@@ -149,6 +149,7 @@ private struct ChatTranscriptView: View {
                         )
                         .equatable()
                         .id(message.id)
+                        .transition(.opacity)
                     }
                 }
             }
@@ -298,7 +299,9 @@ final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
+    /// Referenced from `ChatAgentStreamThrottle`, not duplicated, so the
+    /// coordinator's and a sub-agent's cadences can't drift apart.
+    private static let streamFlushInterval = ChatAgentStreamThrottle.flushInterval
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -352,6 +355,9 @@ final class ChatViewModel: ObservableObject {
     private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
     private var streamFlushDates: [UUID: Date] = [:]
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingSubMessages: [UUID: [ChatTranscriptMessage]] = [:]
+    private var subMessagesFlushDates: [UUID: Date] = [:]
+    private var subMessagesFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
     private let imageModelSelectionGate = ChatImageModelSelectionGate()
@@ -1249,7 +1255,7 @@ final class ChatViewModel: ObservableObject {
                     )
                 }
             })
-            let toolCalls = normalizedToolCalls(completion.toolCalls)
+            let toolCalls = ChatToolCallNormalizer.normalize(completion.toolCalls)
             finishAssistantMessage(
                 assistantMessageID,
                 in: queuedRequest.sessionID,
@@ -1265,6 +1271,7 @@ final class ChatViewModel: ObservableObject {
             }
 
             var insertionAnchor = assistantMessageID
+            var pendingSpawns: [(spawn: ChatConcurrentSpawnRunner.PendingSpawn, context: ChatToolExecutionContext)] = []
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
                 let toolMessageID = UUID()
@@ -1302,6 +1309,7 @@ final class ChatViewModel: ObservableObject {
                             currentID: toolMessageID,
                             currentCall: toolCall,
                             remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            pendingSpawns: pendingSpawns,
                             after: insertionAnchor,
                             in: queuedRequest.sessionID
                         )
@@ -1326,6 +1334,33 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
+                if toolCall.function?.name == ChatSpawnAgentToolRegistry.toolName {
+                    guard ChatConcurrentSpawnGate.allowsAnotherSpawn(alreadyStarted: pendingSpawns.count) else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatSpawnAgentToolExecutor().tooManyPerRoundPayload(),
+                            attachments: []
+                        )
+                        continue
+                    }
+                    let context = ChatToolExecutionContext(
+                        imageGenerationModelID: activeImageModelID,
+                        baseURL: queuedRequest.settings.serverBaseURL,
+                        apiKey: queuedRequest.settings.serverAPIKey,
+                        imageReferences: latestImageReferences(beforeOrAt: toolMessageID, in: queuedRequest.sessionID),
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        mcpHost: mcpHost
+                    )
+                    pendingSpawns.append((
+                        spawn: ChatConcurrentSpawnRunner.PendingSpawn(toolMessageID: toolMessageID, call: toolCall),
+                        context: context
+                    ))
+                    continue
+                }
+
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
@@ -1341,6 +1376,7 @@ final class ChatViewModel: ObservableObject {
                             currentID: toolMessageID,
                             currentCall: toolCall,
                             remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            pendingSpawns: pendingSpawns,
                             after: insertionAnchor,
                             in: queuedRequest.sessionID
                         )
@@ -1396,6 +1432,88 @@ final class ChatViewModel: ObservableObject {
                                 operation: ChatSwitchModelToolRegistry.toolName,
                                 error: error
                             ),
+                            attachments: []
+                        )
+                    }
+                    continue
+                }
+
+                // MCPHostManager.callTool has no consent concept of its own,
+                // so every MCP call needs this gate unconditionally.
+                if let action = ChatConsentGatedAction.detect(call: toolCall, mcpHost: mcpHost) {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            pendingSpawns: pendingSpawns,
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: action.declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                    do {
+                        let content = try await action.execute(appModel: appModel)
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .succeeded,
+                            content: content,
+                            attachments: []
+                        )
+                        appModel?.refreshMetricsIfRunning(force: true)
+                    } catch is CancellationError {
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            pendingSpawns: pendingSpawns,
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    } catch let error as URLError where error.code == .cancelled {
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            pendingSpawns: pendingSpawns,
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: action.failurePayload(error: error),
                             attachments: []
                         )
                     }
@@ -1459,7 +1577,8 @@ final class ChatViewModel: ObservableObject {
                                 modelID: selectedModelID,
                                 in: queuedRequest.sessionID
                             )
-                        }
+                        },
+                        mcpHost: mcpHost
                     )
                     let outcome: ChatToolExecutionOutcome
                     if let customTool {
@@ -1468,12 +1587,8 @@ final class ChatViewModel: ObservableObject {
                             argumentsJSON: toolCall.function?.arguments
                         )
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else if let host = mcpHost,
-                              let toolName = toolCall.function?.name,
-                              host.handlesTool(named: toolName) {
-                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
+                        // MCP calls never reach here — consent-gated above already.
                         outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
                     }
                     updateToolMessage(
@@ -1489,6 +1604,7 @@ final class ChatViewModel: ObservableObject {
                         currentID: toolMessageID,
                         currentCall: toolCall,
                         remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        pendingSpawns: pendingSpawns,
                         after: insertionAnchor,
                         in: queuedRequest.sessionID
                     )
@@ -1498,6 +1614,7 @@ final class ChatViewModel: ObservableObject {
                         currentID: toolMessageID,
                         currentCall: toolCall,
                         remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                        pendingSpawns: pendingSpawns,
                         after: insertionAnchor,
                         in: queuedRequest.sessionID
                     )
@@ -1514,6 +1631,20 @@ final class ChatViewModel: ObservableObject {
                         attachments: []
                     )
                 }
+            }
+
+            if !pendingSpawns.isEmpty {
+                await runPendingSpawnsConcurrently(
+                    pendingSpawns,
+                    in: queuedRequest.sessionID,
+                    settings: activeSettings,
+                    languageModelSupportsTools: queuedRequest.languageModelSupportsTools,
+                    appModel: appModel
+                )
+                // runPendingSpawnsConcurrently no longer throws on
+                // cancellation, so this must re-check explicitly to avoid
+                // inserting a fresh placeholder for a cancelled round.
+                try Task.checkCancellation()
             }
 
             toolRounds += 1
@@ -1549,12 +1680,25 @@ final class ChatViewModel: ObservableObject {
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+                context: ChatToolExecutionContext(
+                    imageGenerationModelID: nil,
+                    baseURL: settings.serverBaseURL,
+                    apiKey: settings.serverAPIKey,
+                    imageReferences: [],
+                    modelSearchPath: settings.expandedModelSearchPath,
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                    mcpHost: mcpHost,
+                    disabledToolNames: settings.disabledToolNames
+                ),
+                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty },
+                allowsSpawning: true
             )
             : []
         if advertisesToolsForModel {
+            // mcpHost's tools already flow in via ChatToolRegistry.definitions(context:)
+            // above -- appending them again would double-register. Custom tools land
+            // after that filter though, so disabledToolNames still needs applying here.
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             toolDefinitions.removeAll {
                 settings.disabledToolNames.contains($0.function.name)
@@ -1641,20 +1785,24 @@ final class ChatViewModel: ObservableObject {
         in sessionID: UUID,
         status: ChatTranscriptMessage.ToolStatus = .running
     ) -> Bool {
-        insertMessage(
-            ChatTranscriptMessage(
-                id: id,
-                role: .tool,
-                content: "",
-                isStreaming: true,
-                toolCallID: call.id,
-                toolName: call.function?.name,
-                toolStatus: status,
-                toolArguments: call.function?.arguments
-            ),
-            after: messageID,
-            in: sessionID
-        )
+        // A spawn_agent cell is born already showing its details, so its own
+        // `.animation(value:)` never fires — animate the insertion itself.
+        withAnimation(.snappy(duration: 0.2)) {
+            insertMessage(
+                ChatTranscriptMessage(
+                    id: id,
+                    role: .tool,
+                    content: "",
+                    isStreaming: true,
+                    toolCallID: call.id,
+                    toolName: call.function?.name,
+                    toolStatus: status,
+                    toolArguments: call.function?.arguments
+                ),
+                after: messageID,
+                in: sessionID
+            )
+        }
     }
 
     private func insertMessage(
@@ -1681,20 +1829,6 @@ final class ChatViewModel: ObservableObject {
         return true
     }
 
-    private func normalizedToolCalls(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {
-        toolCalls.enumerated().map { index, call in
-            var normalized = call
-            normalized.index = index
-            if normalized.id?.isEmpty != false {
-                normalized.id = "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
-            }
-            if normalized.type?.isEmpty != false {
-                normalized.type = "function"
-            }
-            return normalized
-        }
-    }
-
     private func latestImageReferences(
         beforeOrAt messageID: UUID,
         in sessionID: UUID
@@ -1717,6 +1851,11 @@ final class ChatViewModel: ObservableObject {
         content: String,
         attachments: [ChatImageAttachment]
     ) {
+        // Force-flush any pending nested transcript before it goes stale —
+        // a no-op for tools that never populate subMessages.
+        flushSubMessages(id, in: sessionID)
+        clearSubMessagesBuffers(id)
+
         updateMessage(id, in: sessionID) { message in
             message.content = content
             message.imageAttachments = attachments
@@ -1730,6 +1869,125 @@ final class ChatViewModel: ObservableObject {
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
             bumpScroll()
+        }
+    }
+
+    /// Coalesced at the same capped cadence as token streaming — several
+    /// sub-agents firing this uncapped would risk saturating the main
+    /// thread with synchronous SwiftUI diff/layout passes.
+    private func updateToolMessageSubMessages(
+        _ id: UUID,
+        in sessionID: UUID,
+        subMessages: [ChatTranscriptMessage]
+    ) {
+        pendingSubMessages[id] = subMessages
+
+        let now = Date()
+        if let lastFlush = subMessagesFlushDates[id],
+           now.timeIntervalSince(lastFlush) < Self.streamFlushInterval {
+            scheduleSubMessagesFlush(id, in: sessionID)
+            return
+        }
+        flushSubMessages(id, in: sessionID)
+    }
+
+    private func scheduleSubMessagesFlush(_ id: UUID, in sessionID: UUID) {
+        guard subMessagesFlushTasks[id] == nil else {
+            return
+        }
+        subMessagesFlushTasks[id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.streamFlushInterval * 1_000_000_000))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.subMessagesFlushTasks[id] = nil
+            self.flushSubMessages(id, in: sessionID)
+        }
+    }
+
+    private func flushSubMessages(_ id: UUID, in sessionID: UUID) {
+        subMessagesFlushTasks[id]?.cancel()
+        subMessagesFlushTasks[id] = nil
+
+        guard let subMessages = pendingSubMessages.removeValue(forKey: id) else {
+            return
+        }
+        _ = updateMessage(id, in: sessionID) { message in
+            message.subMessages = subMessages
+        }
+        subMessagesFlushDates[id] = Date()
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
+    }
+
+    private func clearSubMessagesBuffers(_ id: UUID) {
+        subMessagesFlushTasks[id]?.cancel()
+        subMessagesFlushTasks.removeValue(forKey: id)
+        pendingSubMessages.removeValue(forKey: id)
+        subMessagesFlushDates.removeValue(forKey: id)
+    }
+
+    /// A child's own cancellation propagates and is re-thrown here after
+    /// marking whichever messages are still pending as `.cancelled`.
+    private func runPendingSpawnsConcurrently(
+        _ pendingSpawns: [(spawn: ChatConcurrentSpawnRunner.PendingSpawn, context: ChatToolExecutionContext)],
+        in sessionID: UUID,
+        settings: NativSettings,
+        languageModelSupportsTools: Bool,
+        appModel: NativModel?
+    ) async {
+        let contextByID = Dictionary(
+            uniqueKeysWithValues: pendingSpawns.map { ($0.spawn.toolMessageID, $0.context) }
+        )
+
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(
+            pendingSpawns.map(\.spawn)
+        ) { [weak self] spawn in
+            guard let self, let context = contextByID[spawn.toolMessageID] else {
+                throw ChatSpawnAgentToolError.noModelConfigured
+            }
+            return try await ChatSpawnAgentToolExecutor().execute(
+                call: spawn.call,
+                settings: settings,
+                languageModelSupportsTools: languageModelSupportsTools,
+                toolExecutionContext: context,
+                consentGate: self.toolConsentGate,
+                appModel: appModel,
+                onSubMessagesChange: { [weak self] subMessages in
+                    self?.updateToolMessageSubMessages(
+                        spawn.toolMessageID,
+                        in: sessionID,
+                        subMessages: subMessages
+                    )
+                }
+            )
+        }
+
+        for outcome in outcomes {
+            switch outcome.result {
+            case .success(let content):
+                updateToolMessage(
+                    outcome.toolMessageID,
+                    in: sessionID,
+                    status: .succeeded,
+                    content: content,
+                    attachments: []
+                )
+            case .failure(let error):
+                // Render a child's own cancellation as .cancelled, not .failed.
+                let isCancellation = error is CancellationError || (error as? URLError)?.code == .cancelled
+                updateToolMessage(
+                    outcome.toolMessageID,
+                    in: sessionID,
+                    status: isCancellation ? .cancelled : .failed,
+                    content: ChatToolDispatcher.failurePayload(
+                        toolName: ChatSpawnAgentToolRegistry.toolName,
+                        error: error
+                    ),
+                    attachments: []
+                )
+            }
         }
     }
 
@@ -1755,6 +2013,7 @@ final class ChatViewModel: ObservableObject {
         currentID: UUID,
         currentCall: MLXChatToolCall,
         remainingCalls: [MLXChatToolCall],
+        pendingSpawns: [(spawn: ChatConcurrentSpawnRunner.PendingSpawn, context: ChatToolExecutionContext)],
         after anchorID: UUID,
         in sessionID: UUID
     ) {
@@ -1769,6 +2028,21 @@ final class ChatViewModel: ObservableObject {
             ),
             attachments: []
         )
+
+        // Queued-but-not-yet-dispatched spawns have no other cleanup path
+        // once the round aborts here, or they'd stay stuck at "running".
+        for pending in pendingSpawns {
+            updateToolMessage(
+                pending.spawn.toolMessageID,
+                in: sessionID,
+                status: .cancelled,
+                content: ChatToolDispatcher.failurePayload(
+                    toolName: ChatSpawnAgentToolRegistry.toolName,
+                    error: cancellation
+                ),
+                attachments: []
+            )
+        }
 
         var anchorID = anchorID
         for call in remainingCalls {
@@ -1993,28 +2267,32 @@ final class ChatViewModel: ObservableObject {
         flushStream(id, in: sessionID)
         clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
-        updateMessage(id, in: sessionID) { message in
-            message.isStreaming = false
-            if message.content.isEmpty {
-                message.content = fallbackContent
+        // A tool-only round vanishes from visibleMessages once toolCalls is
+        // set below — animate it so that's a fade, not a pop.
+        withAnimation(.snappy(duration: 0.2)) {
+            updateMessage(id, in: sessionID) { message in
+                message.isStreaming = false
+                if message.content.isEmpty {
+                    message.content = fallbackContent
+                }
+                if message.reasoningContent.isEmpty,
+                   let fallbackReasoningContent {
+                    message.reasoningContent = fallbackReasoningContent
+                }
+                message.toolCalls = toolCalls
+                if !message.reasoningContent.isEmpty,
+                   message.thinkingDuration == nil {
+                    message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
+                }
+                if isCancelled,
+                   message.content == fallbackContent,
+                   message.reasoningContent.isEmpty {
+                    message.role = .error
+                }
+                message.responseMetrics = responseMetrics?.hasVisibleValues == true
+                    ? responseMetrics
+                    : nil
             }
-            if message.reasoningContent.isEmpty,
-               let fallbackReasoningContent {
-                message.reasoningContent = fallbackReasoningContent
-            }
-            message.toolCalls = toolCalls
-            if !message.reasoningContent.isEmpty,
-               message.thinkingDuration == nil {
-                message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
-            }
-            if isCancelled,
-               message.content == fallbackContent,
-               message.reasoningContent.isEmpty {
-                message.role = .error
-            }
-            message.responseMetrics = responseMetrics?.hasVisibleValues == true
-                ? responseMetrics
-                : nil
         }
         persistSession(sessionID, updateTimestamp: true)
     }
@@ -2448,8 +2726,12 @@ private struct ChatMessageRow: View, Equatable {
         guard message.role == .assistant else {
             return false
         }
-        return !message.reasoningContent.isEmpty
-            || (message.isThinkingEnabled && message.isStreaming && message.content.isEmpty)
+        return ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: message.reasoningContent,
+            isThinkingEnabled: message.isThinkingEnabled,
+            isStreaming: message.isStreaming,
+            content: message.content
+        )
     }
 
     private var rendersMarkdown: Bool {
@@ -2570,6 +2852,16 @@ private struct ChatAgentStepCell: View {
             && imageModelSelectionRequest != nil
     }
 
+    /// Scoped to `spawn_agent` — the only tool whose nested detail
+    /// populates live and is worth forcing open while running.
+    private var isRunningSubAgent: Bool {
+        ChatToolPresentation.showsDetailsWhileRunning(toolName: message.toolName, status: message.toolStatus)
+    }
+
+    private var showsDetails: Bool {
+        isExpanded || isRunningSubAgent
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -2580,7 +2872,7 @@ private struct ChatAgentStepCell: View {
                 header
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "Hide call details" : "Show call details")
+            .help(showsDetails ? "Hide call details" : "Show call details")
             .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
             if isAwaitingImageModelSelection {
@@ -2591,10 +2883,13 @@ private struct ChatAgentStepCell: View {
                 Divider()
                     .padding(.top, 7)
                 consentPrompt
-            } else if isExpanded {
-                Divider()
-                    .padding(.top, 7)
-                details
+            } else if showsDetails {
+                Group {
+                    Divider()
+                        .padding(.top, 7)
+                    details
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(.horizontal, 10)
@@ -2606,6 +2901,18 @@ private struct ChatAgentStepCell: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title), \(accessibilityStatus)")
+        // Also covers auto-expand-on-running, not just the manual toggle
+        // (which already wraps its own toggle() in withAnimation).
+        .animation(.snappy(duration: 0.2), value: showsDetails)
+        .onChange(of: message.toolStatus) { oldValue, newValue in
+            if ChatToolPresentation.shouldAutoExpandOnSettle(
+                toolName: message.toolName,
+                previousStatus: oldValue,
+                newStatus: newValue
+            ) {
+                isExpanded = true
+            }
+        }
     }
 
     private var header: some View {
@@ -2632,7 +2939,7 @@ private struct ChatAgentStepCell: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .rotationEffect(.degrees(showsDetails ? 90 : 0))
                 }
             }
             if message.toolStatus == .failed, let toolErrorMessage {
@@ -2689,6 +2996,9 @@ private struct ChatAgentStepCell: View {
             return Text("The model wants to switch to ")
                 + Text(verbatim: requestedModelID).bold()
                 + Text(". The server restarts briefly; your session is kept.")
+        }
+        if let toolName = message.toolName, toolName.hasPrefix(MCPToolNaming.qualifiedPrefix) {
+            return Text(ChatToolPresentation.mcpConsentDescription(toolName: toolName))
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
@@ -2780,6 +3090,59 @@ private struct ChatAgentStepCell: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                     NativCodeBlock(raw: message.content, lineLimit: 12)
+                }
+            }
+            if !message.subMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(message.subMessages) { subMessage in
+                        if subMessage.role == .tool {
+                            // Sub-agents don't prompt for image-model selection,
+                            // same as they can't prompt for anything else.
+                            ChatAgentStepCell(
+                                message: subMessage,
+                                imageModelSelectionRequest: nil,
+                                onConfirm: onConfirm,
+                                onDeny: onDeny,
+                                onSelectImageModel: { _, _ in },
+                                onCancelImageModelSelection: { _ in },
+                                onExploreImageModels: { _ in }
+                            )
+                        } else if subMessage.role == .assistant,
+                                  !subMessage.content.isEmpty
+                                    || ChatToolPresentation.showsThinkingBubble(
+                                        reasoningContent: subMessage.reasoningContent,
+                                        isThinkingEnabled: subMessage.isThinkingEnabled,
+                                        isStreaming: subMessage.isStreaming,
+                                        content: subMessage.content
+                                    ) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                if ChatToolPresentation.showsThinkingBubble(
+                                    reasoningContent: subMessage.reasoningContent,
+                                    isThinkingEnabled: subMessage.isThinkingEnabled,
+                                    isStreaming: subMessage.isStreaming,
+                                    content: subMessage.content
+                                ) {
+                                    ChatThinkingBubble(
+                                        content: subMessage.reasoningContent,
+                                        isThinking: subMessage.isStreaming && subMessage.content.isEmpty,
+                                        thinkingDuration: subMessage.thinkingDuration
+                                    )
+                                }
+                                if !subMessage.content.isEmpty {
+                                    // The sub-agent's own round text — reuses
+                                    // ChatMessageText (the same markdown renderer the
+                                    // coordinator's own bubble uses) rather than a new one.
+                                    ChatMessageText(
+                                        content: subMessage.content,
+                                        rendersMarkdown: true,
+                                        isStreaming: subMessage.isStreaming
+                                    )
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

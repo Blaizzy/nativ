@@ -31,6 +31,9 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
     var modelSwitchInProgress = false
     private(set) var switchCallCount = 0
     var onSwitch: ((String?) -> Void)?
+    var memoryWarning: ModelPreloadMemoryWarning?
+    var activeGenerations = false
+    var activeGenerationsError: Error?
 
     init(languageModelID: String?, isRunning: Bool = true) {
         settings = NativSettings(languageModelID: languageModelID)
@@ -45,11 +48,24 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
             settings.languageModelID = modelID
         }
     }
+
+    func hasActiveTextGenerations() async throws -> Bool {
+        if let activeGenerationsError {
+            throw activeGenerationsError
+        }
+        return activeGenerations
+    }
+
+    func preloadMemoryWarning(forLanguageModelID modelID: String, availableModels: [LocalModel]) -> ModelPreloadMemoryWarning? {
+        memoryWarning
+    }
 }
 
 private func makeContext(
     imageModelID: String? = nil,
-    modelSearchPath: String = ""
+    modelSearchPath: String = "",
+    mcpHost: MCPHostManager? = nil,
+    disabledToolNames: [String] = []
 ) -> ChatToolExecutionContext {
     ChatToolExecutionContext(
         imageGenerationModelID: imageModelID,
@@ -60,7 +76,9 @@ private func makeContext(
         additionalModelSearchPaths: [],
         analyticsDatabaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathComponent("Analytics.sqlite3")
+            .appendingPathComponent("Analytics.sqlite3"),
+        mcpHost: mcpHost,
+        disabledToolNames: disabledToolNames
     )
 }
 
@@ -68,6 +86,7 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
     MLXChatToolCall(id: "1", function: MLXChatFunctionCall(name: name, arguments: arguments))
 }
 
+@MainActor
 final class ChatToolRegistryTests: XCTestCase {
     func testDefinitionsAlwaysAdvertiseWebSearch() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
@@ -86,7 +105,7 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
-        let names = ChatToolRegistry.definitions(canEditImage: false)
+        let names = ChatToolRegistry.definitions(context: makeContext(), canEditImage: false)
             .map(\.function.name)
 
         XCTAssertTrue(names.contains(ChatImageToolRegistry.generateToolName))
@@ -97,21 +116,31 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testDefinitionsOfferEditOnlyWhenAnImageIsAvailable() {
-        let withoutEdit = ChatToolRegistry.definitions(canEditImage: false)
+        let withoutEdit = ChatToolRegistry.definitions(context: makeContext(), canEditImage: false)
             .map(\.function.name)
         XCTAssertTrue(withoutEdit.contains(ChatImageToolRegistry.generateToolName))
         XCTAssertFalse(withoutEdit.contains(ChatImageToolRegistry.editToolName))
 
-        let withEdit = ChatToolRegistry.definitions(canEditImage: true)
+        let withEdit = ChatToolRegistry.definitions(context: makeContext(), canEditImage: true)
             .map(\.function.name)
         XCTAssertTrue(withEdit.contains(ChatImageToolRegistry.editToolName))
     }
 
     func testDefinitionsNeverAdvertiseDuplicateToolNames() {
-        let names = ChatToolRegistry.definitions(canEditImage: true)
+        let names = ChatToolRegistry.definitions(context: makeContext(), canEditImage: true)
             .map(\.function.name)
 
         XCTAssertEqual(names.count, Set(names).count)
+    }
+
+    func testDefinitionsOmitDisabledTools() {
+        let names = ChatToolRegistry.definitions(
+            context: makeContext(disabledToolNames: [ChatSystemMonitorToolRegistry.toolName]),
+            canEditImage: true
+        ).map(\.function.name)
+
+        XCTAssertFalse(names.contains(ChatSystemMonitorToolRegistry.toolName))
+        XCTAssertTrue(names.contains(ChatServerStatsToolRegistry.toolName), "only the disabled tool should be omitted, not everything")
     }
 
     func testImageToolSchemasAreGoldenPinned() throws {
@@ -124,7 +153,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let data = try encoder.encode(ChatImageToolRegistry.definitions(canEdit: true))
         let actual = String(decoding: data, as: UTF8.self)
 
-        XCTAssertEqual(actual, golden, "generate_image/edit_image's schema must match the intended schema exactly -- if this fails, either the schema drifted unintentionally or this pin needs updating alongside a deliberate schema change")
+        XCTAssertEqual(actual, golden, "generate_image/edit_image's schema must match the intended schema exactly — if this fails, either the schema drifted unintentionally or this pin needs updating alongside a deliberate schema change")
     }
 
     func testImageToolKeepsModelSelectionOutOfTheLLMProtocol() throws {
@@ -836,6 +865,42 @@ final class ChatToolPresentationTests: XCTestCase {
         .failed, .cancelled, .awaitingConsent, .declined,
     ]
 
+    func testShowsThinkingBubbleTrueOnceReasoningContentArrives() {
+        XCTAssertTrue(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "some reasoning",
+            isThinkingEnabled: false,
+            isStreaming: false,
+            content: "final answer"
+        ))
+    }
+
+    func testShowsThinkingBubbleTrueWhileStreamingWithNoContentYetIfThinkingEnabled() {
+        XCTAssertTrue(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "",
+            isThinkingEnabled: true,
+            isStreaming: true,
+            content: ""
+        ))
+    }
+
+    func testShowsThinkingBubbleFalseOnceContentArrivesWithoutThinkingEnabled() {
+        XCTAssertFalse(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "",
+            isThinkingEnabled: true,
+            isStreaming: true,
+            content: "already answering"
+        ))
+    }
+
+    func testShowsThinkingBubbleFalseWithNoReasoningAndThinkingDisabled() {
+        XCTAssertFalse(ChatToolPresentation.showsThinkingBubble(
+            reasoningContent: "",
+            isThinkingEnabled: false,
+            isStreaming: true,
+            content: ""
+        ))
+    }
+
     func testTitlePinnedForEveryToolAndStatus() {
         let expected: [String: [ChatTranscriptMessage.ToolStatus?: String]] = [
             "generate_image": [
@@ -887,6 +952,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "some_unknown_tool",
                 .awaitingConsent: "some_unknown_tool", .declined: "some_unknown_tool",
             ],
+            "mcp__websearch__search": [
+                nil: "search (websearch)", .preparing: "Running search (websearch)…",
+                .running: "Running search (websearch)…", .succeeded: "Ran search (websearch)",
+                .failed: "search (websearch)", .cancelled: "search (websearch)",
+                .awaitingImageModelSelection: "search (websearch)",
+                .awaitingConsent: "Run search (websearch)?", .declined: "search (websearch) declined",
+            ],
         ]
 
         for (toolName, byStatus) in expected {
@@ -910,6 +982,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            "mcp__websearch__search",
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -919,6 +992,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            "mcp__websearch__search": "puzzlepiece.extension",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -936,6 +1010,68 @@ final class ChatToolPresentationTests: XCTestCase {
             XCTAssertEqual(ChatToolPresentation.symbolName(toolName: toolName, status: .running), successLikeSymbol[toolName])
             XCTAssertEqual(ChatToolPresentation.symbolName(toolName: toolName, status: nil), successLikeSymbol[toolName])
         }
+    }
+
+    func testMCPConsentDescriptionNamesTheActualToolAndServer() {
+        XCTAssertEqual(
+            ChatToolPresentation.mcpConsentDescription(toolName: "mcp__websearch__search"),
+            "The model wants to run search (websearch)."
+        )
+    }
+
+    func testMCPConsentDescriptionFallsBackForANonMCPOrMissingToolName() {
+        XCTAssertEqual(
+            ChatToolPresentation.mcpConsentDescription(toolName: nil),
+            "The model wants to run this tool."
+        )
+        XCTAssertEqual(
+            ChatToolPresentation.mcpConsentDescription(toolName: "not_mcp_shaped"),
+            "The model wants to run this tool."
+        )
+    }
+
+    func testShowsDetailsWhileRunningIsTrueOnlyForARunningSpawnAgentCell() {
+        XCTAssertTrue(ChatToolPresentation.showsDetailsWhileRunning(toolName: ChatSpawnAgentToolRegistry.toolName, status: .running))
+    }
+
+    func testShowsDetailsWhileRunningIsFalseForOtherRunningTools() {
+        XCTAssertFalse(ChatToolPresentation.showsDetailsWhileRunning(toolName: ChatSpawnAgentToolRegistry.toolName, status: .succeeded))
+        XCTAssertFalse(ChatToolPresentation.showsDetailsWhileRunning(toolName: ChatSystemMonitorToolRegistry.toolName, status: .running))
+        XCTAssertFalse(ChatToolPresentation.showsDetailsWhileRunning(toolName: nil, status: .running))
+    }
+
+    func testShouldAutoExpandOnSettleTrueForSpawnAgentTransitioningFromRunningToSucceededOrFailed() {
+        XCTAssertTrue(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: .running, newStatus: .succeeded
+        ))
+        XCTAssertTrue(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: .running, newStatus: .failed
+        ))
+    }
+
+    func testShouldAutoExpandOnSettleFalseForEveryOtherNewStatus() {
+        for status: ChatTranscriptMessage.ToolStatus? in [nil, .preparing, .running, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined] {
+            XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+                toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: .running, newStatus: status
+            ), "should not auto-expand transitioning into \(String(describing: status))")
+        }
+    }
+
+    func testShouldAutoExpandOnSettleFalseWhenThePreviousStatusWasNotRunning() {
+        for previousStatus: ChatTranscriptMessage.ToolStatus? in [nil, .preparing, .succeeded, .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined] {
+            XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+                toolName: ChatSpawnAgentToolRegistry.toolName, previousStatus: previousStatus, newStatus: .succeeded
+            ), "should not auto-expand when the previous status was \(String(describing: previousStatus)), not .running")
+        }
+    }
+
+    func testShouldAutoExpandOnSettleFalseForOtherTools() {
+        XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: ChatSystemMonitorToolRegistry.toolName, previousStatus: .running, newStatus: .succeeded
+        ))
+        XCTAssertFalse(ChatToolPresentation.shouldAutoExpandOnSettle(
+            toolName: nil, previousStatus: .running, newStatus: .succeeded
+        ))
     }
 }
 
@@ -1047,6 +1183,71 @@ final class ChatSwitchModelToolExecutorTests: XCTestCase {
         }
     }
 
+    func testMemoryWarningRejectsCleanlyWithoutAttemptingTheSwitch() async {
+        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
+        fake.memoryWarning = ModelPreloadMemoryWarning(
+            candidateModelID: "org/new",
+            candidateSlot: .language,
+            existingSlots: [.imageGeneration],
+            estimatedWorkingSetBytes: 900,
+            memoryBudgetBytes: 100,
+            totalMemoryBytes: 200
+        )
+        do {
+            _ = try await ChatSwitchModelToolExecutor().execute(
+                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
+                appModel: fake
+            )
+            XCTFail("a model that can't fit must be rejected before attempting the switch")
+        } catch let error as ChatSwitchModelToolError {
+            guard case .insufficientMemory(let modelID, _) = error else {
+                return XCTFail("expected .insufficientMemory, got \(error)")
+            }
+            XCTAssertEqual(modelID, "org/new")
+        } catch {
+            XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+        XCTAssertEqual(fake.switchCallCount, 0, "a rejected switch must never restart the server")
+    }
+
+    func testActiveGenerationsRejectsCleanlyWithoutAttemptingTheSwitch() async {
+        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
+        fake.activeGenerations = true
+        do {
+            _ = try await ChatSwitchModelToolExecutor().execute(
+                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
+                appModel: fake
+            )
+            XCTFail("a switch must be rejected while any generation is in flight -- the restart would kill it")
+        } catch let error as ChatSwitchModelToolError {
+            guard case .activeGenerationsInProgress = error else {
+                return XCTFail("expected .activeGenerationsInProgress, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+        XCTAssertEqual(fake.switchCallCount, 0, "a rejected switch must never restart the server")
+    }
+
+    func testActiveGenerationsQueryFailureFailsClosedRatherThanProceeding() async {
+        let fake = FakeModelSwitchingSurface(languageModelID: "org/old")
+        fake.activeGenerationsError = FakeToolError()
+        do {
+            _ = try await ChatSwitchModelToolExecutor().execute(
+                call: makeCall(name: ChatSwitchModelToolRegistry.toolName, arguments: #"{"model_id":"org/new"}"#),
+                appModel: fake
+            )
+            XCTFail("an unverifiable active-generations query must block the switch, not proceed")
+        } catch let error as ChatSwitchModelToolError {
+            guard case .unableToVerifyNoActiveGenerations = error else {
+                return XCTFail("expected .unableToVerifyNoActiveGenerations, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSwitchModelToolError, got \(error)")
+        }
+        XCTAssertEqual(fake.switchCallCount, 0, "an unverifiable query must never allow the restart to proceed")
+    }
+
     private func decode(_ json: String) throws -> [String: Any] {
         let data = try XCTUnwrap(json.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -1130,7 +1331,6 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {
-        // Predates toolArguments existing on disk at all -- must not fail to decode.
         let oldJSON = """
             {
                 "id": "8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B",
@@ -1187,5 +1387,610 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
         XCTAssertEqual(decoded, original)
+    }
+}
+
+@MainActor
+final class ChatSpawnAgentToolExecutorTests: XCTestCase {
+    private func makeSettings(languageModelID: String? = "org/model") -> NativSettings {
+        NativSettings(languageModelID: languageModelID)
+    }
+
+    func testInvalidJSONArgumentsThrowsInvalidArguments() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: "not json"),
+                settings: makeSettings(),
+                languageModelSupportsTools: true,
+                toolExecutionContext: makeContext(),
+                consentGate: ChatToolConsentGate(),
+                appModel: nil,
+                onSubMessagesChange: { _ in }
+            )
+            XCTFail("malformed JSON arguments must throw")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .invalidArguments = error else {
+                return XCTFail("expected .invalidArguments, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testMissingTaskThrowsInvalidArguments() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: "{}"),
+                settings: makeSettings(),
+                languageModelSupportsTools: true,
+                toolExecutionContext: makeContext(),
+                consentGate: ChatToolConsentGate(),
+                appModel: nil,
+                onSubMessagesChange: { _ in }
+            )
+            XCTFail("missing required task must throw")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .invalidArguments = error else {
+                return XCTFail("expected .invalidArguments, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testBlankTaskThrowsInvalidArguments() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"   "}"#),
+                settings: makeSettings(),
+                languageModelSupportsTools: true,
+                toolExecutionContext: makeContext(),
+                consentGate: ChatToolConsentGate(),
+                appModel: nil,
+                onSubMessagesChange: { _ in }
+            )
+            XCTFail("a whitespace-only task must throw, same as an empty one")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .invalidArguments = error else {
+                return XCTFail("expected .invalidArguments, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testNoModelConfiguredThrowsNoModelConfigured() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize the repo"}"#),
+                settings: makeSettings(languageModelID: nil),
+                languageModelSupportsTools: true,
+                toolExecutionContext: makeContext(),
+                consentGate: ChatToolConsentGate(),
+                appModel: nil,
+                onSubMessagesChange: { _ in }
+            )
+            XCTFail("no configured language model must throw before ever touching the network")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .noModelConfigured = error else {
+                return XCTFail("expected .noModelConfigured, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testUnrecognizedExplicitModelOverrideThrowsUnknownModelBeforeAnyNetworkCall() async {
+        // Runs against a real LocalModelDiscovery.scan, not a mock.
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(
+                    name: ChatSpawnAgentToolRegistry.toolName,
+                    arguments: #"{"task":"summarize the repo","model":"definitely-not-a-real-model-xyz-12345"}"#
+                ),
+                settings: makeSettings(),
+                languageModelSupportsTools: true,
+                toolExecutionContext: makeContext(),
+                consentGate: ChatToolConsentGate(),
+                appModel: nil,
+                onSubMessagesChange: { _ in }
+            )
+            XCTFail("an unrecognized explicit model override must throw before ever touching the network")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .unknownModel(let modelID) = error else {
+                return XCTFail("expected .unknownModel, got \(error)")
+            }
+            XCTAssertEqual(modelID, "definitely-not-a-real-model-xyz-12345")
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testTooManyPerRoundPayloadShape() throws {
+        let payload = ChatSpawnAgentToolExecutor().tooManyPerRoundPayload()
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(
+            object["error"] as? String,
+            "Only \(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound) sub-agents may run per round."
+        )
+        XCTAssertNil(object["result"])
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = ChatSpawnAgentToolExecutor().failurePayload(operation: "x", error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "fake failure")
+        XCTAssertNil(object["result"])
+    }
+
+    func testBlankArgumentModelStillFallsThroughToNoModelConfigured() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize the repo","model":"   "}"#),
+                settings: makeSettings(languageModelID: nil),
+                languageModelSupportsTools: true,
+                toolExecutionContext: makeContext(),
+                consentGate: ChatToolConsentGate(),
+                appModel: nil,
+                onSubMessagesChange: { _ in }
+            )
+            XCTFail("a whitespace-only model argument must not count as a real override — with no coordinator model either, this must still throw")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .noModelConfigured = error else {
+                return XCTFail("expected .noModelConfigured, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+final class ChatSpawnAgentToolErrorInsufficientMemoryDetectionTests: XCTestCase {
+    func testDetectsTheServersStructuredInsufficientMemoryRejection() {
+        let body = #"{"detail":{"error":"insufficient_memory","model":"org/big-model","message":"model requires 900 bytes; only 100 bytes free"}}"#
+        let error = ChatSpawnAgentToolError.from(NativChatError.httpStatus(507, body), modelID: "org/big-model")
+        guard case .insufficientMemory(let modelID, let message) = error else {
+            return XCTFail("expected .insufficientMemory, got \(String(describing: error))")
+        }
+        XCTAssertEqual(modelID, "org/big-model")
+        XCTAssertEqual(message, "model requires 900 bytes; only 100 bytes free")
+    }
+
+    func testIgnoresA507WithADifferentErrorKind() {
+        let body = #"{"detail":{"error":"some_other_error","message":"unrelated"}}"#
+        XCTAssertNil(ChatSpawnAgentToolError.from(NativChatError.httpStatus(507, body), modelID: "org/model"))
+    }
+
+    func testIgnoresANonMatchingStatusCodeEvenWithTheRightBody() {
+        let body = #"{"detail":{"error":"insufficient_memory","message":"..."}}"#
+        XCTAssertNil(ChatSpawnAgentToolError.from(NativChatError.httpStatus(500, body), modelID: "org/model"))
+    }
+
+    func testIgnoresNonHTTPStatusErrors() {
+        XCTAssertNil(ChatSpawnAgentToolError.from(NativChatError.invalidResponse, modelID: "org/model"))
+        XCTAssertNil(ChatSpawnAgentToolError.from(CancellationError(), modelID: "org/model"))
+    }
+}
+
+final class ChatSpawnAgentModelResolverTests: XCTestCase {
+    func testPrefersArgumentModelOverCoordinatorModel() {
+        XCTAssertEqual(
+            ChatSpawnAgentModelResolver.resolve(argumentModel: "mlx-community/Qwen3-0.6B-4bit", coordinatorModelID: "org/coordinator-model"),
+            "mlx-community/Qwen3-0.6B-4bit"
+        )
+    }
+
+    func testFallsBackToCoordinatorModelWhenArgumentModelIsNil() {
+        XCTAssertEqual(
+            ChatSpawnAgentModelResolver.resolve(argumentModel: nil, coordinatorModelID: "org/coordinator-model"),
+            "org/coordinator-model"
+        )
+    }
+
+    func testFallsBackToCoordinatorModelWhenArgumentModelIsBlank() {
+        XCTAssertEqual(
+            ChatSpawnAgentModelResolver.resolve(argumentModel: "   ", coordinatorModelID: "org/coordinator-model"),
+            "org/coordinator-model"
+        )
+    }
+
+    func testTrimsWhitespaceFromArgumentModel() {
+        XCTAssertEqual(
+            ChatSpawnAgentModelResolver.resolve(argumentModel: "  mlx-community/Qwen3-0.6B-4bit  ", coordinatorModelID: nil),
+            "mlx-community/Qwen3-0.6B-4bit"
+        )
+    }
+
+    func testReturnsNilWhenBothArgumentAndCoordinatorModelAreMissing() {
+        XCTAssertNil(ChatSpawnAgentModelResolver.resolve(argumentModel: nil, coordinatorModelID: nil))
+        XCTAssertNil(ChatSpawnAgentModelResolver.resolve(argumentModel: "   ", coordinatorModelID: nil))
+    }
+
+    func testIsExplicitOverrideTrueForANonBlankArgumentModel() {
+        XCTAssertTrue(ChatSpawnAgentModelResolver.isExplicitOverride(argumentModel: "mlx-community/Qwen3-0.6B-4bit"))
+    }
+
+    func testIsExplicitOverrideFalseForNilArgumentModel() {
+        XCTAssertFalse(ChatSpawnAgentModelResolver.isExplicitOverride(argumentModel: nil))
+    }
+
+    func testIsExplicitOverrideFalseForBlankArgumentModel() {
+        XCTAssertFalse(ChatSpawnAgentModelResolver.isExplicitOverride(argumentModel: "   "))
+    }
+
+    func testIsKnownModelMatchesAnExactRepoID() {
+        let known = [fakeLocalModel(repoID: "mlx-community/Qwen3-0.6B-4bit")]
+        XCTAssertTrue(ChatSpawnAgentModelResolver.isKnownModel("mlx-community/Qwen3-0.6B-4bit", among: known))
+    }
+
+    func testIsKnownModelFalseForAnUnrecognizedRepoID() {
+        let known = [fakeLocalModel(repoID: "mlx-community/Qwen3-0.6B-4bit")]
+        XCTAssertFalse(ChatSpawnAgentModelResolver.isKnownModel("mlx-community/Qwen3-1.7B-4bit", among: known))
+    }
+
+    func testIsKnownModelFalseForTheDisplayStringMissingItsOrgPrefix() {
+        let known = [fakeLocalModel(repoID: "mlx-community/Qwen3-1.7B-4bit")]
+        XCTAssertFalse(ChatSpawnAgentModelResolver.isKnownModel("Qwen3-1.7B-4bit", among: known))
+    }
+
+    func testIsKnownModelFalseForAnEmptyKnownList() {
+        XCTAssertFalse(ChatSpawnAgentModelResolver.isKnownModel("mlx-community/Qwen3-0.6B-4bit", among: []))
+    }
+
+    private func fakeLocalModel(repoID: String) -> LocalModel {
+        LocalModel(
+            repoID: repoID,
+            snapshotURL: nil,
+            modifiedAt: nil,
+            sizeBytes: nil,
+            parameterCount: nil,
+            quantizationBits: nil,
+            quantizationGroupSize: nil,
+            contextSize: nil,
+            provider: nil,
+            capabilities: [],
+            drafterKind: nil,
+            hiddenSize: nil
+        )
+    }
+}
+
+@MainActor
+final class ChatCompletionRequestBuilderTests: XCTestCase {
+    func testAllowsSpawningTrueIncludesSpawnAgentInAdvertisedTools() {
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: NativSettings(languageModelID: "org/model"),
+            advertisesTools: true,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        XCTAssertEqual(request.tools?.map(\.function.name).contains(ChatSpawnAgentToolRegistry.toolName), true)
+    }
+
+    func testDisabledToolsAreOmittedFromASubAgentsAdvertisedTools() {
+        var settings = NativSettings(languageModelID: "org/model")
+        settings.disabledToolNames = [ChatSystemMonitorToolRegistry.toolName]
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: settings,
+            advertisesTools: true,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        let names = request.tools?.map(\.function.name) ?? []
+        XCTAssertFalse(names.contains(ChatSystemMonitorToolRegistry.toolName), "a disabled tool must not be advertised to a sub-agent")
+        XCTAssertTrue(names.contains(ChatSpawnAgentToolRegistry.toolName), "other, non-disabled tools must remain advertised")
+    }
+
+    func testAllowsSpawningFalseOmitsSpawnAgentFromAdvertisedTools() {
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: NativSettings(languageModelID: "org/model"),
+            advertisesTools: true,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: false
+        )
+        XCTAssertEqual(
+            request.tools?.map(\.function.name).contains(ChatSpawnAgentToolRegistry.toolName),
+            false,
+            "a sub-agent's own request must never advertise spawn_agent — this is the depth-1 cap's actual wire-level enforcement"
+        )
+    }
+
+    func testAdvertisesToolsFalseOmitsToolsEntirely() {
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: NativSettings(languageModelID: "org/model"),
+            advertisesTools: false,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        XCTAssertNil(request.tools)
+        XCTAssertNil(request.toolChoice)
+    }
+
+    func testSystemPromptIsPrependedWhenNonEmpty() {
+        var settings = NativSettings(languageModelID: "org/model")
+        settings.systemPrompt = "Be terse."
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: settings,
+            advertisesTools: false,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        XCTAssertEqual(request.messages.first?.role, "system")
+        XCTAssertEqual(request.messages.count, 2)
+    }
+
+    func testEmptySystemPromptIsNotPrepended() {
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: NativSettings(languageModelID: "org/model"),
+            advertisesTools: false,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        XCTAssertEqual(request.messages.count, 1)
+        XCTAssertEqual(request.messages.first?.role, "user")
+    }
+
+    func testSystemPromptIncludesBuiltInToolGuideWhenToolsAreAdvertised() {
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: NativSettings(languageModelID: "org/model"),
+            advertisesTools: true,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        let systemText = request.messages.first(where: { $0.role == "system" })?.content?.textValue ?? ""
+        XCTAssertTrue(systemText.contains(NativSkill.builtInToolGuide.instructions))
+    }
+
+    func testSystemPromptOmitsBuiltInToolGuideWhenToolsAreNotAdvertised() {
+        var settings = NativSettings(languageModelID: "org/model")
+        settings.systemPrompt = "Be terse."
+        let request = ChatCompletionRequestBuilder.make(
+            modelID: "org/model",
+            precedingMessages: [ChatTranscriptMessage(role: .user, content: "hi")],
+            settings: settings,
+            advertisesTools: false,
+            languageModelSupportsTools: true,
+            canEditImage: false,
+            allowsSpawning: true
+        )
+        let systemText = request.messages.first(where: { $0.role == "system" })?.content?.textValue ?? ""
+        XCTAssertEqual(systemText, "Be terse.")
+    }
+}
+
+final class ChatAgentStreamThrottleTests: XCTestCase {
+    func testAlwaysFlushesWhenThereIsNoPriorFlush() {
+        XCTAssertTrue(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: nil))
+    }
+
+    func testDoesNotFlushImmediatelyAfterFlushing() {
+        XCTAssertFalse(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: 0))
+    }
+
+    func testDoesNotFlushBeforeTheIntervalElapses() {
+        XCTAssertFalse(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: ChatAgentStreamThrottle.flushInterval * 0.5))
+    }
+
+    func testFlushesExactlyAtTheInterval() {
+        XCTAssertTrue(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: ChatAgentStreamThrottle.flushInterval))
+    }
+
+    func testFlushesWellAfterTheInterval() {
+        XCTAssertTrue(ChatAgentStreamThrottle.shouldFlush(elapsedSinceLastFlush: ChatAgentStreamThrottle.flushInterval * 10))
+    }
+}
+
+final class ChatToolCallNormalizerTests: XCTestCase {
+    func testAssignsSequentialIndexes() {
+        let calls = [
+            MLXChatToolCall(id: "a", function: MLXChatFunctionCall(name: "f1", arguments: "{}")),
+            MLXChatToolCall(id: "b", function: MLXChatFunctionCall(name: "f2", arguments: "{}")),
+        ]
+        let normalized = ChatToolCallNormalizer.normalize(calls)
+        XCTAssertEqual(normalized.map(\.index), [0, 1])
+    }
+
+    func testFillsInMissingIDAndType() {
+        let calls = [MLXChatToolCall(id: "", type: "", function: MLXChatFunctionCall(name: "f1", arguments: "{}"))]
+        let normalized = ChatToolCallNormalizer.normalize(calls)
+        XCTAssertEqual(normalized.first?.type, "function")
+        XCTAssertTrue(normalized.first?.id?.hasPrefix("call_") == true)
+    }
+
+    func testPreservesExistingIDAndType() {
+        let calls = [MLXChatToolCall(id: "call_existing", type: "function", function: MLXChatFunctionCall(name: "f1", arguments: "{}"))]
+        let normalized = ChatToolCallNormalizer.normalize(calls)
+        XCTAssertEqual(normalized.first?.id, "call_existing")
+        XCTAssertEqual(normalized.first?.type, "function")
+    }
+
+    func testTrimsWhitespaceFromToolCallName() {
+        let calls = [MLXChatToolCall(id: "a", function: MLXChatFunctionCall(name: "  spawn_agent  ", arguments: "{}"))]
+        let normalized = ChatToolCallNormalizer.normalize(calls)
+        XCTAssertEqual(normalized.first?.function?.name, "spawn_agent")
+    }
+
+    func testWhitespaceCorruptedNameFailsDispatchBeforeNormalizingSucceedsAfter() {
+        let corrupted = MLXChatToolCall(id: "a", function: MLXChatFunctionCall(name: " spawn_agent", arguments: "{}"))
+        XCTAssertNotEqual(corrupted.function?.name, ChatSpawnAgentToolRegistry.toolName)
+
+        let normalized = ChatToolCallNormalizer.normalize([corrupted]).first
+        XCTAssertEqual(normalized?.function?.name, ChatSpawnAgentToolRegistry.toolName)
+    }
+
+    func testDoesNotAlterAlreadyCleanNames() {
+        let calls = [MLXChatToolCall(id: "a", function: MLXChatFunctionCall(name: "spawn_agent", arguments: "{}"))]
+        let normalized = ChatToolCallNormalizer.normalize(calls)
+        XCTAssertEqual(normalized.first?.function?.name, "spawn_agent")
+    }
+
+    func testInternalWhitespaceIsNotCollapsed() {
+        let calls = [MLXChatToolCall(id: "a", function: MLXChatFunctionCall(name: "spawn agent", arguments: "{}"))]
+        let normalized = ChatToolCallNormalizer.normalize(calls)
+        XCTAssertEqual(normalized.first?.function?.name, "spawn agent")
+    }
+}
+
+final class ChatConcurrentSpawnGateTests: XCTestCase {
+    func testAllowsUpToTheCapThenStops() {
+        XCTAssertEqual(ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound, 5)
+        for count in 0..<ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound {
+            XCTAssertTrue(ChatConcurrentSpawnGate.allowsAnotherSpawn(alreadyStarted: count), "count \(count) should still allow another spawn")
+        }
+        XCTAssertFalse(ChatConcurrentSpawnGate.allowsAnotherSpawn(alreadyStarted: ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound))
+        XCTAssertFalse(ChatConcurrentSpawnGate.allowsAnotherSpawn(alreadyStarted: ChatConcurrentSpawnGate.maximumConcurrentSpawnsPerRound + 10))
+    }
+}
+
+final class ChatConcurrentSpawnRunnerTests: XCTestCase {
+    private func makePending(count: Int) -> [ChatConcurrentSpawnRunner.PendingSpawn] {
+        (0..<count).map { i in
+            ChatConcurrentSpawnRunner.PendingSpawn(
+                toolMessageID: UUID(),
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"t\#(i)"}"#)
+            )
+        }
+    }
+
+    func testThreeSpawnsRunConcurrentlyNotSequentially() async {
+        let pending = makePending(count: 3)
+        let clock = ContinuousClock()
+        let start = clock.now
+
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
+            try await Task.sleep(for: .milliseconds(500))
+            return "result-for-\(spawn.toolMessageID)"
+        }
+
+        let elapsed = clock.now - start
+        XCTAssertEqual(outcomes.count, 3)
+        XCTAssertLessThan(
+            elapsed,
+            .milliseconds(1200),
+            "3 concurrent ~500ms spawns took \(elapsed) — this is consistent with them running sequentially (~1500ms), not concurrently (~500ms). If this fails, something is serializing the TaskGroup's children."
+        )
+    }
+
+    func testEachSpawnsOwnFailureBecomesAFailureOutcomeNotAThrow() async {
+        let pending = makePending(count: 2)
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { _ in
+            throw FakeToolError()
+        }
+        XCTAssertEqual(outcomes.count, 2, "one spawn's own failure must not prevent its sibling's outcome from being reported")
+        for outcome in outcomes {
+            guard case .failure = outcome.result else {
+                return XCTFail("expected a .failure outcome, got \(outcome.result)")
+            }
+        }
+    }
+
+    func testMixedSuccessAndFailureOutcomesAreReportedIndependently() async {
+        let pending = makePending(count: 2)
+        let succeedingID = pending[0].toolMessageID
+
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
+            if spawn.toolMessageID == succeedingID {
+                return "ok"
+            }
+            throw FakeToolError()
+        }
+
+        let succeeded = outcomes.first { $0.toolMessageID == succeedingID }
+        guard case .success(let value) = succeeded?.result else {
+            return XCTFail("expected the first spawn to succeed")
+        }
+        XCTAssertEqual(value, "ok")
+
+        let failed = outcomes.first { $0.toolMessageID != succeedingID }
+        guard case .failure = failed?.result else {
+            return XCTFail("expected the second spawn to fail")
+        }
+    }
+
+    func testOneSpawnsCancellationDoesNotDiscardItsSiblingsSuccessfulOutcome() async {
+        let pending = makePending(count: 2)
+        let succeedingID = pending[0].toolMessageID
+        let cancelledID = pending[1].toolMessageID
+
+        let outcomes = await ChatConcurrentSpawnRunner.runAll(pending) { spawn in
+            if spawn.toolMessageID == succeedingID {
+                return "the real result"
+            }
+            throw CancellationError()
+        }
+
+        XCTAssertEqual(outcomes.count, 2, "the cancelled sibling must not cause the successful one's outcome to be lost")
+
+        let succeeded = outcomes.first { $0.toolMessageID == succeedingID }
+        guard case .success(let value) = succeeded?.result else {
+            return XCTFail("expected the first spawn's real result to survive its sibling's cancellation, got \(String(describing: succeeded?.result))")
+        }
+        XCTAssertEqual(value, "the real result")
+
+        let cancelled = outcomes.first { $0.toolMessageID == cancelledID }
+        guard case .failure(let error) = cancelled?.result, error is CancellationError else {
+            return XCTFail("expected the second spawn's own cancellation to surface as its own outcome, got \(String(describing: cancelled?.result))")
+        }
+    }
+
+    func testEmptyPendingListReturnsEmptyOutcomesWithoutCallingExecute() async {
+        var callCount = 0
+        let outcomes = await ChatConcurrentSpawnRunner.runAll([]) { _ in
+            callCount += 1
+            return "unreachable"
+        }
+        XCTAssertTrue(outcomes.isEmpty)
+        XCTAssertEqual(callCount, 0)
+    }
+}
+
+final class ChatMCPHostBridgeTests: XCTestCase {
+    func testDeclinedPayloadShape() throws {
+        let payload = ChatMCPHostBridge.declinedPayload()
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["declined"] as? Bool, true)
+        XCTAssertEqual(object["error"] as? String, "The user declined this action.")
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = ChatMCPHostBridge.failurePayload(error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["declined"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "fake failure")
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
