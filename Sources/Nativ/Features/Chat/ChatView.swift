@@ -14,7 +14,6 @@ struct ChatQueuedPrompt: Identifiable, Equatable {
 
 struct ChatPromptEditContext: Equatable {
     let messageID: UUID
-    let discardedMessageCount: Int
 }
 
 private struct ChatSessionBootstrap {
@@ -131,16 +130,22 @@ private struct ChatTranscriptView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
-                        let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
+                        let showsEditUserMessage = chat.isLatestUserMessage(message.id)
+                        let editUnavailableReason = showsEditUserMessage
+                            ? userPromptEditingUnavailableReason(for: message)
+                            : nil
                         ChatMessageRow(
                             message: message,
                             imageModelSelectionRequest: chat.imageModelSelectionRequest(
                                 for: message.id
                             ),
+                            showsEditUserMessage: showsEditUserMessage,
                             canEditUserMessage: editUnavailableReason == nil,
                             editUserMessageUnavailableReason: editUnavailableReason,
                             isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
+                            canForkAssistantResponse: chat.canForkAssistantResponse(message.id),
                             onEditUserMessage: chat.beginEditingUserMessage,
+                            onForkAssistantResponse: chat.forkAssistantResponse,
                             onConfirmToolConsent: chat.confirmToolConsent,
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
@@ -445,20 +450,20 @@ final class ChatViewModel: ObservableObject {
     func canEditUserMessage(_ messageID: UUID) -> Bool {
         guard let currentSessionID,
               !isSessionBusy(currentSessionID),
-              let message = messages.first(where: { $0.id == messageID })
+              isLatestUserMessage(messageID)
         else {
             return false
         }
-        return message.role == .user
+        return true
+    }
+
+    func isLatestUserMessage(_ messageID: UUID) -> Bool {
+        ChatConversationBranch.latestUserMessageID(in: messages) == messageID
     }
 
     func beginEditingUserMessage(_ messageID: UUID) {
         guard canEditUserMessage(messageID),
-              let message = messages.first(where: { $0.id == messageID }),
-              let discardedMessageCount = ChatPromptRevision.discardedMessageCount(
-                after: messageID,
-                in: messages
-              )
+              let message = messages.first(where: { $0.id == messageID })
         else {
             return
         }
@@ -473,10 +478,7 @@ final class ChatViewModel: ObservableObject {
             draft: draft,
             attachments: pendingImageAttachments
         )
-        promptEditContext = ChatPromptEditContext(
-            messageID: messageID,
-            discardedMessageCount: discardedMessageCount
-        )
+        promptEditContext = ChatPromptEditContext(messageID: messageID)
         draft = message.content
         pendingImageAttachments = message.imageAttachments
         composerFocusToken += 1
@@ -492,6 +494,25 @@ final class ChatViewModel: ObservableObject {
         }
         promptEditContext = nil
         composerSnapshot = nil
+    }
+
+    func canForkAssistantResponse(_ messageID: UUID) -> Bool {
+        ChatConversationBranch.throughAssistantResponse(messageID, in: messages) != nil
+    }
+
+    func forkAssistantResponse(_ messageID: UUID) {
+        guard let sourceSession = currentSession,
+              let branchMessages = ChatConversationBranch.throughAssistantResponse(
+                messageID,
+                in: messages
+              )
+        else {
+            return
+        }
+
+        persistCurrentSession(updateTimestamp: false)
+        let branch = makeBranchSession(from: sourceSession, messages: branchMessages)
+        switchToBranch(branch)
     }
 
     func unavailableReason(isRunning: Bool, selectedModelID: String?) -> String? {
@@ -824,24 +845,26 @@ final class ChatViewModel: ObservableObject {
         let imageAttachments = pendingImageAttachments
 
         if let promptEditContext {
+            let revisedMessageID = UUID()
             guard canEditUserMessage(promptEditContext.messageID),
-                  let revision = ChatPromptRevision.make(
-                    messageID: promptEditContext.messageID,
-                    content: prompt,
+                  let branchMessages = ChatConversationBranch.replacingLatestUserMessage(
+                    promptEditContext.messageID,
+                    with: prompt,
                     attachments: imageAttachments,
                     modelID: modelID,
+                    newMessageID: revisedMessageID,
                     in: messages
                   )
             else {
                 return
             }
 
-            messages = revision.messages
-            restoreComposerAfterPromptEditing()
-            persistCurrentSession(updateTimestamp: true)
+            persistCurrentSession(updateTimestamp: false)
+            let branch = makeBranchSession(from: currentSession, messages: branchMessages)
+            switchToBranch(branch)
             enqueueGeneration(
-                for: promptEditContext.messageID,
-                in: currentSession.id,
+                for: revisedMessageID,
+                in: branch.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
                 appModel: appModel
@@ -1136,18 +1159,6 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
-    }
-
-    private func restoreComposerAfterPromptEditing() {
-        if let composerSnapshot {
-            draft = composerSnapshot.draft
-            pendingImageAttachments = composerSnapshot.attachments
-        } else {
-            draft = ""
-            pendingImageAttachments.removeAll()
-        }
-        promptEditContext = nil
-        composerSnapshot = nil
     }
 
     private func discardPromptEditing() {
@@ -2144,6 +2155,33 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
+    private func makeBranchSession(
+        from sourceSession: ChatSession,
+        messages: [ChatTranscriptMessage],
+        createdAt: Date = Date()
+    ) -> ChatSession {
+        var branch = sourceSession
+        branch.id = UUID()
+        branch.title = ChatSession.defaultTitle(for: messages, createdAt: createdAt)
+        branch.customTitle = nil
+        branch.createdAt = createdAt
+        branch.updatedAt = createdAt
+        branch.messages = messages
+        branch.pinned = false
+        branch.pinnedOrder = nil
+        branch.sessionOrder = nil
+        return branch
+    }
+
+    private func switchToBranch(_ branch: ChatSession) {
+        discardPromptEditing()
+        draft = ""
+        pendingImageAttachments.removeAll()
+        upsertStoredSession(branch)
+        sessionStore.saveSession(branch)
+        applyCurrentSession(branch)
+    }
+
     private func persistSession(_ sessionID: UUID, updateTimestamp: Bool) {
         if sessionID == currentSessionID {
             persistCurrentSession(updateTimestamp: updateTimestamp)
@@ -2247,10 +2285,13 @@ private struct ChatMessageRow: View, Equatable {
 
     let message: ChatTranscriptMessage
     let imageModelSelectionRequest: ChatImageModelSelectionRequest?
+    let showsEditUserMessage: Bool
     let canEditUserMessage: Bool
     let editUserMessageUnavailableReason: String?
     let isEditingUserMessage: Bool
+    let canForkAssistantResponse: Bool
     let onEditUserMessage: (UUID) -> Void
+    let onForkAssistantResponse: (UUID) -> Void
     let onConfirmToolConsent: (UUID) -> Void
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
@@ -2262,9 +2303,11 @@ private struct ChatMessageRow: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
             && lhs.imageModelSelectionRequest == rhs.imageModelSelectionRequest
+            && lhs.showsEditUserMessage == rhs.showsEditUserMessage
             && lhs.canEditUserMessage == rhs.canEditUserMessage
             && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
             && lhs.isEditingUserMessage == rhs.isEditingUserMessage
+            && lhs.canForkAssistantResponse == rhs.canForkAssistantResponse
     }
 
     var body: some View {
@@ -2327,7 +2370,7 @@ private struct ChatMessageRow: View, Equatable {
                             )
                         }
 
-                        if message.role == .user {
+                        if showsEditUserMessage {
                             ChatMessageActionButton(
                                 systemImage: "square.and.pencil",
                                 title: editActionTitle,
@@ -2335,6 +2378,17 @@ private struct ChatMessageRow: View, Equatable {
                                 isEnabled: canEditUserMessage
                             ) {
                                 onEditUserMessage(message.id)
+                            }
+                        }
+
+                        if canForkAssistantResponse {
+                            ChatMessageActionButton(
+                                systemImage: "arrow.triangle.branch",
+                                title: "Fork conversation from this response",
+                                isActive: false,
+                                isEnabled: true
+                            ) {
+                                onForkAssistantResponse(message.id)
                             }
                         }
                     }
@@ -2520,7 +2574,7 @@ private struct ChatMessageRow: View, Equatable {
     }
 
     private var showsMessageActions: Bool {
-        message.role == .user || canCopyMessage
+        message.role == .user || canCopyMessage || canForkAssistantResponse
     }
 
     private var editActionTitle: String {

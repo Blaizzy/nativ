@@ -118,7 +118,10 @@
 		8B86659B490F58DEC1363135 /* NativServerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; };
 		8E16504AFD5457AC965426F2 /* FnControlShortcutMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27D63523BA62CC95FDD8D51E /* FnControlShortcutMonitor.swift */; };
 		8E717C7364F8B9DA2BDF0E20 /* TextShimmerWave.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFA5C785716081D2811DFD2D /* TextShimmerWave.swift */; };
-		902CD676AA3002459DF7ACAE /* ChatPromptRevision.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3B8F25491BDEED4717A5D23 /* ChatPromptRevision.swift */; };
+		09E3EEAB2E8210716842A6F7 /* ChatConversationBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE637BF425B960F5201334F3 /* ChatConversationBranchTests.swift */; };
+		A31F078D971F9578B76DFC20 /* ChatConversationBranch.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3B8F25491BDEED4717A5D23 /* ChatConversationBranch.swift */; };
+		902CD676AA3002459DF7ACAE /* ChatConversationBranch.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3B8F25491BDEED4717A5D23 /* ChatConversationBranch.swift */; };
+		ECCFF918691DBD99323D54B4 /* ChatWorkspacePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 423FFA0A94C12C34F0701A5E /* ChatWorkspacePicker.swift */; };
 		90A91F19C53567C017E37E28 /* RoutineRunCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50843C4D4ABCEC290EE626AF /* RoutineRunCoordinator.swift */; };
 		90EE7AA87400E84D947CBBF3 /* NativSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594711E024396C78703CE05A /* NativSettings.swift */; };
 		96AE764D2F938395E9B76C9E /* ChatServerStatsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068ED8143814678E688A3A62 /* ChatServerStatsTool.swift */; };
@@ -426,7 +429,9 @@
 		EEF71E7A328DFB6E2E741999 /* Firecrawl.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Firecrawl.png; sourceTree = "<group>"; };
 		EF7AE3F3DB48E640950CCDB4 /* SystemAudioMeetingRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioMeetingRecorder.swift; sourceTree = "<group>"; };
 		F0CD53CDD71732DE956F55DC /* LocalModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelProvider.swift; sourceTree = "<group>"; };
-		F3B8F25491BDEED4717A5D23 /* ChatPromptRevision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPromptRevision.swift; sourceTree = "<group>"; };
+		423FFA0A94C12C34F0701A5E /* ChatWorkspacePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWorkspacePicker.swift; sourceTree = "<group>"; };
+		AE637BF425B960F5201334F3 /* ChatConversationBranchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatConversationBranchTests.swift; sourceTree = "<group>"; };
+		F3B8F25491BDEED4717A5D23 /* ChatConversationBranch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatConversationBranch.swift; sourceTree = "<group>"; };
 		F553434CA19B929108FF740F /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F84C7B764CE1B6F63746E3BB /* Perplexity.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Perplexity.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -863,11 +868,12 @@
 				D97F637262DB138A253DEA6F /* ChatComposer.swift */,
 				2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */,
 				7A9C24932DBACE75BA4E0CCB /* ChatFontScale.swift */,
-				F3B8F25491BDEED4717A5D23 /* ChatPromptRevision.swift */,
+				F3B8F25491BDEED4717A5D23 /* ChatConversationBranch.swift */,
 				8A11D3AF5467488478CAC264 /* ChatScreenCapture.swift */,
 				530D284E65297E3CA8050AE1 /* ChatSessionStore.swift */,
 				31D10F9AFCCD57FA0625CA24 /* ChatToolRegistry.swift */,
 				F553434CA19B929108FF740F /* ChatView.swift */,
+				423FFA0A94C12C34F0701A5E /* ChatWorkspacePicker.swift */,
 				967B3678137E2B152FAC9838 /* Tools */,
 			);
 			path = Chat;
@@ -885,6 +891,7 @@
 			isa = PBXGroup;
 			children = (
 				3B965B701714787B0A85AE6B /* AudioTests.swift */,
+				AE637BF425B960F5201334F3 /* ChatConversationBranchTests.swift */,
 				C9A57792805B0438492CB6AB /* ChatToolRegistryTests.swift */,
 				AFA5142DB692E378ADE8DFA0 /* ChatWebSearchToolTests.swift */,
 				DAB72E13D688936495CBA7C8 /* CustomToolTests.swift */,
@@ -1155,7 +1162,7 @@
 				2BF78B0A20ED752102326A38 /* ChatImageModelSelection.swift in Sources */,
 				B426C6D2B2C1B7C7D2F831E2 /* ChatImageTool.swift in Sources */,
 				04E587A0A3714FD30ECFDE91 /* ChatListModelsTool.swift in Sources */,
-				902CD676AA3002459DF7ACAE /* ChatPromptRevision.swift in Sources */,
+				902CD676AA3002459DF7ACAE /* ChatConversationBranch.swift in Sources */,
 				C904E51D66BFED1808E18FE5 /* ChatScreenCapture.swift in Sources */,
 				96AE764D2F938395E9B76C9E /* ChatServerStatsTool.swift in Sources */,
 				D63A4CDF0E69DFAF43C5B12F /* ChatSessionStore.swift in Sources */,
@@ -1164,6 +1171,7 @@
 				444833C6AEF5C794590B8A45 /* ChatToolRegistry.swift in Sources */,
 				B47F34B1273BEEAA4D5DD314 /* ChatView.swift in Sources */,
 				8AD4D0675D4C4F456ACEA352 /* ChatWebSearchTool.swift in Sources */,
+				ECCFF918691DBD99323D54B4 /* ChatWorkspacePicker.swift in Sources */,
 				FD18166B4B3FAEB77E0D8C69 /* CodexCLIProfile.swift in Sources */,
 				45BD4C408B9739ABC051A9E7 /* ControlPanelView.swift in Sources */,
 				086BC5B6FF02F0305536333B /* CustomTool.swift in Sources */,
@@ -1248,6 +1256,8 @@
 				AB1C4B8494B46754E6E8BE24 /* AudioAnalyticsStore.swift in Sources */,
 				01A65582AEB5E196FDEFDBE8 /* AudioInputDevicePreferences.swift in Sources */,
 				4B66E72A9DCB833D700F7612 /* AudioTests.swift in Sources */,
+				A31F078D971F9578B76DFC20 /* ChatConversationBranch.swift in Sources */,
+				09E3EEAB2E8210716842A6F7 /* ChatConversationBranchTests.swift in Sources */,
 				76EF60E40F6CC404F4CF8F91 /* ChatImageModelSelection.swift in Sources */,
 				D51D08482F5C0E76ACFEFDB1 /* ChatImageTool.swift in Sources */,
 				39F8BACAF5377A5DA14581BA /* ChatListModelsTool.swift in Sources */,
