@@ -2922,6 +2922,7 @@ private struct ChatImageModelOptionRow: View {
         } else if downloadManager.isDownloading(model.modelID) {
             ModelDownloadProgressControl(
                 progress: downloadManager.progress(for: model.modelID),
+                bytesPerSecond: downloadManager.bytesPerSecond(for: model.modelID),
                 isPaused: downloadManager.isPaused(for: model.modelID),
                 onPauseResume: {
                     if downloadManager.isPaused(for: model.modelID) {

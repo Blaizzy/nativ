@@ -271,3 +271,112 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
     }
 }
+
+final class HuggingFaceDownloadProgressStateTests: XCTestCase {
+    func testAllocatedBytesProvideMonotonicAggregateProgress() {
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+
+        XCTAssertEqual(
+            state.recordAllocatedBytes(25, expectedBytes: 100, at: start),
+            0.25
+        )
+        XCTAssertNil(
+            state.recordReportedProgress(0.10, at: start.addingTimeInterval(1))
+        )
+        XCTAssertEqual(state.progress, 0.25)
+        XCTAssertEqual(
+            state.recordAllocatedBytes(75, expectedBytes: 100, at: start.addingTimeInterval(2)),
+            0.75
+        )
+    }
+
+    func testNewCacheBytesResetTheStallDeadline() {
+        let start = Date(timeIntervalSinceReferenceDate: 2_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+
+        XCTAssertFalse(
+            state.isStalled(at: start.addingTimeInterval(59), timeout: 60, isPaused: false)
+        )
+        XCTAssertEqual(
+            state.recordAllocatedBytes(1, expectedBytes: 10, at: start.addingTimeInterval(59)),
+            0.1
+        )
+        XCTAssertFalse(
+            state.isStalled(at: start.addingTimeInterval(100), timeout: 60, isPaused: false)
+        )
+        XCTAssertTrue(
+            state.isStalled(at: start.addingTimeInterval(119), timeout: 60, isPaused: false)
+        )
+    }
+
+    func testPausedDownloadNeverTriggersRecovery() {
+        let start = Date(timeIntervalSinceReferenceDate: 3_000)
+        let state = HuggingFaceDownloadProgressState(now: start)
+
+        XCTAssertFalse(
+            state.isStalled(at: start.addingTimeInterval(600), timeout: 60, isPaused: true)
+        )
+    }
+
+    func testNearCompleteProgressUsesFinalizingState() {
+        let start = Date(timeIntervalSinceReferenceDate: 4_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+
+        _ = state.recordReportedProgress(0.995, at: start)
+
+        XCTAssertTrue(state.isFinalizing)
+    }
+
+    func testAllocatedBytesProduceSmoothedTransferSpeed() {
+        let start = Date(timeIntervalSinceReferenceDate: 5_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+
+        _ = state.recordAllocatedBytes(100, expectedBytes: nil, at: start)
+        XCTAssertNil(state.bytesPerSecond)
+
+        _ = state.recordAllocatedBytes(1_100, expectedBytes: nil, at: start.addingTimeInterval(1))
+        XCTAssertEqual(state.bytesPerSecond, 1_000)
+
+        _ = state.recordAllocatedBytes(3_100, expectedBytes: nil, at: start.addingTimeInterval(2))
+        XCTAssertEqual(state.bytesPerSecond, 1_350)
+    }
+
+    func testTransferSpeedFallsToZeroAfterNoNewBytes() {
+        let start = Date(timeIntervalSinceReferenceDate: 6_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+
+        _ = state.recordAllocatedBytes(0, expectedBytes: nil, at: start)
+        _ = state.recordAllocatedBytes(1_000, expectedBytes: nil, at: start.addingTimeInterval(1))
+        XCTAssertNotNil(state.bytesPerSecond)
+
+        _ = state.recordAllocatedBytes(1_000, expectedBytes: nil, at: start.addingTimeInterval(3))
+        XCTAssertEqual(state.bytesPerSecond, 0)
+    }
+}
+
+final class ModelDownloadProgressPresentationTests: XCTestCase {
+    func testActiveDownloadNeverDisplaysOneHundredPercent() {
+        XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0), 0)
+        XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0.994), 99)
+        XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(1), 99)
+    }
+
+    func testNearCompleteDownloadUsesFinalizingState() {
+        XCTAssertFalse(ModelDownloadProgressPresentation.isFinalizing(0.994))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(0.995))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(1))
+    }
+
+    func testActiveProgressRingDoesNotBecomeComplete() {
+        XCTAssertEqual(ModelDownloadProgressPresentation.ringProgress(1), 0.99)
+    }
+
+    func testTransferSpeedFormatting() {
+        XCTAssertNil(ModelDownloadProgressPresentation.formattedSpeed(nil))
+        XCTAssertEqual(ModelDownloadProgressPresentation.formattedSpeed(0), "0 B/s")
+        XCTAssertTrue(
+            ModelDownloadProgressPresentation.formattedSpeed(1_000_000)?.hasSuffix("/s") == true
+        )
+    }
+}

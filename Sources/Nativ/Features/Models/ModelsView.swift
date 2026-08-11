@@ -1440,12 +1440,33 @@ private struct ActiveDownloadBannerRow: View {
     }
 
     private var statusText: String {
-        switch download.state {
-        case .downloading:
-            "Downloading… \(Int((download.progress * 100).rounded()))%"
-        case .paused:
+        if download.state == .paused {
             "Download paused"
+        } else if ModelDownloadProgressPresentation.isFinalizing(download.progress) {
+            "Finalizing download…"
+        } else {
+            switch download.phase {
+            case .preparing:
+                "Preparing download…"
+            case .downloading:
+                downloadingStatusText
+            case .finalizing:
+                "Finalizing download…"
+            case .retrying:
+                "Connection stalled. Retrying…"
+            }
         }
+    }
+
+    private var downloadingStatusText: String {
+        var details: [String] = []
+        if download.progress > 0 {
+            details.append("\(ModelDownloadProgressPresentation.activePercentage(download.progress))%")
+        }
+        if let speed = ModelDownloadProgressPresentation.formattedSpeed(download.bytesPerSecond) {
+            details.append(speed)
+        }
+        return details.isEmpty ? "Starting download…" : "Downloading… \(details.joined(separator: " · "))"
     }
 }
 
@@ -1490,6 +1511,7 @@ private struct HubModelRow: View, Equatable {
     let isInstalled: Bool
     let isDownloading: Bool
     let downloadProgress: Double
+    let downloadBytesPerSecond: Double?
     let isDownloadPaused: Bool
     let downloadError: String?
     let onDownload: () -> Void
@@ -1504,6 +1526,7 @@ private struct HubModelRow: View, Equatable {
             && lhs.isInstalled == rhs.isInstalled
             && lhs.isDownloading == rhs.isDownloading
             && lhs.downloadProgress == rhs.downloadProgress
+            && lhs.downloadBytesPerSecond == rhs.downloadBytesPerSecond
             && lhs.isDownloadPaused == rhs.isDownloadPaused
             && lhs.downloadError == rhs.downloadError
     }
@@ -1605,6 +1628,7 @@ private struct HubModelRow: View, Equatable {
                 } else if isDownloading {
                     ModelDownloadProgressControl(
                         progress: downloadProgress,
+                        bytesPerSecond: downloadBytesPerSecond,
                         isPaused: isDownloadPaused,
                         onPauseResume: onPauseResume,
                         onRemove: onRemoveDownload
@@ -1798,6 +1822,7 @@ private struct HubModelRowContainer: View, Equatable {
             isInstalled: isInstalled,
             isDownloading: downloadSnapshot.isDownloading,
             downloadProgress: downloadSnapshot.progress,
+            downloadBytesPerSecond: downloadSnapshot.bytesPerSecond,
             isDownloadPaused: downloadSnapshot.isPaused,
             downloadError: downloadSnapshot.error,
             onDownload: {
@@ -1818,6 +1843,7 @@ private struct HubModelRowContainer: View, Equatable {
 
 struct ModelDownloadProgressControl: View {
     let progress: Double
+    let bytesPerSecond: Double?
     let isPaused: Bool
     let onPauseResume: () -> Void
     let onRemove: () -> Void
@@ -1845,42 +1871,34 @@ struct ModelDownloadProgressControl: View {
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
-                ZStack {
-                    Circle()
-                        .stroke(Color.secondary.opacity(0.16), lineWidth: 3)
-
-                    Circle()
-                        .trim(from: 0, to: displayedProgress)
-                        .stroke(
-                            isPaused ? Color.orange : Color.accentColor,
-                            style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-
-                    if progress > 0 {
-                        Text("\(Int((progress * 100).rounded()))%")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                HStack(spacing: 8) {
+                    if let speedText {
+                        Text(speedText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                             .monospacedDigit()
-                    } else {
-                        Image(systemName: isPaused ? "pause.fill" : "arrow.down")
-                            .font(.system(size: 9, weight: .bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
+                    Spacer(minLength: 0)
+                    progressRing
                 }
-                .frame(width: 34, height: 34)
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
-        .frame(width: 74, height: 36)
+        .frame(width: 116, height: 36)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .animation(.snappy(duration: 0.16), value: isHovering)
         .animation(.easeOut(duration: 0.18), value: displayedProgress)
         .help(
-            isPaused ? "Download paused" : "Downloading \(Int((progress * 100).rounded())) percent"
+            progressDescription
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(isPaused ? "Download paused" : "Download progress")
-        .accessibilityValue("\(Int((progress * 100).rounded())) percent")
+        .accessibilityLabel(progressDescription)
+        .accessibilityValue(
+            "\(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
+        )
         .alert("Remove download?", isPresented: $isConfirmingRemoval) {
             Button("Remove Download", role: .destructive, action: onRemove)
                 .keyboardShortcut(.defaultAction)
@@ -1891,7 +1909,51 @@ struct ModelDownloadProgressControl: View {
     }
 
     private var displayedProgress: Double {
-        min(max(progress, 0.025), 1)
+        ModelDownloadProgressPresentation.ringProgress(progress)
+    }
+
+    private var speedText: String? {
+        guard !isPaused else { return nil }
+        return ModelDownloadProgressPresentation.formattedSpeed(bytesPerSecond)
+    }
+
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.16), lineWidth: 3)
+
+            Circle()
+                .trim(from: 0, to: displayedProgress)
+                .stroke(
+                    isPaused ? Color.orange : Color.accentColor,
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+
+            if progress > 0 {
+                Text("\(ModelDownloadProgressPresentation.activePercentage(progress))%")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            } else {
+                Image(systemName: isPaused ? "pause.fill" : "arrow.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+        }
+        .frame(width: 34, height: 34)
+    }
+
+    private var progressDescription: String {
+        if isPaused {
+            return "Download paused"
+        }
+        if ModelDownloadProgressPresentation.isFinalizing(progress) {
+            return "Finalizing download"
+        }
+        let percentage = "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
+        if let speedText {
+            return "\(percentage) at \(speedText)"
+        }
+        return percentage
     }
 }
 
