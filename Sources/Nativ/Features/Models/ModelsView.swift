@@ -852,14 +852,22 @@ struct ModelsView: View {
 
                 Divider()
 
-                ForEach(
-                    LocalModelCapability.visibleModelTags.filter { $0 != .embeddings },
-                    id: \.self
-                ) { capability in
-                    Toggle(
-                        capability.displayName,
-                        isOn: capabilitySelectionBinding(for: capability)
-                    )
+                Section("Tasks") {
+                    ForEach(LocalModelCapability.discoverTaskFilters, id: \.self) { capability in
+                        Toggle(
+                            capability.displayName,
+                            isOn: capabilitySelectionBinding(for: capability)
+                        )
+                    }
+                }
+
+                Section("Features") {
+                    ForEach(LocalModelCapability.discoverFeatureFilters, id: \.self) { capability in
+                        Toggle(
+                            capability.displayName,
+                            isOn: capabilitySelectionBinding(for: capability)
+                        )
+                    }
                 }
             } label: {
                 Text(capabilityFilterTitle)
@@ -2123,6 +2131,24 @@ extension View {
 extension LocalModelCapability {
     fileprivate static let visibleModelTags = allCases.filter { $0 != .text }
 
+    fileprivate static let discoverTaskFilters: [Self] = [
+        .text,
+        .vision,
+        .audio,
+        .video,
+        .imageGeneration,
+        .imageEditing,
+        .speechToText,
+        .textToSpeech,
+        .embeddings,
+    ]
+
+    fileprivate static let discoverFeatureFilters: [Self] = [
+        .reasoning,
+        .tools,
+        .drafter,
+    ]
+
     fileprivate var hubQueryItem: URLQueryItem {
         switch self {
         case .text:
@@ -2148,7 +2174,7 @@ extension LocalModelCapability {
         case .tools:
             URLQueryItem(name: "other", value: "tool-calling")
         case .drafter:
-            URLQueryItem(name: "other", value: "speculative-decoding")
+            URLQueryItem(name: "other", value: "draft-model")
         }
     }
 

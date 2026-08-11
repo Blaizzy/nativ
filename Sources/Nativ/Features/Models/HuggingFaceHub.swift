@@ -73,7 +73,7 @@ enum HuggingFaceSortDirection: Int, CaseIterable, Hashable, Identifiable, Sendab
 }
 
 enum HuggingFaceCapabilityFilter {
-    /// Reasoning and tool calling are Hub model tags rather than pipeline tasks.
+    /// Reasoning, tool calling, and drafter are Hub model tags rather than pipeline tasks.
     /// Apply them to the API request so Discover searches the full matching
     /// catalog instead of filtering a small window of unrelated trending models.
     static func hubTags(for capabilities: Set<LocalModelCapability>) -> [String] {
@@ -84,7 +84,42 @@ enum HuggingFaceCapabilityFilter {
         if capabilities.contains(.tools) {
             tags.append("tool-calling")
         }
+        if capabilities.contains(.drafter) {
+            tags.append("draft-model")
+        }
         return tags
+    }
+
+    /// Select the canonical Hub task for a single Nativ model capability.
+    /// Feature-only filters remain Hub tags and do not prevent a task filter
+    /// from being sent alongside them.
+    static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
+        let taskCapabilities = capabilities.subtracting([.reasoning, .tools, .drafter])
+        guard taskCapabilities.count == 1, let capability = taskCapabilities.first else {
+            return nil
+        }
+        switch capability {
+        case .text:
+            return "text-generation"
+        case .vision:
+            return "image-text-to-text"
+        case .audio:
+            return "audio-text-to-text"
+        case .video:
+            return "video-text-to-text"
+        case .imageGeneration:
+            return "text-to-image"
+        case .imageEditing:
+            return "image-to-image"
+        case .speechToText:
+            return "automatic-speech-recognition"
+        case .textToSpeech:
+            return "text-to-speech"
+        case .embeddings:
+            return "feature-extraction"
+        case .reasoning, .tools, .drafter:
+            return nil
+        }
     }
 }
 
@@ -249,8 +284,12 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         var result = Set<LocalModelCapability>()
 
         let textPipelines: Set<String> = [
-            "text-generation", "image-text-to-text", "image-to-text",
-            "video-text-to-text", "any-to-any", "translation"
+            "text-generation",
+            "image-text-to-text",
+            "image-to-text",
+            "visual-question-answering",
+            "audio-text-to-text",
+            "video-text-to-text",
         ]
         if textPipelines.contains(pipeline)
             || descriptors.contains("conversational")
@@ -258,8 +297,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             result.insert(.text)
         }
 
-        if pipeline.contains("image-text")
-            || pipeline == "image-to-text"
+        let visionPipelines: Set<String> = [
+            "image-text-to-text", "image-to-text", "visual-question-answering",
+        ]
+        if visionPipelines.contains(pipeline)
             || descriptors.contains("vision")
             || descriptors.contains("vlm")
             || descriptors.contains("llava") {
@@ -274,7 +315,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         if pipeline == "text-to-image" {
             result.insert(.imageGeneration)
         }
-        if pipeline == "image-to-image" {
+        if pipeline == "image-to-image" || pipeline == "image-text-to-image" {
             result.insert(.imageEditing)
         }
 
@@ -290,7 +331,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         }
 
         let embeddingPipelines: Set<String> = [
-            "feature-extraction", "sentence-similarity", "text-ranking"
+            "feature-extraction", "image-feature-extraction", "sentence-similarity",
         ]
         if embeddingPipelines.contains(pipeline)
             || descriptors.contains("embedding")
@@ -311,6 +352,14 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
 
         if descriptors.contains("tool") || descriptors.contains("function-call") {
             result.insert(.tools)
+        }
+
+        let normalizedTags = Set(tags.map { $0.lowercased() })
+        let drafterTags: Set<String> = [
+            "draft-model", "drafter", "speculative-decoding-draft",
+        ]
+        if !normalizedTags.isDisjoint(with: drafterTags) {
+            result.insert(.drafter)
         }
         return result
     }
@@ -429,7 +478,7 @@ private struct HuggingFaceHubClient: Sendable {
             URLQueryItem(name: "direction", value: HuggingFaceSortDirection.descending.apiValue),
             URLQueryItem(name: "limit", value: "50")
         ]
-        if let pipelineTag = Self.pipelineTag(for: capabilities) {
+        if let pipelineTag = HuggingFaceCapabilityFilter.pipelineTag(for: capabilities) {
             queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
         }
         queryItems.append(contentsOf: [
@@ -447,26 +496,6 @@ private struct HuggingFaceHubClient: Sendable {
         }
 
         return try await page(at: url, token: token)
-    }
-
-    private static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
-        guard capabilities.count == 1, let capability = capabilities.first else {
-            return nil
-        }
-        switch capability {
-        case .imageGeneration:
-            return "text-to-image"
-        case .imageEditing:
-            return "image-to-image"
-        case .speechToText:
-            return "automatic-speech-recognition"
-        case .textToSpeech:
-            return "text-to-speech"
-        case .vision:
-            return "image-text-to-text"
-        case .text, .audio, .video, .embeddings, .reasoning, .tools, .drafter:
-            return nil
-        }
     }
 
     func model(id: String, token: String?) async throws -> HuggingFaceModel {
@@ -516,7 +545,6 @@ private struct HuggingFaceHubClient: Sendable {
             .decode([HuggingFaceModel].self, from: data)
             .filter {
                 !$0.id.lowercased().hasPrefix("lmstudio-community/")
-                    && !$0.capabilities.contains(.embeddings)
             }
         return HuggingFaceModelPage(
             models: models,

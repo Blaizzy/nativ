@@ -140,4 +140,98 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             ["reasoning", "tool-calling"]
         )
     }
+
+    func testDrafterUsesCanonicalHubFilter() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTags(for: [.drafter]),
+            ["draft-model"]
+        )
+    }
+
+    func testSupportedCapabilitiesUseCanonicalPipelineTasks() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.text]),
+            "text-generation"
+        )
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.audio]),
+            "audio-text-to-text"
+        )
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.video]),
+            "video-text-to-text"
+        )
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.embeddings]),
+            "feature-extraction"
+        )
+    }
+
+    func testFeatureTagCanBeCombinedWithPipelineTask() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.text, .reasoning]),
+            "text-generation"
+        )
+    }
+
+    func testSupportedHubTaskAliasesResolveToNativCapabilities() throws {
+        XCTAssertEqual(
+            try capabilities(for: "audio-text-to-text"),
+            [.audio, .text]
+        )
+        XCTAssertEqual(
+            try capabilities(for: "video-text-to-text"),
+            [.video, .vision, .text]
+        )
+        XCTAssertEqual(
+            try capabilities(for: "visual-question-answering"),
+            [.vision, .text]
+        )
+        XCTAssertEqual(
+            try capabilities(for: "image-text-to-image"),
+            [.imageEditing]
+        )
+        XCTAssertEqual(
+            try capabilities(for: "image-feature-extraction"),
+            [.embeddings]
+        )
+        XCTAssertEqual(
+            try capabilities(for: "sentence-similarity"),
+            [.embeddings]
+        )
+    }
+
+    func testUnsupportedWorkflowTagsAreNotTreatedAsRunnableModels() throws {
+        XCTAssertTrue(try capabilities(for: "any-to-any").isEmpty)
+        XCTAssertTrue(try capabilities(for: "translation").isEmpty)
+        XCTAssertTrue(try capabilities(for: "text-ranking").isEmpty)
+    }
+
+    func testDrafterAliasesResolveToDrafterCapability() throws {
+        for tag in ["draft-model", "drafter", "speculative-decoding-draft"] {
+            XCTAssertTrue(
+                try capabilities(for: "text-generation", tags: [tag]).contains(.drafter),
+                "Expected \(tag) to resolve as a drafter"
+            )
+        }
+    }
+
+    func testBroadSpeculativeDecodingTagIsNotTreatedAsDrafter() throws {
+        XCTAssertFalse(
+            try capabilities(for: "text-generation", tags: ["speculative-decoding"])
+                .contains(.drafter)
+        )
+    }
+
+    private func capabilities(
+        for pipelineTag: String,
+        tags: [String] = []
+    ) throws -> Set<LocalModelCapability> {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "test/model",
+            "pipeline_tag": pipelineTag,
+            "tags": tags,
+        ])
+        return try JSONDecoder().decode(HuggingFaceModel.self, from: data).capabilities
+    }
 }
