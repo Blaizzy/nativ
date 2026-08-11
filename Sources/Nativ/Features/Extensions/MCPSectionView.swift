@@ -93,8 +93,8 @@ struct MCPSectionView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
             content()
