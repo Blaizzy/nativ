@@ -301,7 +301,7 @@ private struct ImageGenerationComposer: View {
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelLabel,
-            shortcutLabel: nil,
+            shortcutLabel: "⌃⇧M",
             onSelectModel: selectImageModel,
             onSwitchModel: selectImageModel
         )

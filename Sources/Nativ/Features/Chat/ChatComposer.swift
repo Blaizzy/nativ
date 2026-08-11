@@ -659,6 +659,7 @@ struct ComposerModelPicker: View {
                 selectedModelProvider: selectedModelProvider,
                 secondarySection: secondarySection,
                 isEnabled: !isDisabled,
+                usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
                 onSelectModel: onSelectModel,
                 onSwitchModel: onSwitchModel,
@@ -743,6 +744,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let selectedModelProvider: LocalModelProvider?
     let secondarySection: ComposerModelPickerSecondarySection?
     let isEnabled: Bool
+    let usesSelectModelShortcut: Bool
     let statusLabel: String
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
@@ -760,6 +762,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         button.focusRingType = .none
         button.target = context.coordinator
         button.action = #selector(Coordinator.showMenu(_:))
+        configureShortcut(for: button)
         button.setAccessibilityLabel("Model")
         return button
     }
@@ -767,7 +770,15 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.parent = self
         button.isEnabled = isEnabled
+        configureShortcut(for: button)
         context.coordinator.updateActionAvailability(isEnabled)
+    }
+
+    private func configureShortcut(for button: NSButton) {
+        button.keyEquivalent = usesSelectModelShortcut ? "m" : ""
+        button.keyEquivalentModifierMask = usesSelectModelShortcut
+            ? [.control, .shift]
+            : []
     }
 
     @MainActor
