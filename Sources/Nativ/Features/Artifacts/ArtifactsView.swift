@@ -418,11 +418,12 @@ struct ArtifactsView: View {
         VStack(spacing: 0) {
             header
             semanticBanner
+            filterBar
+            Divider()
+            controlsBar
             if isSelecting {
                 selectionBar
             }
-            filterBar
-            Divider()
             contentView
         }
         .focusable()
@@ -666,43 +667,10 @@ struct ArtifactsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 24)
 
-            Button(isSelecting ? "Done" : "Select") {
-                isSelecting.toggle()
-                if !isSelecting {
-                    selection.removeAll()
-                }
-            }
-
-            Toggle(isOn: Binding(get: { showingByChat }, set: { groupByChat = $0 })) {
-                Label("By Chat", systemImage: "bubble.left.and.bubble.right")
-            }
-            .toggleStyle(.button)
-            .disabled(isSearching)
-            .help(isSearching ? "Grouping is off while searching" : "Group artifacts by chat")
-
-            if !showingByChat {
-                Menu {
-                    Picker("Sort", selection: $sort) {
-                        ForEach(ArtifactSort.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Text(sort.rawValue)
-                }
-                .fixedSize()
-
-                Picker("", selection: $layout) {
-                    Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
-                    Image(systemName: "list.bullet").tag(ArtifactLayout.list)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 84)
-            }
+            searchField
+                .frame(width: 280)
 
             Button(action: store.refresh) {
                 Image(systemName: "arrow.clockwise")
@@ -717,8 +685,8 @@ struct ArtifactsView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
     private var selectionBar: some View {
@@ -768,106 +736,142 @@ struct ArtifactsView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private var filterBar: some View {
+    private var controlsBar: some View {
         HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-            filterChip(title: "All", isOn: kindFilter == nil && sourceFilter == nil) {
-                kindFilter = nil
-                sourceFilter = nil
-            }
-
-            ForEach(ArtifactKind.allCases) { kind in
-                let count = store.artifacts.filter { $0.kind == kind }.count
-                filterChip(title: "\(kind.pluralLabel) \(count)", systemImage: kind.systemImage, isOn: kindFilter == kind) {
-                    kindFilter = kindFilter == kind ? nil : kind
+            Button(isSelecting ? "Done" : "Select") {
+                isSelecting.toggle()
+                if !isSelecting {
+                    selection.removeAll()
                 }
-            }
-
-            Divider().frame(height: 16)
-
-            ForEach(ArtifactSource.allCases) { source in
-                let count = store.artifacts.filter { $0.source == source }.count
-                filterChip(title: "\(source.label) \(count)", systemImage: source.systemImage, isOn: sourceFilter == source) {
-                    sourceFilter = sourceFilter == source ? nil : source
-                }
-            }
-
-            Divider().frame(height: 16)
-
-            filterChip(title: "Favorites", systemImage: favoritesOnly ? "star.fill" : "star", isOn: favoritesOnly) {
-                favoritesOnly.toggle()
             }
 
             Menu {
-                Picker("Date", selection: $dateFilter) {
-                    ForEach(ArtifactDateFilter.allCases) { option in
+                Toggle(isOn: $groupByChat) {
+                    Label("By Chat", systemImage: "bubble.left.and.bubble.right")
+                }
+                .disabled(isSearching)
+            } label: {
+                Label("Filter", systemImage: "line.3.horizontal.decrease")
+            }
+            .help(isSearching ? "Grouping is off while searching" : "Group artifacts by chat")
+            .fixedSize()
+
+            Menu {
+                Picker("Sort", selection: $sort) {
+                    ForEach(ArtifactSort.allCases) { option in
                         Text(option.rawValue).tag(option)
                     }
                 }
+                .pickerStyle(.inline)
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "calendar")
-                    Text(dateFilter == .all ? "Date" : dateFilter.rawValue)
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(dateFilter != .all ? Color.white : Color.primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(dateFilter != .all ? Color.accentColor : Color(nsColor: .controlBackgroundColor), in: Capsule())
+                Label("Sort: \(sort.rawValue)", systemImage: "arrow.up.arrow.down")
             }
-            .menuIndicator(.hidden)
+            .help("Sort artifacts")
             .fixedSize()
-                }
-                .padding(.vertical, 2)
-                .padding(.trailing, 24)
-            }
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.88),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                if smartSearchActive {
-                    Circle()
-                        .fill(Color.green.opacity(0.7))
-                        .frame(width: 7, height: 7)
-                        .help("Smart search is on")
+            if !showingByChat {
+                Picker("", selection: $layout) {
+                    Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
+                    Image(systemName: "list.bullet").tag(ArtifactLayout.list)
                 }
-                TextField("Search name or prompt", text: $search)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .frame(width: 200)
-                if !search.isEmpty {
-                    Button {
-                        search = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 84)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.12), radius: 6, x: -3, y: 0)
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)
+        .padding(.vertical, 10)
+    }
+
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                filterChip(title: "All", isOn: kindFilter == nil && sourceFilter == nil) {
+                    kindFilter = nil
+                    sourceFilter = nil
+                }
+
+                ForEach(ArtifactKind.allCases) { kind in
+                    let count = store.artifacts.filter { $0.kind == kind }.count
+                    filterChip(title: "\(kind.pluralLabel) \(count)", systemImage: kind.systemImage, isOn: kindFilter == kind) {
+                        kindFilter = kindFilter == kind ? nil : kind
+                    }
+                }
+
+                Divider().frame(height: 16)
+
+                ForEach(ArtifactSource.allCases) { source in
+                    let count = store.artifacts.filter { $0.source == source }.count
+                    filterChip(title: "\(source.label) \(count)", systemImage: source.systemImage, isOn: sourceFilter == source) {
+                        sourceFilter = sourceFilter == source ? nil : source
+                    }
+                }
+
+                Divider().frame(height: 16)
+
+                filterChip(title: "Favorites", systemImage: favoritesOnly ? "star.fill" : "star", isOn: favoritesOnly) {
+                    favoritesOnly.toggle()
+                }
+
+                Menu {
+                    Picker("Date", selection: $dateFilter) {
+                        ForEach(ArtifactDateFilter.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "calendar")
+                        Text(dateFilter == .all ? "Date" : dateFilter.rawValue)
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(dateFilter != .all ? Color.white : Color.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(dateFilter != .all ? Color.accentColor : Color(nsColor: .controlBackgroundColor), in: Capsule())
+                }
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+            .padding(.vertical, 2)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
         .padding(.bottom, 12)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            if smartSearchActive {
+                Circle()
+                    .fill(Color.green.opacity(0.7))
+                    .frame(width: 7, height: 7)
+                    .help("Smart search is on")
+            }
+            TextField("Search name or prompt", text: $search)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {
