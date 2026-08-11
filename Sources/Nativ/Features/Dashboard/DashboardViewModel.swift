@@ -213,13 +213,13 @@ final class DashboardViewModel: ObservableObject {
         applyPreferredSelectionIfPossible()
     }
 
-    func scanModels(at path: String, additionalPaths: [String] = []) {
+    func scanModels(searchPaths: LocalModelSearchPaths) {
         modelScanTask?.cancel()
         localModelError = nil
 
-        modelScanTask = Task { [path] in
+        modelScanTask = Task {
             do {
-                let models = try await LocalModelDiscovery.scan(path: path, additionalPaths: additionalPaths)
+                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
                 guard !Task.isCancelled else {
                     return
                 }

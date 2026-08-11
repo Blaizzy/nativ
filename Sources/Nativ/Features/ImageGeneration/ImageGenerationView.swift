@@ -201,16 +201,10 @@ private struct ImageGenerationComposer: View {
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onChange(of: localLibrary.models) { _, models in
             let generationModels = models.filter {
@@ -367,9 +361,7 @@ private struct ImageGenerationComposer: View {
     }
 
     private var modelScanKey: String {
-        let settings = model.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        model.settings.localModelSearchPaths.cacheKey
     }
 
     private var actionButtonColor: Color {

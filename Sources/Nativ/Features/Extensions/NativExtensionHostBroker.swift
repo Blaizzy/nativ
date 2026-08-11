@@ -116,8 +116,10 @@ final class NativExtensionHostBroker:
         case .listModels:
             let configuration = try configuration()
             let models = try await LocalModelDiscovery.scan(
-                path: configuration.modelSearchPath,
-                additionalPaths: configuration.additionalModelSearchPaths
+                searchPaths: LocalModelSearchPaths(
+                    primary: configuration.modelSearchPath,
+                    additional: configuration.additionalModelSearchPaths
+                )
             )
             let descriptors = models.map {
                 NativExtensionModelDescriptor(
@@ -145,8 +147,10 @@ final class NativExtensionHostBroker:
                 modelID = requestedModelID
             } else {
                 let models = try await LocalModelDiscovery.scan(
-                    path: configuration.modelSearchPath,
-                    additionalPaths: configuration.additionalModelSearchPaths
+                    searchPaths: LocalModelSearchPaths(
+                        primary: configuration.modelSearchPath,
+                        additional: configuration.additionalModelSearchPaths
+                    )
                 )
                 guard let resolvedModelID = LocalModelDiscovery.speechToTextModelID(
                     in: models,
