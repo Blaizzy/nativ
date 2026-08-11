@@ -3,6 +3,7 @@ import SwiftUI
 struct RoutineEditor: View {
     let draft: RoutineDraft
     let availableModelIDs: [String]
+    @ObservedObject var kitStore: NativKitStore
     let onSave: (Routine) -> Void
     let onCancel: () -> Void
     var onDelete: (() -> Void)?
@@ -20,12 +21,14 @@ struct RoutineEditor: View {
     init(
         draft: RoutineDraft,
         availableModelIDs: [String],
+        kitStore: NativKitStore,
         onSave: @escaping (Routine) -> Void,
         onCancel: @escaping () -> Void,
         onDelete: (() -> Void)? = nil
     ) {
         self.draft = draft
         self.availableModelIDs = availableModelIDs
+        self.kitStore = kitStore
         self.onSave = onSave
         self.onCancel = onCancel
         self.onDelete = onDelete
@@ -48,6 +51,7 @@ struct RoutineEditor: View {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
             && !modelID.isEmpty
             && !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && kitID.map { kitStore.kit(id: $0) != nil } != false
     }
 
     var body: some View {
@@ -96,15 +100,22 @@ struct RoutineEditor: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Picker("Kit", selection: $kitID) {
                                 Text("None").tag(String?.none)
-                                ForEach(NativKit.all) { kit in
+                                if let kitID, kitStore.kit(id: kitID) == nil {
+                                    Text("Unavailable kit").tag(String?.some(kitID))
+                                }
+                                ForEach(kitStore.enabledKits) { kit in
                                     Text(kit.name).tag(String?.some(kit.id))
                                 }
                             }
                             .labelsHidden()
-                            if let kitID, let kit = NativKit.all.first(where: { $0.id == kitID }) {
+                            if let kitID, let kit = kitStore.kit(id: kitID) {
                                 Text(kit.inventory)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                            } else if kitID != nil {
+                                Text("This kit was removed. Choose another kit before the routine can run.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
                         }
                     }

@@ -264,9 +264,10 @@ struct ControlPanelView: View {
     // the entire control panel (including the Models result list).
     let runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
-    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
@@ -637,6 +638,7 @@ struct ControlPanelView: View {
             RoutineEditor(
                 draft: draft,
                 availableModelIDs: availableModelIDs,
+                kitStore: kitStore,
                 onSave: { routine in
                     saveScheduledRoutine(routine)
                     schedulingRoutineDraft = nil
@@ -1943,6 +1945,7 @@ struct ControlPanelView: View {
                 chat: chat,
                 mcpHost: mcpHost,
                 imageGeneration: imageGeneration,
+                kitStore: kitStore,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
@@ -2003,7 +2006,8 @@ struct ControlPanelView: View {
             ExtensionsHubView(
                 manager: extensionManager,
                 host: mcpHost,
-                model: model
+                model: model,
+                kitStore: kitStore
             )
         case .dev:
             DevHubView(
@@ -2402,6 +2406,7 @@ private struct ChatWorkspaceView: View {
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var imageGeneration: ImageGenerationViewModel
+    @ObservedObject var kitStore: NativKitStore
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
@@ -2414,6 +2419,7 @@ private struct ChatWorkspaceView: View {
                     model: model,
                     chat: chat,
                     mcpHost: mcpHost,
+                    kitStore: kitStore,
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
@@ -4274,6 +4280,8 @@ private extension View {
         navigation: .init(),
         runtime: .init(),
         extensionManager: .init(builtInExtensions: []),
+        mcpHost: .init(),
+        kitStore: .init(),
         softwareUpdater: .init()
     )
 }

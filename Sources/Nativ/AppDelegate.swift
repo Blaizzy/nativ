@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import NativServerKit
 import SwiftUI
 import UserNotifications
@@ -350,10 +351,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
+    private let kitStore = NativKitStore.shared
+    private let mcpHost = MCPHostManager()
     private lazy var routineRunner = RoutineRunner(
         model: model,
         store: routineStore,
-        sessionStore: ChatSessionStore()
+        sessionStore: ChatSessionStore(),
+        kitStore: kitStore,
+        mcpHost: mcpHost
     )
     private lazy var routineScheduler = RoutineScheduler(
         store: routineStore,
@@ -372,8 +377,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var modelScanError: String?
     private var lastScannedModelPath: String?
     private weak var highlightedMenuItem: NSMenuItem?
+    private var mcpSettingsObservation: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        kitStore.migrateLegacySettings(mcpServers: model.settings.mcpServers)
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()
         }
@@ -423,6 +430,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 }
             )
         )
+        mcpHost.reload(servers: model.settings.mcpServers)
+        mcpSettingsObservation = model.$settings
+            .map(\.mcpServers)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] servers in
+                self?.mcpHost.reload(servers: servers)
+            }
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(localModelLibraryDidChange(_:)),
@@ -450,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
         extensionManager.shutdown()
+        mcpHost.shutdown()
         runtime.onUpdate = nil
         systemMenuBarPreferences.onChange = nil
         runtime.stop()
@@ -554,6 +570,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             navigation: controlPanelNavigation,
             runtime: runtime,
             extensionManager: extensionManager,
+            mcpHost: mcpHost,
+            kitStore: kitStore,
             softwareUpdater: softwareUpdater,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)

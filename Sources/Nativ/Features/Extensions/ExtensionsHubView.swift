@@ -7,8 +7,9 @@ struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
+    @ObservedObject var kitStore: NativKitStore
     @State private var section: HubSection = .kits
-    @State private var didLaunch = false
+    @State private var requestedCapability: NativKitCapabilityReference?
 
     enum HubSection: String, CaseIterable, Identifiable {
         case kits = "Kits"
@@ -37,27 +38,13 @@ struct ExtensionsHubView: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task {
-            guard !didLaunch else { return }
-            didLaunch = true
-            manager.launch(
-                context: NativExtensionHostContext(
-                    transcriptionConfiguration: { nil },
-                    openSpeechModels: {},
-                    showMainWindow: {}
-                )
-            )
-            host.reload(servers: model.settings.mcpServers)
-        }
-        .onChange(of: model.settings.mcpServers) { _, servers in
-            host.reload(servers: servers)
-        }
     }
 
     private var subnav: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(HubSection.allCases) { item in
                 Button {
+                    requestedCapability = nil
                     section = item
                 } label: {
                     HStack(spacing: 10) {
@@ -88,15 +75,49 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, host: host, model: model)
+            KitsSectionView(
+                host: host,
+                model: model,
+                store: kitStore,
+                onOpenCapability: openCapability
+            )
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:
-            MCPSectionView(host: host, model: model)
+            MCPSectionView(
+                host: host,
+                model: model,
+                requestedCapability: $requestedCapability
+            )
         case .tools:
-            ToolsSectionView(host: host, model: model)
+            ToolsSectionView(
+                host: host,
+                model: model,
+                requestedCapability: $requestedCapability
+            )
         case .skills:
-            SkillsSectionView(model: model)
+            SkillsSectionView(
+                model: model,
+                requestedCapability: $requestedCapability
+            )
+        }
+    }
+
+    private func openCapability(_ capability: NativKitCapabilityReference) {
+        requestedCapability = capability
+        section = capability.hubSection
+    }
+}
+
+private extension NativKitCapabilityReference {
+    var hubSection: ExtensionsHubView.HubSection {
+        switch self {
+        case .mcp:
+            .mcp
+        case .mcpTool, .nativeTool, .customTool:
+            .tools
+        case .skill:
+            .skills
         }
     }
 }
@@ -106,29 +127,39 @@ struct ExtensionsHubView: View {
 struct HubSectionScaffold<Content: View, Action: View>: View {
     let title: String
     let subtitle: String
+    var scrollTarget: String? = nil
     @ViewBuilder var action: () -> Action
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(.system(size: 20, weight: .semibold))
-                        Text(subtitle)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(.system(size: 20, weight: .semibold))
+                            Text(subtitle)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 12)
+                        action()
                     }
-                    Spacer(minLength: 12)
-                    action()
+                    content()
                 }
-                content()
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
+                .frame(maxWidth: 720, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
-            .frame(maxWidth: 720, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .task(id: scrollTarget) {
+                guard let scrollTarget else { return }
+                await Task.yield()
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(scrollTarget, anchor: .center)
+                }
+            }
         }
     }
 }
@@ -385,13 +416,16 @@ private struct FlowLayout: Layout {
 
 private struct SkillsSectionView: View {
     @ObservedObject var model: NativModel
+    @Binding var requestedCapability: NativKitCapabilityReference?
     @State private var editing: NativSkill?
     @State private var pendingDelete: NativSkill?
+    @State private var focusedSkillID: UUID?
 
     var body: some View {
         HubSectionScaffold(
             title: "Skills",
-            subtitle: "Reusable instructions the model can apply."
+            subtitle: "Reusable instructions the model can apply.",
+            scrollTarget: focusedSkillID.map(Self.skillAnchor)
         ) {
             Button {
                 editing = NativSkill()
@@ -412,8 +446,10 @@ private struct SkillsSectionView: View {
                             skill: skill,
                             onToggle: { toggle(skill) },
                             onEdit: { editing = skill },
-                            onDelete: { pendingDelete = skill }
+                            onDelete: { pendingDelete = skill },
+                            isFocused: focusedSkillID == skill.id
                         )
+                        .id(Self.skillAnchor(skill.id))
                     }
                 }
             }
@@ -445,6 +481,10 @@ private struct SkillsSectionView: View {
         } message: { skill in
             Text("“\(skill.name.isEmpty ? "This skill" : skill.name)” will be permanently deleted.")
         }
+        .onAppear(perform: consumeCapabilityRequest)
+        .onChange(of: requestedCapability) { _, _ in
+            consumeCapabilityRequest()
+        }
     }
 
     private func toggle(_ skill: NativSkill) {
@@ -463,6 +503,17 @@ private struct SkillsSectionView: View {
             model.settings.skills.append(skill)
         }
     }
+
+    private func consumeCapabilityRequest() {
+        guard case .skill(.configured(let id)) = requestedCapability else { return }
+        requestedCapability = nil
+        guard model.settings.skills.contains(where: { $0.id == id }) else { return }
+        focusedSkillID = id
+    }
+
+    private static func skillAnchor(_ id: UUID) -> String {
+        "skill:\(id.uuidString)"
+    }
 }
 
 private struct SkillRow: View {
@@ -471,6 +522,7 @@ private struct SkillRow: View {
     let onToggle: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let isFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -513,6 +565,10 @@ private struct SkillRow: View {
             }
         }
         .padding(.vertical, 11)
+        .background(
+            isFocused ? Color.accentColor.opacity(0.08) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
     }
 }
 

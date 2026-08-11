@@ -83,6 +83,8 @@ private enum ChatReasoningLevel: String, CaseIterable, Identifiable {
 struct ChatComposer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var viewModel: ChatViewModel
+    @ObservedObject var kitStore: NativKitStore
+    @ObservedObject var mcpHost: MCPHostManager
     @StateObject private var localLibrary = LocalModelLibrary()
     let unavailableReason: String?
     let canCompose: Bool
@@ -200,6 +202,17 @@ struct ChatComposer: View {
                     ChatWorkspacePicker(
                         selection: workspaceMode,
                         onSelect: onSelectWorkspaceMode
+                    )
+
+                    ChatKitPicker(
+                        kits: kitStore.allKits,
+                        selectedKitID: viewModel.currentKitID,
+                        inventory: NativKitCapabilityInventory(
+                            settings: model.settings,
+                            host: mcpHost
+                        ),
+                        isDisabled: viewModel.hasPendingRequests,
+                        onSelect: viewModel.selectKit
                     )
 
                     Spacer(minLength: 12)
@@ -542,6 +555,66 @@ struct ChatComposer: View {
 
     private var editorHeight: CGFloat {
         min(max(editorContentHeight, editorMinimumHeight), editorMaximumHeight)
+    }
+}
+
+private struct ChatKitPicker: View {
+    let kits: [NativKit]
+    let selectedKitID: String?
+    let inventory: NativKitCapabilityInventory
+    let isDisabled: Bool
+    let onSelect: (String?) -> Void
+
+    private var selectedKit: NativKit? {
+        selectedKitID.flatMap { id in kits.first { $0.id == id } }
+    }
+
+    var body: some View {
+        Menu {
+            Button {
+                onSelect(nil)
+            } label: {
+                menuLabel("No Kit", selected: selectedKitID == nil)
+            }
+
+            if !kits.isEmpty {
+                Divider()
+                ForEach(kits) { kit in
+                    Button {
+                        onSelect(kit.id)
+                    } label: {
+                        menuLabel(kit.name, selected: kit.id == selectedKitID)
+                    }
+                    .help(inventory.evaluation(of: kit).summary ?? kit.inventory)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: selectedKit?.symbol ?? "shippingbox")
+                Text(selectedKit?.name ?? "Kit")
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(Color.primary.opacity(0.055), in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(isDisabled)
+        .help(isDisabled ? "Kit selection is unavailable while requests are active" : "Choose a Kit")
+    }
+
+    private func menuLabel(_ title: String, selected: Bool) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if selected { Image(systemName: "checkmark") }
+        }
     }
 }
 
