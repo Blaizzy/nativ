@@ -761,8 +761,8 @@ struct ControlPanelView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
+            .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
         }
-        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
         .buttonStyle(.plain)
     }
 
@@ -777,8 +777,8 @@ struct ControlPanelView: View {
                 .labelStyle(SidebarNavigationLabelStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
+                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
         }
-        .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
         .buttonStyle(.plain)
     }
 
