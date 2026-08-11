@@ -55,6 +55,9 @@ enum ChatSwitchModelToolError: LocalizedError {
     case switchFailed
     case mismatchedModel(requested: String, active: String?)
     case appModelUnavailable
+    case insufficientMemory(modelID: String, message: String)
+    case activeGenerationsInProgress
+    case unableToVerifyNoActiveGenerations
 
     var errorDescription: String? {
         switch self {
@@ -68,6 +71,12 @@ enum ChatSwitchModelToolError: LocalizedError {
             return "Requested \(requested) but the active model is now \(active ?? "unknown")."
         case .appModelUnavailable:
             return "The app isn't ready to switch models right now."
+        case .insufficientMemory(let modelID, let message):
+            return "Not enough memory to switch to \(modelID): \(message)"
+        case .activeGenerationsInProgress:
+            return "Another generation is currently in progress -- switching models now would interrupt it. Try again once it finishes."
+        case .unableToVerifyNoActiveGenerations:
+            return "Couldn't confirm whether another generation is in progress, so the switch was not attempted. Try again."
         }
     }
 }
@@ -78,6 +87,11 @@ protocol ChatModelSwitchingSurface {
     var modelSwitchInProgress: Bool { get }
     var isRunning: Bool { get }
     func switchLanguageModel(to modelID: String?)
+    /// Non-nil means "reject, don't attempt the switch."
+    func preloadMemoryWarning(forLanguageModelID modelID: String, availableModels: [LocalModel]) -> ModelPreloadMemoryWarning?
+    /// Process-wide, not scoped to the requested model -- a restart kills
+    /// every resident model's generations regardless of which one is asked for.
+    func hasActiveTextGenerations() async throws -> Bool
 }
 
 struct ChatSwitchModelToolExecutor {
@@ -103,6 +117,35 @@ struct ChatSwitchModelToolExecutor {
                 declined: false,
                 error: nil
             ))
+        }
+
+        // Fails CLOSED, unlike the memory check below: an unverifiable query
+        // risks silently killing someone else's generation, while blocking
+        // on one is just a transient, retryable error.
+        do {
+            if try await appModel.hasActiveTextGenerations() {
+                throw ChatSwitchModelToolError.activeGenerationsInProgress
+            }
+        } catch let error as ChatSwitchModelToolError {
+            throw error
+        } catch {
+            throw ChatSwitchModelToolError.unableToVerifyNoActiveGenerations
+        }
+
+        // Best-effort: an unscannable search path just means no warning
+        // can be computed, not a blocked switch.
+        let availableModels = (try? await LocalModelDiscovery.scan(
+            path: appModel.settings.modelSearchPath,
+            additionalPaths: appModel.settings.additionalModelSearchPaths
+        )) ?? []
+        if let warning = appModel.preloadMemoryWarning(
+            forLanguageModelID: requestedModelID,
+            availableModels: availableModels
+        ) {
+            throw ChatSwitchModelToolError.insufficientMemory(
+                modelID: requestedModelID,
+                message: warning.message
+            )
         }
 
         appModel.switchLanguageModel(to: requestedModelID)

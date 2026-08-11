@@ -643,6 +643,26 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         }
     }
 
+    /// Unlike the picker's dismissable warning, `switch_model` has no
+    /// dialog mid-tool-execution -- a non-nil result is a hard reject.
+    func preloadMemoryWarning(
+        forLanguageModelID modelID: String,
+        availableModels: [LocalModel]
+    ) -> ModelPreloadMemoryWarning? {
+        guard let candidate = availableModels.first(where: { $0.repoID == modelID }) else {
+            return nil
+        }
+        return preloadMemoryWarning(for: candidate, slot: .language, availableModels: availableModels)
+    }
+
+    /// Queries the server directly -- the app doesn't track this itself.
+    func hasActiveTextGenerations() async throws -> Bool {
+        try await NativChatClient(
+            baseURL: settings.serverBaseURL,
+            apiKey: settings.serverAPIKey
+        ).hasActiveTextGenerations()
+    }
+
     private func preloadMemoryWarning(
         for candidate: LocalModel,
         slot: ModelPreloadSlot,

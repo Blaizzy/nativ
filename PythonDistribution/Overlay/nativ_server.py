@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import time
 import uuid
 from contextvars import ContextVar
@@ -17,12 +18,20 @@ from typing import Any
 import mlx.core as mx
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
+from huggingface_hub import scan_cache_dir
 from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
+
+from nativ_model_memory import ResidentModel, SizeCache, TenantTable, decide
+
+# mlx_vlm.server's own "app" attribute is overwritten with the FastAPI
+# instance by its __init__.py, so sys.modules is needed to get the
+# actual app.py submodule instead of that instance.
+base_app = sys.modules["mlx_vlm.server.app"]
 
 
 BACKEND_NAME = f"mlx_vlm/{base.__version__}"
@@ -134,6 +143,276 @@ def install_model_load_progress() -> None:
     base_generation.load = load_with_progress
     base_generation.ResponseGenerator._initialize_model = initialize_model_with_progress
     base_generation._nativ_model_load_progress_installed = True
+
+
+INSUFFICIENT_MEMORY_ERROR_KIND = "insufficient_memory"
+
+_TENANTS = TenantTable()
+_SIZES = SizeCache()
+_TEXT_GEN_POOL: dict[tuple, dict] = {}
+_TEXT_GEN_LAST_USED: dict[tuple, float] = {}
+_POOL_LOCK = Lock()
+
+_RESPONSE_GENERATOR_CONTEXT: ContextVar[Any] = ContextVar("nativ_response_generator", default=None)
+_APC_MANAGER_CONTEXT: ContextVar[Any] = ContextVar("nativ_apc_manager", default=None)
+_ACQUIRED_TEXT_GEN_KEYS: ContextVar["list[tuple] | None"] = ContextVar(
+    "nativ_acquired_text_gen_keys", default=None
+)
+
+_ORIGINAL_GET_CACHED_MODEL = None
+_ORIGINAL_UNLOAD_MODEL_SYNC = None
+
+
+def _text_generation_memory_budget_bytes() -> int:
+    """Apple's recommended GPU working-set ceiling minus what MLX has active."""
+    mx.clear_cache()
+    info = mx.device_info()
+    budget = info.get("max_recommended_working_set_size") or info.get("memory_size", 0)
+    return max(0, budget - mx.get_active_memory())
+
+
+def _estimate_model_size_on_disk(model_path: str) -> int:
+    """Pessimistic estimate before the first real measurement is recorded."""
+    try:
+        cache_info = scan_cache_dir()
+    except Exception:
+        return 0
+    for repo in cache_info.repos:
+        if repo.repo_id == model_path:
+            return int(repo.size_on_disk)
+    return 0
+
+
+def _most_recently_used_key():
+    if not _TEXT_GEN_LAST_USED:
+        return None
+    return max(_TEXT_GEN_LAST_USED, key=_TEXT_GEN_LAST_USED.get)
+
+
+def _cleanup_text_gen_entry(cache: dict) -> None:
+    """Mirrors _unload_model_cache_group's cleanup -- our pool bypasses it
+    entirely, so this has to be kept in sync by hand."""
+    response_generator = cache.get("response_generator")
+    if response_generator is not None:
+        response_generator.stop_and_join()
+    apc_manager = cache.get("apc_manager")
+    if apc_manager is not None:
+        apc_manager.clear()
+    vision_cache = cache.get("vision_cache")
+    if vision_cache is not None:
+        vision_cache.clear()
+
+
+def _evict_text_gen_key(cache_key) -> None:
+    """Caller must already hold _POOL_LOCK."""
+    cache = _TEXT_GEN_POOL.pop(cache_key, None)
+    if cache is None:
+        return
+    base.logger.info("Evicting resident text-generation model to make room: %s", cache_key[0])
+    _cleanup_text_gen_entry(cache)
+    _TENANTS.forget(cache_key)
+    _TEXT_GEN_LAST_USED.pop(cache_key, None)
+    mx.clear_cache()
+
+
+def _mirror_most_recent_into_vendored_slot(registry) -> None:
+    """Caller must already hold _POOL_LOCK. Not load-bearing for correctness
+    -- our own pool and tenant table are authoritative regardless."""
+    most_recent = _most_recently_used_key()
+    if most_recent is None:
+        registry.pop("text_generation")
+    else:
+        registry.set("text_generation", _TEXT_GEN_POOL[most_recent])
+
+
+def _acquire_for_current_request(cache_key) -> None:
+    """Caller must already hold _POOL_LOCK."""
+    _TENANTS.acquire(cache_key)
+    _TEXT_GEN_LAST_USED[cache_key] = time.monotonic()
+    acquired = _ACQUIRED_TEXT_GEN_KEYS.get()
+    if acquired is not None:
+        acquired.append(cache_key)
+
+
+def release_text_generation_tenant(cache_key) -> None:
+    """A preloaded-but-never-generated-against model would otherwise hold
+    a phantom tenant forever and could never be evicted."""
+    with _POOL_LOCK:
+        _TENANTS.release(cache_key)
+
+
+def release_text_generation_tenant_after_preload(model_path: str, adapter_path) -> None:
+    """The caller always passes an explicit adapter, so the cache key is
+    fully determined without consulting pool state. A no-op for a model
+    that isn't text-generation-shaped."""
+    if base_app.is_image_generation_model(model_path):
+        return
+    release_text_generation_tenant((model_path, adapter_path, "text_generation"))
+
+
+def _release_acquired_text_gen_keys() -> None:
+    acquired = _ACQUIRED_TEXT_GEN_KEYS.get()
+    if not acquired:
+        return
+    with _POOL_LOCK:
+        for cache_key in acquired:
+            _TENANTS.release(cache_key)
+    acquired.clear()
+
+
+def nativ_get_cached_model(model_path, adapter_path=base_app._INHERIT_ADAPTER, *, model_kind="auto"):
+    # adapter_path=None ("no adapter") must not be conflated with the
+    # default _INHERIT_ADAPTER sentinel ("inherit whatever's loaded").
+
+    # Only text-generation swaps get the new reject-don't-OOM treatment;
+    # other kinds keep the original single-slot behavior.
+    load_as_edit = model_kind == "image_edit"
+    load_as_audio = base_app._audio_model_kind(model_kind)
+    load_as_embedding = model_kind == "embedding"
+    load_as_image = model_kind == "image_generation" or (
+        model_kind == "auto" and base_app.is_image_generation_model(model_path)
+    )
+    if load_as_edit or load_as_audio or load_as_embedding or load_as_image:
+        return _ORIGINAL_GET_CACHED_MODEL(model_path, adapter_path, model_kind=model_kind)
+
+    effective_model_kind = "text_generation" if model_kind == "auto" else model_kind
+    registry = base_app._model_cache_registry()
+
+    # Serializes cold loads process-wide -- /v1/models/load runs off the
+    # event loop, so two concurrent loads could race on the vendored
+    # single registry slot. Pool hits still return immediately.
+    with _POOL_LOCK:
+        if adapter_path is base_app._INHERIT_ADAPTER:
+            most_recent = _most_recently_used_key()
+            adapter_path = most_recent[1] if most_recent and most_recent[0] == model_path else None
+
+        cache_key = (model_path, adapter_path, effective_model_kind)
+        existing = _TEXT_GEN_POOL.get(cache_key)
+        if existing is not None:
+            _acquire_for_current_request(cache_key)
+            _mirror_most_recent_into_vendored_slot(registry)
+            _RESPONSE_GENERATOR_CONTEXT.set(existing.get("response_generator"))
+            _APC_MANAGER_CONTEXT.set(existing.get("apc_manager"))
+            return existing["model"], existing["processor"], existing["config"]
+
+        requested_size = _SIZES.estimate(cache_key, fallback_bytes=_estimate_model_size_on_disk(model_path))
+        resident = tuple(
+            ResidentModel(
+                cache_key=key,
+                size_bytes=_SIZES.estimate(key, fallback_bytes=requested_size),
+                active_tenants=_TENANTS.active_count(key),
+                last_released_at=_TENANTS.last_released_at(key),
+            )
+            for key in _TEXT_GEN_POOL
+        )
+        decision = decide(
+            requested_size_bytes=requested_size,
+            resident=resident,
+            available_bytes=_text_generation_memory_budget_bytes(),
+        )
+        if not decision.should_load:
+            raise HTTPException(
+                status_code=507,
+                detail={
+                    "error": INSUFFICIENT_MEMORY_ERROR_KIND,
+                    "model": model_path,
+                    "message": decision.rejected_reason,
+                },
+            )
+        for evict_key in decision.evict:
+            _evict_text_gen_key(evict_key)
+
+        # Clear the vendored slot so its own eviction logic never runs
+        # against an entry that's actually still live in our pool.
+        registry.pop("text_generation")
+        active_before = mx.get_active_memory()
+        model, processor, config = _ORIGINAL_GET_CACHED_MODEL(model_path, adapter_path, model_kind=model_kind)
+        measured_size = max(0, mx.get_active_memory() - active_before)
+        if measured_size > 0:
+            _SIZES.record_measurement(cache_key, measured_size)
+
+        new_entry = registry.pop("text_generation")
+        _TEXT_GEN_POOL[cache_key] = new_entry
+        _acquire_for_current_request(cache_key)
+        _mirror_most_recent_into_vendored_slot(registry)
+
+        return model, processor, config
+
+
+def nativ_unload_model_sync() -> bool:
+    """Also sweeps our own pool -- invisible to the vendored registry,
+    so it would otherwise silently survive an explicit unload."""
+    with _POOL_LOCK:
+        pool_had_entries = bool(_TEXT_GEN_POOL)
+        for cache_key in list(_TEXT_GEN_POOL):
+            _evict_text_gen_key(cache_key)
+    unloaded_by_original = _ORIGINAL_UNLOAD_MODEL_SYNC()
+    return pool_had_entries or unloaded_by_original
+
+
+def install_model_memory_management() -> None:
+    """Patches both mlx_vlm.server.app.get_cached_model and
+    mlx_vlm.server.get_cached_model -- request handlers resolve the latter
+    via a one-time import-time copy, so patching only the app module would
+    silently miss every request path. Also switches
+    ServerRuntime.response_generator/.apc_manager to ContextVar-backed
+    properties, since handlers re-read them repeatedly, not just once."""
+    if getattr(base_app, "_nativ_model_memory_management_installed", False):
+        return
+    base_app._nativ_model_memory_management_installed = True
+
+    global _ORIGINAL_GET_CACHED_MODEL, _ORIGINAL_UNLOAD_MODEL_SYNC
+    _ORIGINAL_GET_CACHED_MODEL = base_app.get_cached_model
+    _ORIGINAL_UNLOAD_MODEL_SYNC = base_app.unload_model_sync
+
+    base_app.get_cached_model = nativ_get_cached_model
+    base.get_cached_model = nativ_get_cached_model
+    base_app.unload_model_sync = nativ_unload_model_sync
+    base.unload_model_sync = nativ_unload_model_sync
+
+    runtime_class = type(base.runtime)
+    runtime_class.response_generator = property(
+        lambda self: _RESPONSE_GENERATOR_CONTEXT.get(),
+        lambda self, value: _RESPONSE_GENERATOR_CONTEXT.set(value),
+    )
+    runtime_class.apc_manager = property(
+        lambda self: _APC_MANAGER_CONTEXT.get(),
+        lambda self, value: _APC_MANAGER_CONTEXT.set(value),
+    )
+
+    @base.app.middleware("http")
+    async def model_tenant_release_middleware(request: Request, call_next):
+        if request.url.path not in TRACKED_PATHS:
+            return await call_next(request)
+
+        token = _ACQUIRED_TEXT_GEN_KEYS.set([])
+        try:
+            response = await call_next(request)
+        except Exception:
+            _release_acquired_text_gen_keys()
+            _ACQUIRED_TEXT_GEN_KEYS.reset(token)
+            raise
+
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type and hasattr(response, "body_iterator"):
+            original_iterator = response.body_iterator
+
+            async def wrapped_iterator():
+                try:
+                    async for chunk in original_iterator:
+                        yield chunk
+                finally:
+                    # finally, not except -- a client disconnect raises
+                    # GeneratorExit here, not a normal Exception.
+                    _release_acquired_text_gen_keys()
+                    _ACQUIRED_TEXT_GEN_KEYS.reset(token)
+
+            response.body_iterator = wrapped_iterator()
+            return response
+
+        _release_acquired_text_gen_keys()
+        _ACQUIRED_TEXT_GEN_KEYS.reset(token)
+        return response
 
 
 class MetricsAccessLogFilter(logging.Filter):
@@ -1325,12 +1604,28 @@ def install_metrics_overlay() -> None:
         except Exception as error:
             raise HTTPException(status_code=500, detail=f"Failed to load model: {error}") from error
 
+        # A preload, not a generation -- release the implicit tenant.
+        release_text_generation_tenant_after_preload(model.strip(), adapter)
+
         snapshot = current_runtime_snapshot()
         return {
             "status": "loaded",
             "model": snapshot.get("loaded_model"),
             "loaded_models": snapshot.get("loaded_models", {}),
         }
+
+    @base.app.get("/models/active-generations", include_in_schema=False)
+    @base.app.get("/v1/models/active-generations")
+    def active_generations_endpoint(request: Request):
+        """For callers whose action affects every resident model at once
+        (a restart), not just one cache_key's eviction."""
+        require_api_key = getattr(base, "_require_management_api_key", None)
+        if require_api_key is not None:
+            require_api_key(request)
+
+        with _POOL_LOCK:
+            active = _TENANTS.any_active()
+        return {"active": active}
 
     @base.app.post("/routines/{routine_id}/run", include_in_schema=False)
     @base.app.post("/v1/routines/{routine_id}/run")
@@ -1355,6 +1650,7 @@ def install_metrics_overlay() -> None:
 
 
 def main() -> None:
+    install_model_memory_management()
     install_metrics_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
@@ -1371,6 +1667,7 @@ def main() -> None:
 
 
 install_model_load_progress()
+install_model_memory_management()
 install_metrics_overlay()
 
 

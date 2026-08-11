@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_DISTRIBUTION_ROOT = REPO_ROOT / "PythonDistribution"
 LAUNCHER_SOURCE = PYTHON_DISTRIBUTION_ROOT / "Launcher" / "mlx_vlm_server_launcher.c"
 OVERLAY_SERVER = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py"
+OVERLAY_MODEL_MEMORY = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_model_memory.py"
 IMAGE_MODEL_MANIFEST_GENERATOR = Path(__file__).with_name(
     "generate_image_model_manifest.py"
 )
@@ -310,6 +311,7 @@ def build_signature(
         ),
         "launcher_sha256": file_sha256(LAUNCHER_SOURCE),
         "overlay_server_sha256": file_sha256(OVERLAY_SERVER),
+        "overlay_model_memory_sha256": file_sha256(OVERLAY_MODEL_MEMORY),
         "image_model_manifest_generator_sha256": file_sha256(
             IMAGE_MODEL_MANIFEST_GENERATOR
         ),
@@ -614,9 +616,11 @@ def site_packages_dir(output: Path) -> Path:
 
 
 def install_overlay(output: Path) -> None:
-    destination = site_packages_dir(output) / OVERLAY_SERVER.name
+    site_packages = site_packages_dir(output)
     log(f"Installing metrics overlay {OVERLAY_SERVER.name}")
-    shutil.copy2(OVERLAY_SERVER, destination)
+    shutil.copy2(OVERLAY_SERVER, site_packages / OVERLAY_SERVER.name)
+    log(f"Installing model memory management module {OVERLAY_MODEL_MEMORY.name}")
+    shutil.copy2(OVERLAY_MODEL_MEMORY, site_packages / OVERLAY_MODEL_MEMORY.name)
 
 
 def install_image_model_manifest(output: Path) -> None:
@@ -639,14 +643,9 @@ def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
                 "raise SystemExit(0 if importlib.util.find_spec('mlx_vlm.server') else 1)",
             ]
         )
-        run(
-            [
-                str(python),
-                "-c",
-                "import importlib.util; "
-                "raise SystemExit(0 if importlib.util.find_spec('nativ_server') else 1)",
-            ]
-        )
+        # A real import, not just find_spec -- catches a missing/broken
+        # sibling module that a spec-location check alone would miss.
+        run([str(python), "-c", "import nativ_server"])
         manifest_path = output / IMAGE_MODEL_MANIFEST_FILENAME
         if not manifest_path.exists():
             raise SystemExit(f"Missing image model capability manifest: {manifest_path}")
