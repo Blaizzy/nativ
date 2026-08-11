@@ -189,7 +189,7 @@ enum LocalModelProviderResolver {
         ModelFamilyMapping(provider: .prismML, identifiers: ["bonsai"]),
         ModelFamilyMapping(provider: .blackForestLabs, identifiers: ["flux"]),
         ModelFamilyMapping(provider: .openAI, identifiers: ["gptoss", "whisper"]),
-        ModelFamilyMapping(provider: .meta, identifiers: ["llama"]),
+        ModelFamilyMapping(provider: .meta, identifiers: ["llama", "museglimmer"]),
         ModelFamilyMapping(provider: .deepSeek, identifiers: ["deepseek"]),
         ModelFamilyMapping(provider: .nvidia, identifiers: ["nemotron"]),
         ModelFamilyMapping(provider: .apple, identifiers: ["openelm"]),

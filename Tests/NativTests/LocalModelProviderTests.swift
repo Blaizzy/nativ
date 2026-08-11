@@ -96,6 +96,25 @@ final class LocalModelProviderTests: XCTestCase {
         XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-meta")
     }
 
+    func testRepublishedMuseGlimmerVariantsResolveToMetaProvider() {
+        let repoIDs = [
+            "mlx-community/Muse-Glimmer-30B-4bit",
+            "unsloth/Muse-Glimmer-30B",
+            "darkc0de/Muse-Glimmer-30B-heretic"
+        ]
+
+        for repoID in repoIDs {
+            let provider = LocalModelProviderResolver.resolve(
+                repoID: repoID,
+                modelType: nil,
+                architectures: []
+            )
+
+            XCTAssertEqual(provider, .meta, repoID)
+            XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-meta", repoID)
+        }
+    }
+
     func testBlackForestLabsOrganizationResolvesToProvider() {
         let provider = LocalModelProviderResolver.resolve(
             repoID: "black-forest-labs/FLUX.2-klein-9B-kv",
