@@ -114,6 +114,7 @@ private struct ChatTranscriptView: View {
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
+    @State private var composerBackdropHeight: CGFloat = 0
     @State private var followsLatestMessage = true
     @State private var isUserScrollingTranscript = false
 
@@ -194,6 +195,9 @@ private struct ChatTranscriptView: View {
                                 transcriptScrollPosition.scrollTo(edge: .bottom)
                             }
                         }
+                    },
+                    onBackdropHeightChange: { height in
+                        composerBackdropHeight = height
                     }
                 )
             }
@@ -256,7 +260,7 @@ private struct ChatTranscriptView: View {
             .frame(height: ChatTranscriptLayout.composerFadeExtension)
 
             Color.nativMainContentBackground
-                .frame(height: max(72, composerHeight))
+                .frame(height: max(72, composerBackdropHeight))
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -294,6 +298,7 @@ private struct ChatComposerContainer: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
     let onHeightChange: (CGFloat) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -320,7 +325,8 @@ private struct ChatComposerContainer: View {
                     using: model,
                     languageModelSupportsTools: languageModelSupportsTools
                 )
-            }
+            },
+            onBackdropHeightChange: onBackdropHeightChange
         )
         .frame(
             maxWidth: ChatTranscriptLayout.conversationMaxWidth
