@@ -847,7 +847,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     struct RowSnapshot: Equatable {
         let isDownloading: Bool
         let progress: Double
-        let bytesPerSecond: Double?
         let isPaused: Bool
         let error: String?
     }
@@ -916,10 +915,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
         downloads.first { $0.modelID == modelID }?.progress ?? 0
     }
 
-    func bytesPerSecond(for modelID: String) -> Double? {
-        downloads.first { $0.modelID == modelID }?.bytesPerSecond
-    }
-
     func isPaused(for modelID: String) -> Bool {
         downloads.first { $0.modelID == modelID }?.state == .paused
     }
@@ -929,7 +924,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
         return RowSnapshot(
             isDownloading: download != nil,
             progress: download?.progress ?? 0,
-            bytesPerSecond: download?.bytesPerSecond,
             isPaused: download?.state == .paused,
             error: errorByModelID[modelID]
         )
@@ -1211,7 +1205,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
         guard downloads[index].bytesPerSecond != normalizedSpeed else { return }
         downloads[index].bytesPerSecond = normalizedSpeed
-        rowUpdates.send(modelID)
     }
 
     private func setState(_ modelID: String, _ state: DownloadState) {

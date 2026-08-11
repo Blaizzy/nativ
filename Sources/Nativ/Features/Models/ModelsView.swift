@@ -1511,7 +1511,6 @@ private struct HubModelRow: View, Equatable {
     let isInstalled: Bool
     let isDownloading: Bool
     let downloadProgress: Double
-    let downloadBytesPerSecond: Double?
     let isDownloadPaused: Bool
     let downloadError: String?
     let onDownload: () -> Void
@@ -1526,7 +1525,6 @@ private struct HubModelRow: View, Equatable {
             && lhs.isInstalled == rhs.isInstalled
             && lhs.isDownloading == rhs.isDownloading
             && lhs.downloadProgress == rhs.downloadProgress
-            && lhs.downloadBytesPerSecond == rhs.downloadBytesPerSecond
             && lhs.isDownloadPaused == rhs.isDownloadPaused
             && lhs.downloadError == rhs.downloadError
     }
@@ -1628,7 +1626,6 @@ private struct HubModelRow: View, Equatable {
                 } else if isDownloading {
                     ModelDownloadProgressControl(
                         progress: downloadProgress,
-                        bytesPerSecond: downloadBytesPerSecond,
                         isPaused: isDownloadPaused,
                         onPauseResume: onPauseResume,
                         onRemove: onRemoveDownload
@@ -1822,7 +1819,6 @@ private struct HubModelRowContainer: View, Equatable {
             isInstalled: isInstalled,
             isDownloading: downloadSnapshot.isDownloading,
             downloadProgress: downloadSnapshot.progress,
-            downloadBytesPerSecond: downloadSnapshot.bytesPerSecond,
             isDownloadPaused: downloadSnapshot.isPaused,
             downloadError: downloadSnapshot.error,
             onDownload: {
@@ -1843,7 +1839,6 @@ private struct HubModelRowContainer: View, Equatable {
 
 struct ModelDownloadProgressControl: View {
     let progress: Double
-    let bytesPerSecond: Double?
     let isPaused: Bool
     let onPauseResume: () -> Void
     let onRemove: () -> Void
@@ -1871,22 +1866,11 @@ struct ModelDownloadProgressControl: View {
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
-                HStack(spacing: 8) {
-                    if let speedText {
-                        Text(speedText)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                    Spacer(minLength: 0)
-                    progressRing
-                }
+                progressRing
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
-        .frame(width: 116, height: 36)
+        .frame(width: 74, height: 36)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .animation(.snappy(duration: 0.16), value: isHovering)
@@ -1910,11 +1894,6 @@ struct ModelDownloadProgressControl: View {
 
     private var displayedProgress: Double {
         ModelDownloadProgressPresentation.ringProgress(progress)
-    }
-
-    private var speedText: String? {
-        guard !isPaused else { return nil }
-        return ModelDownloadProgressPresentation.formattedSpeed(bytesPerSecond)
     }
 
     private var progressRing: some View {
@@ -1949,11 +1928,7 @@ struct ModelDownloadProgressControl: View {
         if ModelDownloadProgressPresentation.isFinalizing(progress) {
             return "Finalizing download"
         }
-        let percentage = "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
-        if let speedText {
-            return "\(percentage) at \(speedText)"
-        }
-        return percentage
+        return "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
     }
 }
 
