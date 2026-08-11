@@ -128,6 +128,7 @@ enum ChatImageModelSelection {
         modelSearchPath: String,
         additionalModelSearchPaths: [String],
         huggingFaceToken: String?,
+        serverBaseURL: URL? = nil,
         preferredInstalledModelID: String? = nil,
         recommendationLoader: RecommendationLoader = { capability, token in
             try await HuggingFaceModelCatalog.popularModels(
@@ -138,7 +139,8 @@ enum ChatImageModelSelection {
     ) async throws -> [ChatImageModelOption] {
         let installedModels = try await installedOptions(
             modelSearchPath: modelSearchPath,
-            additionalModelSearchPaths: additionalModelSearchPaths
+            additionalModelSearchPaths: additionalModelSearchPaths,
+            serverBaseURL: serverBaseURL
         )
         let compatibleInstalledModels = compatibleModels(
             for: operation,
@@ -189,7 +191,8 @@ enum ChatImageModelSelection {
 
     static func installedOptions(
         modelSearchPath: String,
-        additionalModelSearchPaths: [String]
+        additionalModelSearchPaths: [String],
+        serverBaseURL: URL? = nil
     ) async throws -> [ChatImageModelOption] {
         let models: [LocalModel]
         do {
@@ -204,7 +207,19 @@ enum ChatImageModelSelection {
             models = []
         }
 
-        return models
+        let capabilityOverlaid: [LocalModel]
+        if let serverBaseURL {
+            // mlx-vlm is the source of truth for image capabilities; overlay
+            // its /v1/models answer when the server is reachable.
+            let server = await MLXServerModelCapabilities.fetch(baseURL: serverBaseURL)
+            capabilityOverlaid = models.map {
+                $0.overlaying(serverCapabilities: server.byModelID)
+            }
+        } else {
+            capabilityOverlaid = models
+        }
+
+        return capabilityOverlaid
             .map(ChatImageModelOption.init(model:))
             .sorted(by: modelOrder)
     }

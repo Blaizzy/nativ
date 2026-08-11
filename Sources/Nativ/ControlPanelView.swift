@@ -310,7 +310,10 @@ struct ControlPanelView: View {
                         repoID: modelID,
                         searchPath: settings.modelSearchPath
                     )
-                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
+                    embeddingLibrary.scan(
+                        searchPaths: settings.localModelSearchPaths,
+                        serverBaseURL: settings.serverBaseURL
+                    )
                     NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
                 }
                 navigation.open(.models)
@@ -321,7 +324,10 @@ struct ControlPanelView: View {
                         repoID: modelID,
                         path: settings.modelSearchPath
                     )
-                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
+                    embeddingLibrary.scan(
+                        searchPaths: settings.localModelSearchPaths,
+                        serverBaseURL: settings.serverBaseURL
+                    )
                     NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
                 }
             },
