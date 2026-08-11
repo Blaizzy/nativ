@@ -140,6 +140,25 @@ struct SettingsView: View {
                     .padding(.leading, 52)
 
                 settingsRow(
+                    title: "Server Startup",
+                    description: model.settings.serverStartupMode.description,
+                    systemImage: "power.circle"
+                ) {
+                    Picker("Server Startup", selection: serverStartupModeBinding) {
+                        ForEach(ServerStartupMode.allCases) { mode in
+                            Text(mode.displayName)
+                                .tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 220, alignment: .trailing)
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
                     title: "Start at Login",
                     description: launchAtLogin.requiresApproval
                         ? "Approval is required in System Settings."
@@ -209,6 +228,17 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(width: 220, alignment: .trailing)
+    }
+
+    private var serverStartupModeBinding: Binding<ServerStartupMode> {
+        Binding(
+            get: { model.settings.serverStartupMode },
+            set: { startupMode in
+                var settings = model.settings
+                settings.serverStartupMode = startupMode
+                model.settings = settings.normalized()
+            }
+        )
     }
 
     private var chatFontStepRange: ClosedRange<Double> {

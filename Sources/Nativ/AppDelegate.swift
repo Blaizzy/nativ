@@ -431,7 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         )
         refreshLocalModels()
         if WelcomePreferences.hasCompleted {
-            model.startServer()
+            model.startServerForConfiguredStartup()
         }
     }
 
@@ -496,6 +496,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             return
         }
         requestLanguageModelSwitch(to: localModel)
+    }
+
+    @objc private func releaseModelFromMenu(_ sender: Any?) {
+        model.releaseLoadedModel()
     }
 
     @objc private func refreshModelsFromMenu(_ sender: Any?) {
@@ -671,6 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         var settings = model.settings
         settings.languageModelID = modelID
         settings.serverAPIKey = serverAPIKey
+        settings.serverStartupMode = .automatic
         model.settings = settings.normalized()
         WelcomePreferences.markCompleted()
 
@@ -1216,6 +1221,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             submenu.addItem(.separator())
         }
 
+        if model.modelReleaseInProgress {
+            submenu.addItem(disabledMenuItem("Releasing Model…"))
+            submenu.addItem(.separator())
+        } else if model.loadedModelID != nil {
+            let releaseItem = NSMenuItem(
+                title: "Release Model",
+                action: #selector(releaseModelFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            releaseItem.target = self
+            releaseItem.image = menuIcon(
+                "eject",
+                description: "Release model memory"
+            )
+            releaseItem.isEnabled = model.canReleaseLoadedModel
+            if !releaseItem.isEnabled {
+                releaseItem.toolTip = "Wait for active requests to finish before releasing the model."
+            }
+            submenu.addItem(releaseItem)
+            submenu.addItem(.separator())
+        }
+
         submenu.addItem(modelOptionMenuItem(title: "Load on demand", modelID: nil))
 
         let selectedModelID = model.settings.normalized().languageModelID
@@ -1692,9 +1719,9 @@ private struct SessionStatsContainerView: View {
                     section: section,
                     statusText: model.modelLoadFailure != nil
                         ? "Load failed"
-                        : model.settings.normalized().languageModelID == nil
-                        ? "Starting server…"
-                        : model.modelLoadingStatusText ?? "Loading model…",
+                        : model.isModelLoading
+                        ? model.modelLoadingStatusText ?? "Loading model…"
+                        : "Starting server…",
                     failure: model.modelLoadFailure
                 )
             }

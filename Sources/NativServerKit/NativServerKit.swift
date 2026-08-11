@@ -647,6 +647,57 @@ public final class NativMetricsClient {
     }
 }
 
+public enum NativModelManagementError: LocalizedError {
+    case invalidResponse
+    case httpStatus(Int, String?)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            "The Nativ server returned an invalid response."
+        case .httpStatus(let statusCode, let message):
+            message ?? "The Nativ server returned HTTP \(statusCode)."
+        }
+    }
+}
+
+public final class NativModelManagementClient {
+    private let baseURL: URL
+    private let session: URLSession
+
+    public init(
+        baseURL: URL,
+        configuration: URLSessionConfiguration = .ephemeral
+    ) {
+        self.baseURL = baseURL
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        session = URLSession(configuration: configuration)
+    }
+
+    deinit {
+        session.finishTasksAndInvalidate()
+    }
+
+    public func unloadModel(apiKey: String?) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("unload"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativModelManagementError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NativModelManagementError.httpStatus(
+                httpResponse.statusCode,
+                NativServerErrorMessage.detail(from: String(decoding: data, as: UTF8.self))
+            )
+        }
+    }
+}
+
 public final class NativProcessController {
     public typealias OutputHandler = @Sendable (String) -> Void
     public typealias TerminationHandler = @Sendable (Int32) -> Void

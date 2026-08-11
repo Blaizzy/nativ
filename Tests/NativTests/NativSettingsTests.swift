@@ -55,6 +55,66 @@ final class NativSettingsTests: XCTestCase {
         }
     }
 
+    func testServerStartupModeRoundTripsWithoutChangingLaunchConfiguration() throws {
+        var settings = NativSettings(serverStartupMode: .manual)
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertEqual(decoded.serverStartupMode, .manual)
+
+        settings.serverStartupMode = .automatic
+        XCTAssertTrue(settings.hasSameLaunchConfiguration(as: decoded))
+    }
+
+    func testMissingServerStartupModePreservesAutomaticStartup() throws {
+        let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+
+        XCTAssertEqual(settings.serverStartupMode, .automatic)
+    }
+
+    func testLegacyServerStartupModesMigrateToAutomatic() throws {
+        for legacyValue in ["serverOnly", "serverAndModels"] {
+            let data = Data("{\"serverStartupMode\":\"\(legacyValue)\"}".utf8)
+            let settings = try JSONDecoder().decode(NativSettings.self, from: data)
+
+            XCTAssertEqual(settings.serverStartupMode, .automatic)
+        }
+    }
+
+    func testModelManagementClientCallsAuthenticatedUnloadEndpoint() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ModelManagementURLProtocol.self]
+        var capturedRequest: URLRequest?
+        ModelManagementURLProtocol.handler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("{}".utf8))
+        }
+        defer {
+            ModelManagementURLProtocol.handler = nil
+        }
+
+        let client = NativModelManagementClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            configuration: configuration
+        )
+        try await client.unloadModel(apiKey: "nativ_test")
+
+        XCTAssertEqual(capturedRequest?.httpMethod, "POST")
+        XCTAssertEqual(capturedRequest?.url?.path, "/unload")
+        XCTAssertEqual(
+            capturedRequest?.value(forHTTPHeaderField: "Authorization"),
+            "Bearer nativ_test"
+        )
+    }
+
     func testEmptyPreloadSelectionsAreOmitted() {
         let settings = NativSettings(
             languageModelID: " ",
@@ -590,6 +650,36 @@ final class NativSettingsTests: XCTestCase {
         )
         try data.write(to: url)
     }
+}
+
+private final class ModelManagementURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 private enum TestCredentialStoreError: Error {

@@ -62,10 +62,12 @@ private final class ModelsNativState: ObservableObject {
     @Published private(set) var modelSwitchInProgress: Bool
     @Published private(set) var modelSwitchTargetID: String?
     @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var metricsLoading: Bool
     @Published private(set) var modelLoadFailure: ModelLoadFailure?
+    @Published private(set) var modelReleaseInProgress: Bool
+    @Published private(set) var modelReleaseFailure: ModelReleaseFailure?
     @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
     @Published private(set) var loadedModelID: String?
+    @Published private(set) var activeRequestCount: Int
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -75,10 +77,12 @@ private final class ModelsNativState: ObservableObject {
         modelSwitchInProgress = model.modelSwitchInProgress
         modelSwitchTargetID = model.modelSwitchTargetID
         modelLoadingProgress = model.modelLoadingProgress
-        metricsLoading = model.metricsLoading
         modelLoadFailure = model.modelLoadFailure
+        modelReleaseInProgress = model.modelReleaseInProgress
+        modelReleaseFailure = model.modelReleaseFailure
         systemHuggingFaceCredential = model.systemHuggingFaceCredential
         loadedModelID = model.metrics?.server.loadedModel
+        activeRequestCount = model.metrics?.summary.inFlight ?? 0
 
         model.$settings
             .removeDuplicates()
@@ -100,13 +104,17 @@ private final class ModelsNativState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] in self?.modelLoadingProgress = $0 }
             .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] in self?.metricsLoading = $0 }
-            .store(in: &cancellables)
         model.$modelLoadFailure
             .removeDuplicates()
             .sink { [weak self] in self?.modelLoadFailure = $0 }
+            .store(in: &cancellables)
+        model.$modelReleaseInProgress
+            .removeDuplicates()
+            .sink { [weak self] in self?.modelReleaseInProgress = $0 }
+            .store(in: &cancellables)
+        model.$modelReleaseFailure
+            .removeDuplicates()
+            .sink { [weak self] in self?.modelReleaseFailure = $0 }
             .store(in: &cancellables)
         model.$systemHuggingFaceCredential
             .removeDuplicates()
@@ -116,6 +124,11 @@ private final class ModelsNativState: ObservableObject {
             .map { $0?.server.loadedModel }
             .removeDuplicates()
             .sink { [weak self] in self?.loadedModelID = $0 }
+            .store(in: &cancellables)
+        model.$metrics
+            .map { $0?.summary.inFlight ?? 0 }
+            .removeDuplicates()
+            .sink { [weak self] in self?.activeRequestCount = $0 }
             .store(in: &cancellables)
     }
 
@@ -130,7 +143,7 @@ private final class ModelsNativState: ObservableObject {
         if modelSwitchInProgress {
             return modelSwitchTargetID
         }
-        guard metricsLoading || modelLoadingProgress != nil else {
+        guard modelLoadingProgress != nil else {
             return nil
         }
         return settings.normalized().languageModelID
@@ -412,6 +425,28 @@ struct ModelsView: View {
         let visibleModels = filteredLocalModels
         let normalizedSettings = modelState.settings.normalized()
 
+        ModelsRuntimeStatusRow(
+            isServerRunning: modelState.isRunning,
+            selectedModelID: normalizedSettings.languageModelID,
+            loadedModelID: modelState.loadedModelID,
+            loadingModelID: modelState.modelLoadingID,
+            activeRequestCount: modelState.activeRequestCount,
+            isReleasing: modelState.modelReleaseInProgress,
+            onRelease: model.releaseLoadedModel
+        )
+        .modelsListRow()
+
+        if let failure = modelState.modelReleaseFailure {
+            ModelsNotice(
+                title: "Couldn’t release model",
+                message: failure.message,
+                systemImage: "exclamationmark.triangle.fill",
+                color: .orange,
+                onDismiss: model.clearModelReleaseFailure
+            )
+            .modelsListRow()
+        }
+
         if let error = localLibrary.error {
             ModelsNotice(
                 title: "Couldn’t read the model cache",
@@ -469,6 +504,7 @@ struct ModelsView: View {
                     isSelectionDisabled: modelState.modelSwitchInProgress,
                     isModelLoading: modelState.modelLoadingID
                         == localModel.repoID,
+                    isLoaded: modelState.loadedModelID == localModel.repoID,
                     modelLoadingPercentage: modelState.modelLoadingPercentage,
                     isDeleting: localLibrary.deletingModelIDs.contains(
                         localModel.repoID),
@@ -1184,6 +1220,7 @@ private struct InstalledModelRow: View, Equatable {
     let preferredPreloadSlot: ModelPreloadSlot?
     let isSelectionDisabled: Bool
     let isModelLoading: Bool
+    let isLoaded: Bool
     let modelLoadingPercentage: Int?
     let isDeleting: Bool
     let canDelete: Bool
@@ -1200,6 +1237,7 @@ private struct InstalledModelRow: View, Equatable {
             && lhs.preferredPreloadSlot == rhs.preferredPreloadSlot
             && lhs.isSelectionDisabled == rhs.isSelectionDisabled
             && lhs.isModelLoading == rhs.isModelLoading
+            && lhs.isLoaded == rhs.isLoaded
             && lhs.modelLoadingPercentage == rhs.modelLoadingPercentage
             && lhs.isDeleting == rhs.isDeleting
             && lhs.canDelete == rhs.canDelete
@@ -1234,6 +1272,13 @@ private struct InstalledModelRow: View, Equatable {
                             Text(modelName(localModel.displayName))
                                 .font(.body.weight(.semibold))
                                 .lineLimit(1)
+                            if isLoaded {
+                                ModelPill(
+                                    title: "Loaded",
+                                    systemImage: "checkmark.circle.fill",
+                                    color: .green
+                                )
+                            }
                             if let sourceLabel = localModel.source.badgeLabel {
                                 ModelPill(
                                     title: sourceLabel,
@@ -1883,6 +1928,111 @@ private struct ModelProviderBadge: View {
         }
         .frame(width: 46, height: 46)
         .help(provider?.displayName ?? "Unknown provider")
+    }
+}
+
+private struct ModelsRuntimeStatusRow: View {
+    let isServerRunning: Bool
+    let selectedModelID: String?
+    let loadedModelID: String?
+    let loadingModelID: String?
+    let activeRequestCount: Int
+    let isReleasing: Bool
+    let onRelease: () -> Void
+
+    private var statusColor: Color {
+        if !isServerRunning {
+            return .secondary
+        }
+        if loadingModelID != nil {
+            return .orange
+        }
+        return loadedModelID == nil ? .orange : .green
+    }
+
+    private var title: String {
+        if !isServerRunning {
+            return "Server Off"
+        }
+        if loadingModelID != nil {
+            return "Loading Model"
+        }
+        return loadedModelID == nil ? "No Model Loaded" : "Model Loaded"
+    }
+
+    private var detail: String {
+        if let loadingModelID {
+            return loadingModelID
+        }
+        if let loadedModelID {
+            return loadedModelID
+        }
+        if isServerRunning {
+            if let selectedModelID {
+                return "\(selectedModelID) remains selected and will load when needed."
+            }
+            return "The server is ready and will load a selected model when needed."
+        }
+        return "Start the server to load a model."
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(
+                systemName: loadingModelID != nil
+                    ? "arrow.triangle.2.circlepath"
+                    : loadedModelID == nil ? "cube.transparent" : "cube.fill"
+            )
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(statusColor.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 12)
+
+            if loadedModelID != nil, loadingModelID == nil {
+                Button(action: onRelease) {
+                    HStack(spacing: 6) {
+                        if isReleasing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "eject")
+                        }
+                        Text(isReleasing ? "Releasing…" : "Release Model")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isReleasing || activeRequestCount > 0)
+                .help(
+                    activeRequestCount > 0
+                        ? "Wait for active requests to finish before releasing the model."
+                        : "Release model memory without stopping the server."
+                )
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 }
 

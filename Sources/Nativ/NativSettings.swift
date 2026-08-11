@@ -311,6 +311,51 @@ struct ModelConfigProfile: Codable, Equatable {
     }
 }
 
+enum ServerStartupMode: String, Codable, CaseIterable, Identifiable {
+    case manual
+    case automatic
+
+    var id: Self { self }
+
+    var startsAutomatically: Bool {
+        self == .automatic
+    }
+
+    var displayName: String {
+        switch self {
+        case .manual:
+            "Manual"
+        case .automatic:
+            "Automatic"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .manual:
+            "Start the server only when you choose to."
+        case .automatic:
+            "Start the server and restore selected models when Nativ opens."
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        switch value {
+        case Self.manual.rawValue:
+            self = .manual
+        case Self.automatic.rawValue, "serverOnly", "serverAndModels":
+            self = .automatic
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown server startup mode: \(value)"
+            )
+        }
+    }
+}
+
 struct NativSettings: Codable, Equatable {
     /// Default hub cache location, resolved from the environment.
     /// See `HuggingFaceCache.defaultHubPath`.
@@ -337,6 +382,7 @@ struct NativSettings: Codable, Equatable {
     var huggingFaceToken: String?
     var serverHost: String
     var serverPort: Int
+    var serverStartupMode: ServerStartupMode
     var maxTokens: Int
     var maxKVSize: Int
     var systemPrompt: String
@@ -388,6 +434,7 @@ struct NativSettings: Codable, Equatable {
         huggingFaceToken: String? = nil,
         serverHost: String = Self.defaultServerHost,
         serverPort: Int = 8080,
+        serverStartupMode: ServerStartupMode = .automatic,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
         systemPrompt: String = "",
@@ -438,6 +485,7 @@ struct NativSettings: Codable, Equatable {
         self.huggingFaceToken = huggingFaceToken
         self.serverHost = serverHost
         self.serverPort = serverPort
+        self.serverStartupMode = serverStartupMode
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
         self.systemPrompt = systemPrompt
@@ -490,6 +538,7 @@ struct NativSettings: Codable, Equatable {
         case huggingFaceToken
         case serverHost
         case serverPort
+        case serverStartupMode
         case selectedModelID
         case maxTokens
         case maxKVSize
@@ -547,6 +596,7 @@ struct NativSettings: Codable, Equatable {
         huggingFaceToken = try container.decodeIfPresent(String.self, forKey: .huggingFaceToken) ?? defaults.huggingFaceToken
         serverHost = try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
         serverPort = try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
+        serverStartupMode = try container.decodeIfPresent(ServerStartupMode.self, forKey: .serverStartupMode) ?? defaults.serverStartupMode
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize = try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? defaults.systemPrompt
@@ -599,6 +649,7 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
+        try container.encode(serverStartupMode, forKey: .serverStartupMode)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
         try container.encode(systemPrompt, forKey: .systemPrompt)

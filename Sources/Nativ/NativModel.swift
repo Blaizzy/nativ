@@ -32,6 +32,11 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
     }
 }
 
+struct ModelReleaseFailure: Equatable, Identifiable, Sendable {
+    let id = UUID()
+    let message: String
+}
+
 @MainActor
 final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var isRunning = false
@@ -45,6 +50,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var modelSwitchTargetID: String?
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var modelLoadFailure: ModelLoadFailure?
+    @Published private(set) var modelReleaseInProgress = false
+    @Published private(set) var modelReleaseFailure: ModelReleaseFailure?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
     @Published private(set) var metricsLoading = false
     @Published private(set) var systemHuggingFaceCredential =
@@ -74,6 +81,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
+    private var modelReleaseTask: Task<Void, Never>?
     private var currentServerOutput = ""
 
     private let maxLogCharacters = 250_000
@@ -225,6 +233,18 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         metrics?.server.displayLoadedModel ?? "None"
     }
 
+    var loadedModelID: String? {
+        metrics?.server.loadedModel
+    }
+
+    var canReleaseLoadedModel: Bool {
+        isRunning
+            && loadedModelID != nil
+            && metrics?.summary.inFlight == 0
+            && !modelReleaseInProgress
+            && !modelSwitchInProgress
+    }
+
     var isModelLoading: Bool {
         modelSwitchInProgress
             || (settings.normalized().languageModelID != nil
@@ -312,9 +332,18 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         return settingsAppliedAtServerStart.serverBaseURL
     }
 
+    func startServerForConfiguredStartup() {
+        let startupMode = settings.normalized().serverStartupMode
+        guard startupMode.startsAutomatically else {
+            return
+        }
+        startServer()
+    }
+
     func startServer() {
         var shouldStartMetrics = false
         clearModelLoadFailure()
+        modelReleaseFailure = nil
         currentServerOutput = ""
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
@@ -415,6 +444,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     func stopServer(preserveSessionStats: Bool = false) {
         cancelPendingServerRestart()
+        modelReleaseTask?.cancel()
+        modelReleaseTask = nil
+        modelReleaseInProgress = false
         modelLoadingProgress = nil
         if preserveSessionStats {
             preserveCurrentSessionStats()
@@ -535,6 +567,48 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     func switchLanguageModel(to modelID: String?) {
         switchPreloadedModel(to: modelID, for: .language)
+    }
+
+    func releaseLoadedModel() {
+        guard canReleaseLoadedModel, let loadedModelID else {
+            return
+        }
+
+        modelReleaseInProgress = true
+        modelReleaseFailure = nil
+        let baseURL = activeServerBaseURL ?? settings.serverBaseURL
+        let apiKey = settingsAppliedAtServerStart?.serverAPIKey
+        let client = NativModelManagementClient(baseURL: baseURL)
+
+        modelReleaseTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.modelReleaseTask = nil
+                self.modelReleaseInProgress = false
+                self.notifyMenuStateChanged()
+            }
+
+            do {
+                try await client.unloadModel(apiKey: apiKey)
+                try Task.checkCancellation()
+                self.appendLog("\nReleased \(loadedModelID) while keeping the server running.\n")
+                self.refreshMetricsIfRunning(force: true)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.modelReleaseFailure = ModelReleaseFailure(
+                    message: error.localizedDescription
+                )
+                self.appendLog("\nFailed to release \(loadedModelID): \(error.localizedDescription)\n")
+            }
+        }
+        notifyMenuStateChanged()
+    }
+
+    func clearModelReleaseFailure() {
+        modelReleaseFailure = nil
     }
 
     @discardableResult
@@ -685,6 +759,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func applicationWillTerminate() {
+        modelReleaseTask?.cancel()
+        modelReleaseTask = nil
         stopMetricsPolling(clearSession: true)
         if server.isRunning {
             try? server.stop(timeout: 2)
@@ -786,6 +862,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
                     )
                 }
                 self.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
+                self.modelReleaseTask?.cancel()
+                self.modelReleaseTask = nil
+                self.modelReleaseInProgress = false
                 self.isRunning = false
                 self.settingsAppliedAtServerStart = nil
                 self.huggingFaceTokenAppliedAtServerStart = nil
