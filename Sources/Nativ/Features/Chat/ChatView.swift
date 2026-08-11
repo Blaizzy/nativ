@@ -99,7 +99,6 @@ private enum ChatTranscriptLayout {
     static let conversationMaxWidth: CGFloat = 680
     static let horizontalPadding: CGFloat = 32
     static let messageHorizontalInset: CGFloat = 32
-    static let composerHorizontalInset: CGFloat = 12
     static let composerClearance: CGFloat = 48
     static let composerFadeExtension: CGFloat = 40
 }
@@ -331,14 +330,9 @@ private struct ChatComposerContainer: View {
         .frame(
             maxWidth: ChatTranscriptLayout.conversationMaxWidth
                 - conversationWidthReduction
-                - (ChatTranscriptLayout.composerHorizontalInset * 2)
         )
         .frame(maxWidth: .infinity)
-        .padding(
-            .horizontal,
-            ChatTranscriptLayout.horizontalPadding
-                + ChatTranscriptLayout.composerHorizontalInset
-        )
+        .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in

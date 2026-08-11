@@ -2407,7 +2407,8 @@ private struct ChatWorkspaceView: View {
                     model: model,
                     viewModel: imageGeneration,
                     workspaceMode: mode,
-                    onSelectWorkspaceMode: onSelectMode
+                    onSelectWorkspaceMode: onSelectMode,
+                    conversationWidthReduction: conversationWidthReduction
                 )
             }
         }
