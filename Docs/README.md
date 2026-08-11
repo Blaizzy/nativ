@@ -24,4 +24,4 @@ For running Nativ, building from source, and the project layout, see the
 |---|---|
 | [Extensions](extending/extensions.md) | The extension package format, manifest, lifecycle, permissions, and adding a first-party extension. |
 | [Kits](extending/kits.md) | Authoring a Kit — a curated bundle of MCP servers, skills, and extensions. |
-| [MCP catalog](extending/mcp-catalog.md) | Contributing an MCP server to the built-in Browse catalog. |
+| [MCP catalog](extending/mcp-catalog.md) | Contributing a server to the built-in MCP list. |

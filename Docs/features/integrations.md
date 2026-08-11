@@ -21,7 +21,7 @@ tools become available to a tool-calling model in [Chat](chat.md).
 - Configured servers persist in settings and are (re)started by the host
   ([`MCPHostManager`](../../Sources/Nativ/Features/MCP/MCPHostManager.swift)).
 - Each MCP tool call passes through the same consent gate as built-in chat tools before it runs.
-- The **Browse catalog** grid lists reviewed community servers; a [Kit](../extending/kits.md)
+- The **Built in** list exposes reviewed community servers directly; a [Kit](../extending/kits.md)
   can bundle several servers, skills, and extensions and enable them together.
 
 Authoring: add a server to the catalog via [MCP catalog](../extending/mcp-catalog.md); bundle
