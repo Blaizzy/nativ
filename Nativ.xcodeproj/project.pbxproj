@@ -42,6 +42,7 @@
 		1DCBC70AA972310D3FBC22CC /* ChatSwitchModelTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BBBE5DAD60FA5D2450B2CD /* ChatSwitchModelTool.swift */; };
 		1EBCB9482DABA02FD039A795 /* Routine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F067B3DB861CF232820136 /* Routine.swift */; };
 		203E0B78BCFCA71DFFB8B48B /* WebSearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB3FA30F4803017685118E3 /* WebSearchService.swift */; };
+		2043243F627AFA7A2239BB8E /* ChatCapabilitiesSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D2AACD0A419316AD0099E20 /* ChatCapabilitiesSheet.swift */; };
 		237BB8D2F99FFE536CF0421B /* ImageGenerationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 239C5B241E83468B75C43E5A /* ImageGenerationViewModel.swift */; };
 		23C7BE9CB287D87B15233E7B /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE151F7A36DA21A32ABCFD63 /* WelcomeView.swift */; };
 		2452C5D7B24CA5FF6FAA36E2 /* MCPHostManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5D77458EF56DD1B8F4AE17 /* MCPHostManager.swift */; };
@@ -360,6 +361,7 @@
 		3B1B970F41F1B5612B791ABE /* KitsSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitsSectionView.swift; sourceTree = "<group>"; };
 		3B965B701714787B0A85AE6B /* AudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTests.swift; sourceTree = "<group>"; };
 		3C90AC464C5C04FB14A3C789 /* TavilyBrowsingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TavilyBrowsingProvider.swift; sourceTree = "<group>"; };
+		3D2AACD0A419316AD0099E20 /* ChatCapabilitiesSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCapabilitiesSheet.swift; sourceTree = "<group>"; };
 		3E540204DED30CFBDB0FE1AD /* SystemMonitorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMonitorStore.swift; sourceTree = "<group>"; };
 		3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXImageModelResolverTests.swift; sourceTree = "<group>"; };
 		41417C210BF817681A8C6D87 /* IntegrationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationsView.swift; sourceTree = "<group>"; };
@@ -951,6 +953,7 @@
 		ED33631B7BBA892EB4B78808 /* Chat */ = {
 			isa = PBXGroup;
 			children = (
+				3D2AACD0A419316AD0099E20 /* ChatCapabilitiesSheet.swift */,
 				D97F637262DB138A253DEA6F /* ChatComposer.swift */,
 				2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */,
 				7A9C24932DBACE75BA4E0CCB /* ChatFontScale.swift */,
@@ -1247,6 +1250,7 @@
 				63D4D3774994EAE5F5ABB7E9 /* AudioInputVolumeController.swift in Sources */,
 				ADDF36ABE66D5ACE3D765589 /* AudioView.swift in Sources */,
 				184CEAB6FBA72EB5BF2A319D /* BraveBrowsingProvider.swift in Sources */,
+				2043243F627AFA7A2239BB8E /* ChatCapabilitiesSheet.swift in Sources */,
 				A2606518E424E92625661281 /* ChatComposer.swift in Sources */,
 				61598EC22589683F1A54B047 /* ChatConfigurationView.swift in Sources */,
 				E1A4AA0C4AA32599FF2D54E7 /* ChatFontScale.swift in Sources */,

@@ -25,6 +25,7 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
@@ -40,6 +41,7 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
+                extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction,
@@ -60,7 +62,11 @@ struct ChatView: View {
         .background(Color.nativMainContentBackground)
         .onAppear {
             chat.mcpHost = mcpHost
+            mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
+        }
+        .onChange(of: model.settings.mcpServers) { _, servers in
+            mcpHost.reload(servers: servers)
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -107,6 +113,7 @@ private struct ChatTranscriptView: View {
 
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
@@ -182,6 +189,7 @@ private struct ChatTranscriptView: View {
                 ChatComposerContainer(
                     model: model,
                     chat: chat,
+                    extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
                     conversationWidthReduction: conversationWidthReduction,
@@ -293,6 +301,7 @@ private struct ChatTranscriptView: View {
 private struct ChatComposerContainer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
@@ -307,6 +316,7 @@ private struct ChatComposerContainer: View {
         ChatComposer(
             model: model,
             viewModel: chat,
+            extensionManager: extensionManager,
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
                 ?? model.settings.structuredOutputValidationError,
@@ -1660,10 +1670,13 @@ final class ChatViewModel: ObservableObject {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+            let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
             toolDefinitions.removeAll {
                 settings.disabledToolNames.contains($0.function.name)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
+                    || ($0.function.name == ChatWebReadToolRegistry.toolName
+                        && !webReadIsConfigured)
             }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
@@ -3704,6 +3717,7 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        extensionManager: NativExtensionManager(builtInExtensions: []),
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
