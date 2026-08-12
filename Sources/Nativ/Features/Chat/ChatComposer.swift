@@ -90,11 +90,13 @@ struct ChatComposer: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onSend: (Bool) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
-    private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
+    private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
     private let editorMaximumHeight: CGFloat = 120
+    private let composerVerticalPadding: CGFloat = 18
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -110,15 +112,17 @@ struct ChatComposer: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = context.date.timeIntervalSince(sendingStartedAt)
                     Text(workingStatus(elapsed: elapsed))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
+                .padding(.leading, textInset.leading + 4)
             } else if let unavailableReason {
                 Text(unavailableReason)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .padding(.leading, textInset.leading + 4)
             }
 
             if !viewModel.currentSessionQueuedPrompts.isEmpty {
@@ -235,8 +239,13 @@ struct ChatComposer: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                onBackdropHeightChange(height + (composerVerticalPadding * 2))
+            }
         }
-        .padding(.vertical, 18)
+        .padding(.vertical, composerVerticalPadding)
         .task(id: modelScanKey) {
             localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
@@ -537,6 +546,7 @@ struct ChatComposer: View {
     }
 
     private func send() {
+        guard canSend else { return }
         onSend(selectedLocalModel?.capabilities.contains(.tools) == true)
     }
 
@@ -650,6 +660,7 @@ struct ComposerModelPicker: View {
                 selectedModelProvider: selectedModelProvider,
                 secondarySection: secondarySection,
                 isEnabled: !isDisabled,
+                usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
                 onSelectModel: onSelectModel,
                 onSwitchModel: onSwitchModel,
@@ -734,6 +745,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let selectedModelProvider: LocalModelProvider?
     let secondarySection: ComposerModelPickerSecondarySection?
     let isEnabled: Bool
+    let usesSelectModelShortcut: Bool
     let statusLabel: String
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
@@ -751,6 +763,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         button.focusRingType = .none
         button.target = context.coordinator
         button.action = #selector(Coordinator.showMenu(_:))
+        configureShortcut(for: button)
         button.setAccessibilityLabel("Model")
         return button
     }
@@ -758,7 +771,15 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.parent = self
         button.isEnabled = isEnabled
+        configureShortcut(for: button)
         context.coordinator.updateActionAvailability(isEnabled)
+    }
+
+    private func configureShortcut(for button: NSButton) {
+        button.keyEquivalent = usesSelectModelShortcut ? "m" : ""
+        button.keyEquivalentModifierMask = usesSelectModelShortcut
+            ? [.control, .shift]
+            : []
     }
 
     @MainActor
