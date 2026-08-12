@@ -191,6 +191,7 @@ targets:
       - path: Sources/Nativ/Utilities/Formatting.swift
       - path: Sources/Nativ/Utilities/MarkdownFormatting.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
     dependencies:
       - target: NativServerKit

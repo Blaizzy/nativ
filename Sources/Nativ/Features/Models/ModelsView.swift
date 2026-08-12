@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import Textual
 
 private enum ModelsPageSection: String, CaseIterable, Identifiable {
     case installed = "Installed"
@@ -51,6 +52,12 @@ private struct HubSearchTaskID: Hashable {
     let capabilities: Set<LocalModelCapability>
     let access: HubAccessFilter
     let authenticationToken: String?
+}
+
+private struct ModelReadmeSelection: Equatable {
+    let repoID: String
+    let provider: LocalModelProvider?
+    let localSnapshotURL: URL?
 }
 
 /// Filters the app-wide model publisher down to values that can actually
@@ -186,6 +193,7 @@ struct ModelsView: View {
     @StateObject private var modelState: ModelsNativState
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
+    @StateObject private var readmeStore = HuggingFaceModelReadmeStore()
     // Keep download progress observation in the banner and individual rows.
     // Observing the manager here invalidates the entire Models view for every
     // progress tick, which makes Discover scroll janky during downloads.
@@ -202,6 +210,7 @@ struct ModelsView: View {
     @State private var handledSpeechModelDiscoveryRequest = 0
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
+    @State private var readmeSelection: ModelReadmeSelection?
 
     init(
         model: NativModel,
@@ -263,8 +272,15 @@ struct ModelsView: View {
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
                     renderedSection = newSection
+                    selectFirstReadme(in: newSection)
                 }
             }
+        }
+        .onChange(of: localLibrary.models.map(\.repoID)) { _, _ in
+            selectFirstVisibleReadmeIfNeeded(in: .installed)
+        }
+        .onChange(of: hubLibrary.models.map(\.id)) { _, _ in
+            selectFirstVisibleReadmeIfNeeded(in: .discover)
         }
         .task(id: hubSearchTaskID) {
             guard renderedSection == .discover else { return }
@@ -277,6 +293,17 @@ struct ModelsView: View {
                 direction: hubSortDirection,
                 capabilities: hubCapabilityFilters,
                 predicate: hubVisibilityPredicate,
+                token: modelState.effectiveHuggingFaceToken
+            )
+        }
+        .task(id: readmeSelection?.repoID) {
+            guard let readmeSelection else {
+                readmeStore.clearSelection()
+                return
+            }
+            await readmeStore.load(
+                repoID: readmeSelection.repoID,
+                localSnapshotURL: readmeSelection.localSnapshotURL,
                 token: modelState.effectiveHuggingFaceToken
             )
         }
@@ -350,7 +377,41 @@ struct ModelsView: View {
                 .padding(.horizontal, 22)
                 .padding(.vertical, 14)
 
-            sectionScroller
+            sectionResults
+        }
+    }
+
+    @ViewBuilder
+    private var sectionResults: some View {
+        // Keep the results hierarchy mounted when details open. Replacing the
+        // whole scroller here made a card click wait for the visible rows to
+        // be rebuilt before SwiftUI could present the README loading state.
+        VStack(spacing: 0) {
+            switch renderedSection {
+            case .installed:
+                installedResultsHeader
+                    .modelsListRow(top: 0)
+            case .discover:
+                discoverResultsHeader
+                    .modelsListRow(top: 0)
+            }
+
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    sectionScroller(showsResultsHeader: false)
+
+                    if let readmeSelection, section == renderedSection {
+                        Divider()
+                        ModelReadmePanel(
+                            selection: readmeSelection,
+                            store: readmeStore,
+                            onClose: { self.readmeSelection = nil }
+                        )
+                        .frame(width: geometry.size.width * 0.4)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+            }
         }
     }
 
@@ -383,7 +444,7 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
-    private var sectionScroller: some View {
+    private func sectionScroller(showsResultsHeader: Bool) -> some View {
         if section != renderedSection {
             ScrollView {
                 Text("Opening \(section.rawValue)…")
@@ -397,7 +458,7 @@ struct ModelsView: View {
             case .installed:
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        installedRows
+                        installedRows(showsResultsHeader: showsResultsHeader)
 
                         Color.clear
                             .frame(height: 12)
@@ -405,13 +466,13 @@ struct ModelsView: View {
                     }
                 }
             case .discover:
-                discoverScroller
+                discoverScroller(showsResultsHeader: showsResultsHeader)
             }
         }
     }
 
     @ViewBuilder
-    private var installedRows: some View {
+    private func installedRows(showsResultsHeader: Bool) -> some View {
         let visibleModels = filteredLocalModels
         let normalizedSettings = modelState.settings.normalized()
 
@@ -442,18 +503,10 @@ struct ModelsView: View {
             )
             .modelsListRow()
         } else {
-            HStack {
-                Text(
-                    "\(visibleModels.count) \(visibleModels.count == 1 ? "model" : "models")"
-                )
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if localLibrary.isScanning {
-                    ProgressView().controlSize(.small)
-                }
+            if showsResultsHeader {
+                installedResultsHeader
+                    .modelsListRow(top: 0)
             }
-            .modelsListRow(top: 0)
 
             ForEach(visibleModels) { localModel in
                 let preloadSlots = preloadSlots(for: localModel)
@@ -473,6 +526,7 @@ struct ModelsView: View {
                     isModelLoading: modelState.modelLoadingID
                         == localModel.repoID,
                     modelLoadingPercentage: modelState.modelLoadingPercentage,
+                    isReadmeSelected: readmeSelection?.repoID == localModel.repoID,
                     isDeleting: localLibrary.deletingModelIDs.contains(
                         localModel.repoID),
                     canDelete: localModel.isDeletable && !modelState.modelSwitchInProgress
@@ -488,10 +542,30 @@ struct ModelsView: View {
                             model.switchPreloadedModel(to: nil, for: slot)
                         }
                     },
+                    onShowReadme: {
+                        showReadme(
+                            repoID: localModel.repoID,
+                            provider: localModel.provider,
+                            localSnapshotURL: localModel.snapshotURL
+                        )
+                    },
                     onDelete: { deleteInstalledModel(localModel) }
                 )
                 .equatable()
                 .modelsListRow()
+            }
+        }
+    }
+
+    private var installedResultsHeader: some View {
+        let visibleModels = filteredLocalModels
+        return HStack {
+            Text("\(visibleModels.count) \(visibleModels.count == 1 ? "model" : "models")")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+            if localLibrary.isScanning {
+                ProgressView().controlSize(.small)
             }
         }
     }
@@ -519,7 +593,7 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
-    private var discoverScroller: some View {
+    private func discoverScroller(showsResultsHeader: Bool) -> some View {
         if let error = hubLibrary.error {
             ScrollView {
                 ModelsNotice(
@@ -568,13 +642,23 @@ struct ModelsView: View {
             // every scroll pass is noticeably more expensive than Installed.
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    discoverResultsHeader
-                        .modelsListRow(top: 0)
+                    if showsResultsHeader {
+                        discoverResultsHeader
+                            .modelsListRow(top: 0)
+                    }
 
                     ForEach(models) { hubModel in
                         HubModelRowContainer(
                             model: hubModel,
                             isInstalled: installedIDs.contains(hubModel.id),
+                            isReadmeSelected: readmeSelection?.repoID == hubModel.id,
+                            onShowReadme: {
+                                showReadme(
+                                    repoID: hubModel.id,
+                                    provider: hubModel.provider,
+                                    localSnapshotURL: nil
+                                )
+                            },
                             onDownload: { downloadSizeBytes in
                                 downloadManager.download(
                                     repoID: hubModel.id,
@@ -649,6 +733,65 @@ struct ModelsView: View {
             modelState.loadedModelID,
         ]
         return configuredModelIDs.contains(repoID)
+    }
+
+    private func showReadme(
+        repoID: String,
+        provider: LocalModelProvider?,
+        localSnapshotURL: URL?
+    ) {
+        let selection = ModelReadmeSelection(
+            repoID: repoID,
+            provider: provider,
+            localSnapshotURL: localSnapshotURL
+        )
+        if readmeSelection == selection {
+            return
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            readmeSelection = selection
+        }
+    }
+
+    private func selectFirstVisibleReadmeIfNeeded(in targetSection: ModelsPageSection) {
+        guard renderedSection == targetSection else { return }
+        let visibleIDs: [String] = switch targetSection {
+        case .installed:
+            filteredLocalModels.map(\.repoID)
+        case .discover:
+            filteredHubModels.map(\.id)
+        }
+        guard readmeSelection == nil || !visibleIDs.contains(readmeSelection?.repoID ?? "") else {
+            return
+        }
+        selectFirstReadme(in: targetSection)
+    }
+
+    private func selectFirstReadme(in targetSection: ModelsPageSection) {
+        switch targetSection {
+        case .installed:
+            guard let model = filteredLocalModels.first else {
+                readmeSelection = nil
+                return
+            }
+            showReadme(
+                repoID: model.repoID,
+                provider: model.provider,
+                localSnapshotURL: model.snapshotURL
+            )
+        case .discover:
+            guard let model = filteredHubModels.first else {
+                readmeSelection = nil
+                return
+            }
+            showReadme(
+                repoID: model.id,
+                provider: model.provider,
+                localSnapshotURL: nil
+            )
+        }
     }
 
     private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
@@ -1189,6 +1332,114 @@ private struct DebouncedModelsSearchField: NSViewRepresentable {
     }
 }
 
+private struct ModelReadmePanel: View {
+    let selection: ModelReadmeSelection
+    @ObservedObject var store: HuggingFaceModelReadmeStore
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .background(Color.nativMainContentBackground)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Model README")
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            ModelProviderBadge(provider: selection.provider)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(modelName(selection.repoID))
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(selection.repoID)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("Close model details")
+            .accessibilityLabel("Close model details")
+        }
+        .padding(16)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if store.modelID != selection.repoID || store.isLoading {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Loading README…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let markdown = store.markdown {
+            ScrollView {
+                StructuredText(
+                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                        in: HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
+                            markdown,
+                            modelTitle: modelName(selection.repoID)
+                        )
+                    ),
+                    baseURL: readmeAssetBaseURL,
+                    syntaxExtensions: [.math]
+                )
+                .textual.structuredTextStyle(.gitHub)
+                .textual.tableStyle(.overflow(relativeWidth: 4))
+                .textual.imageAttachmentLoader(.image(relativeTo: readmeAssetBaseURL))
+                .textual.overflowMode(.scroll)
+                .textual.textSelection(.enabled)
+                .font(.system(size: 15))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(18)
+            }
+        } else {
+            ContentUnavailableView {
+                Label("README unavailable", systemImage: "doc.text.magnifyingglass")
+            } description: {
+                Text(store.error ?? "This model doesn’t include a README.")
+            } actions: {
+                if let hubURL {
+                    Link("Open on Hugging Face", destination: hubURL)
+                }
+            }
+        }
+    }
+
+    private var hubURL: URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/\(selection.repoID)"
+        return components.url
+    }
+
+    private var readmeAssetBaseURL: URL {
+        if let localSnapshotURL = selection.localSnapshotURL {
+            return localSnapshotURL.appendingPathComponent("", isDirectory: true)
+        }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/\(selection.repoID)/resolve/main/"
+        return components.url ?? URL(string: "https://huggingface.co/")!
+    }
+}
+
 private struct InstalledModelRow: View, Equatable {
     let localModel: LocalModel
     let preloadSlots: [ModelPreloadSlot]
@@ -1197,9 +1448,11 @@ private struct InstalledModelRow: View, Equatable {
     let isSelectionDisabled: Bool
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
+    let isReadmeSelected: Bool
     let isDeleting: Bool
     let canDelete: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
+    let onShowReadme: () -> Void
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
@@ -1213,6 +1466,7 @@ private struct InstalledModelRow: View, Equatable {
             && lhs.isSelectionDisabled == rhs.isSelectionDisabled
             && lhs.isModelLoading == rhs.isModelLoading
             && lhs.modelLoadingPercentage == rhs.modelLoadingPercentage
+            && lhs.isReadmeSelected == rhs.isReadmeSelected
             && lhs.isDeleting == rhs.isDeleting
             && lhs.canDelete == rhs.canDelete
     }
@@ -1227,17 +1481,7 @@ private struct InstalledModelRow: View, Equatable {
 
     var body: some View {
         HStack(spacing: 10) {
-            Button {
-                guard let preferredPreloadSlot else {
-                    showsUnsupportedModelInformation = true
-                    return
-                }
-                guard !isSelectionDisabled else { return }
-                onSetPreload(
-                    preferredPreloadSlot,
-                    !selectedPreloadSlots.contains(preferredPreloadSlot)
-                )
-            } label: {
+            Button(action: onShowReadme) {
                 HStack(spacing: 14) {
                     ModelProviderBadge(provider: localModel.provider, isHighlighted: isSelected)
 
@@ -1332,8 +1576,10 @@ private struct InstalledModelRow: View, Equatable {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .help(rowHelp)
-            .accessibilityLabel(rowHelp)
+            .help("Show README for \(localModel.repoID)")
+            .accessibilityLabel("Show details for \(localModel.repoID)")
+
+            loadButton
 
             if isDeleting {
                 ProgressView()
@@ -1365,7 +1611,7 @@ private struct InstalledModelRow: View, Equatable {
         }
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .modelRowBackground(isHighlighted: isSelected)
+        .modelRowBackground(isHighlighted: isReadmeSelected || isSelected)
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -1380,6 +1626,57 @@ private struct InstalledModelRow: View, Equatable {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This permanently removes \(localModel.repoID) from the local Hugging Face cache.")
+        }
+    }
+
+    @ViewBuilder
+    private var loadButton: some View {
+        if let preferredPreloadSlot {
+            let isLoaded = selectedPreloadSlots.contains(preferredPreloadSlot)
+            Button {
+                guard !isSelectionDisabled else { return }
+                onSetPreload(preferredPreloadSlot, !isLoaded)
+            } label: {
+                Label(
+                    isLoaded ? "Unload" : "Load",
+                    systemImage: isLoaded ? "stop.fill" : "play.fill"
+                )
+                .font(.callout.weight(.medium))
+                .foregroundStyle(isLoaded ? Color.primary : Color.white)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(
+                            isLoaded
+                                ? Color.secondary.opacity(0.12)
+                                : Color.accentColor
+                        )
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isSelectionDisabled)
+            .help(rowHelp)
+            .accessibilityLabel(rowHelp)
+            .fixedSize()
+        } else {
+            Button {
+                showsUnsupportedModelInformation = true
+            } label: {
+                Label("Unavailable", systemImage: "exclamationmark.triangle")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.secondary.opacity(0.10))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(rowHelp)
+            .fixedSize()
         }
     }
 
@@ -1504,10 +1801,12 @@ private struct HubModelRow: View, Equatable {
     let model: HuggingFaceModel
     let downloadSizeBytes: Int64?
     let isInstalled: Bool
+    let isReadmeSelected: Bool
     let isDownloading: Bool
     let downloadProgress: Double
     let isDownloadPaused: Bool
     let downloadError: String?
+    let onShowReadme: () -> Void
     let onDownload: () -> Void
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
@@ -1518,6 +1817,7 @@ private struct HubModelRow: View, Equatable {
         lhs.model == rhs.model
             && lhs.downloadSizeBytes == rhs.downloadSizeBytes
             && lhs.isInstalled == rhs.isInstalled
+            && lhs.isReadmeSelected == rhs.isReadmeSelected
             && lhs.isDownloading == rhs.isDownloading
             && lhs.downloadProgress == rhs.downloadProgress
             && lhs.isDownloadPaused == rhs.isDownloadPaused
@@ -1558,60 +1858,73 @@ private struct HubModelRow: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
-                ModelProviderBadge(provider: model.provider)
+                Button(action: onShowReadme) {
+                    HStack(spacing: 14) {
+                        ModelProviderBadge(provider: model.provider)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 7) {
-                        Text(modelName(model.id))
-                            .font(.body.weight(.semibold))
-                            .lineLimit(1)
-                        if model.isGated {
-                            ModelPill(title: "Gated", systemImage: "lock")
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 7) {
+                                Text(modelName(model.id))
+                                    .font(.body.weight(.semibold))
+                                    .lineLimit(1)
+                                if model.isGated {
+                                    ModelPill(title: "Gated", systemImage: "lock")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .clipped()
+
+                            Text(model.id)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+
+                            HStack(spacing: 6) {
+                                ModelPill(
+                                    title: compactCount(model.downloads),
+                                    systemImage: "arrow.down.circle"
+                                )
+                                ModelPill(title: compactCount(model.likes), systemImage: "heart")
+                                if let sizeBytes = downloadSizeBytes {
+                                    ModelPill(
+                                        title: ByteCountFormatter.string(
+                                            fromByteCount: sizeBytes, countStyle: .file),
+                                        systemImage: "internaldrive"
+                                    )
+                                }
+                                if let memoryFitWarning {
+                                    HubModelMemoryWarningBadge(warning: memoryFitWarning)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .clipped()
+
+                            HStack(spacing: 6) {
+                                ForEach(
+                                    LocalModelCapability.visibleModelTags.filter(
+                                        model.capabilities.contains
+                                    ),
+                                    id: \.self
+                                ) { capability in
+                                    CapabilityPill(capability: capability)
+                                }
+                            }
+                            // Keep Discover rows the same height so the mounted page has
+                            // stable geometry when capability pills are absent.
+                            .frame(maxWidth: .infinity, minHeight: 19, alignment: .leading)
+                            .clipped()
                         }
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+                        Spacer(minLength: 12)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .clipped()
-
-                    Text(model.id)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    HStack(spacing: 6) {
-                        ModelPill(
-                            title: compactCount(model.downloads), systemImage: "arrow.down.circle")
-                        ModelPill(title: compactCount(model.likes), systemImage: "heart")
-                        if let sizeBytes = downloadSizeBytes {
-                            ModelPill(
-                                title: ByteCountFormatter.string(
-                                    fromByteCount: sizeBytes, countStyle: .file),
-                                systemImage: "internaldrive"
-                            )
-                        }
-                        if let memoryFitWarning {
-                            HubModelMemoryWarningBadge(warning: memoryFitWarning)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .clipped()
-
-                    HStack(spacing: 6) {
-                        ForEach(
-                            LocalModelCapability.visibleModelTags.filter(
-                                model.capabilities.contains
-                            ),
-                            id: \.self
-                        ) { capability in
-                            CapabilityPill(capability: capability)
-                        }
-                    }
-                    // Keep Discover rows the same height so the mounted page has
-                    // stable geometry when capability pills are absent.
-                    .frame(maxWidth: .infinity, minHeight: 19, alignment: .leading)
-                    .clipped()
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .help("Show README for \(model.id)")
+                .accessibilityLabel("Show details for \(model.id)")
 
                 if isInstalled {
                     Label("Installed", systemImage: "checkmark.circle.fill")
@@ -1642,7 +1955,7 @@ private struct HubModelRow: View, Equatable {
             }
         }
         .padding(14)
-        .modelRowBackground(isHighlighted: false)
+        .modelRowBackground(isHighlighted: isReadmeSelected)
     }
 
     private var downloadHelp: String {
@@ -1780,6 +2093,8 @@ private struct HubModelRowContainer: View, Equatable {
 
     let model: HuggingFaceModel
     let isInstalled: Bool
+    let isReadmeSelected: Bool
+    let onShowReadme: () -> Void
     let onDownload: (Int64?) -> Void
     let onPauseResume: () -> Void
     let onRemoveDownload: () -> Void
@@ -1787,12 +2102,16 @@ private struct HubModelRowContainer: View, Equatable {
     init(
         model: HuggingFaceModel,
         isInstalled: Bool,
+        isReadmeSelected: Bool,
+        onShowReadme: @escaping () -> Void,
         onDownload: @escaping (Int64?) -> Void,
         onPauseResume: @escaping () -> Void,
         onRemoveDownload: @escaping () -> Void
     ) {
         self.model = model
         self.isInstalled = isInstalled
+        self.isReadmeSelected = isReadmeSelected
+        self.onShowReadme = onShowReadme
         self.onDownload = onDownload
         self.onPauseResume = onPauseResume
         self.onRemoveDownload = onRemoveDownload
@@ -1804,6 +2123,7 @@ private struct HubModelRowContainer: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model == rhs.model
             && lhs.isInstalled == rhs.isInstalled
+            && lhs.isReadmeSelected == rhs.isReadmeSelected
     }
 
     var body: some View {
@@ -1812,10 +2132,12 @@ private struct HubModelRowContainer: View, Equatable {
             model: model,
             downloadSizeBytes: downloadSizeBytes,
             isInstalled: isInstalled,
+            isReadmeSelected: isReadmeSelected,
             isDownloading: downloadSnapshot.isDownloading,
             downloadProgress: downloadSnapshot.progress,
             isDownloadPaused: downloadSnapshot.isPaused,
             downloadError: downloadSnapshot.error,
+            onShowReadme: onShowReadme,
             onDownload: {
                 onDownload(downloadSizeBytes)
             },
