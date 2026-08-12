@@ -764,6 +764,7 @@ struct ControlPanelView: View {
             .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
         }
         .buttonStyle(.plain)
+        .padding(.vertical, 1)
     }
 
     private func extensionSidebarButton(
@@ -780,6 +781,7 @@ struct ControlPanelView: View {
                 .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
         }
         .buttonStyle(.plain)
+        .padding(.vertical, 1)
     }
 
     private var pinnedSection: some View {
