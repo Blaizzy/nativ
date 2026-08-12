@@ -1068,6 +1068,10 @@ final class ChatViewModel: ObservableObject {
         activeTask = nil
     }
 
+    private func ownsActiveRequest(_ requestID: UUID) -> Bool {
+        activeRequestID == requestID
+    }
+
     func prioritizeQueuedRequest(_ requestID: UUID) {
         guard let index = requestQueue.firstIndex(where: { $0.id == requestID }), index > 0 else {
             return
@@ -1225,21 +1229,31 @@ final class ChatViewModel: ObservableObject {
                 // the session marked busy forever, which is what made a frozen
                 // chat impossible to delete, stop, or switch away from.
                 defer {
+                    let ownedRequest = ownsActiveRequest(queuedRequest.id)
                     releaseActiveRequestSlot(matching: queuedRequest.id)
-                    if currentSessionID == queuedRequest.sessionID {
-                        bumpScroll()
+                    if ownedRequest {
+                        if currentSessionID == queuedRequest.sessionID {
+                            bumpScroll()
+                        }
+                        startNextRequestIfNeeded()
                     }
-                    startNextRequestIfNeeded()
                 }
 
                 do {
                     try await runChatLoop(queuedRequest)
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    if ownsActiveRequest(queuedRequest.id) {
+                        finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    }
                 } catch let error as URLError where error.code == .cancelled {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    if ownsActiveRequest(queuedRequest.id) {
+                        finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    }
                 } catch {
+                    guard ownsActiveRequest(queuedRequest.id) else {
+                        return
+                    }
                     appModel?.reportModelLoadFailure(
                         modelID: queuedRequest.settings.languageModelID,
                         error: error
@@ -1557,6 +1571,9 @@ final class ChatViewModel: ObservableObject {
             }
 
             toolRounds += 1
+            guard ownsActiveRequest(queuedRequest.id) else {
+                throw CancellationError()
+            }
             assistantMessageID = UUID()
             activeAssistantMessageID = assistantMessageID
             guard insertAssistantMessage(
