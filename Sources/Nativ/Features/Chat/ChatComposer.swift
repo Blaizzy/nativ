@@ -629,6 +629,7 @@ struct ComposerModelPickerSecondarySection {
 }
 
 struct ComposerModelPicker: View {
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isPickerHovered = false
     @State private var isMenuOpen = false
 
@@ -725,11 +726,9 @@ struct ComposerModelPicker: View {
     }
 
     private var pickerHighlightColor: Color {
-        let background = NSColor.controlBackgroundColor
-        return Color(
-            nsColor: background.blended(withFraction: 0.24, of: NSColor.labelColor)
-                ?? background
-        )
+        colorScheme == .light
+            ? Color.black.opacity(0.08)
+            : Color.white.opacity(0.14)
     }
 
     private var pickerRestingColor: Color {
