@@ -93,7 +93,7 @@ struct ChatComposer: View {
     let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
-    private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
+    private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
     private let editorMaximumHeight: CGFloat = 120
     private let composerVerticalPadding: CGFloat = 18
@@ -546,6 +546,7 @@ struct ChatComposer: View {
     }
 
     private func send() {
+        guard canSend else { return }
         onSend(selectedLocalModel?.capabilities.contains(.tools) == true)
     }
 

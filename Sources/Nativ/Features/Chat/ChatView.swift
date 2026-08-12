@@ -310,8 +310,7 @@ private struct ChatComposerContainer: View {
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
                 ?? model.settings.structuredOutputValidationError,
-            canCompose: model.isRunning
-                && !model.isModelLoading
+            canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
                 && model.settings.structuredOutputValidationError == nil,
             canSend: !model.isModelLoading
