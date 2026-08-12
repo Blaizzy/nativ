@@ -1581,33 +1581,7 @@ private struct InstalledModelRow: View, Equatable {
 
             loadButton
 
-            if isDeleting {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 30, height: 30)
-                    .help("Deleting model")
-            } else if let snapshotURL = localModel.snapshotURL {
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
-                } label: {
-                    Image(systemName: "arrow.up.forward.square")
-                        .frame(width: 20, height: 20)
-                }
-                .buttonStyle(.borderless)
-                .help("Show in Finder")
-                .accessibilityLabel("Show \(localModel.repoID) in Finder")
-            }
-
-            ModelDownloadActionButton(
-                title: canDelete
-                    ? "Delete installed model"
-                    : "Stop the server before deleting this model",
-                systemImage: "trash",
-                tint: .red,
-                isDisabled: !canDelete || isDeleting
-            ) {
-                showsDeleteConfirmation = true
-            }
+            modelActionsMenu
         }
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
@@ -1626,6 +1600,49 @@ private struct InstalledModelRow: View, Equatable {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This permanently removes \(localModel.repoID) from the local Hugging Face cache.")
+        }
+    }
+
+    @ViewBuilder
+    private var modelActionsMenu: some View {
+        if isDeleting {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 30, height: 30)
+                .help("Deleting model")
+        } else {
+            Menu {
+                if let snapshotURL = localModel.snapshotURL {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
+                    } label: {
+                        Label("Show in Finder", systemImage: "arrow.up.forward.square")
+                    }
+
+                    Divider()
+                }
+
+                Button(role: .destructive) {
+                    showsDeleteConfirmation = true
+                } label: {
+                    Label("Delete Model…", systemImage: "trash")
+                }
+                .disabled(!canDelete)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .rotationEffect(.degrees(90))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(
+                canDelete
+                    ? "Model actions"
+                    : "Model actions — stop the server before deleting this model"
+            )
+            .accessibilityLabel("Actions for \(localModel.repoID)")
         }
     }
 
