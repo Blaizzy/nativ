@@ -1,0 +1,49 @@
+name: Verify MCP Catalog
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Sources/Nativ/Resources/MCPCatalog.json"
+      - "scripts/verify_mcp_catalog.py"
+      - ".github/workflows/verify-mcp-catalog.yml"
+  pull_request:
+    paths:
+      - "Sources/Nativ/Resources/MCPCatalog.json"
+      - "scripts/verify_mcp_catalog.py"
+      - ".github/workflows/verify-mcp-catalog.yml"
+  schedule:
+    - cron: "0 7 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-mcp-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install verifier dependencies
+        run: pip install "mcp>=1.0"
+
+      - name: Verify MCP catalog
+        run: python scripts/verify_mcp_catalog.py

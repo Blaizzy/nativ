@@ -5,6 +5,7 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
     case httpStatus(Int, String)
     case missingAssistantContent
     case malformedStreamEvent(String)
+    case serverError(String)
 
     public var description: String {
         switch self {
@@ -20,6 +21,9 @@ public enum NativChatError: Error, LocalizedError, CustomStringConvertible {
             return "Chat response did not include assistant content"
         case .malformedStreamEvent(let event):
             return "Malformed chat stream event: \(event)"
+        case .serverError(let message):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "The server reported an error." : trimmed
         }
     }
 
@@ -247,6 +251,8 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
     public let promptTokensPerSecond: Double?
     public let decodeTokensPerSecond: Double?
     public let peakMemoryGB: Double?
+    public let specDraftKind: String?
+    public let specAcceptanceRate: Double?
 
     init(
         promptTokens: Int?,
@@ -254,7 +260,9 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
         totalTokens: Int?,
         promptTokensPerSecond: Double?,
         decodeTokensPerSecond: Double?,
-        peakMemoryGB: Double?
+        peakMemoryGB: Double?,
+        specDraftKind: String? = nil,
+        specAcceptanceRate: Double? = nil
     ) {
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
@@ -262,6 +270,8 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
         self.promptTokensPerSecond = promptTokensPerSecond
         self.decodeTokensPerSecond = decodeTokensPerSecond
         self.peakMemoryGB = peakMemoryGB
+        self.specDraftKind = specDraftKind
+        self.specAcceptanceRate = specAcceptanceRate
     }
 
     public var resolvedTotalTokens: Int? {
@@ -302,6 +312,8 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
         case promptTokensPerSecond = "prompt_tps"
         case decodeTokensPerSecond = "generation_tps"
         case peakMemoryGB = "peak_memory"
+        case specDraftKind = "draft_kind"
+        case specAcceptanceRate = "spec_acceptance_rate"
     }
 
     fileprivate func resolvingTimings(from timings: MLXChatTimings?) -> MLXChatUsage {
@@ -312,7 +324,9 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
             promptTokensPerSecond: promptTokensPerSecond,
             decodeTokensPerSecond: timings?.resolvedDecodeTokensPerSecond
                 ?? decodeTokensPerSecond,
-            peakMemoryGB: timings?.peakMemoryGB ?? peakMemoryGB
+            peakMemoryGB: timings?.peakMemoryGB ?? peakMemoryGB,
+            specDraftKind: timings?.specDraftKind ?? specDraftKind,
+            specAcceptanceRate: timings?.resolvedSpecAcceptanceRate ?? specAcceptanceRate
         )
     }
 }
@@ -622,7 +636,23 @@ public final class NativChatClient {
         var timings: MLXChatTimings?
         var responseModel: String?
         var streamedGeneratedTokens = 0
+        var firstGeneratedTokenAt: Date?
+        var lastGeneratedTokenAt: Date?
         var toolCallAccumulator = MLXChatToolCallAccumulator()
+
+        func cumulativeDecodeTokensPerSecond() -> Double? {
+            guard streamedGeneratedTokens > 1,
+                  let firstGeneratedTokenAt,
+                  let lastGeneratedTokenAt
+            else {
+                return nil
+            }
+            let elapsed = lastGeneratedTokenAt.timeIntervalSince(firstGeneratedTokenAt)
+            guard elapsed > 0 else {
+                return nil
+            }
+            return Double(streamedGeneratedTokens - 1) / elapsed
+        }
 
         for try await line in bytes.lines {
             try Task.checkCancellation()
@@ -641,6 +671,10 @@ public final class NativChatClient {
             }
             guard let data = dataString.data(using: .utf8) else {
                 throw NativChatError.malformedStreamEvent(dataString)
+            }
+
+            if let errorEvent = try? decoder.decode(ChatStreamErrorEvent.self, from: data) {
+                throw NativChatError.serverError(errorEvent.error.message)
             }
 
             let chunk = try decoder.decode(ChatStreamChunk.self, from: data)
@@ -664,20 +698,26 @@ public final class NativChatClient {
                     || reasoningDelta?.isEmpty == false
                 if hasGeneratedToken {
                     streamedGeneratedTokens += 1
+                    let now = Date()
+                    if firstGeneratedTokenAt == nil {
+                        firstGeneratedTokenAt = now
+                    }
+                    lastGeneratedTokenAt = now
                 }
                 if let toolCallDeltas, !toolCallDeltas.isEmpty {
                     toolCallAccumulator.merge(toolCallDeltas)
                 }
+                let liveDecodeTokensPerSecond = cumulativeDecodeTokensPerSecond()
                 if contentDelta?.isEmpty == false
                     || reasoningDelta?.isEmpty == false
                     || toolCallDeltas?.isEmpty == false
-                    || decodeTokensPerSecond != nil {
+                    || liveDecodeTokensPerSecond != nil {
                     await onEvent(
                         MLXChatStreamDelta(
                             content: contentDelta,
                             reasoningContent: reasoningDelta,
                             toolCalls: toolCallDeltas,
-                            decodeTokensPerSecond: decodeTokensPerSecond,
+                            decodeTokensPerSecond: liveDecodeTokensPerSecond,
                             generatedTokens: chunk.usage?.completionTokens
                                 ?? streamedGeneratedTokens
                         )
@@ -815,6 +855,27 @@ private struct ChatCompletionResponse: Decodable {
     }
 }
 
+private struct ChatStreamErrorEvent: Decodable {
+    let error: Payload
+
+    struct Payload: Decodable {
+        let message: String
+
+        init(from decoder: Decoder) throws {
+            if let text = try? decoder.singleValueContainer().decode(String.self) {
+                message = text
+                return
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            message = try container.decode(String.self, forKey: .message)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case message
+        }
+    }
+}
+
 private struct ChatStreamChunk: Decodable {
     let model: String?
     let choices: [Choice]
@@ -883,6 +944,9 @@ struct MLXChatToolCallAccumulator {
 private struct MLXChatTimings: Decodable {
     let predictedTokensPerSecond: Double?
     let peakMemoryGB: Double?
+    let specDraftKind: String?
+    let specDraftedTokens: Int?
+    let specAcceptedTokens: Int?
 
     var resolvedDecodeTokensPerSecond: Double? {
         guard let predictedTokensPerSecond,
@@ -894,8 +958,21 @@ private struct MLXChatTimings: Decodable {
         return predictedTokensPerSecond
     }
 
+    var resolvedSpecAcceptanceRate: Double? {
+        guard let specAcceptedTokens,
+              let specDraftedTokens,
+              specDraftedTokens > 0
+        else {
+            return nil
+        }
+        return Double(specAcceptedTokens) / Double(specDraftedTokens)
+    }
+
     enum CodingKeys: String, CodingKey {
         case predictedTokensPerSecond = "predicted_per_second"
         case peakMemoryGB = "peak_memory"
+        case specDraftKind = "draft_kind"
+        case specDraftedTokens = "draft_n"
+        case specAcceptedTokens = "draft_n_accepted"
     }
 }

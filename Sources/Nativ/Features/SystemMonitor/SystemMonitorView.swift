@@ -8,6 +8,7 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
     case gpu
     case memory
     case disk
+    case sensors
 
     var id: String { rawValue }
 
@@ -23,6 +24,8 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
             "Memory"
         case .disk:
             "Disk"
+        case .sensors:
+            "Sensors"
         }
     }
 
@@ -38,6 +41,8 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
             "memorychip"
         case .disk:
             "internaldrive"
+        case .sensors:
+            "thermometer.medium"
         }
     }
 }
@@ -69,10 +74,10 @@ struct SystemMonitorView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("System Monitor")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("System")
                     .font(.title2.weight(.semibold))
-                Text("Live performance and hardware health for this Mac")
+                Text("Live performance monitoring and hardware health for this Mac")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -112,10 +117,10 @@ struct SystemMonitorView: View {
             .buttonStyle(.borderless)
             .help("Refresh now")
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     private var menuBarControl: some View {
@@ -231,6 +236,12 @@ struct SystemMonitorView: View {
                 snapshot: store.snapshot,
                 readHistory: store.diskReadHistory,
                 writeHistory: store.diskWriteHistory
+            )
+        case .sensors:
+            SystemSensorsPage(
+                snapshot: store.snapshot,
+                temperatureHistory: store.temperatureHistory,
+                powerHistory: store.powerHistory
             )
         }
     }
@@ -383,6 +394,183 @@ private struct SystemOverviewPage: View {
             components.append("\(Int(refreshRate.rounded())) Hz")
         }
         return components.joined(separator: " · ")
+    }
+}
+
+private struct SystemSensorsPage: View {
+    let snapshot: SystemMonitorSnapshot
+    let temperatureHistory: [SystemHistorySample]
+    let powerHistory: [SystemHistorySample]
+
+    var body: some View {
+        SystemMonitorPage(title: "Sensors", subtitle: subtitle) {
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(minimum: 140), spacing: 14),
+                    count: 4
+                ),
+                spacing: 14
+            ) {
+                SystemOverviewMetric(
+                    title: "Die temperature",
+                    value: SystemMonitorFormat.celsius(
+                        snapshot.thermal.dieTemperatureCelsius
+                    ),
+                    detail: snapshot.thermal.hottestSensorName ?? "Unavailable",
+                    icon: "thermometer.medium",
+                    tint: SystemMonitorPalette.red
+                )
+                SystemOverviewMetric(
+                    title: "Power",
+                    value: SystemMonitorFormat.watts(snapshot.power.headlineWatts),
+                    detail: snapshot.power.hasAnyReading
+                        ? snapshot.power.headlineLabel
+                        : "Unavailable",
+                    icon: "bolt.fill",
+                    tint: SystemMonitorPalette.orange
+                )
+                SystemOverviewMetric(
+                    title: "Fans",
+                    value: SystemMonitorFormat.rpm(snapshot.thermal.maximumFanRPM),
+                    detail: fanDetail,
+                    icon: "fan.fill",
+                    tint: SystemMonitorPalette.teal
+                )
+                SystemOverviewMetric(
+                    title: "Thermal pressure",
+                    value: snapshot.thermal.thermalPressureLabel,
+                    detail: snapshot.thermal.thermalPressure == .nominal
+                        ? "Not throttling"
+                        : "Throttling likely",
+                    icon: "gauge.with.dots.needle.67percent",
+                    tint: pressureTint
+                )
+            }
+            .frame(maxWidth: .infinity)
+
+            SystemValueHistoryChart(
+                title: "Temperature history",
+                samples: temperatureHistory,
+                color: SystemMonitorPalette.red,
+                seriesName: "Die temperature",
+                format: { SystemMonitorFormat.celsius($0) },
+                axisStep: 10,
+                axisMinimum: 60,
+                anchorsAtZero: false
+            )
+
+            SystemValueHistoryChart(
+                title: "Power history",
+                samples: powerHistory,
+                color: SystemMonitorPalette.orange,
+                seriesName: snapshot.power.headlineLabel,
+                format: { SystemMonitorFormat.watts($0) },
+                axisStep: 10,
+                axisMinimum: 10
+            )
+
+            adaptivePair {
+                SystemInfoCard(title: "Power breakdown") {
+                    SystemInfoRow("CPU", value: SystemMonitorFormat.watts(snapshot.power.cpuWatts))
+                    SystemInfoRow("GPU", value: SystemMonitorFormat.watts(snapshot.power.gpuWatts))
+                    SystemInfoRow(
+                        "Neural Engine",
+                        value: SystemMonitorFormat.watts(snapshot.power.aneWatts)
+                    )
+                    SystemInfoRow(
+                        "Memory",
+                        value: SystemMonitorFormat.watts(snapshot.power.dramWatts)
+                    )
+                    SystemInfoRow(
+                        "SoC package",
+                        value: SystemMonitorFormat.watts(snapshot.power.socWatts)
+                    )
+                    SystemInfoRow(
+                        "System input",
+                        value: SystemMonitorFormat.watts(snapshot.power.systemInputWatts)
+                    )
+                }
+            } trailing: {
+                SystemInfoCard(title: "Cooling") {
+                    if snapshot.thermal.hasFans {
+                        ForEach(
+                            Array(snapshot.thermal.fanSpeedsRPM.enumerated()),
+                            id: \.offset
+                        ) { index, rpm in
+                            SystemInfoRow(
+                                "Fan \(index + 1)",
+                                value: SystemMonitorFormat.rpm(rpm)
+                            )
+                        }
+                    } else {
+                        SystemInfoRow("Fans", value: "Fanless design")
+                    }
+                    SystemInfoRow(
+                        "Thermal pressure",
+                        value: snapshot.thermal.thermalPressureLabel
+                    )
+                    SystemInfoRow("Sensors", value: "\(snapshot.thermal.sensors.count)")
+                }
+            }
+
+            if !snapshot.thermal.sensors.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("All sensors")
+                        .font(.headline)
+
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 280), spacing: 14)],
+                        spacing: 12
+                    ) {
+                        ForEach(snapshot.thermal.sensors) { sensor in
+                            SystemInfoRow(
+                                sensor.name,
+                                value: SystemMonitorFormat.celsius(sensor.celsius)
+                            )
+                        }
+                    }
+                    .padding(14)
+                    .systemMonitorPanel()
+                }
+            }
+        }
+    }
+
+    private var subtitle: String {
+        guard let temperature = snapshot.thermal.dieTemperatureCelsius else {
+            return "Temperature, power, and cooling"
+        }
+        return "\(SystemMonitorFormat.celsius(temperature)) · \(snapshot.thermal.sensors.count) sensors"
+    }
+
+    private var fanDetail: String {
+        guard snapshot.thermal.hasFans else { return "Fanless design" }
+        return "\(snapshot.thermal.fanSpeedsRPM.count) fans"
+    }
+
+    private var pressureTint: Color {
+        switch snapshot.thermal.thermalPressure {
+        case .nominal: SystemMonitorPalette.positive
+        case .fair: SystemMonitorPalette.orange
+        default: SystemMonitorPalette.red
+        }
+    }
+
+    @ViewBuilder
+    private func adaptivePair<Leading: View, Trailing: View>(
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 14) {
+                leading()
+                trailing()
+            }
+            VStack(spacing: 14) {
+                leading()
+                trailing()
+            }
+        }
     }
 }
 
@@ -1580,16 +1768,51 @@ private struct SystemDiskHistoryChart: View {
 
 private struct SystemFPSHistoryChart: View {
     let samples: [SystemHistorySample]
+
+    var body: some View {
+        SystemValueHistoryChart(
+            title: "FPS history",
+            samples: samples,
+            color: SystemMonitorPalette.blue,
+            seriesName: "Frame rate",
+            format: { SystemMonitorFormat.framesPerSecond($0) },
+            axisStep: 30,
+            axisMinimum: 30
+        )
+    }
+}
+
+/// History chart for a quantity measured in its own units rather than as a percentage.
+/// Shared by frame rate, temperature, and power.
+private struct SystemValueHistoryChart: View {
+    let title: String
+    let samples: [SystemHistorySample]
+    let color: Color
+    /// Row label shown in the hover tooltip.
+    let seriesName: String
+    let format: (Double) -> String
+    /// The y-axis snaps to multiples of this, so the plot does not rescale on every sample.
+    let axisStep: Double
+    /// Smallest upper bound, so a quiet chart does not zoom into noise.
+    let axisMinimum: Double
+    /// Whether zero is a meaningful floor for this quantity.
+    ///
+    /// Frame rate and watts genuinely start at zero, and anchoring there makes their
+    /// magnitude readable. Temperature does not — a die never approaches 0 °C, so a
+    /// zero-anchored axis squeezes the entire useful range into the top of the plot and
+    /// renders real drift as a flat line, which is precisely the signal this chart exists
+    /// to show. Those series anchor just below the observed minimum instead.
+    var anchorsAtZero = true
     @State private var hoveredSample: SystemHistorySample?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("FPS history")
+                Text(title)
                     .font(.headline)
                 Spacer()
                 if let current = samples.last?.value {
-                    Text(SystemMonitorFormat.framesPerSecond(current))
+                    Text(format(current))
                         .font(.caption.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -1600,15 +1823,20 @@ private struct SystemFPSHistoryChart: View {
             } else {
                 Chart {
                     ForEach(samples) { sample in
+                        // Filled from the axis floor rather than the default of zero. On a
+                        // series that does not anchor at zero the baseline sits outside
+                        // the domain, and the area is then drawn past the bottom of the
+                        // plot and bleeds over whatever follows the chart.
                         AreaMark(
                             x: .value("Time", sample.recordedAt),
-                            y: .value("Frames per second", sample.value)
+                            yStart: .value("Baseline", axisRange.lowerBound),
+                            yEnd: .value(seriesName, sample.value)
                         )
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [
-                                    SystemMonitorPalette.blue.opacity(0.44),
-                                    SystemMonitorPalette.blue.opacity(0.06),
+                                    color.opacity(0.44),
+                                    color.opacity(0.06),
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -1618,9 +1846,9 @@ private struct SystemFPSHistoryChart: View {
 
                         LineMark(
                             x: .value("Time", sample.recordedAt),
-                            y: .value("Frames per second", sample.value)
+                            y: .value(seriesName, sample.value)
                         )
-                        .foregroundStyle(SystemMonitorPalette.blue)
+                        .foregroundStyle(color)
                         .lineStyle(.init(lineWidth: 1.5))
                         .interpolationMethod(.catmullRom)
                     }
@@ -1643,11 +1871,9 @@ private struct SystemFPSHistoryChart: View {
                                 recordedAt: hoveredSample.recordedAt,
                                 rows: [
                                     SystemChartHoverRow(
-                                        title: "Frame rate",
-                                        value: SystemMonitorFormat.framesPerSecond(
-                                            hoveredSample.value
-                                        ),
-                                        color: SystemMonitorPalette.blue
+                                        title: seriesName,
+                                        value: format(hoveredSample.value),
+                                        color: color
                                     ),
                                 ]
                             )
@@ -1655,9 +1881,9 @@ private struct SystemFPSHistoryChart: View {
 
                         PointMark(
                             x: .value("Hovered time", hoveredSample.recordedAt),
-                            y: .value("Hovered FPS", hoveredSample.value)
+                            y: .value("Hovered \(seriesName)", hoveredSample.value)
                         )
-                        .foregroundStyle(SystemMonitorPalette.blue)
+                        .foregroundStyle(color)
                         .symbolSize(38)
                     }
                 }
@@ -1665,14 +1891,18 @@ private struct SystemFPSHistoryChart: View {
                     domain: systemChartTimeDomain(for: [samples]),
                     range: .plotDimension(startPadding: 0, endPadding: 0)
                 )
-                .chartYScale(domain: 0...fpsAxisMaximum)
+                .chartYScale(domain: axisRange)
+                // Deliberately not clipping the plot area: the hover tooltip is an
+                // annotation anchored above the rule mark and is chart content too, so
+                // clipping truncates it. Bounding the area fill between the axis floor
+                // and the value is what actually keeps the fill inside the plot.
                 .chartYAxis {
                     AxisMarks(values: .automatic(desiredCount: 5)) { value in
                         AxisGridLine()
                             .foregroundStyle(Color.secondary.opacity(0.12))
                         AxisValueLabel {
-                            if let fps = value.as(Double.self) {
-                                Text("\(Int(fps.rounded())) fps")
+                            if let number = value.as(Double.self) {
+                                Text(format(number))
                             }
                         }
                         .foregroundStyle(.secondary)
@@ -1705,9 +1935,15 @@ private struct SystemFPSHistoryChart: View {
         .systemMonitorPanel()
     }
 
-    private var fpsAxisMaximum: Double {
-        let observedMaximum = samples.map(\.value).max() ?? 0
-        return max(30, ceil(observedMaximum / 30) * 30)
+    private var axisRange: ClosedRange<Double> {
+        let values = samples.map(\.value)
+        let upper = max(axisMinimum, ceil((values.max() ?? 0) / axisStep) * axisStep)
+        guard !anchorsAtZero else { return 0...upper }
+
+        let lower = max(0, floor((values.min() ?? 0) / axisStep) * axisStep)
+        // A run flat enough to land inside one step would otherwise produce an empty
+        // domain, so always keep at least one step of height.
+        return lower < upper ? lower...upper : lower...(lower + axisStep)
     }
 }
 
@@ -1903,6 +2139,23 @@ private enum SystemMonitorFormat {
     static func framesPerSecond(_ value: Double?) -> String {
         guard let value, value.isFinite, value >= 0 else { return "--" }
         return "\(Int(value.rounded())) FPS"
+    }
+
+    static func celsius(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "--" }
+        return String(format: "%.1f°C", value)
+    }
+
+    static func watts(_ value: Double?) -> String {
+        guard let value, value.isFinite, value >= 0 else { return "--" }
+        return value < 10
+            ? String(format: "%.2f W", value)
+            : String(format: "%.1f W", value)
+    }
+
+    static func rpm(_ value: Int?) -> String {
+        guard let value else { return "--" }
+        return "\(value) RPM"
     }
 
     static func decimal(_ value: Double) -> String {

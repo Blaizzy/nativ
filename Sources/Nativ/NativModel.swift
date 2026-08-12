@@ -330,6 +330,16 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             modelLoadingProgress = nil
             appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Pick a chat model to load one.\n")
         }
+        if let speechToTextModelID = settings.normalized().speechToTextModelID,
+           let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(
+               repoID: speechToTextModelID,
+               path: settings.modelSearchPath
+           ),
+           let speechFlagIndex = launchArguments.firstIndex(of: "--stt-model"),
+           speechFlagIndex + 1 < launchArguments.count {
+            launchArguments.removeSubrange(speechFlagIndex...(speechFlagIndex + 1))
+            appendLog("\n\(speechIssue) Starting the server without it — dictation stays unavailable until that model is replaced or repaired.\n")
+        }
         do {
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path

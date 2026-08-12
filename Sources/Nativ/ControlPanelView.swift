@@ -1,31 +1,28 @@
 import AppKit
+import NativServerKit
 import NativExtensionSDK
 import SwiftUI
 import UniformTypeIdentifiers
 
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
-    case imageGeneration = "Images"
     case artifacts = "Artifacts"
     case dashboard = "Dashboard"
     case system = "System"
     case models = "Models"
-    case integrations = "Integrations"
     case extensions = "Extensions"
-    case developer = "Developer"
+    case dev = "Dev"
     case settings = "Settings"
 
     static var allCases: [ControlPanelTab] {
         [
             .chat,
-            .imageGeneration,
             .artifacts,
             .dashboard,
             .system,
             .models,
-            .integrations,
             .extensions,
-            .developer,
+            .dev,
         ]
     }
 
@@ -35,8 +32,6 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .chat:
             "bubble.left.and.bubble.right"
-        case .imageGeneration:
-            "photo.on.rectangle"
         case .artifacts:
             "photo.on.rectangle.angled"
         case .dashboard:
@@ -45,12 +40,10 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
             "gauge.open.with.lines.needle.33percent"
         case .models:
             "cube.transparent"
-        case .integrations:
-            "puzzlepiece.extension"
         case .extensions:
-            "shippingbox"
-        case .developer:
-            "hammer"
+            "point.3.filled.connected.trianglepath.dotted"
+        case .dev:
+            "chevron.left.forwardslash.chevron.right"
         case .settings:
             "gearshape"
         }
@@ -64,8 +57,12 @@ final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
+    @Published private(set) var imageModelDiscoveryRequest = 0
+    @Published private(set) var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+    @Published private(set) var collapseAllSectionsRequest = 0
     private var consumedNewChatRequest = 0
     private var consumedToggleSidebarRequest = 0
+    private var consumedCollapseAllSectionsRequest = 0
 
     func open(_ tab: ControlPanelTab) {
         requestedExtensionPageID = nil
@@ -82,12 +79,22 @@ final class ControlPanelNavigation: ObservableObject {
         requestedTab = .models
     }
 
+    func openImageModelDiscovery(for operation: ChatImageOperation) {
+        imageModelDiscoveryCapability = operation.requiredCapability
+        imageModelDiscoveryRequest += 1
+        requestedTab = .models
+    }
+
     func createChat() {
         newChatRequest += 1
     }
 
     func toggleSidebar() {
         toggleSidebarRequest += 1
+    }
+
+    func collapseAllSections() {
+        collapseAllSectionsRequest += 1
     }
 
     func consumeNewChatRequest() -> Bool {
@@ -103,6 +110,14 @@ final class ControlPanelNavigation: ObservableObject {
             return false
         }
         consumedToggleSidebarRequest = toggleSidebarRequest
+        return true
+    }
+
+    func consumeCollapseAllSectionsRequest() -> Bool {
+        guard consumedCollapseAllSectionsRequest < collapseAllSectionsRequest else {
+            return false
+        }
+        consumedCollapseAllSectionsRequest = collapseAllSectionsRequest
         return true
     }
 }
@@ -132,6 +147,11 @@ private enum ControlPanelLayout {
         windowControlsTopPadding + (windowControlsHeight / 2)
     static let sidebarTransitionDuration: TimeInterval = 0.2
     static let sidebarTransitionSettleDuration: Duration = .milliseconds(225)
+}
+
+private enum ControlPanelOnboarding {
+    static let extensionsBadgeDismissedKey =
+        "nativ.control-panel.extensions-new-badge-dismissed.v1"
 }
 
 extension Color {
@@ -178,6 +198,16 @@ private struct ModelsDownloadArrow: View {
 
     private var helpText: String {
         count == 1 ? "A model is downloading" : "\(count) models are downloading"
+    }
+}
+
+private struct SidebarNavigationLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.icon
+                .frame(width: 24, alignment: .center)
+            configuration.title
+        }
     }
 }
 
@@ -229,18 +259,85 @@ struct ControlPanelView: View {
     @Environment(\.displayScale) private var displayScale
     @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
-    @ObservedObject var runtime: SystemRuntimeMonitor
+    // Only the Developer page observes live runtime values. Keeping this as a
+    // plain reference prevents its one-second polling cycle from invalidating
+    // the entire control panel (including the Models result list).
+    let runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     @StateObject private var chat = ChatViewModel()
+    @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
     @StateObject private var artifacts = ArtifactStore()
     @StateObject private var dashboard = DashboardViewModel()
     @StateObject private var systemMonitor = SystemMonitorStore()
     @StateObject private var launchAtLogin = LaunchAtLoginController()
     @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @StateObject private var embeddingLibrary = LocalModelLibrary()
+
+    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
+    private static let embeddingModelSize: Int64 = 4_300_000_000
+
+    private var artifactSemanticSearch: ArtifactSemanticSearchConfig? {
+        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
+            return nil
+        }
+        let settings = model.settings.normalized()
+        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
+            ?? URL(string: "http://127.0.0.1:8080")!
+        let modelID = Self.embeddingModelID
+        let insufficientReason = downloads.capacityBlocker(
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath
+        )
+        return ArtifactSemanticSearchConfig(
+            modelID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
+            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
+            isDownloading: downloads.isDownloading(modelID),
+            downloadProgress: downloads.progress(for: modelID),
+            canInstall: insufficientReason == nil,
+            insufficientReason: insufficientReason,
+            onEnable: {
+                downloads.download(
+                    repoID: modelID,
+                    sizeBytes: Self.embeddingModelSize,
+                    cachePath: settings.modelSearchPath,
+                    token: model.effectiveHuggingFaceToken
+                ) {
+                    EmbeddingModelPreparer.prepare(
+                        repoID: modelID,
+                        searchPath: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+                navigation.open(.models)
+            },
+            onRemove: {
+                Task {
+                    try? await LocalModelDiscovery.delete(
+                        repoID: modelID,
+                        path: settings.modelSearchPath
+                    )
+                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
+                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+                }
+            },
+            prepareModel: {
+                EmbeddingModelPreparer.prepare(
+                    repoID: modelID,
+                    searchPath: settings.modelSearchPath
+                )
+            }
+        )
+    }
+    @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
+    private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
+    @State private var chatWorkspaceMode: ChatWorkspaceMode = .chat
     @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
@@ -249,7 +346,11 @@ struct ControlPanelView: View {
     @State private var detailTransitionOffset: CGFloat = 0
     @State private var isSidebarTransitioning = false
     @State private var sidebarTransitionGeneration = 0
+    @ObservedObject private var routineStore = RoutineStore.shared
+    @StateObject private var routineModelLibrary = LocalModelLibrary()
+    @State private var schedulingRoutineDraft: RoutineDraft?
     @State private var isModelConfigurationVisible = false
+    @State private var selectedDevSection: DevHubView.Section = .integrations
     @State private var isFullScreen = false
     @State private var windowControlsRefreshTrigger = 0
     @State private var isNewChatHovering = false
@@ -300,17 +401,19 @@ struct ControlPanelView: View {
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 1040, minHeight: 600)
         .overlay(alignment: .top) {
-            if selectedTab != .models, let failure = model.modelLoadFailure {
-                GlobalModelLoadFailureBanner(
-                    failure: failure,
-                    onOpenModels: { navigation.open(.models) },
-                    onDismiss: { model.clearModelLoadFailure() }
-                )
-                .padding(.top, 10)
-                .padding(.horizontal, 16)
+            Group {
+                if selectedTab != .models, let failure = model.modelLoadFailure {
+                    GlobalModelLoadFailureBanner(
+                        failure: failure,
+                        onOpenModels: { navigation.open(.models) },
+                        onDismiss: { model.clearModelLoadFailure() }
+                    )
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: selectedTab)
         }
-        .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .background {
             ZStack {
                 ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
@@ -332,6 +435,7 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
+            embeddingLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -371,6 +475,9 @@ struct ControlPanelView: View {
         }
         .onChange(of: navigation.toggleSidebarRequest) { _, _ in
             handleToggleSidebarRequest()
+        }
+        .onChange(of: navigation.collapseAllSectionsRequest) { _, _ in
+            handleCollapseAllSectionsRequest()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -417,17 +524,23 @@ struct ControlPanelView: View {
             if isSelectingRecents {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             } else {
                 sidebarActionBar
                     .padding(.horizontal, 10)
+                    .padding(.top, 8)
                     .padding(.bottom, 8)
             }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    pinnedSection
-                    foldersSection
+                    if showsPinnedSection {
+                        pinnedSection
+                    }
+                    if showsFoldersSection {
+                        foldersSection
+                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
@@ -467,11 +580,17 @@ struct ControlPanelView: View {
                 deleteRecentSession(recent)
                 pendingDeleteRecent = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteRecent = nil
             }
         } message: { recent in
-            Text("“\(recent.title)” will be permanently deleted.")
+            if case .chat(let sessionID) = recent.selection,
+               let routine = routineStore.routine(forSession: sessionID) {
+                Text("“\(recent.title)” has a routine (\(RoutineFormatting.summary(routine))). Deleting the chat cancels the routine.")
+            } else {
+                Text("“\(recent.title)” will be permanently deleted.")
+            }
         }
         .alert(
             "Delete folder?",
@@ -485,6 +604,7 @@ struct ControlPanelView: View {
                 chat.deleteFolder(folder.id)
                 pendingDeleteFolder = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteFolder = nil
             }
@@ -498,9 +618,35 @@ struct ControlPanelView: View {
             Button("Delete", role: .destructive) {
                 bulkDeleteSelected()
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
+        }
+        .sheet(item: $schedulingRoutineDraft) { draft in
+            let textModelIDs = routineModelLibrary.models
+                .filter { $0.capabilities.contains(.text) }
+                .map(\.repoID)
+            let snapshotModelID = draft.routine.modelID
+            let availableModelIDs = (
+                snapshotModelID.isEmpty || textModelIDs.contains(snapshotModelID)
+                    ? textModelIDs
+                    : textModelIDs + [snapshotModelID]
+            ).sorted()
+            let isExistingRoutine = RoutineStore.shared.routine(id: draft.routine.id) != nil
+            RoutineEditor(
+                draft: draft,
+                availableModelIDs: availableModelIDs,
+                onSave: { routine in
+                    saveScheduledRoutine(routine)
+                    schedulingRoutineDraft = nil
+                },
+                onCancel: { schedulingRoutineDraft = nil },
+                onDelete: isExistingRoutine ? {
+                    RoutineStore.shared.delete(id: draft.routine.id)
+                    schedulingRoutineDraft = nil
+                } : nil
+            )
         }
     }
 
@@ -572,7 +718,7 @@ struct ControlPanelView: View {
             ForEach(ControlPanelTab.allCases) { tab in
                 sidebarTabButton(tab)
 
-                if tab == .imageGeneration {
+                if tab == .chat {
                     ForEach(extensionManager.enabledSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }
@@ -588,6 +734,15 @@ struct ControlPanelView: View {
         } label: {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
+                    .labelStyle(SidebarNavigationLabelStyle())
+                if tab == .extensions, !isExtensionsBadgeDismissed {
+                    Text("NEW")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                }
                 Spacer(minLength: 0)
                 if tab == .models {
                     HStack(spacing: 6) {
@@ -619,6 +774,7 @@ struct ControlPanelView: View {
             applySidebarSelection(selection)
         } label: {
             Label(contribution.title, systemImage: contribution.systemImage)
+                .labelStyle(SidebarNavigationLabelStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
         }
@@ -633,30 +789,40 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            headerDivider
-
-            if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
-                emptyPinnedHint
-            } else {
-                ForEach(pinnedFolders) { folder in
-                    folderView(folder, dropTargeted: isPinnedDropTargeted)
-                }
-                ForEach(pinnedSessions) { recent in
-                    draggableRow(recent, isPinnedRow: true)
-                        .overlay(alignment: .top) {
-                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+            if !model.settings.sidebarPinnedCollapsed {
+                Group {
+                    if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
+                        emptyPinnedHint
+                    } else {
+                        ForEach(pinnedFolders) { folder in
+                            folderView(folder, dropTargeted: isPinnedDropTargeted)
                         }
-                        .overlay(alignment: .bottom) {
-                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                        ForEach(pinnedSessions) { recent in
+                            draggableRow(recent, isPinnedRow: true)
+                                .overlay(alignment: .top) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isPinnedDropTargeted)
+                                }
+                                .overlay(alignment: .bottom) {
+                                    pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isPinnedDropTargeted)
+                                }
                         }
+                    }
                 }
+                .transition(.slide)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isPinnedDropTargeted))
         .onDrop(of: [.text], isTargeted: $isPinnedDropTargeted) { providers in
-            loadDropString(providers) { handlePinnedDrop($0) }
+            loadDropString(providers) { payload in
+                revealSidebarSection(\.sidebarPinnedCollapsed)
+                handlePinnedDrop(payload)
+            }
         }
+    }
+
+    private var showsPinnedSection: Bool {
+        isSelectingRecents || !pinnedSessions.isEmpty || !pinnedFolders.isEmpty
     }
 
     private var sessionsSection: some View {
@@ -664,25 +830,28 @@ struct ControlPanelView: View {
             sidebarRecentsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
-                .padding(.top, 12)
+                .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
 
-            headerDivider
-
-            ForEach(ungroupedSessions) { recent in
-                draggableRow(recent, isPinnedRow: false)
-                    .overlay(alignment: .top) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
-                    }
-                    .overlay(alignment: .bottom) {
-                        pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isSessionsDropTargeted)
-                    }
+            if !model.settings.sidebarSessionsCollapsed {
+                ForEach(ungroupedSessions) { recent in
+                    draggableRow(recent, isPinnedRow: false)
+                        .overlay(alignment: .top) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && !reorderInsertAfter && isSessionsDropTargeted)
+                        }
+                        .overlay(alignment: .bottom) {
+                            pinnedInsertionLine(visible: reorderTargetID == recent.id && reorderInsertAfter && isSessionsDropTargeted)
+                        }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isSessionsDropTargeted))
         .onDrop(of: [.text], isTargeted: $isSessionsDropTargeted) { providers in
-            loadDropString(providers) { _ = handleSessionsDrop([$0]) }
+            loadDropString(providers) { payload in
+                revealSidebarSection(\.sidebarSessionsCollapsed)
+                _ = handleSessionsDrop([payload])
+            }
         }
     }
 
@@ -694,19 +863,23 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            headerDivider
-
-            if chat.folders.isEmpty {
-                emptyFoldersHint
-            } else {
-                ForEach(unpinnedFolders) { folder in
-                    folderView(folder, dropTargeted: isFoldersDropTargeted)
+            if !model.settings.sidebarFoldersCollapsed {
+                if unpinnedFolders.isEmpty {
+                    emptyFoldersHint
+                } else {
+                    ForEach(unpinnedFolders) { folder in
+                        folderView(folder, dropTargeted: isFoldersDropTargeted)
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(dropHighlight(isTargeted: isFoldersDropTargeted))
         .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
+    }
+
+    private var showsFoldersSection: Bool {
+        isSelectingRecents || !unpinnedFolders.isEmpty
     }
 
     private var emptyFoldersHint: some View {
@@ -969,18 +1142,33 @@ struct ControlPanelView: View {
             .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
             .help("Select multiple")
 
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    createRecentSession()
+            Menu {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        createRecentSession()
+                    }
+                } label: {
+                    Label(newRecentTitle, systemImage: newRecentSystemImage)
+                }
+                Button {
+                    presentNewRoutine()
+                } label: {
+                    Label("New routine", systemImage: "bolt")
                 }
             } label: {
-                Image(systemName: "square.and.pencil")
+                Image(systemName: "plus")
                     .font(.system(size: 15, weight: .medium))
                     .frame(width: 28, height: 28)
                     .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
             }
-            .buttonStyle(.plain)
-            .disabled(selectedTab == .imageGeneration && imageGeneration.isGenerating)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(
+                selectedTab == .chat
+                    && chatWorkspaceMode == .images
+                    && imageGeneration.isGenerating
+            )
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
         }
@@ -1038,33 +1226,56 @@ struct ControlPanelView: View {
         )
     }
 
-    private var headerDivider: some View {
-        Divider()
-            .padding(.leading, 8)
-            .padding(.trailing, 10)
-            .padding(.bottom, 6)
+    private func sidebarSectionHeader<Trailing: View>(
+        title: String,
+        isCollapsed: Bool,
+        onToggle: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.secondary.opacity(0.7))
+
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .frame(width: 12)
+
+                Spacer(minLength: 0)
+            }
+            .contentShape(.rect)
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.2)) {
+                    onToggle()
+                }
+            }
+            .help(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
+
+            trailing()
+        }
     }
 
     private var sidebarPinnedHeader: some View {
-        HStack(spacing: 8) {
-            Text("Pinned")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
-
-            Spacer(minLength: 0)
+        sidebarSectionHeader(
+            title: "Pinned",
+            isCollapsed: model.settings.sidebarPinnedCollapsed,
+            onToggle: { model.settings.sidebarPinnedCollapsed.toggle() }
+        ) {
+            EmptyView()
         }
     }
 
     private var sidebarFoldersHeader: some View {
-        HStack(spacing: 8) {
-            Text("Folders")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
-
-            Spacer(minLength: 0)
-
+        sidebarSectionHeader(
+            title: "Folders",
+            isCollapsed: model.settings.sidebarFoldersCollapsed,
+            onToggle: { model.settings.sidebarFoldersCollapsed.toggle() }
+        ) {
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
+                    model.settings.sidebarFoldersCollapsed = false
                     _ = chat.createFolder(name: "New Folder")
                 }
             } label: {
@@ -1079,12 +1290,34 @@ struct ControlPanelView: View {
     }
 
     private var sidebarRecentsHeader: some View {
-        HStack(spacing: 8) {
-            Text("Sessions")
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(.secondary.opacity(0.7))
+        sidebarSectionHeader(
+            title: "Sessions",
+            isCollapsed: model.settings.sidebarSessionsCollapsed,
+            onToggle: { model.settings.sidebarSessionsCollapsed.toggle() }
+        ) {
+            EmptyView()
+        }
+    }
 
-            Spacer(minLength: 0)
+    private var allSidebarSectionsCollapsed: Bool {
+        model.settings.allSidebarSectionsCollapsed
+            && !chat.folders.contains { !$0.isCollapsed }
+    }
+
+    private func revealSidebarSection(_ keyPath: WritableKeyPath<NativSettings, Bool>) {
+        guard model.settings[keyPath: keyPath] else {
+            return
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            model.settings[keyPath: keyPath] = false
+        }
+    }
+
+    private func toggleAllSidebarSections() {
+        let shouldCollapse = !allSidebarSectionsCollapsed
+        withAnimation(.snappy(duration: 0.2)) {
+            model.settings.setAllSidebarSectionsCollapsed(shouldCollapse)
+            chat.setAllFoldersCollapsed(shouldCollapse)
         }
     }
 
@@ -1121,9 +1354,13 @@ struct ControlPanelView: View {
 
     private var showsModelConfigurationToggle: Bool {
         switch selectedTab {
-        case .chat, .models, .developer:
+        case .chat:
+            chatWorkspaceMode == .chat
+        case .models:
             true
-        case .imageGeneration, .artifacts, .dashboard, .system, .integrations, .extensions, .settings:
+        case .dev:
+            selectedDevSection == .developer
+        case .artifacts, .dashboard, .system, .extensions, .settings:
             false
         }
     }
@@ -1301,8 +1538,10 @@ struct ControlPanelView: View {
     private func recentSessionRow(_ recent: ControlPanelRecentSession) -> some View {
         ControlPanelRecentSessionRow(
             recent: recent,
+            routineStatus: routineStatus(for: recent),
             isSelected: sidebarSelection == recent.selection,
             isCurrent: isCurrentRecent(recent),
+            isActive: isRecentActive(recent),
             isSelectionDisabled: isRecentSelectionDisabled(recent),
             isDeleteDisabled: isRecentDeleteDisabled(recent),
             canExport: canExportRecent(recent),
@@ -1335,6 +1574,9 @@ struct ControlPanelView: View {
             onTogglePin: {
                 togglePinRecent(recent)
             },
+            onEditRoutine: {
+                editRoutine(for: recent)
+            },
             folders: chat.folders,
             onMoveToFolder: { folderID in
                 moveRecentToFolder(recent, folderID: folderID)
@@ -1350,6 +1592,56 @@ struct ControlPanelView: View {
             return
         }
         chat.setPinned(sessionID, pinned: !recent.pinned)
+    }
+
+    private func routineStatus(for recent: ControlPanelRecentSession) -> RoutineRowStatus {
+        guard case .chat(let sessionID) = recent.selection,
+              let routine = routineStore.routine(forSession: sessionID)
+        else {
+            return .none
+        }
+        if routineStore.isRoutineRunning(forSession: sessionID) {
+            return .running
+        }
+        return routine.isEnabled ? .scheduled : .disabled
+    }
+
+    private func editRoutine(for recent: ControlPanelRecentSession) {
+        guard case .chat(let sessionID) = recent.selection else {
+            return
+        }
+        let settings = model.settings.normalized()
+        routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
+        guard let existing = RoutineStore.shared.routine(forSession: sessionID) else {
+            return
+        }
+        schedulingRoutineDraft = RoutineDraft(routine: existing)
+    }
+
+    private func presentNewRoutine() {
+        let settings = model.settings.normalized()
+        routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
+        schedulingRoutineDraft = RoutineDraft(
+            routine: Routine(modelID: settings.languageModelID ?? "")
+        )
+    }
+
+    private func saveScheduledRoutine(_ routine: Routine) {
+        var routine = routine
+        if routine.sourceSessionID == nil {
+            let now = Date()
+            let session = ChatSession(
+                id: UUID(),
+                title: routine.name.isEmpty ? "Routine" : routine.name,
+                createdAt: now,
+                updatedAt: now,
+                messages: []
+            )
+            ChatSessionStore().saveSession(session)
+            routine.sourceSessionID = session.id
+        }
+        RoutineStore.shared.upsert(routine)
+        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func moveRecentToFolder(_ recent: ControlPanelRecentSession, folderID: UUID?) {
@@ -1564,8 +1856,14 @@ struct ControlPanelView: View {
         guard affectsDisplayed else {
             return
         }
-        let survivor = recentSessions.first { !removedIDs.contains($0.id) }
-        applySidebarSelection(survivor?.selection ?? .tab(selectedTab))
+        if let survivor = recentSessions.first(where: { !removedIDs.contains($0.id) }) {
+            applySidebarSelection(survivor.selection)
+        } else if chatWorkspaceMode == .images {
+            imageGeneration.beginNewDraft()
+            showImageWorkspace()
+        } else {
+            createChatSession()
+        }
     }
 
     private func renameRecentSession(_ recent: ControlPanelRecentSession, to newTitle: String) {
@@ -1620,19 +1918,24 @@ struct ControlPanelView: View {
     private var corePage: some View {
         switch selectedTab {
         case .chat:
-            ChatView(
+            ChatWorkspaceView(
+                mode: chatWorkspaceMode,
+                onSelectMode: selectChatWorkspaceMode,
                 model: model,
                 chat: chat,
+                mcpHost: mcpHost,
+                imageGeneration: imageGeneration,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
                     ? 0
-                    : ControlPanelLayout.titlebarHeight
+                    : ControlPanelLayout.titlebarHeight,
+                onExploreImageModels: navigation.openImageModelDiscovery
             )
-        case .imageGeneration:
-            ImageGenerationView(model: model, viewModel: imageGeneration)
         case .artifacts:
             ArtifactsView(
                 store: artifacts,
+                semanticSearch: artifactSemanticSearch,
+                titleLeadingInset: detailTitleLeadingInset,
                 onOpenChat: { artifact in
                     switch artifact.source {
                     case .uploaded:
@@ -1646,13 +1949,14 @@ struct ControlPanelView: View {
                     if let attachment = artifacts.chatAttachment(for: artifact) {
                         chat.stageAttachment(attachment)
                     }
-                    applySidebarSelection(.tab(.chat))
+                    showChatWorkspace()
                 },
                 onUseAsReference: { artifact in
+                    imageGeneration.beginNewDraft()
+                    showImageWorkspace()
                     if let attachment = artifacts.chatAttachment(for: artifact) {
                         imageGeneration.useAsReference(attachment)
                     }
-                    applySidebarSelection(.tab(.imageGeneration))
                 }
             )
         case .dashboard:
@@ -1668,31 +1972,31 @@ struct ControlPanelView: View {
                 titleLeadingInset: detailTitleLeadingInset
             )
         case .models:
-            ModelsView(
+            ModelsViewHost(
                 model: model,
                 showsConfiguration: $isModelConfigurationVisible,
                 titleLeadingInset: detailTitleLeadingInset,
-                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest
+                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest,
+                imageModelDiscoveryRequest: navigation.imageModelDiscoveryRequest,
+                imageModelDiscoveryCapability: navigation.imageModelDiscoveryCapability
             )
-        case .integrations:
-            IntegrationsView(
-                model: model,
-                titleLeadingInset: detailTitleLeadingInset
-            )
+            .equatable()
         case .extensions:
-            ExtensionsView(
+            ExtensionsHubView(
                 manager: extensionManager,
-                titleLeadingInset: detailTitleLeadingInset
+                host: mcpHost,
+                model: model
             )
-        case .developer:
-            DeveloperView(
+        case .dev:
+            DevHubView(
+                section: $selectedDevSection,
                 model: model,
                 runtime: runtime,
-                showsConfiguration: $isModelConfigurationVisible,
-                titleLeadingInset: detailTitleLeadingInset
+                showsConfiguration: $isModelConfigurationVisible
             )
         case .settings:
             SettingsView(
+                model: model,
                 softwareUpdater: softwareUpdater,
                 launchAtLogin: launchAtLogin
             )
@@ -1728,11 +2032,16 @@ struct ControlPanelView: View {
     private func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
         switch selection {
         case .tab(let tab):
-            if tab == .chat, chat.currentSessionID == nil {
-                chat.createSession()
-            } else if tab == .imageGeneration,
-                      imageGeneration.currentSessionID == nil {
-                imageGeneration.createSession()
+            if tab == .extensions {
+                isExtensionsBadgeDismissed = true
+            }
+            if tab == .chat {
+                switch chatWorkspaceMode {
+                case .chat where chat.currentSessionID == nil:
+                    chat.createSession()
+                default:
+                    break
+                }
             }
             sidebarSelection = selection
             selectedTab = tab
@@ -1753,15 +2062,17 @@ struct ControlPanelView: View {
             } else {
                 sidebarSelection = .tab(.chat)
             }
+            chatWorkspaceMode = .chat
             selectedTab = .chat
         case .imageGeneration(let sessionID):
             if imageGeneration.sessions.contains(where: { $0.id == sessionID }) {
                 imageGeneration.selectSession(sessionID)
                 sidebarSelection = selection
             } else {
-                sidebarSelection = .tab(.imageGeneration)
+                sidebarSelection = .tab(.chat)
             }
-            selectedTab = .imageGeneration
+            chatWorkspaceMode = .images
+            selectedTab = .chat
         }
     }
 
@@ -1776,20 +2087,17 @@ struct ControlPanelView: View {
             return true
         }
         switch selectedTab {
-        case .dashboard, .system, .models, .integrations, .extensions, .developer:
+        case .dashboard, .system, .models, .extensions, .dev:
             return true
-        case .chat, .imageGeneration, .artifacts, .settings:
+        case .chat, .artifacts, .settings:
             return false
         }
     }
 
     private func createRecentSession() {
-        if selectedTab == .imageGeneration {
-            imageGeneration.createSession()
-            applySidebarSelection(
-                imageGeneration.currentSessionID.map(ControlPanelSidebarSelection.imageGeneration)
-                    ?? .tab(.imageGeneration)
-            )
+        if selectedTab == .chat, chatWorkspaceMode == .images {
+            imageGeneration.beginNewDraft()
+            showImageWorkspace()
         } else {
             createChatSession()
         }
@@ -1807,6 +2115,13 @@ struct ControlPanelView: View {
             return
         }
         toggleSidebarVisibility()
+    }
+
+    private func handleCollapseAllSectionsRequest() {
+        guard navigation.consumeCollapseAllSectionsRequest() else {
+            return
+        }
+        toggleAllSidebarSections()
     }
 
     private func canExportRecent(_ recent: ControlPanelRecentSession) -> Bool {
@@ -1908,6 +2223,7 @@ struct ControlPanelView: View {
 
         switch recent.selection {
         case .chat(let sessionID):
+            routineStore.deleteRoutine(forSession: sessionID)
             chat.deleteSession(sessionID)
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
@@ -1918,9 +2234,17 @@ struct ControlPanelView: View {
         guard shouldSelectReplacement else {
             return
         }
-        applySidebarSelection(
-            replacementSelection ?? fallbackTabSelection(for: recent)
-        )
+        if let replacementSelection {
+            applySidebarSelection(replacementSelection)
+        } else {
+            switch recent.selection {
+            case .imageGeneration:
+                imageGeneration.beginNewDraft()
+                showImageWorkspace()
+            case .chat, .tab, .extensionPage:
+                createChatSession()
+            }
+        }
     }
 
     private func adjacentRecentSelection(
@@ -1946,26 +2270,11 @@ struct ControlPanelView: View {
         }
         switch (sidebarSelection, recent.selection) {
         case (.tab(.chat), .chat(let sessionID)):
-            return sessionID == chat.currentSessionID
-        case (.tab(.imageGeneration), .imageGeneration(let sessionID)):
-            return sessionID == imageGeneration.currentSessionID
+            return chatWorkspaceMode == .chat && sessionID == chat.currentSessionID
+        case (.tab(.chat), .imageGeneration(let sessionID)):
+            return chatWorkspaceMode == .images && sessionID == imageGeneration.currentSessionID
         default:
             return false
-        }
-    }
-
-    private func fallbackTabSelection(
-        for recent: ControlPanelRecentSession
-    ) -> ControlPanelSidebarSelection {
-        switch recent.selection {
-        case .chat:
-            .tab(.chat)
-        case .imageGeneration:
-            .tab(.imageGeneration)
-        case .tab(let tab):
-            .tab(tab)
-        case .extensionPage(let pageID):
-            .extensionPage(pageID)
         }
     }
 
@@ -1976,6 +2285,16 @@ struct ControlPanelView: View {
         case .imageGeneration(let sessionID):
             return sessionID == imageGeneration.currentSessionID
         case .tab, .extensionPage:
+            return false
+        }
+    }
+
+    /// True while this chat is the one generating a response — drives the title shimmer.
+    private func isRecentActive(_ recent: ControlPanelRecentSession) -> Bool {
+        switch recent.selection {
+        case .chat(let sessionID):
+            return sessionID == chat.activeRequestSessionID
+        case .imageGeneration, .tab, .extensionPage:
             return false
         }
     }
@@ -2003,14 +2322,101 @@ struct ControlPanelView: View {
     }
 
     private var newRecentHelp: String {
-        selectedTab == .imageGeneration ? "Create a new image conversation" : "Create a new chat"
+        selectedTab == .chat && chatWorkspaceMode == .images
+            ? "Start a new image draft"
+            : "Create a new chat"
+    }
+
+    private var newRecentTitle: String {
+        selectedTab == .chat && chatWorkspaceMode == .images
+            ? "New image"
+            : "New chat"
+    }
+
+    private var newRecentSystemImage: String {
+        selectedTab == .chat && chatWorkspaceMode == .images
+            ? "photo.badge.plus"
+            : "square.and.pencil"
     }
 
     private func createChatSession() {
         chat.createSession()
-        applySidebarSelection(chat.currentSessionID.map(ControlPanelSidebarSelection.chat) ?? .tab(.chat))
+        showChatWorkspace()
     }
 
+    private func selectChatWorkspaceMode(_ mode: ChatWorkspaceMode) {
+        guard mode != chatWorkspaceMode else {
+            return
+        }
+        switch mode {
+        case .chat:
+            showChatWorkspace()
+        case .images:
+            imageGeneration.beginNewDraft(preservingUncommittedDraft: true)
+            showImageWorkspace()
+        }
+    }
+
+    private func showChatWorkspace() {
+        if chat.currentSessionID == nil {
+            chat.createSession()
+        }
+        chatWorkspaceMode = .chat
+        selectedTab = .chat
+        sidebarSelection = chat.currentSessionID.map(ControlPanelSidebarSelection.chat)
+            ?? .tab(.chat)
+    }
+
+    private func showImageWorkspace() {
+        chatWorkspaceMode = .images
+        selectedTab = .chat
+        sidebarSelection = imageGeneration.currentSessionID
+            .map(ControlPanelSidebarSelection.imageGeneration)
+            ?? .tab(.chat)
+    }
+
+}
+
+private struct ChatWorkspaceView: View {
+    let mode: ChatWorkspaceMode
+    let onSelectMode: (ChatWorkspaceMode) -> Void
+    @ObservedObject var model: NativModel
+    let chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var imageGeneration: ImageGenerationViewModel
+    @Binding var showsConfiguration: Bool
+    let conversationWidthReduction: CGFloat
+    let onExploreImageModels: (ChatImageOperation) -> Void
+
+    var body: some View {
+        Group {
+            switch mode {
+            case .chat:
+                ChatView(
+                    model: model,
+                    chat: chat,
+                    mcpHost: mcpHost,
+                    workspaceMode: mode,
+                    onSelectWorkspaceMode: onSelectMode,
+                    showsConfiguration: $showsConfiguration,
+                    conversationWidthReduction: conversationWidthReduction,
+                    onExploreImageModels: onExploreImageModels
+                )
+            case .images:
+                ImageGenerationView(
+                    model: model,
+                    viewModel: imageGeneration,
+                    workspaceMode: mode,
+                    onSelectWorkspaceMode: onSelectMode
+                )
+            }
+        }
+        .id(mode)
+        .transition(.opacity)
+        .animation(.easeOut(duration: 0.1), value: mode)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.nativMainContentBackground)
+    }
 }
 
 private struct FooterControlTrackingView: NSViewRepresentable {
@@ -3406,10 +3812,19 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     }
 }
 
+private enum RoutineRowStatus {
+    case none
+    case disabled
+    case scheduled
+    case running
+}
+
 private struct ControlPanelRecentSessionRow: View {
     let recent: ControlPanelRecentSession
+    let routineStatus: RoutineRowStatus
     let isSelected: Bool
     let isCurrent: Bool
+    let isActive: Bool
     let isSelectionDisabled: Bool
     let isDeleteDisabled: Bool
     let canExport: Bool
@@ -3424,6 +3839,7 @@ private struct ControlPanelRecentSessionRow: View {
     let onRename: (String) -> Void
     let onNewChat: () -> Void
     let onTogglePin: () -> Void
+    let onEditRoutine: () -> Void
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
@@ -3432,6 +3848,29 @@ private struct ControlPanelRecentSessionRow: View {
     @State private var isRenaming = false
     @State private var renameDraft = ""
     @FocusState private var renameFieldFocused: Bool
+
+    @ViewBuilder
+    private var routineBolt: some View {
+        switch routineStatus {
+        case .none:
+            EmptyView()
+        case .disabled:
+            Image(systemName: "bolt.slash")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .help("Routine paused")
+        case .scheduled:
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .help("Routine scheduled")
+        case .running:
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.green)
+                .help("Routine running now")
+        }
+    }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -3450,6 +3889,11 @@ private struct ControlPanelRecentSessionRow: View {
                         }
                         .onExitCommand {
                             isRenaming = false
+                        }
+                        // Clicking away ends the rename (commit) instead of
+                        // leaving a stuck field/caret that swallows clicks.
+                        .onChange(of: renameFieldFocused) { _, focused in
+                            if !focused, isRenaming { commitRename() }
                         }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3489,9 +3933,11 @@ private struct ControlPanelRecentSessionRow: View {
                                 .accessibilityLabel("Image session")
                         }
 
-                        Text(recent.title)
+                        TextShimmerWave(text: recent.title, active: isActive)
                             .lineLimit(1)
                             .truncationMode(.tail)
+
+                        routineBolt
 
                         Spacer(minLength: 0)
                     }
@@ -3569,6 +4015,14 @@ private struct ControlPanelRecentSessionRow: View {
                     recent.pinned ? "Unpin" : "Pin",
                     systemImage: recent.pinned ? "pin.slash" : "pin"
                 )
+            }
+
+            if routineStatus != .none {
+                Button {
+                    onEditRoutine()
+                } label: {
+                    Label("Edit routine", systemImage: "bolt")
+                }
             }
 
             Menu {
@@ -3682,6 +4136,9 @@ private struct ControlPanelFolderHeaderView: View {
                     .onExitCommand {
                         isRenaming = false
                     }
+                    .onChange(of: renameFieldFocused) { _, focused in
+                        if !focused, isRenaming { commitRename() }
+                    }
             } else {
                 Text(folder.name)
                     .font(.system(size: 13, weight: .medium))
@@ -3776,7 +4233,6 @@ private struct SidebarRowSelectionStyle: ViewModifier {
             .foregroundStyle(Color.primary)
             .contentShape(.rect)
             .onHover { isHovering = $0 }
-            .animation(.easeInOut, value: isHovering)
     }
 
     private var backgroundColor: Color {

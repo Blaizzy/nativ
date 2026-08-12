@@ -5,11 +5,14 @@ import UniformTypeIdentifiers
 struct ImageGenerationView: View {
     private enum Layout {
         static let conversationMaxWidth: CGFloat = 860
+        static let composerMaxWidth: CGFloat = 680
         static let horizontalPadding: CGFloat = 32
     }
 
     @ObservedObject var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var followsLatestTurn = true
@@ -17,8 +20,13 @@ struct ImageGenerationView: View {
     var body: some View {
         transcript
             .overlay(alignment: .bottom) {
-                ImageGenerationComposer(model: model, viewModel: viewModel)
-                    .frame(maxWidth: Layout.conversationMaxWidth)
+                ImageGenerationComposer(
+                    model: model,
+                    viewModel: viewModel,
+                    workspaceMode: workspaceMode,
+                    onSelectWorkspaceMode: onSelectWorkspaceMode
+                )
+                    .frame(maxWidth: Layout.composerMaxWidth)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, Layout.horizontalPadding)
                     .onGeometryChange(for: CGFloat.self) { proxy in
@@ -94,6 +102,8 @@ struct ImageGenerationView: View {
 private struct ImageGenerationComposer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @StateObject private var localLibrary = LocalModelLibrary()
     @State private var editorContentHeight: CGFloat = 0
     @State private var showsSettings = false
@@ -138,6 +148,11 @@ private struct ImageGenerationComposer: View {
                     )
                     .frame(width: 30, height: 30)
                     .help("Add a reference image")
+
+                    ChatWorkspacePicker(
+                        selection: workspaceMode,
+                        onSelect: onSelectWorkspaceMode
+                    )
 
                     Button {
                         showsSettings.toggle()
@@ -186,16 +201,10 @@ private struct ImageGenerationComposer: View {
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onChange(of: localLibrary.models) { _, models in
             let generationModels = models.filter {
@@ -352,9 +361,7 @@ private struct ImageGenerationComposer: View {
     }
 
     private var modelScanKey: String {
-        let settings = model.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        model.settings.localModelSearchPaths.cacheKey
     }
 
     private var actionButtonColor: Color {

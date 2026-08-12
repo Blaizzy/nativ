@@ -30,6 +30,7 @@ final class VoiceDictationExtension: NativHostExtension {
             context.showMainWindow()
         }
         coordinator.start()
+        audioCaptureLibrary.start()
         isActive = true
     }
 
@@ -100,6 +101,7 @@ final class VoiceDictationExtension: NativHostExtension {
         developer: "Nativ",
         systemImage: "waveform.badge.mic",
         included: true,
+        enabledByDefault: false,
         runtime: .extensionFoundation,
         runtimeBundleIdentifier: "dev.local.Nativ.VoiceDictationExtension",
         contributions: .init(
@@ -128,11 +130,6 @@ final class VoiceDictationExtension: NativHostExtension {
                     id: "com.nativ.voice-dictation.retranscribe",
                     title: "Retranscribe",
                     defaultShortcut: "Fn+R"
-                ),
-                .init(
-                    id: "com.nativ.voice-dictation.hands-free",
-                    title: "Hands-free",
-                    defaultShortcut: "Option"
                 ),
             ],
             settings: [

@@ -51,6 +51,11 @@ enum Main {
             }
         }
 
+        if let index = CommandLine.arguments.firstIndex(of: "--run-routine"),
+           index + 1 < CommandLine.arguments.count {
+            RoutineHeadlessRun.execute(routineID: CommandLine.arguments[index + 1])
+        }
+
         NativApplication.main()
     }
 
@@ -120,6 +125,26 @@ private struct NativApplication: App {
                     appDelegate.toggleSidebar()
                 }
                 .keyboardShortcut("s", modifiers: [.control, .command])
+            }
+
+            CommandGroup(after: .sidebar) {
+                Button("Collapse All Sections") {
+                    appDelegate.toggleAllSidebarSections()
+                }
+                .keyboardShortcut(".", modifiers: [.command, .option])
+
+                Button("Increase Chat Font Size") {
+                    appDelegate.increaseChatFontSize()
+                }
+                .keyboardShortcut("+", modifiers: .command)
+                Button("Decrease Chat Font Size") {
+                    appDelegate.decreaseChatFontSize()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+                Button("Reset Chat Font Size") {
+                    appDelegate.resetChatFontSize()
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
 
             CommandGroup(replacing: .appSettings) {

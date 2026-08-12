@@ -186,11 +186,7 @@ final class ImageGenerationViewModel: ObservableObject {
             return repaired
         }
 
-        if let latestSession = storedSessions.sorted(by: ImageGenerationSession.recencySort).first {
-            applyCurrentSession(latestSession)
-        } else {
-            createSession()
-        }
+        refreshSessionList()
     }
 
     deinit {
@@ -268,39 +264,25 @@ final class ImageGenerationViewModel: ObservableObject {
         persistCurrentSession(updateTimestamp: false)
     }
 
-    func createSession() {
+    func beginNewDraft(preservingUncommittedDraft: Bool = false) {
         guard !isGenerating else {
             return
         }
 
-        if let currentSession,
-           currentSession.turns.isEmpty,
-           normalized(prompt) == nil,
-           pendingImageAttachments.isEmpty,
-           activeReference == nil {
-            applyCurrentSession(currentSession)
+        if preservingUncommittedDraft, currentSession == nil {
             return
         }
 
         persistCurrentSession(updateTimestamp: false)
-        let createdAt = Date()
-        let session = ImageGenerationSession(
-            id: UUID(),
-            title: ImageGenerationSession.timestampTitle(for: createdAt),
-            createdAt: createdAt,
-            updatedAt: createdAt,
-            modelKind: .imageGeneration,
-            modelID: normalized(modelID) ?? Self.fallbackModelID,
-            draftSettings: requestSettings,
-            activeReference: nil,
-            turns: []
-        )
-
-        storedSessions.append(session)
-        sessionStore.saveSession(session)
         prompt = ""
         pendingImageAttachments.removeAll()
-        applyCurrentSession(session)
+        currentSession = nil
+        currentSessionID = nil
+        turns = []
+        activeReference = nil
+        statusText = nil
+        refreshSessionList()
+        bumpScroll()
     }
 
     func selectSession(_ sessionID: UUID) {
@@ -362,11 +344,11 @@ final class ImageGenerationViewModel: ObservableObject {
               appModel.isRunning,
               let requestModelID = normalized(modelID),
               let requestPrompt = normalized(prompt),
-              let requestSeed = parsedSeed,
-              currentSession != nil
+              let requestSeed = parsedSeed
         else {
             return
         }
+        materializeDraftSession(modelID: requestModelID)
         appModel.clearModelLoadFailure(for: requestModelID)
 
         var settings = requestSettings
@@ -700,6 +682,26 @@ final class ImageGenerationViewModel: ObservableObject {
         statusText = nil
         refreshSessionList()
         bumpScroll()
+    }
+
+    private func materializeDraftSession(modelID: String) {
+        guard currentSession == nil else {
+            return
+        }
+        let createdAt = Date()
+        let session = ImageGenerationSession(
+            id: UUID(),
+            title: ImageGenerationSession.timestampTitle(for: createdAt),
+            createdAt: createdAt,
+            updatedAt: createdAt,
+            modelKind: .imageGeneration,
+            modelID: modelID,
+            draftSettings: requestSettings,
+            activeReference: activeReference,
+            turns: []
+        )
+        currentSession = session
+        currentSessionID = session.id
     }
 
     func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) {

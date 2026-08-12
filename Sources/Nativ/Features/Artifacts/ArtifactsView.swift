@@ -1,5 +1,8 @@
 import AppKit
+import AVFoundation
+import PDFKit
 import SwiftUI
+import Vision
 
 enum ArtifactLayout {
     case grid
@@ -65,9 +68,19 @@ struct ArtifactGroup: Identifiable {
 
 struct ArtifactsView: View {
     @ObservedObject var store: ArtifactStore
+    let semanticSearch: ArtifactSemanticSearchConfig?
+    var titleLeadingInset: CGFloat = 0
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
     let onUseAsReference: (Artifact) -> Void
+
+    @StateObject private var searchIndex = ArtifactSearchIndex()
+    @State private var semanticMatches: [UUID]?
+    @State private var searchDebounce: Task<Void, Never>?
+    @State private var showsSemanticPopover = false
+    @State private var isConfirmingSemanticModelRemoval = false
+    @AppStorage("artifactSemanticSearchOffered") private var semanticSearchOffered = false
+    @AppStorage("smartSearchEnabled") private var smartSearchEnabled = true
 
     @State private var search = ""
     @State private var kindFilter: ArtifactKind?
@@ -80,7 +93,7 @@ struct ArtifactsView: View {
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var inspectorArtifact: Artifact?
-    @State private var groupByChat = true
+    @State private var groupByChat = false
     @State private var albumSessionID: UUID?
     @State private var favoritesOnly = false
     @State private var dateFilter: ArtifactDateFilter = .all
@@ -90,8 +103,19 @@ struct ArtifactsView: View {
     @FocusState private var gridFocused: Bool
     @FocusState private var searchFocused: Bool
 
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var showingByChat: Bool {
+        groupByChat && !isSearching
+    }
+
+    private var smartSearchActive: Bool {
+        smartSearchEnabled && (semanticSearch?.isModelInstalled == true)
+    }
+
     private var filtered: [Artifact] {
-        let query = search.lowercased()
         var result = store.artifacts
         if let kindFilter {
             result = result.filter { $0.kind == kindFilter }
@@ -105,10 +129,21 @@ struct ArtifactsView: View {
         if dateFilter != .all {
             result = result.filter { dateFilter.includes($0.createdAt) }
         }
-        if !query.isEmpty {
-            result = result.filter { $0.searchText.contains(query) }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            return result.sorted(by: sort.comparator)
         }
-        return result.sorted(by: sort.comparator)
+        if let semanticMatches, smartSearchActive {
+            var rank: [UUID: Int] = [:]
+            for (position, id) in semanticMatches.enumerated() {
+                rank[id] = position
+            }
+            return result
+                .filter { rank[$0.id] != nil }
+                .sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
+        }
+        let lowered = query.lowercased()
+        return result.filter { $0.searchText.contains(lowered) }.sorted(by: sort.comparator)
     }
 
     private var groups: [ArtifactGroup] {
@@ -128,9 +163,261 @@ struct ArtifactsView: View {
         return order.map { ArtifactGroup(id: $0, title: $0, items: buckets[$0] ?? []) }
     }
 
+    @ViewBuilder
+    private var semanticBanner: some View {
+        if let config = semanticSearch, !config.isModelInstalled, !config.isDownloading,
+           config.canInstall, !semanticSearchOffered, !store.artifacts.isEmpty {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Turn on Smart search")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the settings.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Button("Install") {
+                    config.onEnable()
+                    semanticSearchOffered = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("Not now") {
+                    semanticSearchOffered = true
+                }
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(nsColor: .windowBackgroundColor))
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private func semanticSettingsButton(_ config: ArtifactSemanticSearchConfig) -> some View {
+        Button {
+            showsSemanticPopover = true
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .help("Smart search settings")
+        .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Smart search", systemImage: "sparkle.magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                if config.isModelInstalled {
+                    Toggle("Enabled", isOn: $smartSearchEnabled)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                    Text(smartSearchEnabled
+                        ? "Searching by image, video and document contents."
+                        : "Turned off. The model stays installed.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Text("Runs on-device — results are fastest when your Mac isn't busy generating.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Divider()
+                    Button("Remove model", role: .destructive) {
+                        isConfirmingSemanticModelRemoval = true
+                    }
+                    .controlSize(.small)
+                    .help("Deletes the model and turns Smart search off")
+                } else if config.isDownloading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Downloading model… \(Int((config.downloadProgress * 100).rounded()))%")
+                            .font(.system(size: 11))
+                    }
+                } else {
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by what's inside them.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Button("Install") {
+                        config.onEnable()
+                        semanticSearchOffered = true
+                        showsSemanticPopover = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!config.canInstall)
+                    if let reason = config.insufficientReason {
+                        Text(reason)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(width: 264)
+        }
+    }
+
+    private func scheduleSemanticSearch() {
+        searchDebounce?.cancel()
+        guard smartSearchEnabled, let config = semanticSearch, config.isModelInstalled else {
+            semanticMatches = nil
+            return
+        }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            semanticMatches = nil
+            return
+        }
+        searchDebounce = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if Task.isCancelled {
+                return
+            }
+            await Task.detached { config.prepareModel() }.value
+            let matches = await searchIndex.search(query: query, model: config.modelID, client: config.client)
+            if Task.isCancelled {
+                return
+            }
+            semanticMatches = matches
+        }
+    }
+
+    private func warmSemanticIndex() {
+        guard smartSearchEnabled, let config = semanticSearch, config.isModelInstalled else {
+            return
+        }
+        Task {
+            await Task.detached { config.prepareModel() }.value
+            await searchIndex.index(
+                artifacts: store.artifacts,
+                model: config.modelID,
+                client: config.client,
+                visualURLs: visualDataURLs(for:),
+                textChunks: documentTextChunks(for:)
+            )
+        }
+    }
+
+    private func documentTextChunks(for artifact: Artifact) async -> [String] {
+        let url = store.fileURL(for: artifact)
+        switch artifact.kind {
+        case .image:
+            // On-device OCR (Apple Vision) so text inside screenshots/photos is searchable.
+            if let text = await Self.recognizeText(in: url), !text.isEmpty {
+                return Self.chunkedText(text, maxChunks: 4, chunkSize: 1200)
+            }
+            return []
+        case .video:
+            return []
+        case .document:
+            let ext = artifact.fileExtension.lowercased()
+            return await Task.detached(priority: .utility) {
+                let raw: String
+                if ext == "pdf" {
+                    guard let document = PDFDocument(url: url), let string = document.string else {
+                        return []
+                    }
+                    raw = string
+                } else {
+                    guard let string = try? String(contentsOf: url, encoding: .utf8) else {
+                        return []
+                    }
+                    raw = string
+                }
+                return Self.chunkedText(raw, maxChunks: 8, chunkSize: 1200)
+            }.value
+        }
+    }
+
+    private static func recognizeText(in url: URL) async -> String? {
+        await Task.detached(priority: .utility) {
+            guard let image = NSImage(contentsOf: url),
+                  let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                return nil
+            }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([request])
+            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            let text = lines.joined(separator: "\n")
+            return text.isEmpty ? nil : text
+        }.value
+    }
+
+    private static func chunkedText(_ text: String, maxChunks: Int, chunkSize: Int) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return []
+        }
+        var chunks: [String] = []
+        var start = trimmed.startIndex
+        while start < trimmed.endIndex, chunks.count < maxChunks {
+            let end = trimmed.index(start, offsetBy: chunkSize, limitedBy: trimmed.endIndex) ?? trimmed.endIndex
+            let piece = trimmed[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !piece.isEmpty {
+                chunks.append(piece)
+            }
+            start = end
+        }
+        return chunks
+    }
+
+    private func visualDataURLs(for artifact: Artifact) async -> [String] {
+        let url = store.fileURL(for: artifact)
+        switch artifact.kind {
+        case .image:
+            let mimeType = artifact.mimeType
+            return await Task.detached(priority: .utility) {
+                guard let data = try? Data(contentsOf: url) else {
+                    return []
+                }
+                return ["data:\(mimeType);base64,\(data.base64EncodedString())"]
+            }.value
+        case .video:
+            return await Self.videoFrameDataURLs(url: url, count: 4)
+        case .document:
+            return []
+        }
+    }
+
+    private static func videoFrameDataURLs(url: URL, count: Int) async -> [String] {
+        await Task.detached(priority: .utility) {
+            let asset = AVURLAsset(url: url)
+            guard let duration = try? await asset.load(.duration) else {
+                return []
+            }
+            let seconds = CMTimeGetSeconds(duration)
+            guard seconds.isFinite, seconds > 0 else {
+                return []
+            }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 512, height: 512)
+            generator.requestedTimeToleranceBefore = .positiveInfinity
+            generator.requestedTimeToleranceAfter = .positiveInfinity
+
+            var urls: [String] = []
+            for index in 0..<count {
+                let fraction = (Double(index) + 0.5) / Double(count)
+                let time = CMTime(seconds: seconds * fraction, preferredTimescale: 600)
+                guard let cgImage = try? await generator.image(at: time).image else {
+                    continue
+                }
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                    urls.append("data:image/jpeg;base64,\(data.base64EncodedString())")
+                }
+            }
+            return urls
+        }.value
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
+            semanticBanner
             if isSelecting {
                 selectionBar
             }
@@ -142,6 +429,22 @@ struct ArtifactsView: View {
         .focusEffectDisabled()
         .focused($gridFocused)
         .onKeyPress(action: handleKey)
+        .task {
+            warmSemanticIndex()
+        }
+        .onChange(of: search) { _, _ in
+            scheduleSemanticSearch()
+        }
+        .onChange(of: smartSearchActive) { _, _ in
+            warmSemanticIndex()
+            scheduleSemanticSearch()
+        }
+        .onChange(of: store.artifacts.count) { _, _ in
+            warmSemanticIndex()
+        }
+        .onChange(of: searchIndex.indexedCount) { _, _ in
+            scheduleSemanticSearch()
+        }
         .overlay {
             if previewID != nil {
                 ArtifactPreview(
@@ -155,6 +458,30 @@ struct ArtifactsView: View {
                     }
                 )
             }
+        }
+        .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
+            Button("Delete", role: .destructive) {
+                store.delete(pendingDelete)
+                selection.subtract(pendingDelete.map(\.id))
+                pendingDelete = []
+                if selection.isEmpty {
+                    isSelecting = false
+                }
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { pendingDelete = [] }
+        } message: {
+            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
+        }
+        .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
+            Button("Remove Model", role: .destructive) {
+                semanticSearch?.onRemove()
+                showsSemanticPopover = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the on-device Smart Search model and turns Smart Search off.")
         }
         .overlay {
             if let albumSessionID {
@@ -177,19 +504,6 @@ struct ArtifactsView: View {
                     onClose: { self.albumSessionID = nil }
                 )
             }
-        }
-        .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
-            Button("Delete", role: .destructive) {
-                store.delete(pendingDelete)
-                selection.subtract(pendingDelete.map(\.id))
-                pendingDelete = []
-                if selection.isEmpty {
-                    isSelecting = false
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingDelete = [] }
-        } message: {
-            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
         }
         .sheet(item: $inspectorArtifact) { artifact in
             ArtifactInspector(
@@ -234,7 +548,7 @@ struct ArtifactsView: View {
             )
         } else if filtered.isEmpty {
             emptyState(title: "Nothing matches", message: "Try a different filter or search term.")
-        } else if groupByChat {
+        } else if showingByChat {
             deckGrid
         } else {
             ScrollView {
@@ -291,8 +605,8 @@ struct ArtifactsView: View {
 
     private func grid(_ artifacts: [Artifact]) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 172, maximum: 220), spacing: 18)],
-            spacing: 18
+            columns: [GridItem(.adaptive(minimum: 180, maximum: 220), spacing: 24)],
+            spacing: 24
         ) {
             ForEach(artifacts) { artifact in
                 ArtifactTile(
@@ -344,11 +658,11 @@ struct ArtifactsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Artifacts")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.title2.weight(.semibold))
                 Text("\(filtered.count) \(filtered.count == 1 ? "item" : "items")")
-                    .font(.system(size: 12))
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
@@ -361,40 +675,26 @@ struct ArtifactsView: View {
                 }
             }
 
-            Menu {
-                Button {
-                    groupByChat = true
-                } label: {
-                    if groupByChat {
-                        Label("By Chat", systemImage: "checkmark")
-                    } else {
-                        Text("By Chat")
-                    }
-                }
-                Button {
-                    groupByChat = false
-                } label: {
-                    if !groupByChat {
-                        Label("By Date", systemImage: "checkmark")
-                    } else {
-                        Text("By Date")
-                    }
-                }
-                if !groupByChat {
-                    Divider()
+            Toggle(isOn: Binding(get: { showingByChat }, set: { groupByChat = $0 })) {
+                Label("By Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            .toggleStyle(.button)
+            .disabled(isSearching)
+            .help(isSearching ? "Grouping is off while searching" : "Group artifacts by chat")
+
+            if !showingByChat {
+                Menu {
                     Picker("Sort", selection: $sort) {
                         ForEach(ArtifactSort.allCases) { option in
                             Text(option.rawValue).tag(option)
                         }
                     }
                     .pickerStyle(.inline)
+                } label: {
+                    Text(sort.rawValue)
                 }
-            } label: {
-                Text(groupByChat ? "By Chat" : "By Date · \(sort.rawValue)")
-            }
-            .fixedSize()
+                .fixedSize()
 
-            if !groupByChat {
                 Picker("", selection: $layout) {
                     Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
                     Image(systemName: "list.bullet").tag(ArtifactLayout.list)
@@ -410,10 +710,15 @@ struct ArtifactsView: View {
                     .animation(store.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
             }
             .help("Rescan chats for new artifacts")
+
+            if let config = semanticSearch {
+                semanticSettingsButton(config)
+            }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 22)
+        .padding(.leading, titleLeadingInset)
         .padding(.top, 20)
-        .padding(.bottom, 12)
+        .padding(.bottom, 16)
     }
 
     private var selectionBar: some View {
@@ -515,6 +820,7 @@ struct ArtifactsView: View {
             .fixedSize()
                 }
                 .padding(.vertical, 2)
+                .padding(.trailing, 24)
             }
             .mask(
                 LinearGradient(
@@ -531,6 +837,12 @@ struct ArtifactsView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                if smartSearchActive {
+                    Circle()
+                        .fill(Color.green.opacity(0.7))
+                        .frame(width: 7, height: 7)
+                        .help("Smart search is on")
+                }
                 TextField("Search name or prompt", text: $search)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
@@ -568,7 +880,7 @@ struct ArtifactsView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
-        .background(.bar)
+        .background(Color.nativMainContentBackground)
     }
 
     @ViewBuilder
@@ -975,13 +1287,17 @@ private struct ArtifactThumbnail: View {
             if isTextDocument, let textPreview {
                 textCard(textPreview)
             } else if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
+                Color.clear
+                    .overlay {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
             } else {
                 placeholder
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .task(id: artifact.id) {
             if isTextDocument {

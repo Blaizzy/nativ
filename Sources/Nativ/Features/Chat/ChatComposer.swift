@@ -87,6 +87,8 @@ struct ChatComposer: View {
     let unavailableReason: String?
     let canCompose: Bool
     let canSend: Bool
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onSend: (Bool) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
@@ -96,6 +98,14 @@ struct ChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let promptEditContext = viewModel.promptEditContext {
+                ChatPromptEditBanner(
+                    discardedMessageCount: promptEditContext.discardedMessageCount,
+                    onCancel: viewModel.cancelPromptEditing
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = context.date.timeIntervalSince(sendingStartedAt)
@@ -127,15 +137,18 @@ struct ChatComposer: View {
                         text: $viewModel.draft,
                         isEnabled: canCompose,
                         onSubmit: send,
+                        onCancel: cancelPromptEditingAction,
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
-                        }
+                        },
+                        fontScale: model.settings.chatFontScale,
+                        focusToken: viewModel.composerFocusToken
                     )
 
                     if viewModel.draft.isEmpty {
-                        Text("Message")
-                            .font(.body)
+                        Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
+                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
                             .foregroundStyle(.tertiary)
                             .padding(textInset)
                             .offset(x: 4)
@@ -203,6 +216,11 @@ struct ChatComposer: View {
                     .frame(width: 30, height: 30)
                     .help("Add attachment")
 
+                    ChatWorkspacePicker(
+                        selection: workspaceMode,
+                        onSelect: onSelectWorkspaceMode
+                    )
+
                     Spacer(minLength: 12)
 
                     modelPicker
@@ -223,7 +241,7 @@ struct ChatComposer: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!showsStopButton && !canSend)
-                    .help(showsStopButton ? "Stop response" : "Send (Return)")
+                    .help(actionButtonHelp)
                 }
                 .padding(.leading, 10)
                 .padding(.trailing, 12)
@@ -239,16 +257,10 @@ struct ChatComposer: View {
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onChange(of: localLibrary.models) { _, models in
             disableThinkingIfUnsupported(modelID: selectedModelID, models: models)
@@ -269,9 +281,7 @@ struct ChatComposer: View {
     }
 
     private var modelScanKey: String {
-        let settings = model.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        model.settings.localModelSearchPaths.cacheKey
     }
 
     private var modelPicker: some View {
@@ -348,7 +358,9 @@ struct ChatComposer: View {
         guard model.settings.thinkingEnabled else {
             return .off
         }
-        guard model.settings.thinkingBudgetEnabled else {
+        guard model.settings.thinkingBudgetEnabled,
+              !model.settings.speculativeDecodingActive
+        else {
             return .max
         }
 
@@ -377,7 +389,7 @@ struct ChatComposer: View {
             title: "Reasoning",
             selectedID: reasoningLevel.rawValue,
             selectedLabel: reasoningLevel.rawValue,
-            options: ChatReasoningLevel.allCases.map {
+            options: availableReasoningLevels.map {
                 ComposerModelPickerSecondaryOption(
                     id: $0.rawValue,
                     title: $0.rawValue,
@@ -416,6 +428,13 @@ struct ChatComposer: View {
         ) {}
     }
 
+    private var availableReasoningLevels: [ChatReasoningLevel] {
+        guard model.settings.speculativeDecodingActive else {
+            return ChatReasoningLevel.allCases
+        }
+        return ChatReasoningLevel.allCases.filter { $0.tokenBudget == nil }
+    }
+
     private func applyReasoningLevel(_ level: ChatReasoningLevel) {
         switch level {
         case .off:
@@ -425,8 +444,12 @@ struct ChatComposer: View {
             model.settings.thinkingBudgetEnabled = false
         case .low, .medium, .high:
             model.settings.thinkingEnabled = true
-            model.settings.thinkingBudgetEnabled = true
-            model.settings.thinkingBudget = level.tokenBudget ?? model.settings.thinkingBudget
+            if model.settings.speculativeDecodingActive {
+                model.settings.thinkingBudgetEnabled = false
+            } else {
+                model.settings.thinkingBudgetEnabled = true
+                model.settings.thinkingBudget = level.tokenBudget ?? model.settings.thinkingBudget
+            }
         }
     }
 
@@ -507,6 +530,23 @@ struct ChatComposer: View {
         return Color(nsColor: .tertiaryLabelColor)
     }
 
+    private var cancelPromptEditingAction: (() -> Void)? {
+        guard viewModel.promptEditContext != nil else {
+            return nil
+        }
+        return viewModel.cancelPromptEditing
+    }
+
+    private var actionButtonHelp: String {
+        if showsStopButton {
+            return "Stop response"
+        }
+        if viewModel.promptEditContext != nil {
+            return "Save prompt and regenerate (Return)"
+        }
+        return "Send (Return)"
+    }
+
     private var showsStopButton: Bool {
         viewModel.isCurrentSessionSending && !canSend
     }
@@ -521,6 +561,65 @@ struct ChatComposer: View {
 
     private var editorHeight: CGFloat {
         min(max(editorContentHeight, editorMinimumHeight), editorMaximumHeight)
+    }
+}
+
+private struct ChatPromptEditBanner: View {
+    let discardedMessageCount: Int
+    let onCancel: () -> Void
+    @State private var isCancelHovered = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "pencil")
+                .foregroundStyle(Color.accentColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Editing prompt")
+                    .fontWeight(.medium)
+                Text(replacementDescription)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            Button(action: onCancel) {
+                Text("Cancel")
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(
+                        isCancelHovered ? Color.accentColor.opacity(0.12) : .clear,
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .keyboardShortcut(.cancelAction)
+            .onHover { isCancelHovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: isCancelHovered)
+            .help("Cancel editing")
+        }
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.accentColor.opacity(0.22), lineWidth: 0.5)
+        }
+    }
+
+    private var replacementDescription: String {
+        switch discardedMessageCount {
+        case 0:
+            "Sending will generate a new response."
+        case 1:
+            "Sending will replace the following response."
+        default:
+            "Sending will replace \(discardedMessageCount) later conversation items."
+        }
     }
 }
 
@@ -1347,15 +1446,20 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let isEnabled: Bool
     let onSubmit: () -> Void
+    var onCancel: (() -> Void)?
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
+    var fontScale: Double = 1.0
+    var focusToken: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
             onSubmit: onSubmit,
+            onCancel: onCancel,
             onPasteImage: onPasteImage,
-            onContentHeightChange: onContentHeightChange
+            onContentHeightChange: onContentHeightChange,
+            focusToken: focusToken
         )
     }
 
@@ -1363,10 +1467,11 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         let textView = ChatComposerNSTextView()
         textView.delegate = context.coordinator
         textView.onSubmit = context.coordinator.handleSubmit
+        textView.onCancel = context.coordinator.handleCancel
         textView.onPasteImage = context.coordinator.handlePasteImage
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
-        textView.font = NSFont.preferredFont(forTextStyle: .body)
+        textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = .clear
         textView.drawsBackground = false
@@ -1396,6 +1501,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
         context.coordinator.onPasteImage = onPasteImage
         context.coordinator.onContentHeightChange = onContentHeightChange
 
@@ -1405,34 +1511,39 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
+        textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
-        guard textView.string != text else {
-            context.coordinator.reportContentHeight()
-            return
+        if !textView.hasMarkedText(), textView.string != text {
+            textView.string = text
         }
-
-        textView.string = text
         context.coordinator.reportContentHeight()
+        context.coordinator.requestFocus(ifNeeded: focusToken)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: String
         var onSubmit: () -> Void
+        var onCancel: (() -> Void)?
         var onPasteImage: (NSPasteboard) -> Bool
         var onContentHeightChange: (CGFloat) -> Void
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
+        private var lastFocusToken: Int
 
         init(
             text: Binding<String>,
             onSubmit: @escaping () -> Void,
+            onCancel: (() -> Void)?,
             onPasteImage: @escaping (NSPasteboard) -> Bool,
-            onContentHeightChange: @escaping (CGFloat) -> Void
+            onContentHeightChange: @escaping (CGFloat) -> Void,
+            focusToken: Int
         ) {
             _text = text
             self.onSubmit = onSubmit
+            self.onCancel = onCancel
             self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
+            lastFocusToken = focusToken
         }
 
         func handlePasteImage(_ pasteboard: NSPasteboard) -> Bool {
@@ -1444,12 +1555,35 @@ struct ChatComposerTextEditor: NSViewRepresentable {
                 return
             }
 
+            guard !textView.hasMarkedText() else {
+                reportContentHeight()
+                return
+            }
+
             text = textView.string
             reportContentHeight()
         }
 
         func handleSubmit() {
             onSubmit()
+        }
+
+        func handleCancel() {
+            onCancel?()
+        }
+
+        func requestFocus(ifNeeded focusToken: Int) {
+            guard focusToken != lastFocusToken, let textView else {
+                return
+            }
+            lastFocusToken = focusToken
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView else { return }
+                textView.window?.makeFirstResponder(textView)
+                let end = (textView.string as NSString).length
+                textView.setSelectedRange(NSRange(location: end, length: 0))
+                textView.scrollRangeToVisible(NSRange(location: end, length: 0))
+            }
         }
 
         func reportContentHeight() {
@@ -1491,6 +1625,7 @@ private final class ChatComposerNSScrollView: NSScrollView {
 
 private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
+    var onCancel: (() -> Void)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
@@ -1499,6 +1634,11 @@ private final class ChatComposerNSTextView: NSTextView {
         // before applying the composer send/newline behavior.
         if hasMarkedText() {
             super.keyDown(with: event)
+            return
+        }
+
+        if event.keyCode == 53, onCancel != nil {
+            onCancel?()
             return
         }
 

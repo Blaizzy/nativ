@@ -39,8 +39,8 @@ final class VoiceCaptureCoordinator {
         shortcutMonitor.onRetry = { [weak self] in
             self?.retryLastTranscription()
         }
-        shortcutMonitor.onHandsFreeToggle = { [weak self] in
-            self?.toggleHandsFreeCapture()
+        overlay.setDictationCancelAction { [weak self] in
+            self?.cancelCapture()
         }
         recorder.onMeterUpdate = { [weak self] level, elapsed in
             self?.overlay.update(level: level, elapsed: elapsed)
@@ -82,29 +82,32 @@ final class VoiceCaptureCoordinator {
     }
 
     private func handleShortcutChange(_ isHeld: Bool) {
-        guard !isHandsFreeMode else {
-            return
-        }
-        isShortcutHeld = isHeld
-        if isHeld {
-            beginCapture()
-        } else {
-            endCapture()
-        }
-    }
-
-    private func toggleHandsFreeCapture() {
         if isHandsFreeMode {
+            guard isHeld else {
+                return
+            }
             isHandsFreeMode = false
             isShortcutHeld = false
             endCapture()
             return
         }
 
-        guard !isShortcutHeld, !recorder.isRecording else {
+        if isShortcutHeld {
+            guard !isHeld else {
+                return
+            }
+            isShortcutHeld = false
+            endCapture()
             return
         }
-        isHandsFreeMode = true
+
+        guard isHeld else {
+            return
+        }
+
+        if VoiceShortcutPreferences.shared.isHandsFreeEnabled {
+            isHandsFreeMode = true
+        }
         isShortcutHeld = true
         beginCapture()
     }
@@ -118,12 +121,24 @@ final class VoiceCaptureCoordinator {
             guard let self else {
                 return
             }
-            let isAuthorized = await Self.requestMicrophoneAccess()
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            let granted: Bool
+            switch status {
+            case .authorized:
+                granted = true
+            case .notDetermined:
+                granted = await AVCaptureDevice.requestAccess(for: .audio)
+            default:
+                granted = false
+            }
             guard !Task.isCancelled, self.isShortcutHeld else {
                 return
             }
-            guard isAuthorized else {
+            guard granted else {
                 self.overlay.showFailure()
+                if status == .denied || status == .restricted {
+                    self.presentMicrophonePermissionAlert()
+                }
                 return
             }
 
@@ -159,6 +174,17 @@ final class VoiceCaptureCoordinator {
             return
         }
         activeOverlayTranscriptionID = nil
+        overlay.hide()
+    }
+
+    private func cancelCapture() {
+        permissionTask?.cancel()
+        permissionTask = nil
+        recorder.discard()
+        activeOverlayTranscriptionID = nil
+        insertionTarget = nil
+        isShortcutHeld = false
+        isHandsFreeMode = false
         overlay.hide()
     }
 
@@ -248,8 +274,10 @@ final class VoiceCaptureCoordinator {
             let installedModels: [LocalModel]
             do {
                 installedModels = try await LocalModelDiscovery.scan(
-                    path: configuration.modelSearchPath,
-                    additionalPaths: configuration.additionalModelSearchPaths
+                    searchPaths: LocalModelSearchPaths(
+                        primary: configuration.modelSearchPath,
+                        additional: configuration.additionalModelSearchPaths
+                    )
                 )
             } catch {
                 guard !Task.isCancelled else {
@@ -267,19 +295,20 @@ final class VoiceCaptureCoordinator {
                 self.finishOverlayTranscription(overlayTranscriptionID)
                 return
             }
-            guard let modelID = LocalModelDiscovery.speechToTextModelID(
+            // Both of these are dead ends for the server path. Rather than discarding the
+            // recording, hand it to the on-device system recognizer when that is possible;
+            // the alert is only shown when there is genuinely nothing that can transcribe.
+            let modelID = LocalModelDiscovery.speechToTextModelID(
                 in: installedModels,
                 selectedModelID: requestConfiguration.selectedModelID
-            ) else {
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                self.showMissingSpeechModelAlert()
-                return
-            }
-            guard requestConfiguration.serverIsRunning else {
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                self.showTranscriptionError(
-                    title: "Nativ Server Is Not Running",
-                    message: "Start the Nativ server, then record again to transcribe the audio."
+            )
+            guard let modelID, requestConfiguration.serverIsRunning else {
+                await self.transcribeWithSystemRecognizer(
+                    recordingURL,
+                    target: target,
+                    durationSeconds: durationSeconds,
+                    overlayTranscriptionID: overlayTranscriptionID,
+                    unavailableReason: modelID == nil ? .noSpeechModel : .serverStopped
                 )
                 return
             }
@@ -355,6 +384,99 @@ final class VoiceCaptureCoordinator {
         transcriptionTasks[taskID] = task
     }
 
+    /// Why the bundled server could not be used for this recording.
+    private enum ServerUnavailableReason {
+        case noSpeechModel
+        case serverStopped
+    }
+
+    /// Last-resort transcription through macOS's on-device recognizer.
+    ///
+    /// Mirrors the server path exactly — same transcript file, same analytics row, same
+    /// cursor insertion — so a fallback transcript behaves like any other. If the system
+    /// recognizer cannot help either, the original alert is shown, leaving the previous
+    /// behaviour intact for anyone it does not cover.
+    private func transcribeWithSystemRecognizer(
+        _ recordingURL: URL,
+        target: VoiceTranscriptInsertionTarget?,
+        durationSeconds: TimeInterval?,
+        overlayTranscriptionID: UUID?,
+        unavailableReason: ServerUnavailableReason
+    ) async {
+        guard await AppleSpeechTranscriber.isAvailable else {
+            finishOverlayTranscription(overlayTranscriptionID)
+            showServerUnavailableAlert(unavailableReason)
+            return
+        }
+
+        let transcript: String
+        do {
+            transcript = try await AppleSpeechTranscriber.transcribe(contentsOf: recordingURL)
+        } catch AppleSpeechTranscriber.Failure.empty {
+            handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
+            return
+        } catch let AppleSpeechTranscriber.Failure.modelInstalling(language) {
+            // The one failure worth its own message: macOS has the language but not the
+            // model yet, and is now fetching it. Saying so beats an alert about a server
+            // the user may not have been trying to use.
+            finishOverlayTranscription(overlayTranscriptionID)
+            showTranscriptionError(
+                title: "Preparing On-Device Dictation",
+                message: """
+                macOS is downloading its \(language) speech model. Your recording is saved \
+                in Audio — dictate again once it has finished.
+                """
+            )
+            return
+        } catch {
+            NSLog(
+                "Nativ on-device transcription failed for %@: %@",
+                recordingURL.lastPathComponent,
+                error.localizedDescription
+            )
+            finishOverlayTranscription(overlayTranscriptionID)
+            showServerUnavailableAlert(unavailableReason)
+            return
+        }
+
+        let transcriptURL = recordingURL
+            .deletingPathExtension()
+            .appendingPathExtension("txt")
+        try? transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        analytics.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: transcript,
+            durationSeconds: durationSeconds,
+            modelID: AppleSpeechTranscriber.modelIdentifier,
+            applicationName: target?.applicationName
+        )
+
+        let insertedAtCursor = await VoiceTranscriptInserter.insertAtCursor(
+            transcript,
+            target: target
+        )
+        NSLog(
+            "Nativ saved voice transcript to %@ using the on-device system recognizer",
+            transcriptURL.path
+        )
+        finishOverlayTranscription(overlayTranscriptionID)
+        if !insertedAtCursor {
+            showInsertionPermissionAlertIfNeeded()
+        }
+    }
+
+    private func showServerUnavailableAlert(_ reason: ServerUnavailableReason) {
+        switch reason {
+        case .noSpeechModel:
+            showMissingSpeechModelAlert()
+        case .serverStopped:
+            showTranscriptionError(
+                title: "Nativ Server Is Not Running",
+                message: "Start the Nativ server, then record again to transcribe the audio."
+            )
+        }
+    }
+
     private func handleEmptyTranscription(
         _ recordingURL: URL,
         overlayTranscriptionID: UUID?
@@ -407,11 +529,13 @@ final class VoiceCaptureCoordinator {
     }
 
     private func showRecentRecordingUnavailable() {
+        let preferences = VoiceShortcutPreferences.shared
         showTranscriptionError(
             title: "No Recent Recording",
             message: """
-            Audio is available for five minutes after recording. Hold Fn + Control \
-            to record again, then press Fn + R before the audio expires.
+            Audio is available for five minutes after recording. Use \
+            \(preferences.recordShortcut.displayName) to record again, then use \
+            \(preferences.retryShortcut.displayName) before the audio expires.
             """
         )
     }
@@ -488,16 +612,28 @@ final class VoiceCaptureCoordinator {
         }
     }
 
-    private static func requestMicrophoneAccess() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            true
-        case .notDetermined:
-            await AVCaptureDevice.requestAccess(for: .audio)
-        case .denied, .restricted:
-            false
-        @unknown default:
-            false
+    private func presentMicrophonePermissionAlert() {
+        guard !isPresentingAlert else {
+            return
+        }
+        isPresentingAlert = true
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Microphone Access Needed"
+        alert.informativeText = """
+        Nativ needs microphone access to record dictation. Enable Nativ under \
+        Microphone in System Settings, then try the shortcut again.
+        """
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Not Now")
+        let response = alert.runModal()
+        isPresentingAlert = false
+        shortcutMonitor.resynchronizeAfterModalInteraction()
+
+        if response == .alertFirstButtonReturn {
+            NativSystemPermissionController.openMicrophoneSettings()
         }
     }
 }

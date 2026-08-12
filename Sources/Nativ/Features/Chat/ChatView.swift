@@ -12,63 +12,39 @@ struct ChatQueuedPrompt: Identifiable, Equatable {
     let position: Int
 }
 
-struct ChatView: View {
-    private enum Layout {
-        static let conversationMaxWidth: CGFloat = 680
-        static let horizontalPadding: CGFloat = 32
-    }
+struct ChatPromptEditContext: Equatable {
+    let messageID: UUID
+    let discardedMessageCount: Int
+}
 
+private struct ChatSessionBootstrap {
+    let sessions: [ChatSession]
+}
+
+struct ChatView: View {
     @ObservedObject var model: NativModel
-    @ObservedObject var chat: ChatViewModel
+    let chat: ChatViewModel
+    @ObservedObject var mcpHost: MCPHostManager
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
-    @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
-    @State private var composerHeight: CGFloat = 0
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
-    @State private var followsLatestMessage = true
-    @State private var isUserScrollingTranscript = false
 
     var body: some View {
         ModelConfigurationLayout(
             model: model,
             isConfigurationVisible: $showsConfiguration
         ) {
-            VStack(spacing: 0) {
-                transcript
-                    .overlay(alignment: .bottom) {
-                        ChatComposer(
-                            model: model,
-                            viewModel: chat,
-                            unavailableReason: unavailableReason,
-                            canCompose: canCompose,
-                            canSend: canSend,
-                            onSend: { languageModelSupportsTools in
-                                chat.send(
-                                    using: model,
-                                    languageModelSupportsTools: languageModelSupportsTools
-                                )
-                            }
-                        )
-                        .frame(
-                            maxWidth: Layout.conversationMaxWidth
-                                - conversationWidthReduction
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, Layout.horizontalPadding)
-                        .onGeometryChange(for: CGFloat.self) { proxy in
-                            proxy.size.height
-                        } action: { height in
-                            let isInitialMeasurement = composerHeight == 0
-                            composerHeight = height
-                            if isInitialMeasurement {
-                                Task { @MainActor in
-                                    try? await Task.sleep(for: .milliseconds(50))
-                                    transcriptScrollPosition.scrollTo(edge: .bottom)
-                                }
-                            }
-                        }
-                    }
-            }
+            ChatTranscriptView(
+                model: model,
+                chat: chat,
+                workspaceMode: workspaceMode,
+                onSelectWorkspaceMode: onSelectWorkspaceMode,
+                conversationWidthReduction: conversationWidthReduction,
+                onExploreImageModels: onExploreImageModels
+            )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachImages(fromURLs: urls)
             } isTargeted: { isDropTargeted = $0 }
@@ -82,6 +58,17 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .onAppear {
+            chat.mcpHost = mcpHost
+            chat.refreshPendingImageModelSelections()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
+            chat.reloadPersistedSessions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            chat.refreshPendingImageModelSelections()
+        }
+        .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
     private var dropOverlay: some View {
@@ -106,31 +93,30 @@ struct ChatView: View {
         }
         .ignoresSafeArea()
     }
+}
+
+private struct ChatTranscriptView: View {
+    private enum Layout {
+        static let conversationMaxWidth: CGFloat = 680
+        static let horizontalPadding: CGFloat = 32
+    }
+
+    @ObservedObject var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let conversationWidthReduction: CGFloat
+    let onExploreImageModels: (ChatImageOperation) -> Void
+    @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
+    @State private var composerHeight: CGFloat = 0
+    @State private var followsLatestMessage = true
+    @State private var isUserScrollingTranscript = false
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
     }
 
-    private var canSend: Bool {
-        !model.isModelLoading
-            && model.settings.structuredOutputValidationError == nil
-            && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID)
-    }
-
-    private var canCompose: Bool {
-        model.isRunning
-            && !model.isModelLoading
-            && selectedModelID?.isEmpty == false
-            && model.settings.structuredOutputValidationError == nil
-    }
-
-    private var unavailableReason: String? {
-        model.modelLoadingStatusText
-            ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
-            ?? model.settings.structuredOutputValidationError
-    }
-
-    private var transcript: some View {
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
@@ -145,25 +131,53 @@ struct ChatView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
+                        let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
                         ChatMessageRow(
                             message: message,
+                            imageModelSelectionRequest: chat.imageModelSelectionRequest(
+                                for: message.id
+                            ),
+                            canEditUserMessage: editUnavailableReason == nil,
+                            editUserMessageUnavailableReason: editUnavailableReason,
+                            isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
+                            onEditUserMessage: chat.beginEditingUserMessage,
                             onConfirmToolConsent: chat.confirmToolConsent,
-                            onDenyToolConsent: chat.denyToolConsent
+                            onDenyToolConsent: chat.denyToolConsent,
+                            onSelectImageModel: chat.selectImageModel,
+                            onCancelImageModelSelection: chat.cancelImageModelSelection,
+                            onExploreImageModels: onExploreImageModels
                         )
+                        .equatable()
                         .id(message.id)
                     }
                 }
             }
-            .frame(
-                maxWidth: Layout.conversationMaxWidth
-                    - conversationWidthReduction
-            )
+            .frame(maxWidth: Layout.conversationMaxWidth - conversationWidthReduction)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Layout.horizontalPadding)
             .padding(.top, 18)
             .padding(.bottom, max(18, composerHeight))
         }
         .scrollPosition($transcriptScrollPosition)
+        .overlay(alignment: .bottom) {
+            ChatComposerContainer(
+                model: model,
+                chat: chat,
+                workspaceMode: workspaceMode,
+                onSelectWorkspaceMode: onSelectWorkspaceMode,
+                conversationWidthReduction: conversationWidthReduction,
+                onHeightChange: { height in
+                    let isInitialMeasurement = composerHeight == 0
+                    composerHeight = height
+                    if isInitialMeasurement {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(50))
+                            transcriptScrollPosition.scrollTo(edge: .bottom)
+                        }
+                    }
+                }
+            )
+        }
         .onScrollPhaseChange { _, newPhase, context in
             switch newPhase {
             case .tracking, .interacting:
@@ -174,9 +188,7 @@ struct ChatView: View {
                     followsLatestMessage = false
                 }
             case .idle:
-                guard isUserScrollingTranscript else {
-                    return
-                }
+                guard isUserScrollingTranscript else { return }
                 isUserScrollingTranscript = false
                 followsLatestMessage = isAtTranscriptBottom(context.geometry)
             case .animating:
@@ -193,9 +205,7 @@ struct ChatView: View {
             transcriptScrollPosition.scrollTo(edge: .bottom)
         }
         .onChange(of: chat.scrollTargetMessageID) { _, target in
-            guard let target else {
-                return
-            }
+            guard let target else { return }
             followsLatestMessage = false
             DispatchQueue.main.async {
                 transcriptScrollPosition.scrollTo(id: target, anchor: .center)
@@ -211,12 +221,84 @@ struct ChatView: View {
     private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
         geometry.visibleRect.maxY >= geometry.contentSize.height - 8
     }
+
+    private func userPromptEditingUnavailableReason(
+        for message: ChatTranscriptMessage
+    ) -> String? {
+        guard message.role == .user else {
+            return "Only user prompts can be edited"
+        }
+        guard chat.canEditUserMessage(message.id) else {
+            return "Stop the response and remove queued prompts before editing"
+        }
+        guard model.isRunning else {
+            return "Start the server before editing a prompt"
+        }
+        guard !model.isModelLoading else {
+            return "Wait for the model to finish loading"
+        }
+        guard selectedModelID?.isEmpty == false else {
+            return "Select a language model before editing a prompt"
+        }
+        if let validationError = model.settings.structuredOutputValidationError {
+            return validationError
+        }
+        return nil
+    }
+}
+
+private struct ChatComposerContainer: View {
+    @ObservedObject var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let conversationWidthReduction: CGFloat
+    let onHeightChange: (CGFloat) -> Void
+
+    private var selectedModelID: String? {
+        model.settings.normalized().languageModelID
+    }
+
+    var body: some View {
+        ChatComposer(
+            model: model,
+            viewModel: chat,
+            unavailableReason: model.modelLoadingStatusText
+                ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+                ?? model.settings.structuredOutputValidationError,
+            canCompose: model.isRunning
+                && !model.isModelLoading
+                && selectedModelID?.isEmpty == false
+                && model.settings.structuredOutputValidationError == nil,
+            canSend: !model.isModelLoading
+                && model.settings.structuredOutputValidationError == nil
+                && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
+            workspaceMode: workspaceMode,
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onSend: { languageModelSupportsTools in
+                chat.send(
+                    using: model,
+                    languageModelSupportsTools: languageModelSupportsTools
+                )
+            }
+        )
+        .frame(maxWidth: 680 - conversationWidthReduction)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 32)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            onHeightChange(height)
+        }
+    }
 }
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
+    weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 30.0
+    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -224,7 +306,19 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
+    }
+
+    private struct ComposerSnapshot {
+        let draft: String
+        let attachments: [ChatImageAttachment]
+    }
+
+    private struct ImageModelPreparationContext {
+        let modelSearchPath: String
+        let additionalModelSearchPaths: [String]
+        let huggingFaceToken: String?
     }
 
     @Published private(set) var sessions: [ChatSessionSummary] = []
@@ -234,12 +328,19 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
     @Published private(set) var pendingFolderAttachments: [ChatFolderAttachment] = []
     @Published var draft = ""
+    @Published private(set) var promptEditContext: ChatPromptEditContext?
+    @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     @Published private(set) var scrollToken = 0
     @Published var scrollTargetMessageID: UUID?
+    @Published private(set) var isLoadingSessions = true
+    @Published private(set) var imageModelSelectionRequests: [
+        UUID: ChatImageModelSelectionRequest
+    ] = [:]
 
     private let sessionStore = ChatSessionStore()
+    private var sessionLoadTask: Task<Void, Never>?
     private var activeTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var activeAssistantMessageID: UUID?
@@ -254,20 +355,38 @@ final class ChatViewModel: ObservableObject {
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
+    private let imageModelSelectionGate = ChatImageModelSelectionGate()
+    private var imageModelPreparationTasks: [UUID: Task<Void, Never>] = [:]
+    private var imageModelPreparationContexts: [UUID: ImageModelPreparationContext] = [:]
+    private var imageModelRefreshTask: Task<Void, Never>?
+    private var composerSnapshot: ComposerSnapshot?
 
     init() {
-        storedSessions = sessionStore.loadSessions()
         folders = sessionStore.loadFolders()
-        pruneRedundantEmptySessions()
-        if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
-            applyCurrentSession(latestSession)
-        } else {
-            createSession()
+        let now = Date()
+        applyCurrentSession(
+            ChatSession(
+                id: UUID(),
+                title: ChatSession.timestampTitle(for: now),
+                createdAt: now,
+                updatedAt: now,
+                messages: []
+            )
+        )
+
+        let loadTask = Task.detached(priority: .userInitiated) {
+            ChatSessionBootstrap(sessions: ChatSessionStore().loadSessions())
+        }
+        sessionLoadTask = Task { @MainActor [weak self] in
+            let bootstrap = await loadTask.value
+            guard let self, !Task.isCancelled else { return }
+            finishLoadingSessions(bootstrap)
         }
     }
 
     deinit {
         activeTask?.cancel()
+        sessionLoadTask?.cancel()
     }
 
     var isCurrentSessionSending: Bool {
@@ -324,6 +443,58 @@ final class ChatViewModel: ObservableObject {
                 || !pendingImageAttachments.isEmpty)
     }
 
+    func canEditUserMessage(_ messageID: UUID) -> Bool {
+        guard let currentSessionID,
+              !isSessionBusy(currentSessionID),
+              let message = messages.first(where: { $0.id == messageID })
+        else {
+            return false
+        }
+        return message.role == .user
+    }
+
+    func beginEditingUserMessage(_ messageID: UUID) {
+        guard canEditUserMessage(messageID),
+              let message = messages.first(where: { $0.id == messageID }),
+              let discardedMessageCount = ChatPromptRevision.discardedMessageCount(
+                after: messageID,
+                in: messages
+              )
+        else {
+            return
+        }
+
+        if promptEditContext?.messageID == messageID {
+            composerFocusToken += 1
+            return
+        }
+
+        cancelPromptEditing()
+        composerSnapshot = ComposerSnapshot(
+            draft: draft,
+            attachments: pendingImageAttachments
+        )
+        promptEditContext = ChatPromptEditContext(
+            messageID: messageID,
+            discardedMessageCount: discardedMessageCount
+        )
+        draft = message.content
+        pendingImageAttachments = message.imageAttachments
+        composerFocusToken += 1
+    }
+
+    func cancelPromptEditing() {
+        guard promptEditContext != nil else {
+            return
+        }
+        if let composerSnapshot {
+            draft = composerSnapshot.draft
+            pendingImageAttachments = composerSnapshot.attachments
+        }
+        promptEditContext = nil
+        composerSnapshot = nil
+    }
+
     func unavailableReason(isRunning: Bool, selectedModelID: String?) -> String? {
         if !isRunning {
             return "Server is stopped."
@@ -358,6 +529,7 @@ final class ChatViewModel: ObservableObject {
         storedSessions.append(session)
         pruneRedundantEmptySessions()
         sessionStore.saveSession(session)
+        discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
         pendingFolderAttachments.removeAll()
@@ -397,6 +569,7 @@ final class ChatViewModel: ObservableObject {
 
         if let session = storedSessions.first(where: { $0.id == sessionID }) {
             persistCurrentSession(updateTimestamp: false)
+            discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
             pendingFolderAttachments.removeAll()
@@ -407,6 +580,7 @@ final class ChatViewModel: ObservableObject {
         if let session = sessionStore.loadSession(id: sessionID) {
             persistCurrentSession(updateTimestamp: false)
             upsertStoredSession(session)
+            discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
             pendingFolderAttachments.removeAll()
@@ -481,6 +655,16 @@ final class ChatViewModel: ObservableObject {
             return
         }
         folders[index].isCollapsed = collapsed
+        sessionStore.saveFolders(folders)
+    }
+
+    func setAllFoldersCollapsed(_ collapsed: Bool) {
+        guard folders.contains(where: { $0.isCollapsed != collapsed }) else {
+            return
+        }
+        for index in folders.indices {
+            folders[index].isCollapsed = collapsed
+        }
         sessionStore.saveFolders(folders)
     }
 
@@ -570,6 +754,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
+        discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
         pendingFolderAttachments.removeAll()
@@ -608,7 +793,9 @@ final class ChatViewModel: ObservableObject {
             case .assistant:
                 speaker = message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 60) } ?? "Assistant"
             case .tool:
-                speaker = message.toolName == "edit_image" ? "Image edit" : "Image generation"
+                speaker = message.toolName == ChatImageToolRegistry.editToolName
+                    ? "Image edit"
+                    : "Image generation"
             case .error:
                 speaker = "Error"
             }
@@ -637,11 +824,37 @@ final class ChatViewModel: ObservableObject {
         else {
             return
         }
-        appModel.clearModelLoadFailure(for: modelID)
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
         let folderAttachments = pendingFolderAttachments
+
+        if let promptEditContext {
+            guard canEditUserMessage(promptEditContext.messageID),
+                  let revision = ChatPromptRevision.make(
+                    messageID: promptEditContext.messageID,
+                    content: prompt,
+                    attachments: imageAttachments,
+                    modelID: modelID,
+                    in: messages
+                  )
+            else {
+                return
+            }
+
+            messages = revision.messages
+            restoreComposerAfterPromptEditing()
+            persistCurrentSession(updateTimestamp: true)
+            enqueueGeneration(
+                for: promptEditContext.messageID,
+                in: currentSession.id,
+                settings: settings,
+                languageModelSupportsTools: languageModelSupportsTools,
+                appModel: appModel
+            )
+            return
+        }
+
         draft = ""
         pendingImageAttachments.removeAll()
         pendingFolderAttachments.removeAll()
@@ -655,13 +868,34 @@ final class ChatViewModel: ObservableObject {
         )
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
+        enqueueGeneration(
+            for: userMessage.id,
+            in: currentSession.id,
+            settings: settings,
+            languageModelSupportsTools: languageModelSupportsTools,
+            appModel: appModel
+        )
+    }
+
+    private func enqueueGeneration(
+        for userMessageID: UUID,
+        in sessionID: UUID,
+        settings: NativSettings,
+        languageModelSupportsTools: Bool,
+        appModel: NativModel
+    ) {
+        if let modelID = settings.languageModelID {
+            appModel.clearModelLoadFailure(for: modelID)
+        }
         self.appModel = appModel
         requestQueue.append(QueuedChatRequest(
             id: UUID(),
-            sessionID: currentSession.id,
-            userMessageID: userMessage.id,
+            sessionID: sessionID,
+            userMessageID: userMessageID,
             assistantMessageID: UUID(),
             settings: settings,
+            imageGenerationModelID: imageGenerationModelID(for: sessionID)
+                ?? settings.imageGenerationModelID,
             languageModelSupportsTools: languageModelSupportsTools
         ))
         bumpScroll()
@@ -674,6 +908,123 @@ final class ChatViewModel: ObservableObject {
 
     func denyToolConsent(_ toolMessageID: UUID) {
         toolConsentGate.deny(toolMessageID)
+    }
+
+    func imageModelSelectionRequest(
+        for toolMessageID: UUID
+    ) -> ChatImageModelSelectionRequest? {
+        imageModelSelectionRequests[toolMessageID]
+    }
+
+    func selectImageModel(_ toolMessageID: UUID, _ modelID: String) {
+        guard let request = imageModelSelectionRequests[toolMessageID],
+              let selectedModel = ChatImageModelSelection.selectedModel(
+                  withID: modelID,
+                  from: request
+              )
+        else {
+            return
+        }
+
+        guard !selectedModel.isInstalled else {
+            imageModelSelectionGate.select(modelID: modelID, for: toolMessageID)
+            return
+        }
+        guard let preparationContext = imageModelPreparationContexts[toolMessageID] else {
+            return
+        }
+
+        imageModelPreparationTasks[toolMessageID]?.cancel()
+        imageModelPreparationTasks[toolMessageID] = Task { @MainActor [weak self] in
+            defer {
+                self?.imageModelPreparationTasks.removeValue(forKey: toolMessageID)
+            }
+            do {
+                try await HuggingFaceDownloadManager.shared.downloadIfNeeded(
+                    repoID: selectedModel.modelID,
+                    sizeBytes: selectedModel.downloadSizeBytes,
+                    cachePath: preparationContext.modelSearchPath,
+                    token: preparationContext.huggingFaceToken
+                )
+                try Task.checkCancellation()
+                let installedModels = try await ChatImageModelSelection.installedOptions(
+                    modelSearchPath: preparationContext.modelSearchPath,
+                    additionalModelSearchPaths: preparationContext.additionalModelSearchPaths
+                )
+                guard ChatImageModelSelection.isPrepared(
+                    modelID: selectedModel.modelID,
+                    for: request.operation,
+                    installedModels: installedModels
+                ) else {
+                    HuggingFaceDownloadManager.shared.reportError(
+                        "The downloaded model is not compatible with \(request.operation.capabilityName).",
+                        for: selectedModel.modelID
+                    )
+                    return
+                }
+                guard self?.imageModelSelectionRequests[toolMessageID] != nil else {
+                    return
+                }
+                self?.imageModelSelectionGate.select(
+                    modelID: selectedModel.modelID,
+                    for: toolMessageID
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                HuggingFaceDownloadManager.shared.reportError(
+                    error.localizedDescription,
+                    for: selectedModel.modelID
+                )
+            }
+        }
+    }
+
+    func cancelImageModelSelection(_ toolMessageID: UUID) {
+        guard imageModelSelectionRequests[toolMessageID] != nil else {
+            return
+        }
+        imageModelPreparationTasks.removeValue(forKey: toolMessageID)?.cancel()
+        imageModelSelectionGate.cancel(toolMessageID)
+    }
+
+    func refreshPendingImageModelSelections() {
+        guard !imageModelSelectionRequests.isEmpty else {
+            return
+        }
+
+        let pendingRequests = imageModelSelectionRequests.compactMap { id, request in
+            imageModelPreparationContexts[id].map { (id, request.operation, $0) }
+        }
+        imageModelRefreshTask?.cancel()
+        imageModelRefreshTask = Task { @MainActor [weak self] in
+            for (toolMessageID, operation, context) in pendingRequests {
+                do {
+                    let models = try await ChatImageModelSelection.availableOptions(
+                        for: operation,
+                        modelSearchPath: context.modelSearchPath,
+                        additionalModelSearchPaths: context.additionalModelSearchPaths,
+                        huggingFaceToken: context.huggingFaceToken
+                    )
+                    try Task.checkCancellation()
+                    guard self?.imageModelSelectionRequests[toolMessageID]?.operation
+                            == operation
+                    else {
+                        continue
+                    }
+                    self?.imageModelSelectionRequests[toolMessageID] =
+                        ChatImageModelSelectionRequest(
+                            operation: operation,
+                            models: models
+                        )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // Keep the last known choices if the local cache cannot be
+                    // scanned. Hub failures are already handled as offline mode.
+                }
+            }
+        }
     }
 
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
@@ -929,12 +1280,30 @@ final class ChatViewModel: ObservableObject {
         activeRequestSessionID = nil
         requestQueue.removeAll()
         sendingStartedAt = nil
+        discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
         pendingFolderAttachments.removeAll()
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
+    }
+
+    private func restoreComposerAfterPromptEditing() {
+        if let composerSnapshot {
+            draft = composerSnapshot.draft
+            pendingImageAttachments = composerSnapshot.attachments
+        } else {
+            draft = ""
+            pendingImageAttachments.removeAll()
+        }
+        promptEditContext = nil
+        composerSnapshot = nil
+    }
+
+    private func discardPromptEditing() {
+        promptEditContext = nil
+        composerSnapshot = nil
     }
 
     private func startNextRequestIfNeeded() {
@@ -1008,6 +1377,7 @@ final class ChatViewModel: ObservableObject {
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
+        var activeImageModelID = queuedRequest.imageGenerationModelID
 
         while true {
             try Task.checkCancellation()
@@ -1049,15 +1419,63 @@ final class ChatViewModel: ObservableObject {
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
                 let toolMessageID = UUID()
+                let initialToolStatus: ChatTranscriptMessage.ToolStatus = switch toolCall.function?.name {
+                case ChatImageToolRegistry.generateToolName,
+                     ChatImageToolRegistry.editToolName: .preparing
+                default: .running
+                }
                 guard insertToolMessage(
                     id: toolMessageID,
                     call: toolCall,
                     after: insertionAnchor,
-                    in: queuedRequest.sessionID
+                    in: queuedRequest.sessionID,
+                    status: initialToolStatus
                 ) else {
                     throw NativChatError.invalidResponse
                 }
                 insertionAnchor = toolMessageID
+
+                let customTool = toolCall.function?.name.flatMap { toolName in
+                    queuedRequest.settings.customTools.first { $0.toolName == toolName }
+                }
+                if customTool?.kind == .script {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                }
 
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
@@ -1140,15 +1558,75 @@ final class ChatViewModel: ObservableObject {
                         beforeOrAt: toolMessageID,
                         in: queuedRequest.sessionID
                     )
+                    let imageModelPreparationContext = ImageModelPreparationContext(
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        huggingFaceToken: appModel?.effectiveHuggingFaceToken
+                    )
                     let context = ChatToolExecutionContext(
-                        imageGenerationModelID: queuedRequest.settings.imageGenerationModelID,
+                        imageGenerationModelID: activeImageModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
                         apiKey: queuedRequest.settings.serverAPIKey,
                         imageReferences: references,
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
-                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
+                        imageModelSelection: { [weak self] request in
+                            guard let self else {
+                                throw CancellationError()
+                            }
+                            defer {
+                                self.imageModelPreparationTasks
+                                    .removeValue(forKey: toolMessageID)?
+                                    .cancel()
+                                self.imageModelSelectionRequests.removeValue(
+                                    forKey: toolMessageID
+                                )
+                                self.imageModelPreparationContexts.removeValue(
+                                    forKey: toolMessageID
+                                )
+                            }
+
+                            let selectedModelID = await self.imageModelSelectionGate
+                                .awaitSelection(for: toolMessageID) {
+                                    self.imageModelSelectionRequests[toolMessageID] = request
+                                    self.imageModelPreparationContexts[toolMessageID] =
+                                        imageModelPreparationContext
+                                    self.setToolMessageStatus(
+                                        toolMessageID,
+                                        in: queuedRequest.sessionID,
+                                        status: .awaitingImageModelSelection
+                                    )
+                                }
+                            guard let selectedModelID else {
+                                throw CancellationError()
+                            }
+                            return selectedModelID
+                        },
+                        imageExecutionWillStart: { [weak self] selectedModelID in
+                            activeImageModelID = selectedModelID
+                            self?.beginImageExecution(
+                                toolMessageID,
+                                modelID: selectedModelID,
+                                in: queuedRequest.sessionID
+                            )
+                        }
                     )
-                    let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    let outcome: ChatToolExecutionOutcome
+                    if let customTool {
+                        let result = try await CustomToolExecutor.execute(
+                            customTool,
+                            argumentsJSON: toolCall.function?.arguments
+                        )
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else if let host = mcpHost,
+                              let toolName = toolCall.function?.name,
+                              host.handlesTool(named: toolName) {
+                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
+                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
+                    } else {
+                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                    }
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -1218,28 +1696,42 @@ final class ChatViewModel: ObservableObject {
 
         let precedingMessages = sessionMessages[..<assistantIndex]
         var requestMessages = precedingMessages.compactMap(\.apiMessage)
-        if !settings.systemPrompt.isEmpty {
-            requestMessages.insert(
-                MLXChatMessage(role: "system", content: settings.systemPrompt),
-                at: 0
-            )
-        }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        let toolDefinitions = advertisesToolsForModel
+        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                context: ChatToolExecutionContext(
-                    imageGenerationModelID: settings.imageGenerationModelID,
-                    baseURL: settings.serverBaseURL,
-                    apiKey: settings.serverAPIKey,
-                    imageReferences: [],
-                    modelSearchPath: settings.expandedModelSearchPath,
-                    additionalModelSearchPaths: settings.additionalModelSearchPaths
-                ),
                 canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
             )
             : []
+        if advertisesToolsForModel {
+            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
+            toolDefinitions += mcpHost?.toolDefinitions() ?? []
+            let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+            toolDefinitions.removeAll {
+                settings.disabledToolNames.contains($0.function.name)
+                    || ($0.function.name == ChatWebSearchToolRegistry.toolName
+                        && !webSearchIsConfigured)
+            }
+        }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
+
+        var systemParts: [String] = []
+        if !settings.systemPrompt.isEmpty {
+            systemParts.append(settings.systemPrompt)
+        }
+        // Inject the built-in tool-use skill when tools are available.
+        if !toolDefinitions.isEmpty {
+            systemParts.append(NativSkill.builtInToolGuide.instructions)
+        }
+        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
+            systemParts.append(skill.instructions)
+        }
+        if !systemParts.isEmpty {
+            requestMessages.insert(
+                MLXChatMessage(role: "system", content: systemParts.joined(separator: "\n\n")),
+                at: 0
+            )
+        }
         return MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
@@ -1250,7 +1742,9 @@ final class ChatViewModel: ObservableObject {
             minP: settings.minP,
             repetitionPenalty: settings.repetitionPenaltyEnabled ? settings.repetitionPenalty : nil,
             enableThinking: settings.thinkingEnabled,
-            thinkingBudget: settings.thinkingEnabled && settings.thinkingBudgetEnabled
+            thinkingBudget: settings.thinkingEnabled
+                && settings.thinkingBudgetEnabled
+                && !settings.speculativeDecodingActive
                 ? settings.thinkingBudget
                 : nil,
             thinkingStartToken: settings.thinkingEnabled ? settings.thinkingStartToken : nil,
@@ -1295,7 +1789,8 @@ final class ChatViewModel: ObservableObject {
         id: UUID,
         call: MLXChatToolCall,
         after messageID: UUID,
-        in sessionID: UUID
+        in sessionID: UUID,
+        status: ChatTranscriptMessage.ToolStatus = .running
     ) -> Bool {
         insertMessage(
             ChatTranscriptMessage(
@@ -1305,7 +1800,7 @@ final class ChatViewModel: ObservableObject {
                 isStreaming: true,
                 toolCallID: call.id,
                 toolName: call.function?.name,
-                toolStatus: .running,
+                toolStatus: status,
                 toolArguments: call.function?.arguments
             ),
             after: messageID,
@@ -1379,6 +1874,28 @@ final class ChatViewModel: ObservableObject {
             message.toolStatus = status
             message.isStreaming = false
         }
+        if status != .awaitingImageModelSelection {
+            imageModelSelectionRequests.removeValue(forKey: id)
+            imageModelPreparationContexts.removeValue(forKey: id)
+        }
+        persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
+    }
+
+    private func setToolMessageStatus(
+        _ id: UUID,
+        in sessionID: UUID,
+        status: ChatTranscriptMessage.ToolStatus
+    ) {
+        updateMessage(id, in: sessionID) { message in
+            message.toolStatus = status
+        }
+        if status != .awaitingImageModelSelection {
+            imageModelSelectionRequests.removeValue(forKey: id)
+            imageModelPreparationContexts.removeValue(forKey: id)
+        }
         persistSession(sessionID, updateTimestamp: true)
         if currentSessionID == sessionID {
             bumpScroll()
@@ -1445,6 +1962,41 @@ final class ChatViewModel: ObservableObject {
             return messages
         }
         return storedSessions.first(where: { $0.id == sessionID })?.messages
+    }
+
+    private func imageGenerationModelID(for sessionID: UUID) -> String? {
+        if currentSessionID == sessionID {
+            return currentSession?.imageGenerationModelID
+        }
+        return storedSessions.first(where: { $0.id == sessionID })?
+            .imageGenerationModelID
+    }
+
+    private func beginImageExecution(
+        _ toolMessageID: UUID,
+        modelID: String,
+        in sessionID: UUID
+    ) {
+        if currentSessionID == sessionID {
+            currentSession?.imageGenerationModelID = modelID
+        } else {
+            guard let sessionIndex = storedSessions.firstIndex(where: {
+                $0.id == sessionID
+            }) else {
+                return
+            }
+            storedSessions[sessionIndex].imageGenerationModelID = modelID
+        }
+
+        updateMessage(toolMessageID, in: sessionID) { message in
+            message.toolStatus = .running
+        }
+        imageModelSelectionRequests.removeValue(forKey: toolMessageID)
+        imageModelPreparationContexts.removeValue(forKey: toolMessageID)
+        persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
     }
 
     private func message(_ messageID: UUID, in sessionID: UUID) -> ChatTranscriptMessage? {
@@ -1538,7 +2090,8 @@ final class ChatViewModel: ObservableObject {
                         ?? message.responseMetrics?.generatedTokens,
                     decodeTokensPerSecond: metrics.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
-                    peakMemoryGB: message.responseMetrics?.peakMemoryGB
+                    peakMemoryGB: message.responseMetrics?.peakMemoryGB,
+                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
                 )
             }
         }
@@ -1673,10 +2226,47 @@ final class ChatViewModel: ObservableObject {
         bumpScroll()
     }
 
+    private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {
+        let localSession = currentSession
+        let localSessionHasWork = localSession.map { session in
+            !session.messages.isEmpty
+                || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !pendingImageAttachments.isEmpty
+                || activeRequestID != nil
+        } == true
+
+        storedSessions = bootstrap.sessions
+        if localSessionHasWork, let localSession {
+            upsertStoredSession(localSession)
+        }
+
+        pruneRedundantEmptySessions()
+        isLoadingSessions = false
+
+        guard !localSessionHasWork else {
+            refreshSessionList()
+            return
+        }
+
+        if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
+            applyCurrentSession(latestSession)
+        } else if let localSession {
+            storedSessions = [localSession]
+            sessionStore.saveSession(localSession)
+            refreshSessionList()
+        } else {
+            createSession()
+        }
+    }
+
     private func normalizedForLoad(_ messages: [ChatTranscriptMessage]) -> [ChatTranscriptMessage] {
         messages.map { message in
             var message = message
-            if message.toolStatus == .awaitingConsent || message.toolStatus == .running {
+            if message.toolStatus == .awaitingConsent
+                || message.toolStatus == .awaitingImageModelSelection
+                || message.toolStatus == .preparing
+                || message.toolStatus == .running
+            {
                 message.toolStatus = .cancelled
                 message.content = ChatToolDispatcher.failurePayload(
                     toolName: message.toolName,
@@ -1726,6 +2316,24 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
+    func reloadPersistedSessions() {
+        guard !isLoadingSessions else {
+            return
+        }
+        storedSessions = sessionStore.loadSessions()
+        if let currentSession,
+           !storedSessions.contains(where: { $0.id == currentSession.id }) {
+            upsertStoredSession(currentSession)
+        }
+        if let id = currentSessionID,
+           activeRequestSessionID != id,
+           let fresh = storedSessions.first(where: { $0.id == id }),
+           fresh.messages.count != messages.count {
+            applyCurrentSession(fresh)
+        }
+        refreshSessionList()
+    }
+
     private func upsertStoredSession(_ session: ChatSession) {
         if let index = storedSessions.firstIndex(where: { $0.id == session.id }) {
             storedSessions[index] = session
@@ -1764,6 +2372,10 @@ final class ChatViewModel: ObservableObject {
             }
 
             if session.messages.isEmpty {
+                if RoutineStore.shared.routine(forSession: session.id) != nil {
+                    keptSessions.append(session)
+                    continue
+                }
                 if keptEmptySession {
                     removedSessionIDs.append(session.id)
                     continue
@@ -1781,14 +2393,30 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-private struct ChatMessageRow: View {
+private struct ChatMessageRow: View, Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
+    let imageModelSelectionRequest: ChatImageModelSelectionRequest?
+    let canEditUserMessage: Bool
+    let editUserMessageUnavailableReason: String?
+    let isEditingUserMessage: Bool
+    let onEditUserMessage: (UUID) -> Void
     let onConfirmToolConsent: (UUID) -> Void
     let onDenyToolConsent: (UUID) -> Void
-    @State private var didCopyResponse = false
+    let onSelectImageModel: (UUID, String) -> Void
+    let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
+    @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message
+            && lhs.imageModelSelectionRequest == rhs.imageModelSelectionRequest
+            && lhs.canEditUserMessage == rhs.canEditUserMessage
+            && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
+            && lhs.isEditingUserMessage == rhs.isEditingUserMessage
+    }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
@@ -1801,8 +2429,12 @@ private struct ChatMessageRow: View {
             if message.role == .tool {
                 ChatAgentStepCell(
                     message: message,
+                    imageModelSelectionRequest: imageModelSelectionRequest,
                     onConfirm: onConfirmToolConsent,
-                    onDeny: onDenyToolConsent
+                    onDeny: onDenyToolConsent,
+                    onSelectImageModel: onSelectImageModel,
+                    onCancelImageModelSelection: onCancelImageModelSelection,
+                    onExploreImageModels: onExploreImageModels
                 )
             }
 
@@ -1841,20 +2473,36 @@ private struct ChatMessageRow: View {
                 ChatResponseMetricsRow(metrics: responseMetrics)
             }
 
-            if showsCopyAction {
+            if showsMessageActions {
                 HStack(spacing: 8) {
-                    ChatCopyResponseButton(
-                        didCopy: didCopyResponse,
-                        onCopy: copyResponse
-                    )
+                    HStack(spacing: 0) {
+                        if canCopyMessage {
+                            ChatCopyMessageButton(
+                                didCopy: didCopyMessage,
+                                messageKind: message.role == .user ? "prompt" : "response",
+                                onCopy: copyMessage
+                            )
+                        }
+
+                        if message.role == .user {
+                            ChatMessageActionButton(
+                                systemImage: "square.and.pencil",
+                                title: editActionTitle,
+                                isActive: isEditingUserMessage,
+                                isEnabled: canEditUserMessage
+                            ) {
+                                onEditUserMessage(message.id)
+                            }
+                        }
+                    }
 
                     Text(message.createdAt, format: .dateTime.hour().minute())
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
                 }
-                .opacity(isHoveringMessage || didCopyResponse ? 1 : 0)
-                .accessibilityHidden(!isHoveringMessage && !didCopyResponse)
+                .opacity(isHoveringMessage || didCopyMessage || isEditingUserMessage ? 1 : 0)
+                .accessibilityHidden(!isHoveringMessage && !didCopyMessage && !isEditingUserMessage)
             }
         }
         .frame(maxWidth: .infinity, alignment: rowAlignment)
@@ -1870,7 +2518,8 @@ private struct ChatMessageRow: View {
                 ChatMessageText(
                     content: displayContent,
                     rendersMarkdown: rendersMarkdown,
-                    isStreaming: message.isStreaming
+                    isStreaming: message.isStreaming,
+                    isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
                 .fixedSize(horizontal: true, vertical: false)
@@ -1878,7 +2527,8 @@ private struct ChatMessageRow: View {
                 ChatMessageText(
                     content: displayContent,
                     rendersMarkdown: rendersMarkdown,
-                    isStreaming: message.isStreaming
+                    isStreaming: message.isStreaming,
+                    isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
                 .multilineTextAlignment(textAlignment)
@@ -2020,25 +2670,39 @@ private struct ChatMessageRow: View {
         return responseMetrics
     }
 
-    private var showsCopyAction: Bool {
-        message.role == .assistant
+    private var canCopyMessage: Bool {
+        (message.role == .user || message.role == .assistant)
             && !message.isStreaming
             && !message.content.isEmpty
     }
 
-    private func copyResponse() {
+    private var showsMessageActions: Bool {
+        message.role == .user || canCopyMessage
+    }
+
+    private var editActionTitle: String {
+        if isEditingUserMessage {
+            return "Editing prompt"
+        }
+        if canEditUserMessage {
+            return "Edit prompt"
+        }
+        return editUserMessageUnavailableReason ?? "Prompt editing is temporarily unavailable"
+    }
+
+    private func copyMessage() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(message.content, forType: .string)
 
         withAnimation(.easeInOut(duration: 0.15)) {
-            didCopyResponse = true
+            didCopyMessage = true
         }
 
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation(.easeInOut(duration: 0.15)) {
-                didCopyResponse = false
+                didCopyMessage = false
             }
         }
     }
@@ -2046,12 +2710,21 @@ private struct ChatMessageRow: View {
 
 private struct ChatAgentStepCell: View {
     let message: ChatTranscriptMessage
+    let imageModelSelectionRequest: ChatImageModelSelectionRequest?
     let onConfirm: (UUID) -> Void
     let onDeny: (UUID) -> Void
+    let onSelectImageModel: (UUID, String) -> Void
+    let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isExpanded = false
 
     private var isAwaitingConsent: Bool {
         message.toolStatus == .awaitingConsent
+    }
+
+    private var isAwaitingImageModelSelection: Bool {
+        message.toolStatus == .awaitingImageModelSelection
+            && imageModelSelectionRequest != nil
     }
 
     var body: some View {
@@ -2065,9 +2738,13 @@ private struct ChatAgentStepCell: View {
             }
             .buttonStyle(.plain)
             .help(isExpanded ? "Hide call details" : "Show call details")
-            .disabled(isAwaitingConsent)
+            .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
-            if isAwaitingConsent {
+            if isAwaitingImageModelSelection {
+                Divider()
+                    .padding(.top, 7)
+                imageModelSelectionPrompt
+            } else if isAwaitingConsent {
                 Divider()
                     .padding(.top, 7)
                 consentPrompt
@@ -2101,15 +2778,14 @@ private struct ChatAgentStepCell: View {
 
                 Text(title)
                     .font(.callout.weight(.medium))
-                if let statusCaption {
-                    Text(statusCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let mcpServerSlug {
+                    NativStatusBadge(text: mcpServerSlug, tone: .neutral, symbol: "puzzlepiece.extension")
                 }
+                statusBadge
 
                 Spacer(minLength: 12)
 
-                if !isAwaitingConsent {
+                if !isAwaitingConsent && !isAwaitingImageModelSelection {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -2126,24 +2802,26 @@ private struct ChatAgentStepCell: View {
         .contentShape(.rect)
     }
 
-    private var statusCaption: String? {
+    @ViewBuilder
+    private var statusBadge: some View {
         switch message.toolStatus {
-        case .cancelled:
-            "Cancelled"
+        case .succeeded:
+            NativStatusBadge(text: "Done", tone: .success)
         case .failed:
-            "Failed"
+            NativStatusBadge(text: "Failed", tone: .danger)
+        case .cancelled:
+            NativStatusBadge(text: "Cancelled", tone: .neutral)
         case .declined:
-            "Declined"
-        case .running, .succeeded, .awaitingConsent, nil:
-            nil
+            NativStatusBadge(text: "Declined", tone: .neutral)
+        case .preparing, .running, .awaitingConsent,
+             .awaitingImageModelSelection, nil:
+            EmptyView()
         }
     }
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
+            consentDescription
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2163,6 +2841,77 @@ private struct ChatAgentStepCell: View {
         .padding(.top, 7)
     }
 
+    private var consentDescription: Text {
+        if message.toolName == ChatSwitchModelToolRegistry.toolName {
+            return Text("The model wants to switch to ")
+                + Text(verbatim: requestedModelID).bold()
+                + Text(". The server restarts briefly; your session is kept.")
+        }
+        return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
+    }
+
+    @ViewBuilder
+    private var imageModelSelectionPrompt: some View {
+        if let request = imageModelSelectionRequest {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Choose the model to use for \(request.operation.capabilityName).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                if request.models.isEmpty {
+                    Text("No compatible downloaded models are available.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !request.installedModels.isEmpty {
+                    imageModelSection(
+                        title: "Downloaded",
+                        models: request.installedModels
+                    )
+                }
+
+                if !request.downloadableModels.isEmpty {
+                    imageModelSection(
+                        title: "Available to download",
+                        models: request.downloadableModels
+                    )
+                }
+
+                HStack(spacing: 8) {
+                    Button("Cancel") {
+                        onCancelImageModelSelection(message.id)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Explore models") {
+                        onExploreImageModels(request.operation)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 7)
+        }
+    }
+
+    private func imageModelSection(
+        title: String,
+        models: [ChatImageModelOption]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            ForEach(models) { model in
+                ChatImageModelOptionRow(model: model) {
+                    onSelectImageModel(message.id, model.modelID)
+                }
+            }
+        }
+    }
+
     private var requestedModelID: String {
         guard let data = message.toolArguments?.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -2176,24 +2925,18 @@ private struct ChatAgentStepCell: View {
     @ViewBuilder
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Arguments")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(formattedArguments)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                NativCodeBlock(raw: formattedArguments)
             }
             if !message.content.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Result")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(message.content)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(6)
+                    NativCodeBlock(raw: message.content, lineLimit: 12)
                 }
             }
         }
@@ -2209,19 +2952,47 @@ private struct ChatAgentStepCell: View {
     }
 
     private var title: String {
-        ChatToolPresentation.title(toolName: message.toolName, status: message.toolStatus)
+        // For MCP tools show the bare tool name, not the mcp__slug__ prefix.
+        let name = mcpToolParts?.tool ?? message.toolName
+        return ChatToolPresentation.title(toolName: name, status: message.toolStatus)
     }
 
     private var symbolName: String {
         ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
     }
 
-    private var tintColor: Color {
-        message.toolStatus == .failed ? .red : .secondary
+    private var statusTone: NativStatusTone {
+        switch message.toolStatus {
+        case .preparing, .running: return .active
+        case .succeeded: return .success
+        case .failed: return .danger
+        case .awaitingConsent, .awaitingImageModelSelection: return .warning
+        case .cancelled, .declined, nil: return .neutral
+        }
     }
+
+    private var tintColor: Color {
+        statusTone.color
+    }
+
+    /// Splits an MCP tool name (`mcp__<slug>__<tool>`) into its server slug and
+    /// bare tool name; nil for built-in tools.
+    private var mcpToolParts: (slug: String, tool: String)? {
+        guard let name = message.toolName, name.hasPrefix("mcp__") else { return nil }
+        let body = name.dropFirst("mcp__".count)
+        guard let separator = body.range(of: "__") else { return nil }
+        let slug = String(body[..<separator.lowerBound])
+        let tool = String(body[separator.upperBound...])
+        guard !slug.isEmpty, !tool.isEmpty else { return nil }
+        return (slug, tool)
+    }
+
+    private var mcpServerSlug: String? { mcpToolParts?.slug }
 
     private var accessibilityStatus: String {
         switch message.toolStatus {
+        case .preparing:
+            "preparing"
         case .running:
             "running"
         case .succeeded:
@@ -2232,6 +3003,8 @@ private struct ChatAgentStepCell: View {
             "cancelled"
         case .awaitingConsent:
             "awaiting your confirmation"
+        case .awaitingImageModelSelection:
+            "awaiting image model selection"
         case .declined:
             "declined"
         case nil:
@@ -2246,6 +3019,92 @@ private struct ChatAgentStepCell: View {
             return nil
         }
         return object["error"] as? String
+    }
+}
+
+private struct ChatImageModelOptionRow: View {
+    private static let downloadButtonLabelWidth: CGFloat = 180
+
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+
+    let model: ChatImageModelOption
+    let onChoose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.displayName)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(model.modelID)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 12)
+                trailingControl
+            }
+
+            if let error = downloadManager.errorByModelID[model.modelID] {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControl: some View {
+        if model.isInstalled {
+            Button(action: onChoose) {
+                Label("Use", systemImage: "chevron.right")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Use \(model.displayName)")
+        } else if downloadManager.isDownloading(model.modelID) {
+            ModelDownloadProgressControl(
+                progress: downloadManager.progress(for: model.modelID),
+                isPaused: downloadManager.isPaused(for: model.modelID),
+                onPauseResume: {
+                    if downloadManager.isPaused(for: model.modelID) {
+                        downloadManager.resumeDownload(model.modelID)
+                    } else {
+                        downloadManager.pauseDownload(model.modelID)
+                    }
+                },
+                onRemove: { downloadManager.removeDownload(model.modelID) }
+            )
+        } else {
+            Button(action: onChoose) {
+                Label(downloadTitle, systemImage: "arrow.down.circle")
+                    .frame(width: Self.downloadButtonLabelWidth)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Download and use \(model.displayName)")
+        }
+    }
+
+    private var downloadTitle: String {
+        guard let sizeBytes = model.downloadSizeBytes else {
+            return "Download"
+        }
+        let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        return "Download · \(size)"
     }
 }
 
@@ -2305,8 +3164,9 @@ private struct ChatLiveDecodeMetricsBadge: View, Equatable {
     }
 }
 
-private struct ChatCopyResponseButton: View {
+private struct ChatCopyMessageButton: View {
     let didCopy: Bool
+    let messageKind: String
     let onCopy: () -> Void
     @State private var isHovering = false
 
@@ -2323,11 +3183,37 @@ private struct ChatCopyResponseButton: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help(didCopy ? "Copied" : "Copy response")
-        .accessibilityLabel(didCopy ? "Response copied" : "Copy response")
+        .help(didCopy ? "Copied" : "Copy \(messageKind)")
+        .accessibilityLabel(didCopy ? "\(messageKind.capitalized) copied" : "Copy \(messageKind)")
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: didCopy)
+    }
+}
+
+private struct ChatMessageActionButton: View {
+    let systemImage: String
+    let title: String
+    let isActive: Bool
+    let isEnabled: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
+                .frame(width: 30, height: 28)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help(title)
+        .accessibilityLabel(title)
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+        .animation(.easeInOut(duration: 0.15), value: isActive)
     }
 }
 
@@ -2506,6 +3392,12 @@ private struct ChatResponseMetricsRow: View {
             label: "Decode tok/s",
             value: NativFormatting.rate(metrics.decodeTokensPerSecond)
         )
+        if let acceptanceRate = metrics.specAcceptanceRate {
+            ChatResponseMetricPill(
+                label: "Draft acceptance",
+                value: acceptanceRate.formatted(.percent.precision(.fractionLength(0)))
+            )
+        }
         ChatResponseMetricPill(
             label: "Peak memory",
             value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? "--"
@@ -2712,21 +3604,28 @@ private struct ChatMessageText: View {
     let content: String
     let rendersMarkdown: Bool
     let isStreaming: Bool
+    var isUserPrompt = false
+    @Environment(\.chatFontScale) private var chatFontScale
 
     @ViewBuilder
     var body: some View {
-        if rendersMarkdown && !isStreaming {
+        if isUserPrompt {
+            ChatSelectablePromptText(
+                content: content,
+                fontScale: chatFontScale
+            )
+        } else if rendersMarkdown && !isStreaming {
             StructuredText(
                 markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
             )
             .textual.structuredTextStyle(.gitHub)
             .textual.textSelection(.enabled)
-            .font(.body)
+            .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else {
             renderedText
                 .textSelection(.enabled)
-                .font(.body)
+                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         }
     }
 
@@ -2741,6 +3640,73 @@ private struct ChatMessageText: View {
         }
 
         return Text(attributed)
+    }
+}
+
+private struct ChatSelectablePromptText: NSViewRepresentable {
+    let content: String
+    let fontScale: Double
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        update(textView)
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        update(textView)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: NSTextView,
+        context: Context
+    ) -> CGSize? {
+        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
+        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
+        let bounds = (content as NSString).boundingRect(
+            with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: textAttributes(font: font)
+        )
+        let measuredWidth = max(1, ceil(bounds.width))
+        let width = proposal.width.map { min($0, measuredWidth) } ?? measuredWidth
+        return CGSize(width: width, height: max(1, ceil(bounds.height)))
+    }
+
+    private func update(_ textView: NSTextView) {
+        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
+        if textView.string != content || textView.font != font {
+            textView.textStorage?.setAttributedString(NSAttributedString(
+                string: content,
+                attributes: textAttributes(font: font)
+            ))
+        }
+        textView.setAccessibilityLabel(content)
+    }
+
+    private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        paragraphStyle.lineSpacing = 2
+        return [
+            .font: font,
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraphStyle
+        ]
     }
 }
 
@@ -2813,7 +3779,11 @@ private struct ChatEmptyTranscriptView: View {
     ChatView(
         model: .init(),
         chat: ChatViewModel(),
+        mcpHost: MCPHostManager(),
+        workspaceMode: .chat,
+        onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        conversationWidthReduction: 0
+        conversationWidthReduction: 0,
+        onExploreImageModels: { _ in }
     )
 }

@@ -1,8 +1,36 @@
 import AppKit
 import AVFoundation
+import CoreAudio
+import Darwin
 import Foundation
 import NativServerKit
 import ScreenCaptureKit
+
+enum AudioCapturePreferences {
+    static let automaticallySummarizeKey = "audio.capture.automaticallySummarize"
+    static let includeSystemAudioKey = "audio.capture.includeSystemAudio"
+    static let suggestMeetingTranscriptionKey = "audio.capture.suggestMeetingTranscription"
+
+    static func registerDefaults() {
+        UserDefaults.standard.register(defaults: [
+            automaticallySummarizeKey: true,
+            includeSystemAudioKey: true,
+            suggestMeetingTranscriptionKey: false,
+        ])
+    }
+
+    static var automaticallySummarize: Bool {
+        UserDefaults.standard.bool(forKey: automaticallySummarizeKey)
+    }
+
+    static var includeSystemAudio: Bool {
+        UserDefaults.standard.bool(forKey: includeSystemAudioKey)
+    }
+
+    static var suggestMeetingTranscription: Bool {
+        UserDefaults.standard.bool(forKey: suggestMeetingTranscriptionKey)
+    }
+}
 
 enum AudioCapturePhase: Equatable {
     case idle
@@ -45,31 +73,71 @@ enum AudioCaptureLibraryError: LocalizedError {
     }
 }
 
+private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
+    var onFinish: ((AVAudioPlayer) -> Void)?
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onFinish?(player)
+    }
+}
+
 @MainActor
 final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var phase: AudioCapturePhase = .idle
     @Published private(set) var activeKind: AudioRecordKind?
     @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var inputLevel: Float = 0
+    let meterState = AudioInputLevelState()
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
     @Published private(set) var shouldOfferScreenCaptureSettings = false
+    @Published private(set) var playingRecordID: String?
+    @Published private(set) var isPlaybackPaused = false
 
     var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
 
+    private var audioPlayer: AVAudioPlayer?
+    private lazy var playbackDelegate: AudioPlaybackDelegate = {
+        let delegate = AudioPlaybackDelegate()
+        delegate.onFinish = { [weak self] player in
+            Task { @MainActor in self?.playbackDidFinish(player) }
+        }
+        return delegate
+    }()
     private let voiceRecorder = VoiceAudioRecorder()
     private let meetingRecorder = SystemAudioMeetingRecorder()
     private let recordingOverlay = VoiceCaptureOverlayController()
+    private let meetingJoinMonitor = MeetingJoinMonitor()
+    private let meetingSuggestion = MeetingTranscriptionSuggestionController()
     private let analytics: AudioAnalyticsStore
     private var elapsedTimer: Timer?
     private var captureStartedAt: Date?
     private var shouldSummarizeCurrentCapture = false
     private var activeBackend: ActiveAudioCaptureBackend?
     private var activeTask: Task<Void, Never>?
+    private var lastMeterPublishAt = Date.distantPast
 
     init(analytics: AudioAnalyticsStore? = nil) {
+        AudioCapturePreferences.registerDefaults()
         self.analytics = analytics ?? .shared
+        meetingJoinMonitor.onMeetingJoined = { [weak self] application in
+            self?.offerMeetingTranscription(for: application) ?? false
+        }
+        meetingSuggestion.onStart = { [weak self] in
+            guard let self else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                await self.start(
+                    .meeting,
+                    automaticallySummarize: AudioCapturePreferences.automaticallySummarize,
+                    includeSystemAudio: AudioCapturePreferences.includeSystemAudio
+                )
+            }
+        }
         recordingOverlay.setAudioCaptureActions(
             complete: { [weak self] in
                 Task { @MainActor [weak self] in
@@ -91,17 +159,18 @@ final class AudioCaptureLibrary: ObservableObject {
             guard let self else {
                 return
             }
-            self.inputLevel = level
-            self.elapsed = elapsed
-            self.updateRecordingOverlay(level: level, elapsed: elapsed)
+            self.publishMeter(level: level, elapsed: elapsed)
         }
         meetingRecorder.onMicrophoneLevelUpdate = { [weak self] level in
             guard let self else {
                 return
             }
-            self.inputLevel = level
-            self.updateRecordingOverlay(level: level, elapsed: self.elapsed)
+            self.publishMeter(level: level, elapsed: self.elapsed)
         }
+    }
+
+    func start() {
+        meetingJoinMonitor.start()
     }
 
     static var recordingsDirectory: URL {
@@ -145,9 +214,10 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
         activeIncludesSystemAudio = kind == .meeting && includeSystemAudio
-        inputLevel = 0
+        meterState.update(0)
+        lastMeterPublishAt = .distantPast
 
-        guard await Self.requestMicrophoneAccess() else {
+        guard Self.hasMicrophoneAccess() else {
             fail(AudioCaptureLibraryError.microphonePermissionRequired)
             return
         }
@@ -352,12 +422,70 @@ final class AudioCaptureLibrary: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func openAudio(for record: AudioTranscriptionRecord) {
+    func revealAudio(for record: AudioTranscriptionRecord) {
         guard let url = audioURL(for: record) else {
             lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
             return
         }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func togglePlayback(for record: AudioTranscriptionRecord) {
+        if playingRecordID == record.id {
+            if isPlaybackPaused {
+                if audioPlayer?.play() == true {
+                    isPlaybackPaused = false
+                } else {
+                    lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+                }
+            } else {
+                audioPlayer?.pause()
+                isPlaybackPaused = true
+            }
+            return
+        }
+        startPlayback(for: record)
+    }
+
+    private func startPlayback(for record: AudioTranscriptionRecord) {
+        stopPlayback()
+        guard let url = audioURL(for: record) else {
+            lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+            return
+        }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.delegate = playbackDelegate
+            guard player.play() else {
+                lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+                return
+            }
+            audioPlayer = player
+            playingRecordID = record.id
+            isPlaybackPaused = false
+        } catch {
+            lastErrorMessage = error.localizedDescription
+        }
+    }
+
+    func stopPlayback() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        playingRecordID = nil
+        isPlaybackPaused = false
+    }
+
+    func stopPlaybackIfPlaying(_ recordID: String) {
+        if playingRecordID == recordID {
+            stopPlayback()
+        }
+    }
+
+    private func playbackDidFinish(_ player: AVAudioPlayer) {
+        guard audioPlayer === player else {
+            return
+        }
+        stopPlayback()
     }
 
     func revealLibrary() {
@@ -371,6 +499,7 @@ final class AudioCaptureLibrary: ObservableObject {
         guard record.resolvedKind != .dictation else {
             return
         }
+        stopPlaybackIfPlaying(record.id)
         if let audioURL = audioURL(for: record) {
             try? FileManager.default.removeItem(at: audioURL)
         }
@@ -388,6 +517,8 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func shutdown() {
+        meetingJoinMonitor.stop()
+        meetingSuggestion.dismiss()
         activeTask?.cancel()
         activeTask = nil
         stopElapsedTimer()
@@ -398,6 +529,16 @@ final class AudioCaptureLibrary: ObservableObject {
             await meetingRecorder.cancel()
         }
         resetCaptureState()
+    }
+
+    private func offerMeetingTranscription(for application: MeetingApplication) -> Bool {
+        guard AudioCapturePreferences.suggestMeetingTranscription,
+              phase == .idle
+        else {
+            return false
+        }
+        meetingSuggestion.show(for: application.displayName)
+        return true
     }
 
     private func processRecording(
@@ -451,8 +592,10 @@ final class AudioCaptureLibrary: ObservableObject {
             throw AudioCaptureLibraryError.serverNotRunning
         }
         let installedModels = try await LocalModelDiscovery.scan(
-            path: configuration.modelSearchPath,
-            additionalPaths: configuration.additionalModelSearchPaths
+            searchPaths: LocalModelSearchPaths(
+                primary: configuration.modelSearchPath,
+                additional: configuration.additionalModelSearchPaths
+            )
         )
         guard let modelID = LocalModelDiscovery.speechToTextModelID(
             in: installedModels,
@@ -479,8 +622,10 @@ final class AudioCaptureLibrary: ObservableObject {
             throw AudioCaptureLibraryError.serverNotRunning
         }
         let installedModels = try await LocalModelDiscovery.scan(
-            path: configuration.modelSearchPath,
-            additionalPaths: configuration.additionalModelSearchPaths
+            searchPaths: LocalModelSearchPaths(
+                primary: configuration.modelSearchPath,
+                additional: configuration.additionalModelSearchPaths
+            )
         )
         let languageModels = installedModels.filter(\.isEligibleForLanguageModelPicker)
         let modelID = configuration.languageModelID.flatMap { selectedID in
@@ -617,11 +762,12 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .idle
         activeKind = nil
         elapsed = 0
-        inputLevel = 0
+        meterState.update(0)
         activeIncludesSystemAudio = false
         activeBackend = nil
         captureStartedAt = nil
         shouldSummarizeCurrentCapture = false
+        lastMeterPublishAt = .distantPast
         activeTask = nil
     }
 
@@ -634,7 +780,7 @@ final class AudioCaptureLibrary: ObservableObject {
                 }
                 self.elapsed = Date().timeIntervalSince(captureStartedAt)
                 self.updateRecordingOverlay(
-                    level: self.inputLevel,
+                    level: self.meterState.level,
                     elapsed: self.elapsed
                 )
             }
@@ -655,17 +801,19 @@ final class AudioCaptureLibrary: ObservableObject {
         recordingOverlay.update(level: level, elapsed: elapsed)
     }
 
-    private static func requestMicrophoneAccess() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        @unknown default:
-            return false
+    private func publishMeter(level: Float, elapsed: TimeInterval) {
+        let now = Date()
+        guard now.timeIntervalSince(lastMeterPublishAt) >= 1.0 / 15.0 else {
+            return
         }
+        lastMeterPublishAt = now
+        meterState.update(level)
+        self.elapsed = elapsed
+        updateRecordingOverlay(level: level, elapsed: elapsed)
+    }
+
+    private static func hasMicrophoneAccess() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private static func makeOutputURL(
@@ -710,5 +858,272 @@ final class AudioCaptureLibrary: ObservableObject {
             start = end
         }
         return chunks
+    }
+}
+
+struct MeetingApplication: Equatable {
+    let processIdentifier: pid_t
+    let displayName: String
+}
+
+@MainActor
+final class MeetingJoinMonitor {
+    var onMeetingJoined: ((MeetingApplication) -> Bool)?
+
+    private var timer: Timer?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var promptedProcessIdentifiers = Set<pid_t>()
+    private var inputActivitySamples: [pid_t: Int] = [:]
+
+    private static let pollingInterval: TimeInterval = 0.5
+    private static let requiredInputActivitySamples = 2
+
+    func start() {
+        guard timer == nil else {
+            return
+        }
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for notificationName in [
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+        ] {
+            workspaceObservers.append(
+                workspaceCenter.addObserver(
+                    forName: notificationName,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.evaluate()
+                    }
+                }
+            )
+        }
+        workspaceObservers.append(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let application = notification.userInfo?[
+                    NSWorkspace.applicationUserInfoKey
+                ] as? NSRunningApplication else {
+                    return
+                }
+                Task { @MainActor [weak self] in
+                    self?.resetState(for: application.processIdentifier)
+                }
+            }
+        )
+
+        let timer = Timer(timeInterval: Self.pollingInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.evaluate()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        evaluate()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceObservers.forEach { workspaceCenter.removeObserver($0) }
+        workspaceObservers.removeAll()
+        promptedProcessIdentifiers.removeAll()
+        inputActivitySamples.removeAll()
+    }
+
+    private func evaluate() {
+        guard AudioCapturePreferences.suggestMeetingTranscription else {
+            promptedProcessIdentifiers.removeAll()
+            inputActivitySamples.removeAll()
+            return
+        }
+
+        clearInactiveMeetingStates()
+
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              let bundleIdentifier = application.bundleIdentifier,
+              Self.meetingApplicationNames[bundleIdentifier] != nil,
+              application.activationPolicy == .regular
+        else {
+            return
+        }
+
+        let processIdentifier = application.processIdentifier
+        guard Self.isInputRunning(forProcessIdentifier: processIdentifier) else {
+            inputActivitySamples[processIdentifier] = 0
+            promptedProcessIdentifiers.remove(processIdentifier)
+            return
+        }
+
+        let sampleCount = min(
+            Self.requiredInputActivitySamples,
+            (inputActivitySamples[processIdentifier] ?? 0) + 1
+        )
+        inputActivitySamples[processIdentifier] = sampleCount
+        guard sampleCount >= Self.requiredInputActivitySamples,
+              !promptedProcessIdentifiers.contains(processIdentifier)
+        else {
+            return
+        }
+
+        let displayName = Self.meetingApplicationNames[bundleIdentifier]
+            ?? application.localizedName
+            ?? "the meeting app"
+        let shouldRememberPrompt = onMeetingJoined?(
+            MeetingApplication(
+                processIdentifier: processIdentifier,
+                displayName: displayName
+            )
+        ) ?? false
+        if shouldRememberPrompt {
+            promptedProcessIdentifiers.insert(processIdentifier)
+        }
+    }
+
+    private func clearInactiveMeetingStates() {
+        for processIdentifier in promptedProcessIdentifiers
+            where !Self.isInputRunning(forProcessIdentifier: processIdentifier)
+        {
+            resetState(for: processIdentifier)
+        }
+    }
+
+    private func resetState(for processIdentifier: pid_t) {
+        promptedProcessIdentifiers.remove(processIdentifier)
+        inputActivitySamples.removeValue(forKey: processIdentifier)
+    }
+
+    private static let meetingApplicationNames: [String: String] = [
+        "us.zoom.xos": "Zoom",
+        "com.microsoft.teams2": "Microsoft Teams",
+        "com.microsoft.teams": "Microsoft Teams",
+        "com.cisco.webexmeetingsapp": "Webex",
+        "com.tinyspeck.slackmacgap": "Slack",
+        "com.hnc.Discord": "Discord",
+        "com.apple.FaceTime": "FaceTime",
+        "com.google.Chrome": "Google Meet",
+        "com.apple.Safari": "Google Meet",
+        "org.mozilla.firefox": "Google Meet",
+        "com.microsoft.edgemac": "Google Meet",
+        "company.thebrowser.Browser": "Google Meet",
+        "com.brave.Browser": "Google Meet",
+    ]
+
+    private static func isInputRunning(forProcessIdentifier rootProcessIdentifier: pid_t) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else {
+            return false
+        }
+
+        let processCount = Int(dataSize) / MemoryLayout<AudioObjectID>.stride
+        guard processCount > 0 else {
+            return false
+        }
+        var processObjects = [AudioObjectID](repeating: 0, count: processCount)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &processObjects
+        ) == noErr else {
+            return false
+        }
+
+        for processObject in processObjects {
+            guard let processIdentifier = processIdentifier(for: processObject),
+                  isDescendant(processIdentifier, of: rootProcessIdentifier),
+                  isProcessInputRunning(processObject)
+            else {
+                continue
+            }
+            return true
+        }
+        return false
+    }
+
+    private static func processIdentifier(for processObject: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var processIdentifier: pid_t = 0
+        var dataSize = UInt32(MemoryLayout<pid_t>.size)
+        guard AudioObjectGetPropertyData(
+            processObject,
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &processIdentifier
+        ) == noErr else {
+            return nil
+        }
+        return processIdentifier
+    }
+
+    private static func isProcessInputRunning(_ processObject: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningInput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var isRunning: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(
+            processObject,
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &isRunning
+        ) == noErr && isRunning != 0
+    }
+
+    private static func isDescendant(_ processIdentifier: pid_t, of rootProcessIdentifier: pid_t) -> Bool {
+        var currentProcessIdentifier = processIdentifier
+        var visited = Set<pid_t>()
+        while currentProcessIdentifier > 1,
+              visited.insert(currentProcessIdentifier).inserted
+        {
+            if currentProcessIdentifier == rootProcessIdentifier {
+                return true
+            }
+
+            var processInfo = proc_bsdinfo()
+            let result = withUnsafeMutablePointer(to: &processInfo) { pointer in
+                proc_pidinfo(
+                    currentProcessIdentifier,
+                    PROC_PIDTBSDINFO,
+                    0,
+                    pointer,
+                    Int32(MemoryLayout<proc_bsdinfo>.size)
+                )
+            }
+            guard result == Int32(MemoryLayout<proc_bsdinfo>.size) else {
+                return false
+            }
+            currentProcessIdentifier = pid_t(processInfo.pbi_ppid)
+        }
+        return false
     }
 }

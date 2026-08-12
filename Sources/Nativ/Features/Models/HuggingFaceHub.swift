@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import Foundation
 import NativServerKit
@@ -59,6 +60,13 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let isPrivate: Bool
     let isGated: Bool
     let safetensors: HuggingFaceSafetensors?
+    // These values are used by every visible row. Resolve them once while the
+    // response is decoded instead of repeating string parsing, provider lookup,
+    // and memory estimation during every SwiftUI body pass while scrolling.
+    let provider: LocalModelProvider?
+    let sizeBytes: Int64?
+    let capabilities: Set<LocalModelCapability>
+    let memoryEstimate: LocalModelMemoryEstimate?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -90,27 +98,58 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         } else {
             isGated = false
         }
+
+        provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
+        sizeBytes = safetensors?.sizeBytes
+        capabilities = Self.resolveCapabilities(
+            pipelineTag: pipelineTag,
+            libraryName: libraryName,
+            tags: tags
+        )
+        memoryEstimate = Self.resolveMemoryEstimate(
+            repoID: id,
+            safetensors: safetensors,
+            sizeBytes: sizeBytes,
+            capabilities: capabilities
+        )
     }
 
-    var provider: LocalModelProvider? {
-        LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
+    // The safetensors parameter summary only covers the diffusion transformer,
+    // so for image models it lands well under the real download. Scale it toward
+    // the components a modern image pipeline also ships (text encoder + VAE).
+    // The download manager validates available capacity again before enqueueing.
+    var estimatedDownloadBytes: Int64? {
+        guard let sizeBytes else {
+            return nil
+        }
+        let isImageModel = capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+        guard isImageModel else {
+            return sizeBytes
+        }
+        let scaled = Double(sizeBytes) * 2.5
+        guard scaled <= Double(Int64.max) else {
+            return sizeBytes
+        }
+        return Int64(scaled.rounded(.up))
     }
 
-    var sizeBytes: Int64? {
-        safetensors?.sizeBytes
-    }
-
-    var memoryEstimate: LocalModelMemoryEstimate? {
+    private static func resolveMemoryEstimate(
+        repoID: String,
+        safetensors: HuggingFaceSafetensors?,
+        sizeBytes: Int64?,
+        capabilities: Set<LocalModelCapability>
+    ) -> LocalModelMemoryEstimate? {
         guard let safetensors,
               safetensors.hasOnlyKnownDataTypes,
-              let sizeBytes = safetensors.sizeBytes,
+              let sizeBytes,
               sizeBytes > 0
         else {
             return nil
         }
 
-        let parameterCount = LocalModelDiscovery.parameterCount(from: id)
-        let quantizationBits = LocalModelDiscovery.quantizationBits(from: id)
+        let parameterCount = LocalModelDiscovery.parameterCount(from: repoID)
+        let quantizationBits = LocalModelDiscovery.quantizationBits(from: repoID)
         var estimatedModelBytes = Double(sizeBytes)
 
         // Packed integer summaries and explicitly quantized repositories need a
@@ -154,7 +193,11 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         )
     }
 
-    var capabilities: Set<LocalModelCapability> {
+    private static func resolveCapabilities(
+        pipelineTag: String?,
+        libraryName: String?,
+        tags: [String]
+    ) -> Set<LocalModelCapability> {
         let pipeline = pipelineTag?.lowercased() ?? ""
         let descriptors = ([pipelineTag, libraryName].compactMap { $0 } + tags)
             .joined(separator: " ")
@@ -324,6 +367,7 @@ private struct HuggingFaceHubClient: Sendable {
     func search(
         query: String,
         sort: HuggingFaceModelSort,
+        capabilities: Set<LocalModelCapability>,
         token: String?
     ) async throws -> HuggingFaceModelPage {
         var components = URLComponents()
@@ -337,6 +381,9 @@ private struct HuggingFaceHubClient: Sendable {
             URLQueryItem(name: "direction", value: "-1"),
             URLQueryItem(name: "limit", value: "50")
         ]
+        if let pipelineTag = Self.pipelineTag(for: capabilities) {
+            queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
+        }
         queryItems.append(contentsOf: [
             "downloads", "likes", "pipeline_tag", "library_name", "tags",
             "private", "gated", "safetensors"
@@ -352,6 +399,55 @@ private struct HuggingFaceHubClient: Sendable {
         }
 
         return try await page(at: url, token: token)
+    }
+
+    private static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
+        guard capabilities.count == 1, let capability = capabilities.first else {
+            return nil
+        }
+        switch capability {
+        case .imageGeneration:
+            return "text-to-image"
+        case .imageEditing:
+            return "image-to-image"
+        case .speechToText:
+            return "automatic-speech-recognition"
+        case .textToSpeech:
+            return "text-to-speech"
+        case .vision:
+            return "image-text-to-text"
+        case .text, .audio, .video, .embeddings, .reasoning, .tools, .drafter:
+            return nil
+        }
+    }
+
+    func modelData(id: String, token: String?) async throws -> Data {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/api/models/\(id)"
+        components.queryItems = [
+            "downloads", "likes", "pipeline_tag", "library_name", "tags",
+            "private", "gated", "safetensors"
+        ].map { URLQueryItem(name: "expand[]", value: $0) }
+
+        guard let url = components.url else {
+            throw HuggingFaceHubError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("MLXPlatform/1.0", forHTTPHeaderField: "User-Agent")
+        HuggingFaceAuthentication.authorize(&request, token: token)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw HuggingFaceHubError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = (try? JSONDecoder().decode(HubErrorPayload.self, from: data))?.error ?? ""
+            throw HuggingFaceHubError.requestFailed(httpResponse.statusCode, message)
+        }
+        return data
     }
 
     func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
@@ -398,6 +494,91 @@ private struct HuggingFaceModelPage: Sendable {
     let nextPageURL: URL?
 }
 
+struct HuggingFaceCuratedModelLoader: Sendable {
+    typealias FetchModelData = @Sendable (String) async -> Data?
+
+    private let maximumConcurrentRequests: Int
+    private let fetchModelData: FetchModelData
+
+    init(
+        maximumConcurrentRequests: Int = 4,
+        fetchModelData: @escaping FetchModelData
+    ) {
+        precondition(maximumConcurrentRequests > 0)
+        self.maximumConcurrentRequests = maximumConcurrentRequests
+        self.fetchModelData = fetchModelData
+    }
+
+    func load(ids: [String]) async -> [HuggingFaceModel] {
+        let payloads = await fetchPayloads(ids: ids)
+        guard !Task.isCancelled else {
+            return []
+        }
+
+        // Model decoding derives memory metadata and compiles model-name regexes.
+        // Keep it sequential while allowing the network requests to overlap.
+        let decoder = JSONDecoder()
+        return ids.compactMap { id in
+            guard let data = payloads[id] else {
+                return nil
+            }
+            return try? decoder.decode(HuggingFaceModel.self, from: data)
+        }
+    }
+
+    private func fetchPayloads(ids: [String]) async -> [String: Data] {
+        let fetchModelData = self.fetchModelData
+        return await withTaskGroup(
+            of: (String, Data?).self,
+            returning: [String: Data].self
+        ) { group in
+            var iterator = ids.makeIterator()
+            var payloads: [String: Data] = [:]
+            let initialRequestCount = min(maximumConcurrentRequests, ids.count)
+
+            for _ in 0..<initialRequestCount {
+                guard let id = iterator.next() else { break }
+                group.addTask {
+                    (id, await fetchModelData(id))
+                }
+            }
+
+            while let (id, data) = await group.next() {
+                if let data {
+                    payloads[id] = data
+                }
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    break
+                }
+                if let nextID = iterator.next() {
+                    group.addTask {
+                        (nextID, await fetchModelData(nextID))
+                    }
+                }
+            }
+            return payloads
+        }
+    }
+}
+
+enum HuggingFaceModelCatalog {
+    static func popularModels(
+        with capability: LocalModelCapability,
+        token: String?
+    ) async throws -> [HuggingFaceModel] {
+        let hubCapability: LocalModelCapability = capability == .imageEditing
+            ? .imageGeneration
+            : capability
+        return try await HuggingFaceHubClient().search(
+            query: "mlx",
+            sort: .downloads,
+            capabilities: [hubCapability],
+            token: token
+        ).models
+    }
+}
+
 private struct HubErrorPayload: Decodable {
     let error: String
 }
@@ -413,15 +594,23 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var buffer: [HuggingFaceModel] = []
     private var activeSort: HuggingFaceModelSort = .downloads
+    private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURL: URL?
     private let pageSize = 24
     private let maximumPageCount = 5
+    private let maximumFillFetches = 8
 
     deinit {
         searchTask?.cancel()
     }
 
-    func search(query: String, sort: HuggingFaceModelSort, token: String?) {
+    func search(
+        query: String,
+        sort: HuggingFaceModelSort,
+        capabilities: Set<LocalModelCapability>,
+        predicate: @escaping (HuggingFaceModel) -> Bool,
+        token: String?
+    ) {
         searchTask?.cancel()
         isSearching = true
         error = nil
@@ -430,11 +619,17 @@ final class HuggingFaceModelLibrary: ObservableObject {
         nextPageURL = nil
         pageNumber = 1
         activeSort = sort
+        visibilityPredicate = predicate
 
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await client.search(query: query, sort: sort, token: token)
+                let page = try await client.search(
+                    query: query,
+                    sort: sort,
+                    capabilities: capabilities,
+                    token: token
+                )
                 try Task.checkCancellation()
                 self.buffer = page.models
                 self.nextPageURL = page.nextPageURL
@@ -455,13 +650,41 @@ final class HuggingFaceModelLibrary: ObservableObject {
         }
     }
 
+    func loadCurated(ids: [String], token: String?) {
+        searchTask?.cancel()
+        isSearching = true
+        error = nil
+        models = []
+        buffer = []
+        nextPageURL = nil
+        pageNumber = 1
+        activeSort = .downloads
+        visibilityPredicate = { _ in true }
+
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            let client = self.client
+            let loader = HuggingFaceCuratedModelLoader { id in
+                try? await client.modelData(id: id, token: token)
+            }
+            let ordered = await loader.load(ids: ids)
+            guard !Task.isCancelled else { return }
+            self.buffer = ordered
+            self.models = ordered
+            self.error = ordered.isEmpty
+                ? HuggingFaceHubError.invalidResponse.errorDescription
+                : nil
+            self.isSearching = false
+        }
+    }
+
     var canGoToPreviousPage: Bool {
         pageNumber > 1 && !isSearching
     }
 
     var canGoToNextPage: Bool {
         guard !isSearching, pageNumber < maximumPageCount else { return false }
-        return buffer.count > pageNumber * pageSize || nextPageURL != nil
+        return orderedVisible.count > pageNumber * pageSize || nextPageURL != nil
     }
 
     func goToPreviousPage() {
@@ -475,13 +698,12 @@ final class HuggingFaceModelLibrary: ObservableObject {
         guard canGoToNextPage else { return }
         let target = pageNumber + 1
 
-        if buffer.count >= target * pageSize || nextPageURL == nil {
+        if orderedVisible.count >= target * pageSize || nextPageURL == nil {
             pageNumber = target
             models = slice(forPage: target)
             error = nil
             return
         }
-        guard let nextPageURL else { return }
 
         searchTask?.cancel()
         isSearching = true
@@ -490,10 +712,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await client.page(at: nextPageURL, token: token)
+                try await self.fillBuffer(upTo: target * self.pageSize, token: token)
                 try Task.checkCancellation()
-                self.buffer.append(contentsOf: page.models)
-                self.nextPageURL = page.nextPageURL
                 let nextModels = self.slice(forPage: target)
                 if !nextModels.isEmpty {
                     self.pageNumber = target
@@ -513,7 +733,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     private func fillBuffer(upTo count: Int, token: String?) async throws {
         var fetches = 0
-        while buffer.count < count, let url = nextPageURL, fetches < 8 {
+        while orderedVisible.count < count, let url = nextPageURL, fetches < maximumFillFetches {
             let nextPage = try await client.page(at: url, token: token)
             try Task.checkCancellation()
             buffer.append(contentsOf: nextPage.models)
@@ -523,7 +743,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     }
 
     private func slice(forPage number: Int) -> [HuggingFaceModel] {
-        let ordered = orderedBuffer
+        let ordered = orderedVisible
         let start = (number - 1) * pageSize
         guard start < ordered.count else { return [] }
         return Array(ordered[start..<min(start + pageSize, ordered.count)])
@@ -541,6 +761,10 @@ final class HuggingFaceModelLibrary: ObservableObject {
         }
     }
 
+    private var orderedVisible: [HuggingFaceModel] {
+        orderedBuffer.filter(visibilityPredicate)
+    }
+
     func cancel() {
         searchTask?.cancel()
         searchTask = nil
@@ -555,6 +779,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
     enum DownloadState: Equatable {
         case downloading
         case paused
+    }
+
+    struct RowSnapshot: Equatable {
+        let isDownloading: Bool
+        let progress: Double
+        let isPaused: Bool
+        let error: String?
     }
 
     struct ActiveDownload: Identifiable, Equatable {
@@ -585,8 +816,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     @Published private(set) var downloads: [ActiveDownload] = []
     @Published private(set) var errorByModelID: [String: String] = [:]
+    /// Emits the affected model ID for progress/state changes. `nil` denotes
+    /// a structural change that can affect capacity for every download row.
+    let rowUpdates = PassthroughSubject<String?, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
+    private var progressUpdateTimes: [String: Date] = [:]
+    private var freeDiskCache: [String: (timestamp: Date, bytes: Int64?)] = [:]
 
     deinit {
         contexts.values.forEach { $0.task?.cancel() }
@@ -615,14 +851,28 @@ final class HuggingFaceDownloadManager: ObservableObject {
         downloads.first { $0.modelID == modelID }?.state == .paused
     }
 
+    func rowSnapshot(for modelID: String) -> RowSnapshot {
+        let download = downloads.first { $0.modelID == modelID }
+        return RowSnapshot(
+            isDownloading: download != nil,
+            progress: download?.progress ?? 0,
+            isPaused: download?.state == .paused,
+            error: errorByModelID[modelID]
+        )
+    }
+
     func state(for modelID: String) -> DownloadState? {
         downloads.first { $0.modelID == modelID }?.state
+    }
+
+    func reportError(_ message: String, for modelID: String) {
+        errorByModelID[modelID] = message
     }
 
     func capacityBlocker(sizeBytes: Int64?, cachePath: String) -> String? {
         guard let sizeBytes, sizeBytes > 0 else { return nil }
         let path = LocalModelDiscovery.expandedPath(cachePath)
-        guard let freeBytes = Self.freeDiskBytes(atPath: path) else { return nil }
+        guard let freeBytes = cachedFreeDiskBytes(atPath: path) else { return nil }
         let availableBytes = max(freeBytes - reservedBytes, 0)
         guard sizeBytes > availableBytes else { return nil }
         let needed = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
@@ -638,6 +888,11 @@ final class HuggingFaceDownloadManager: ObservableObject {
         onCompletion: @escaping () -> Void
     ) {
         guard contexts[repoID] == nil else { return }
+        if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
+            errorByModelID[repoID] = blocker
+            rowUpdates.send(repoID)
+            return
+        }
         do {
             try enqueue(
                 repoID: repoID,
@@ -649,6 +904,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         } catch {
             errorByModelID[repoID] =
                 (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            rowUpdates.send(repoID)
         }
     }
 
@@ -675,6 +931,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
             } catch {
                 errorByModelID[repoID] =
                     (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                rowUpdates.send(repoID)
                 throw error
             }
         }
@@ -746,6 +1003,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         )
         do {
             try startDownload(context)
+            rowUpdates.send(nil)
         } catch {
             removeContext(repoID)
             throw error
@@ -805,17 +1063,36 @@ final class HuggingFaceDownloadManager: ObservableObject {
         else {
             return
         }
-        downloads[index].progress = progress
+        let clampedProgress = min(max(progress, 0), 1)
+        let previousProgress = downloads[index].progress
+        let now = Date()
+        let lastUpdate = progressUpdateTimes[modelID] ?? .distantPast
+
+        // Python reports byte progress frequently. Coalesce those reports on
+        // the main actor so a download does not invalidate every visible row
+        // (and the scroll view) for tiny, visually indistinguishable changes.
+        guard clampedProgress >= 1
+            || clampedProgress - previousProgress >= 0.01
+            || now.timeIntervalSince(lastUpdate) >= 0.10
+        else {
+            return
+        }
+        downloads[index].progress = clampedProgress
+        progressUpdateTimes[modelID] = now
+        rowUpdates.send(modelID)
     }
 
     private func setState(_ modelID: String, _ state: DownloadState) {
         guard let index = downloads.firstIndex(where: { $0.modelID == modelID }) else { return }
         downloads[index].state = state
+        rowUpdates.send(modelID)
     }
 
     private func removeContext(_ modelID: String) {
         contexts.removeValue(forKey: modelID)
         downloads.removeAll { $0.modelID == modelID }
+        progressUpdateTimes.removeValue(forKey: modelID)
+        rowUpdates.send(nil)
     }
 
     private func cancelWaiter(_ waiterID: UUID, modelID: String) {
@@ -830,6 +1107,16 @@ final class HuggingFaceDownloadManager: ObservableObject {
             return nil
         }
         return freeBytes
+    }
+
+    private func cachedFreeDiskBytes(atPath path: String) -> Int64? {
+        let now = Date()
+        if let cached = freeDiskCache[path], now.timeIntervalSince(cached.timestamp) < 1 {
+            return cached.bytes
+        }
+        let bytes = Self.freeDiskBytes(atPath: path)
+        freeDiskCache[path] = (timestamp: now, bytes: bytes)
+        return bytes
     }
 }
 
@@ -878,6 +1165,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
         let script = """
         import sys
+        import time
         from tqdm.auto import tqdm
         from huggingface_hub import snapshot_download
 
@@ -898,6 +1186,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             def __init__(self, *args, **kwargs):
                 self._mlx_reports_bytes = kwargs.get("unit") == "B"
                 self._mlx_last_progress = -1.0
+                self._mlx_last_report = 0.0
                 super().__init__(*args, **kwargs)
                 self._mlx_report()
 
@@ -917,8 +1206,12 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 total = float(expected_bytes or self.total or 0)
                 value = float(self.n or 0)
                 progress = min(max(value / total, 0.0), 1.0) if total > 0 else 0.0
-                if abs(progress - self._mlx_last_progress) >= 0.002 or progress >= 1.0:
+                now = time.monotonic()
+                changed = abs(progress - self._mlx_last_progress)
+                stale = now - self._mlx_last_report >= 0.25
+                if progress >= 1.0 or changed >= 0.002 or (changed > 0.0 and stale):
                     self._mlx_last_progress = progress
+                    self._mlx_last_report = now
                     print(f"__MLX_PROGRESS__:{progress:.6f}", flush=True)
 
         snapshot_download(

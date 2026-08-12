@@ -54,14 +54,20 @@ struct AudioView: View {
     @StateObject private var inputDevices = AudioInputDevicePreferences.shared
     @StateObject private var inputLevelMonitor = AudioInputLevelMonitor()
     @StateObject private var inputVolume = AudioInputVolumeController()
-    @AppStorage("audio.capture.automaticallySummarize")
+    @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
-    @AppStorage("audio.capture.includeSystemAudio")
+    @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
+    @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
+    private var suggestMeetingTranscription = false
     @State private var searchText = ""
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
     @State private var destination: AudioDestination = .record
+    @State private var pendingDeleteDictation: AudioTranscriptionRecord?
+    @State private var pendingDeleteRecording: AudioTranscriptionRecord?
+    @State private var hoveredActivity: AudioDailyUsage?
+    @State private var isConfirmingClearAllDictations = false
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -97,16 +103,9 @@ struct AudioView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear {
-            refreshLocalModels()
-            importExistingTranscripts()
-            inputDevices.refresh()
-            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            startInputMonitoringIfNeeded()
+            handleViewAppear()
         }
-        .onChange(of: model.settings.modelSearchPath) { _, _ in
-            refreshLocalModels()
-        }
-        .onChange(of: model.settings.additionalModelSearchPaths) { _, _ in
+        .onChange(of: model.settings.localModelSearchPaths) { _, _ in
             refreshLocalModels()
         }
         .onChange(of: inputDevices.selectedDeviceID) { _, _ in
@@ -125,12 +124,7 @@ struct AudioView: View {
             }
         }
         .onChange(of: destination) { _, destination in
-            if destination == .record {
-                inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-                startInputMonitoringIfNeeded()
-            } else {
-                inputLevelMonitor.stop()
-            }
+            handleDestinationChange(destination)
         }
         .onDisappear {
             inputLevelMonitor.stop()
@@ -175,6 +169,56 @@ struct AudioView: View {
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
         }
+        .alert(
+            "Delete dictation?",
+            isPresented: Binding(
+                get: { pendingDeleteDictation != nil },
+                set: { if !$0 { pendingDeleteDictation = nil } }
+            ),
+            presenting: pendingDeleteDictation
+        ) { record in
+            Button("Delete", role: .destructive) {
+                deleteDictation(record)
+                pendingDeleteDictation = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDictation = nil
+            }
+        } message: { _ in
+            Text("The transcript and any retained audio will be permanently deleted.")
+        }
+        .alert(
+            "Clear all recent dictations?",
+            isPresented: $isConfirmingClearAllDictations
+        ) {
+            Button("Clear All", role: .destructive) {
+                clearAllDictations()
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All locally stored dictation transcripts and retained dictation audio will be permanently deleted.")
+        }
+        .alert(
+            "Delete recording?",
+            isPresented: Binding(
+                get: { pendingDeleteRecording != nil },
+                set: { if !$0 { pendingDeleteRecording = nil } }
+            ),
+            presenting: pendingDeleteRecording
+        ) { record in
+            Button("Delete", role: .destructive) {
+                captureLibrary.delete(record)
+                pendingDeleteRecording = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDeleteRecording = nil
+            }
+        } message: { record in
+            Text("“\(record.displayTitle)” and its saved audio, transcript, and summary will be permanently deleted.")
+        }
     }
 
     private var pageHeader: some View {
@@ -195,10 +239,10 @@ struct AudioView: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     private var destinationBar: some View {
@@ -359,19 +403,44 @@ struct AudioView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 220)
             } else {
-                Chart(dailyUsage) { item in
-                    BarMark(
-                        x: .value("Day", item.date, unit: .day),
-                        y: .value("Words", item.words)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.accentColor, .accentColor.opacity(0.5)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                Chart {
+                    ForEach(dailyUsage) { item in
+                        BarMark(
+                            x: .value("Day", item.date, unit: .day),
+                            y: .value("Words", item.words)
                         )
-                    )
-                    .cornerRadius(4)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.accentColor, .accentColor.opacity(0.5)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .cornerRadius(4)
+                        .opacity(
+                            hoveredActivity == nil || hoveredActivity?.id == item.id
+                                ? 1
+                                : 0.42
+                        )
+                    }
+
+                    if let hoveredActivity {
+                        RuleMark(
+                            x: .value("Hovered day", hoveredActivity.date, unit: .day)
+                        )
+                        .foregroundStyle(Color.secondary.opacity(0.28))
+                        .lineStyle(.init(lineWidth: 1, dash: [3, 3]))
+                        .annotation(
+                            position: .top,
+                            spacing: 8,
+                            overflowResolution: .init(
+                                x: .fit(to: .chart),
+                                y: .disabled
+                            )
+                        ) {
+                            AudioActivityTooltip(item: hoveredActivity)
+                        }
+                    }
                 }
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .day, count: 2)) { value in
@@ -381,6 +450,25 @@ struct AudioView: View {
                 }
                 .chartYAxis {
                     AxisMarks(position: .leading)
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case let .active(location):
+                                    updateHoveredActivity(
+                                        at: location,
+                                        proxy: proxy,
+                                        geometry: geometry
+                                    )
+                                case .ended:
+                                    hoveredActivity = nil
+                                }
+                            }
+                    }
                 }
                 .frame(height: 230)
             }
@@ -597,53 +685,71 @@ struct AudioView: View {
     private var unifiedCaptureCard: some View {
         let tint = Color.blue
 
-        return HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "waveform.badge.mic")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 42, height: 42)
-                .background(
-                    tint.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        tint.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("New recording")
+                        .font(.headline)
+                    Text("Capture audio, then transcribe it locally when you finish.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 16)
+
+                Button {
+                    inputLevelMonitor.stop()
+                    Task {
+                        await captureLibrary.start(
+                            .meeting,
+                            automaticallySummarize: automaticallySummarize,
+                            includeSystemAudio: includeSystemAudio
+                        )
+                    }
+                } label: {
+                    Label("Start recording", systemImage: "record.circle")
+                        .font(.callout.weight(.semibold))
+                        .frame(minWidth: 164)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+                .controlSize(.large)
+            }
+
+            Divider()
+                .padding(.vertical, 16)
+
+            HStack(alignment: .center, spacing: 20) {
+                capturePreferenceRow(
+                    title: "Auto-summary",
+                    detail: "Create summarized notes automatically after each recording.",
+                    systemImage: "sparkles",
+                    tint: .purple,
+                    isOn: $automaticallySummarize,
+                    accessibilityLabel: "Create summarized notes automatically"
                 )
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("New recording")
-                    .font(.headline)
-                Text("Capture audio, then transcribe it locally when you finish.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                Divider()
+                    .frame(height: 52)
 
-            Spacer(minLength: 16)
-
-            HStack(spacing: 9) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(Color.white)
-                Text("Auto-summary")
-                    .font(.callout.weight(.medium))
-                Toggle("Create summarized notes automatically", isOn: $automaticallySummarize)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
+                capturePreferenceRow(
+                    title: "Transcription suggestions",
+                    detail: "Prompt me when a supported meeting app begins using the microphone.",
+                    systemImage: "person.2.wave.2.fill",
+                    tint: tint,
+                    isOn: $suggestMeetingTranscription,
+                    accessibilityLabel: "Suggest transcription when a meeting starts"
+                )
             }
-            .disabled(captureLibrary.isBusy)
-
-            Button {
-                inputLevelMonitor.stop()
-                Task {
-                    await captureLibrary.start(
-                        .meeting,
-                        automaticallySummarize: automaticallySummarize,
-                        includeSystemAudio: includeSystemAudio
-                    )
-                }
-            } label: {
-                Label("Start recording", systemImage: "record.circle")
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(tint)
-            .controlSize(.large)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -746,40 +852,11 @@ struct AudioView: View {
     }
 
     private var inputLevelMeter: some View {
-        HStack(spacing: 8) {
-            ForEach(0..<16, id: \.self) { index in
-                let threshold = Float(index + 1) / 16
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(
-                        displayedInputLevel >= threshold
-                            ? inputSegmentColor(at: index)
-                            : Color.secondary.opacity(0.18)
-                    )
-                    .frame(width: 12, height: 30)
-                    .animation(.linear(duration: 0.08), value: displayedInputLevel)
-            }
-        }
-        .frame(maxWidth: 312, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Microphone input level")
-        .accessibilityValue("\(Int(displayedInputLevel * 100)) percent")
-    }
-
-    private var displayedInputLevel: Float {
-        captureLibrary.phase == .recording
-            ? captureLibrary.inputLevel
-            : inputLevelMonitor.level
-    }
-
-    private func inputSegmentColor(at index: Int) -> Color {
-        switch index {
-        case 0..<11:
-            .accentColor
-        case 11..<14:
-            .orange
-        default:
-            .red
-        }
+        AudioInputLevelMeterView(
+            captureMeter: captureLibrary.meterState,
+            monitorMeter: inputLevelMonitor.meterState,
+            isRecording: captureLibrary.phase == .recording
+        )
     }
 
     private var audioInputStatus: String {
@@ -856,6 +933,45 @@ struct AudioView: View {
                 .foregroundStyle(.green)
         }
         .padding(.horizontal, 4)
+    }
+
+    private func capturePreferenceRow(
+        title: String,
+        detail: String,
+        systemImage: String,
+        tint: Color,
+        isOn: Binding<Bool>,
+        accessibilityLabel: String
+    ) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 38, height: 38)
+                .background(
+                    tint.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 12)
+
+            Toggle(accessibilityLabel, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(captureLibrary.isBusy)
+                .accessibilityLabel(accessibilityLabel)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelConfigurationPanel: some View {
@@ -1676,6 +1792,15 @@ struct AudioView: View {
         }
     }
 
+    private var handsFreeDescription: String {
+        guard shortcuts.isHandsFreeEnabled else {
+            return "Hold while speaking; release to transcribe."
+        }
+        return shortcuts.recordShortcut.keyCode == nil
+            ? "Tap once to start; tap again to transcribe."
+            : "Press once to start; press again to transcribe."
+    }
+
     private var shortcutConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
@@ -1687,17 +1812,33 @@ struct AudioView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Hands-free")
+                            .font(.callout.weight(.medium))
+                        Text(handsFreeDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 16)
+
+                    Toggle("Hands-free", isOn: $shortcuts.isHandsFreeEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .padding(10)
+                .background(
+                    Color.primary.opacity(0.035),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+
                 shortcutRow(
-                    title: "Record while held",
+                    title: "Dictation shortcut",
                     shortcut: shortcuts.recordShortcut,
                     kind: .record
                 )
-                shortcutRow(
-                    title: "Hands-free toggle",
-                    subtitle: "Press once to start; press again to transcribe.",
-                    shortcut: shortcuts.handsFreeShortcut,
-                    kind: .handsFree
-                )
+
                 shortcutRow(
                     title: "Retry recent audio",
                     shortcut: shortcuts.retryShortcut,
@@ -1725,6 +1866,15 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button("Clear All", role: .destructive) {
+                    isConfirmingClearAllDictations = true
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.red)
+                .disabled(dictationRecords.isEmpty)
+                .help("Delete all recent dictations")
+
                 TextField("Search transcripts", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
@@ -1748,7 +1898,10 @@ struct AudioView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(filteredRecords.prefix(30).enumerated()), id: \.element.id) {
                         index, record in
-                        AudioTranscriptRow(record: record)
+                        AudioTranscriptRow(
+                            record: record,
+                            onDelete: { pendingDeleteDictation = record }
+                        )
                         if index < min(filteredRecords.count, 30) - 1 {
                             Divider()
                         }
@@ -1799,11 +1952,17 @@ struct AudioView: View {
                             record: record,
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
-                            onPlay: { captureLibrary.openAudio(for: record) },
+                            isPlaying: captureLibrary.playingRecordID == record.id
+                                && !captureLibrary.isPlaybackPaused,
+                            isPaused: captureLibrary.playingRecordID == record.id
+                                && captureLibrary.isPlaybackPaused,
+                            onPlay: { captureLibrary.togglePlayback(for: record) },
+                            onStop: { captureLibrary.stopPlayback() },
+                            onReveal: { captureLibrary.revealAudio(for: record) },
                             onTranscribe: { captureLibrary.retryTranscription(record) },
                             onSummarize: { captureLibrary.summarize(record) },
                             onRename: { analytics.updateTitle($0, for: record.id) },
-                            onDelete: { captureLibrary.delete(record) }
+                            onDelete: { pendingDeleteRecording = record }
                         )
                     }
                 }
@@ -1847,8 +2006,6 @@ struct AudioView: View {
                     switch kind {
                     case .record:
                         shortcuts.resetRecordShortcut()
-                    case .handsFree:
-                        shortcuts.resetHandsFreeShortcut()
                     case .retry:
                         shortcuts.resetRetryShortcut()
                     }
@@ -1876,17 +2033,49 @@ struct AudioView: View {
         dailyUsage.reduce(0) { $0 + $1.words }
     }
 
+    private func updateHoveredActivity(
+        at location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        guard let plotFrameAnchor = proxy.plotFrame else {
+            hoveredActivity = nil
+            return
+        }
+
+        let plotFrame = geometry[plotFrameAnchor]
+        guard plotFrame.contains(location) else {
+            hoveredActivity = nil
+            return
+        }
+
+        let plotX = location.x - plotFrame.minX
+        guard let date: Date = proxy.value(atX: plotX) else {
+            hoveredActivity = nil
+            return
+        }
+
+        let nextActivity = dailyUsage.min {
+            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+        }
+        guard hoveredActivity != nextActivity else { return }
+        hoveredActivity = nextActivity
+    }
+
     private var filteredRecords: [AudioTranscriptionRecord] {
-        let dictations = analytics.records.filter { $0.resolvedKind == .dictation }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            return dictations
+            return dictationRecords
         }
-        return dictations.filter { record in
+        return dictationRecords.filter { record in
             record.transcript.localizedCaseInsensitiveContains(query)
                 || record.applicationName?.localizedCaseInsensitiveContains(query) == true
                 || record.modelID?.localizedCaseInsensitiveContains(query) == true
         }
+    }
+
+    private var dictationRecords: [AudioTranscriptionRecord] {
+        analytics.records.filter { $0.resolvedKind == .dictation }
     }
 
     private var captureRecords: [AudioTranscriptionRecord] {
@@ -1954,12 +2143,41 @@ struct AudioView: View {
         return String(format: "%.1f hr", seconds / 3_600)
     }
 
+    private func handleViewAppear() {
+        switch destination {
+        case .record:
+            refreshLocalModels()
+            inputDevices.refresh()
+            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
+            startInputMonitoringIfNeeded()
+        case .model:
+            refreshLocalModels()
+        case .overview, .history:
+            importExistingTranscripts()
+        case .animation, .shortcuts:
+            break
+        }
+    }
+
+    private func handleDestinationChange(_ destination: AudioDestination) {
+        switch destination {
+        case .record:
+            refreshLocalModels()
+            inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
+            startInputMonitoringIfNeeded()
+        case .model:
+            refreshLocalModels()
+            inputLevelMonitor.stop()
+        case .overview, .history:
+            importExistingTranscripts()
+            inputLevelMonitor.stop()
+        case .animation, .shortcuts:
+            inputLevelMonitor.stop()
+        }
+    }
+
     private func refreshLocalModels() {
-        let settings = model.settings.normalized()
-        localLibrary.scan(
-            path: settings.modelSearchPath,
-            additionalPaths: settings.additionalModelSearchPaths
-        )
+        localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
     }
 
     private func startInputMonitoringIfNeeded() {
@@ -1980,10 +2198,24 @@ struct AudioView: View {
         analytics.importTranscripts(in: directory)
     }
 
+    private func deleteDictation(_ record: AudioTranscriptionRecord) {
+        captureLibrary.stopPlaybackIfPlaying(record.id)
+        analytics.deleteDictation(
+            withID: record.id,
+            recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
+        )
+    }
+
+    private func clearAllDictations() {
+        analytics.deleteAllDictations(
+            recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
+        )
+        searchText = ""
+    }
+
     private func apply(_ shortcut: VoiceShortcut, to kind: AudioShortcutKind) {
         let assignments: [(AudioShortcutKind, VoiceShortcut)] = [
             (.record, shortcuts.recordShortcut),
-            (.handsFree, shortcuts.handsFreeShortcut),
             (.retry, shortcuts.retryShortcut),
         ]
         guard !assignments.contains(where: {
@@ -1997,8 +2229,6 @@ struct AudioView: View {
         switch kind {
         case .record:
             shortcuts.recordShortcut = shortcut
-        case .handsFree:
-            shortcuts.handsFreeShortcut = shortcut
         case .retry:
             shortcuts.retryShortcut = shortcut
         }
@@ -2018,17 +2248,56 @@ struct AudioView: View {
     }
 }
 
+private struct AudioInputLevelMeterView: View {
+    @ObservedObject var captureMeter: AudioInputLevelState
+    @ObservedObject var monitorMeter: AudioInputLevelState
+    let isRecording: Bool
+
+    private var displayedLevel: Float {
+        isRecording ? captureMeter.level : monitorMeter.level
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<16, id: \.self) { index in
+                let threshold = Float(index + 1) / 16
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(
+                        displayedLevel >= threshold
+                            ? segmentColor(at: index)
+                            : Color.secondary.opacity(0.18)
+                    )
+                    .frame(width: 12, height: 30)
+                    .animation(.linear(duration: 0.08), value: displayedLevel)
+            }
+        }
+        .frame(maxWidth: 312, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Microphone input level")
+        .accessibilityValue("\(Int(displayedLevel * 100)) percent")
+    }
+
+    private func segmentColor(at index: Int) -> Color {
+        switch index {
+        case 0..<11:
+            .accentColor
+        case 11..<14:
+            .orange
+        default:
+            .red
+        }
+    }
+}
+
 private enum AudioShortcutKind: String, Identifiable {
     case record
-    case handsFree
     case retry
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .record: "Record shortcut"
-        case .handsFree: "Hands-free shortcut"
+        case .record: "Dictation shortcut"
         case .retry: "Retry shortcut"
         }
     }
@@ -2103,6 +2372,38 @@ private struct AudioMetricCard: View {
         }
         .padding(16)
         .audioPanelStyle()
+    }
+}
+
+private struct AudioActivityTooltip: View {
+    let item: AudioDailyUsage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(item.date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                .font(.caption.weight(.semibold))
+
+            HStack(spacing: 6) {
+                Text("\(item.words.formatted()) words")
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("\(item.sessions) \(item.sessions == 1 ? "dictation" : "dictations")")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        .fixedSize()
     }
 }
 
@@ -2229,7 +2530,9 @@ private struct InlineEditableAudioTitle: View {
 
 private struct AudioTranscriptRow: View {
     let record: AudioTranscriptionRecord
+    let onDelete: () -> Void
     @State private var copied = false
+    @State private var isDeleteHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -2259,22 +2562,43 @@ private struct AudioTranscriptRow: View {
 
             Spacer(minLength: 12)
 
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(record.transcript, forType: .string)
-                copied = true
-                Task {
-                    try? await Task.sleep(for: .seconds(1.5))
-                    copied = false
+            HStack(spacing: 4) {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(record.transcript, forType: .string)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
+                    }
+                } label: {
+                    Label(
+                        copied ? "Copied" : "Copy",
+                        systemImage: copied ? "checkmark" : "doc.on.doc"
+                    )
                 }
-            } label: {
-                Label(
-                    copied ? "Copied" : "Copy",
-                    systemImage: copied ? "checkmark" : "doc.on.doc"
-                )
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .frame(width: 26, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(
+                                    isDeleteHovering
+                                        ? Color.red.opacity(0.13)
+                                        : Color.clear
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
+                .help("Delete dictation")
+                .accessibilityLabel("Delete dictation")
+                .onHover { isDeleteHovering = $0 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
         .padding(.vertical, 12)
     }
@@ -2289,7 +2613,11 @@ private struct AudioCaptureRecordRow: View {
     let record: AudioTranscriptionRecord
     let audioIsAvailable: Bool
     let isProcessing: Bool
+    let isPlaying: Bool
+    let isPaused: Bool
     let onPlay: () -> Void
+    let onStop: () -> Void
+    let onReveal: () -> Void
     let onTranscribe: () -> Void
     let onSummarize: () -> Void
     let onRename: (String) -> Void
@@ -2319,7 +2647,7 @@ private struct AudioCaptureRecordRow: View {
 
         var tint: Color {
             switch self {
-            case .summary: .white
+            case .summary: .primary
             case .transcript: .primary
             }
         }
@@ -2374,11 +2702,24 @@ private struct AudioCaptureRecordRow: View {
                 }
 
                 Button(action: onPlay) {
-                    Label("Play", systemImage: "play.fill")
+                    Label(
+                        isPlaying ? "Pause" : (isPaused ? "Resume" : "Play"),
+                        systemImage: isPlaying ? "pause.fill" : "play.fill"
+                    )
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(!audioIsAvailable)
+
+                if isPlaying || isPaused {
+                    Button(action: onStop) {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .labelStyle(.iconOnly)
+                    .help("Stop playback")
+                }
 
                 if record.transcript.isEmpty && !isProcessing {
                     Button("Transcribe", action: onTranscribe)
@@ -2404,6 +2745,8 @@ private struct AudioCaptureRecordRow: View {
                         .disabled(isProcessing)
                     }
                     Divider()
+                    Button("Reveal in Finder", action: onReveal)
+                        .disabled(!audioIsAvailable)
                     Button("Delete recording", role: .destructive, action: onDelete)
                 } label: {
                     Image(systemName: "ellipsis")
@@ -2518,7 +2861,7 @@ private struct AudioCaptureRecordRow: View {
             .background(
                 isSelected
                     ? Color.accentColor
-                    : (isHovered ? Color.white.opacity(0.08) : Color.clear),
+                    : (isHovered ? Color.primary.opacity(0.06) : Color.clear),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .contentShape(Rectangle())

@@ -84,11 +84,6 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
         keyDisplay: "R",
         modifiers: [.function]
     )
-    static let handsFreeDefault = VoiceShortcut(
-        keyCode: nil,
-        keyDisplay: nil,
-        modifiers: [.option]
-    )
 
     var displayName: String {
         let parts = modifiers.displayParts + (keyDisplay.map { [$0] } ?? [])
@@ -152,14 +147,14 @@ final class VoiceShortcutPreferences: ObservableObject {
     @Published var retryShortcut: VoiceShortcut {
         didSet { preferencesDidChange() }
     }
-    @Published var handsFreeShortcut: VoiceShortcut {
+    @Published var isHandsFreeEnabled: Bool {
         didSet { preferencesDidChange() }
     }
 
     private struct Payload: Codable {
         let recordShortcut: VoiceShortcut
         let retryShortcut: VoiceShortcut
-        let handsFreeShortcut: VoiceShortcut?
+        let isHandsFreeEnabled: Bool?
     }
 
     private let defaults: UserDefaults
@@ -178,13 +173,11 @@ final class VoiceShortcutPreferences: ObservableObject {
         {
             recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
-            handsFreeShortcut = payload.handsFreeShortcut.flatMap {
-                $0.isValid ? $0 : nil
-            } ?? .handsFreeDefault
+            isHandsFreeEnabled = payload.isHandsFreeEnabled ?? true
         } else {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault
-            handsFreeShortcut = .handsFreeDefault
+            isHandsFreeEnabled = true
         }
     }
 
@@ -196,19 +189,19 @@ final class VoiceShortcutPreferences: ObservableObject {
         retryShortcut = .retryDefault
     }
 
-    func resetHandsFreeShortcut() {
-        handsFreeShortcut = .handsFreeDefault
-    }
-
-    private func preferencesDidChange() {
+    private func persistCurrent() {
         let payload = Payload(
             recordShortcut: recordShortcut,
             retryShortcut: retryShortcut,
-            handsFreeShortcut: handsFreeShortcut
+            isHandsFreeEnabled: isHandsFreeEnabled
         )
         if let data = try? JSONEncoder().encode(payload) {
             defaults.set(data, forKey: storageKey)
         }
+    }
+
+    private func preferencesDidChange() {
+        persistCurrent()
         NotificationCenter.default.post(
             name: .voiceShortcutPreferencesDidChange,
             object: self

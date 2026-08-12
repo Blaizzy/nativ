@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Explore Nativ download activity across every release, with live installer and update-feed statistics from GitHub."
+    />
+    <meta name="theme-color" content="#f1f0e8" />
+    <meta property="og:title" content="Nativ downloads — Open-source momentum, in public" />
+    <meta
+      property="og:description"
+      content="Live, filterable download activity for every Nativ release."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/app-icon.png" />
+    <link rel="apple-touch-icon" href="assets/app-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Nativ downloads — Live release statistics</title>
+  </head>
+  <body class="downloads-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-header>
+      <a class="brand" href="./" aria-label="Nativ home">
+        <img class="brand-logo" src="assets/app-icon.png" alt="" />
+        <span>Nativ</span>
+      </a>
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="./#models">Models</a>
+        <a href="./#integrations">Integrations</a>
+        <a href="https://github.com/Blaizzy/nativ">Docs</a>
+        <a href="./#manifesto">Manifesto</a>
+        <a href="downloads.html" aria-current="page">Downloads</a>
+      </nav>
+      <div class="header-actions">
+        <a
+          class="github-link"
+          href="https://github.com/Blaizzy/nativ"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="View Nativ on GitHub"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 .7a11.6 11.6 0 0 0-3.7 22.5c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.3 3 .1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.6 11.6 0 0 0 12 .7Z" /></svg>
+          <span>★ <span data-stars>Open source</span></span>
+        </a>
+        <a
+          class="mini-download"
+          href="https://github.com/Blaizzy/nativ/releases/latest"
+          data-download
+        >Download</a>
+        <button class="menu-button" type="button" aria-label="Open menu" aria-expanded="false" data-menu-button>
+          <span></span><span></span>
+        </button>
+      </div>
+      <div class="mobile-menu" data-mobile-menu>
+        <a href="./#models">Models</a>
+        <a href="./#integrations">Integrations</a>
+        <a href="https://github.com/Blaizzy/nativ">Docs</a>
+        <a href="./#manifesto">Manifesto</a>
+        <a href="downloads.html" aria-current="page">Downloads</a>
+      </div>
+    </header>
+
+    <main id="main" class="downloads-main">
+      <section class="downloads-hero">
+        <div class="downloads-hero-copy">
+          <p class="kicker reveal">/ LIVE RELEASE TELEMETRY</p>
+          <h1 class="reveal">Open-source<br /><em>momentum.</em></h1>
+          <p class="downloads-lede reveal">
+            Every release asset downloaded from GitHub—installer files and update-feed checks, shown separately.
+          </p>
+          <div class="downloads-status reveal" role="status">
+            <span class="pulse-dot"></span>
+            <span data-data-status>Loading live data</span>
+            <span aria-hidden="true">·</span>
+            <time data-refreshed-at>Connecting to GitHub</time>
+          </div>
+        </div>
+
+        <div class="downloads-metrics reveal" aria-label="All-time GitHub asset download summary">
+          <article class="download-metric download-metric-primary">
+            <span>INSTALLER DOWNLOADS</span>
+            <strong data-installer-total>6,559</strong>
+            <p>.dmg app files downloaded</p>
+            <i aria-hidden="true">↘</i>
+          </article>
+          <article class="download-metric">
+            <span>UPDATE-FEED DOWNLOADS</span>
+            <strong data-update-total>2,035</strong>
+            <p>appcast.xml update checks</p>
+          </article>
+          <article class="download-metric download-metric-dark">
+            <span>TOTAL ASSET DOWNLOADS</span>
+            <strong data-all-total>8,594</strong>
+            <p>.dmg + appcast.xml files</p>
+            <small>ALL TIME</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="downloads-explorer" aria-labelledby="explorer-title">
+        <div class="downloads-explorer-heading reveal">
+          <div>
+            <p class="kicker">/ EXPLORE THE NUMBERS</p>
+            <h2 id="explorer-title">Filter the<br /><em>full history.</em></h2>
+          </div>
+          <p>
+            <strong>How to read this:</strong> Each appcast.xml download is an update check. If Sparkle finds a newer version and the update proceeds, that check can be followed by a separate .dmg download. If Nativ is current, it ends with the appcast. These totals count files—not users or installations.
+          </p>
+        </div>
+
+        <div class="download-controls reveal" aria-label="Download filters">
+          <fieldset class="asset-filter">
+            <legend>ASSET TYPE</legend>
+            <div>
+              <button class="active" type="button" data-asset-filter="all" aria-pressed="true">
+                All assets <span data-filter-count="all">8,594</span>
+              </button>
+              <button type="button" data-asset-filter="dmg" aria-pressed="false">
+                Installers <span data-filter-count="dmg">6,559</span>
+              </button>
+              <button type="button" data-asset-filter="appcast" aria-pressed="false">
+                Update checks <span data-filter-count="appcast">2,035</span>
+              </button>
+            </div>
+          </fieldset>
+          <div class="release-filter" role="group" aria-labelledby="release-filter-label">
+            <span id="release-filter-label">RELEASE</span>
+            <div class="release-select" data-release-select>
+              <button
+                class="release-select-trigger"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="release-filter-options"
+                aria-label="Release: All releases"
+                data-release-trigger
+              >
+                <span data-release-value>All releases</span>
+                <i aria-hidden="true"></i>
+              </button>
+              <div
+                class="release-select-menu"
+                id="release-filter-options"
+                role="listbox"
+                aria-labelledby="release-filter-label"
+                data-release-options
+                hidden
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <section class="download-progress reveal" aria-labelledby="download-progress-title" aria-live="polite">
+          <div class="download-progress-heading">
+            <p class="kicker" id="download-progress-title">/ DOWNLOAD GROWTH</p>
+            <span data-progress-scope>All assets · all releases</span>
+          </div>
+          <div class="download-progress-grid">
+            <article>
+              <span>DAILY · 24H</span>
+              <strong data-progress-value="day">—</strong>
+              <p data-progress-note="day">Collecting history</p>
+            </article>
+            <article>
+              <span>WEEKLY · 7D</span>
+              <strong data-progress-value="week">—</strong>
+              <p data-progress-note="week">Collecting history</p>
+            </article>
+            <article>
+              <span>MONTHLY · 30D</span>
+              <strong data-progress-value="month">—</strong>
+              <p data-progress-note="month">Collecting history</p>
+            </article>
+            <article>
+              <span>YEARLY · 365D</span>
+              <strong data-progress-value="year">—</strong>
+              <p data-progress-note="year">Collecting history</p>
+            </article>
+          </div>
+        </section>
+
+        <div class="download-result reveal" aria-live="polite">
+          <div>
+            <span data-result-label>All assets · all releases</span>
+            <strong data-result-total>8,594</strong>
+          </div>
+          <p><span data-result-count>9 assets across 5 releases</span><span>GitHub release metadata</span></p>
+        </div>
+
+        <div class="download-table-wrap reveal">
+          <table class="download-table">
+            <thead>
+              <tr>
+                <th scope="col">Release</th>
+                <th scope="col">Asset</th>
+                <th scope="col">Type</th>
+                <th scope="col">Published</th>
+                <th scope="col">Downloads</th>
+                <th scope="col">Share</th>
+              </tr>
+            </thead>
+            <tbody data-download-rows>
+              <tr><td colspan="6" class="download-loading">Loading release history…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <section class="download-chart reveal" aria-labelledby="download-chart-title">
+          <div class="download-chart-heading">
+            <div>
+              <p class="kicker">/ DOWNLOAD HISTORY</p>
+              <h3 id="download-chart-title">One year,<br /><em>at a glance.</em></h3>
+            </div>
+            <div>
+              <span>CUMULATIVE DOWNLOADS</span>
+              <strong data-chart-scope>All assets · all releases</strong>
+            </div>
+          </div>
+          <div class="download-chart-frame">
+            <div class="download-chart-plot" data-download-chart role="img" aria-label="Download history chart">
+              <div class="download-chart-axis" data-chart-axis aria-hidden="true"></div>
+              <div class="download-chart-lines" data-chart-lines aria-hidden="true"></div>
+              <span class="download-chart-date download-chart-date-start" data-chart-start aria-hidden="true">—</span>
+              <span class="download-chart-date download-chart-date-end" data-chart-end aria-hidden="true">—</span>
+            </div>
+            <div class="download-chart-empty" data-chart-empty>
+              <strong>COLLECTING HISTORY</strong>
+              <span>The chart appears as daily snapshots accumulate.</span>
+            </div>
+          </div>
+          <p class="download-chart-summary" data-chart-summary>Waiting for download history.</p>
+        </section>
+
+        <div class="download-notes reveal">
+          <a href="https://github.com/Blaizzy/nativ/releases" target="_blank" rel="noreferrer">Inspect every release on GitHub <span>↗</span></a>
+        </div>
+      </section>
+
+      <section class="downloads-cta">
+        <div>
+          <p class="kicker">JOIN THE COUNT</p>
+          <h2>Run intelligence<br /><em>on your Mac.</em></h2>
+        </div>
+        <a class="button button-dark" href="https://github.com/Blaizzy/nativ/releases/latest" data-download>
+          Download Nativ <span aria-hidden="true">↘</span>
+        </a>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-brand">Nativ</div>
+      <p>Built for Apple Silicon. 100% open source. A tribute to the hackers and ML researchers building a private, hackable future.</p>
+      <div class="footer-links">
+        <div><strong>CODE</strong><a href="https://github.com/Blaizzy/nativ">GitHub</a><a href="https://github.com/Blaizzy/nativ/issues">Issues</a><a href="https://github.com/Blaizzy/nativ/blob/main/LICENSE">License</a></div>
+        <div><strong>GET IT</strong><a href="https://github.com/Blaizzy/nativ/releases/latest" data-download>Download</a><a href="downloads.html">Download stats</a><a href="https://github.com/Blaizzy/nativ/releases">Releases</a></div>
+        <div><strong>COMMUNITY</strong><a href="https://discord.gg/MFsUTjzyKP" target="_blank" rel="noreferrer">Discord</a><a href="https://github.com/Blaizzy/nativ/pulls">Contribute</a></div>
+      </div>
+      <div class="footer-bottom"><span>Nativ is MIT licensed · Free forever</span><span>Live data from GitHub</span><button type="button" data-to-top>Back to top ↑</button></div>
+    </footer>
+
+    <script src="script.js"></script>
+    <script src="downloads.js"></script>
+  </body>
+</html>

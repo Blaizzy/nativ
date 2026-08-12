@@ -2,6 +2,21 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testLocalModelSearchPathsIncludeNormalizedAdditionalFolders() {
+        let settings = NativSettings(
+            modelSearchPath: "~/managed-models",
+            additionalModelSearchPaths: [" ~/external-models ", "~/external-models", " "]
+        )
+
+        XCTAssertEqual(
+            settings.localModelSearchPaths,
+            LocalModelSearchPaths(
+                primary: "~/managed-models",
+                additional: ["~/external-models"]
+            )
+        )
+    }
+
     func testLaunchArgumentsRouteEachPreloadedModelToItsOwnFlag() {
         let settings = NativSettings(
             languageModelID: "org/language",
@@ -292,6 +307,11 @@ final class NativSettingsTests: XCTestCase {
             request.value(forHTTPHeaderField: "Authorization"),
             "Bearer nativ_image_token"
         )
+        let body = try XCTUnwrap(request.httpBody)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(object["model"] as? String, "org/model")
     }
 
     func testEveryPreloadSelectionRequiresServerRestart() {
@@ -372,6 +392,75 @@ final class NativSettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(warning?.estimatedWorkingSetBytes, 90)
+    }
+
+    func testChatFontScaleStepsClampAndReset() {
+        var settings = NativSettings()
+        XCTAssertEqual(settings.chatFontScale, 1.0)
+        settings.stepChatFontScale(by: 1)
+        XCTAssertEqual(settings.chatFontScale, 1.15)
+        settings.stepChatFontScale(by: -5)
+        XCTAssertEqual(settings.chatFontScale, NativSettings.minChatFontScale)
+        settings.stepChatFontScale(by: 99)
+        XCTAssertEqual(settings.chatFontScale, NativSettings.maxChatFontScale)
+        settings.resetChatFontScale()
+        XCTAssertEqual(settings.chatFontScale, 1.0)
+    }
+
+    func testChatFontScaleRoundTripsAndClamps() throws {
+        var settings = NativSettings()
+        settings.chatFontScale = 1.3
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.chatFontScale, 1.3)
+
+        var extreme = NativSettings()
+        extreme.chatFontScale = 9.0
+        XCTAssertEqual(extreme.normalized().chatFontScale, NativSettings.maxChatFontScale)
+    }
+
+    func testSidebarSectionCollapseRoundTrips() throws {
+        var settings = NativSettings()
+        XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarFoldersCollapsed)
+        XCTAssertFalse(settings.sidebarSessionsCollapsed)
+        XCTAssertFalse(settings.allSidebarSectionsCollapsed)
+
+        settings.sidebarPinnedCollapsed = true
+        settings.sidebarSessionsCollapsed = true
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        XCTAssertTrue(decoded.sidebarPinnedCollapsed)
+        XCTAssertFalse(decoded.sidebarFoldersCollapsed)
+        XCTAssertTrue(decoded.sidebarSessionsCollapsed)
+        XCTAssertFalse(decoded.allSidebarSectionsCollapsed)
+    }
+
+    func testSetAllSidebarSectionsCollapsedTogglesEveryFlag() {
+        var settings = NativSettings()
+        settings.setAllSidebarSectionsCollapsed(true)
+        XCTAssertTrue(settings.sidebarPinnedCollapsed)
+        XCTAssertTrue(settings.sidebarFoldersCollapsed)
+        XCTAssertTrue(settings.sidebarSessionsCollapsed)
+        XCTAssertTrue(settings.allSidebarSectionsCollapsed)
+
+        settings.setAllSidebarSectionsCollapsed(false)
+        XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarFoldersCollapsed)
+        XCTAssertFalse(settings.sidebarSessionsCollapsed)
+        XCTAssertFalse(settings.allSidebarSectionsCollapsed)
+    }
+
+    func testSidebarSectionCollapseDefaultsToExpandedForExistingInstalls() throws {
+        let legacyJSON = Data(#"{"serverHost":"127.0.0.1","serverPort":8080}"#.utf8)
+        let decoded = try JSONDecoder().decode(NativSettings.self, from: legacyJSON)
+        XCTAssertFalse(decoded.sidebarPinnedCollapsed)
+        XCTAssertFalse(decoded.sidebarFoldersCollapsed)
+        XCTAssertFalse(decoded.sidebarSessionsCollapsed)
     }
 
     func testRememberProfileCapturesCurrentModelSettings() throws {

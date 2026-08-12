@@ -66,6 +66,10 @@ final class IntegrationsViewModel: ObservableObject {
         profiles.openAIBaseURL
     }
 
+    var modelSearchPaths: LocalModelSearchPaths {
+        serverModel.settings.localModelSearchPaths
+    }
+
     private var integrationServerBaseURL: URL {
         serverModel.activeServerBaseURL ?? serverModel.settings.serverBaseURL
     }
@@ -82,12 +86,11 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     func appear() {
-        library.scan(path: serverModel.settings.modelSearchPath)
         refreshStatuses()
     }
 
     func modelsDidChange() {
-        library.scan(path: serverModel.settings.modelSearchPath)
+        scanModels()
     }
 
     func select(_ tool: IntegrationTool) {
@@ -113,10 +116,28 @@ final class IntegrationsViewModel: ObservableObject {
     func refreshStatuses() {
         guard !isRefreshingStatuses else { return }
         isRefreshingStatuses = true
+        let baseURL = integrationServerBaseURL
+        let apiKey = serverAPIKey
         Task {
-            var refreshed: [IntegrationTool: IntegrationToolStatus] = [:]
-            for tool in IntegrationTool.allCases {
-                refreshed[tool] = await profiles.status(for: tool)
+            let refreshed = await withTaskGroup(
+                of: (IntegrationTool, IntegrationToolStatus).self,
+                returning: [IntegrationTool: IntegrationToolStatus].self
+            ) { group in
+                for tool in IntegrationTool.allCases {
+                    group.addTask {
+                        let profile = IntegrationProfileManager(
+                            serverBaseURL: baseURL,
+                            serverAPIKey: apiKey
+                        )
+                        return (tool, await profile.status(for: tool))
+                    }
+                }
+
+                var statuses: [IntegrationTool: IntegrationToolStatus] = [:]
+                for await (tool, status) in group {
+                    statuses[tool] = status
+                }
+                return statuses
             }
             statuses = refreshed
             isRefreshingStatuses = false
@@ -217,6 +238,10 @@ final class IntegrationsViewModel: ObservableObject {
         guard let command = launchCommand(for: tool, workingDirectory: workingDirectory) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
+    }
+
+    private func scanModels() {
+        library.scan(searchPaths: serverModel.settings.localModelSearchPaths)
     }
 
     private func configureProfile(tool: IntegrationTool, selectedModelID: String) throws {
@@ -362,6 +387,9 @@ struct IntegrationsView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear(perform: viewModel.appear)
+        .task(id: viewModel.modelSearchPaths) {
+            viewModel.modelsDidChange()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             viewModel.modelsDidChange()
         }
@@ -636,7 +664,7 @@ private struct IntegrationDetailView: View {
                     Text("Scanning installed models…").foregroundStyle(.secondary)
                 }
             } else if viewModel.eligibleModels.isEmpty {
-                Text("No installed chat models were found. Download one from the Models page first.")
+                Text("No installed chat models were found. Add a model folder or download one from Models.")
                     .foregroundStyle(.secondary)
             } else {
                 Picker("Model", selection: $viewModel.selectedModelID) {

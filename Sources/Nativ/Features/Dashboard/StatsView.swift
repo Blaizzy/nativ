@@ -83,8 +83,7 @@ struct StatsView: View {
 
 private struct DashboardModelState: Equatable {
     let isRunning: Bool
-    let modelSearchPath: String
-    let additionalModelSearchPaths: [String]
+    let modelSearchPaths: LocalModelSearchPaths
     let analyticsDatabaseURL: URL
     let loadedModelID: String?
     let historicalMetricsRevision: DashboardMetricsRevision?
@@ -92,8 +91,7 @@ private struct DashboardModelState: Equatable {
     @MainActor
     init(model: NativModel) {
         isRunning = model.isRunning
-        modelSearchPath = model.settings.modelSearchPath
-        additionalModelSearchPaths = model.settings.normalized().additionalModelSearchPaths
+        modelSearchPaths = model.settings.localModelSearchPaths
         analyticsDatabaseURL = model.analyticsDatabaseURL
         loadedModelID = model.metrics?.server.loadedModel
         historicalMetricsRevision = model.metrics.map {
@@ -126,8 +124,6 @@ private struct DashboardContentView: View, Equatable {
                     .padding(.horizontal, 22)
                     .padding(.top, 20)
                     .padding(.bottom, 16)
-                    .frame(maxWidth: 1500, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .center)
 
                 Divider()
 
@@ -160,7 +156,7 @@ private struct DashboardContentView: View, Equatable {
         .onAppear {
             syncDashboardState(scanModels: true, reloadHistory: true)
         }
-        .onChange(of: modelState.modelSearchPath) { _, _ in
+        .onChange(of: modelState.modelSearchPaths) { _, _ in
             syncDashboardState(scanModels: true, reloadHistory: false)
         }
         .onChange(of: modelState.analyticsDatabaseURL) { _, _ in
@@ -178,7 +174,7 @@ private struct DashboardContentView: View, Equatable {
     private var pageHeader: some View {
         HStack(alignment: .top, spacing: 20) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Analytics")
+                Text("Dashboard")
                     .font(.title2.weight(.semibold))
                 Text("Monitor token consumption, request volume, and model performance across this workspace.")
                     .font(.callout)
@@ -447,10 +443,7 @@ private struct DashboardContentView: View, Equatable {
         dashboard.updateAnalyticsDatabaseURL(modelState.analyticsDatabaseURL)
         dashboard.updatePreferredModelID(modelState.loadedModelID)
         if scanModels {
-            dashboard.scanModels(
-                at: modelState.modelSearchPath,
-                additionalPaths: modelState.additionalModelSearchPaths
-            )
+            dashboard.scanModels(searchPaths: modelState.modelSearchPaths)
         }
         if reloadHistory {
             dashboard.reloadHistorical()

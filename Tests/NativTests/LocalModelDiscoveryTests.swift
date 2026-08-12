@@ -4,6 +4,10 @@ import XCTest
 final class LocalModelDiscoveryTests: XCTestCase {
     private var temporaryCache: URL!
 
+    private var searchPaths: LocalModelSearchPaths {
+        LocalModelSearchPaths(primary: temporaryCache.path)
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         temporaryCache = FileManager.default.temporaryDirectory
@@ -23,9 +27,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
     func testDiscoversMageFlowComponentLayoutAsImageGenerationModel() async throws {
         try makeMageFlowSnapshot(repoID: "microsoft/Mage-Flow-Turbo")
 
-        let models = try await LocalModelDiscovery.scan(
-            path: temporaryCache.path
-        )
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         let model = try XCTUnwrap(models.first)
         XCTAssertEqual(models.count, 1)
@@ -38,9 +40,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
     func testDiscoversMageFlowEditComponentLayoutAsImageEditingModel() async throws {
         try makeMageFlowSnapshot(repoID: "microsoft/Mage-Flow-Edit-Turbo")
 
-        let models = try await LocalModelDiscovery.scan(
-            path: temporaryCache.path
-        )
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         let model = try XCTUnwrap(models.first)
         XCTAssertEqual(models.count, 1)
@@ -48,6 +48,29 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertEqual(model.provider, .microsoft)
         XCTAssertTrue(model.capabilities.contains(.imageEditing))
         XCTAssertFalse(model.capabilities.contains(.imageGeneration))
+    }
+
+    func testDiscoversModelFromAdditionalSearchFolder() async throws {
+        let externalModel = temporaryCache.appendingPathComponent(
+            "external/owner/model",
+            isDirectory: true
+        )
+        try writeJSON(
+            ["model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]],
+            to: externalModel.appendingPathComponent("config.json")
+        )
+        try write("weights", to: externalModel.appendingPathComponent("model.safetensors"))
+
+        let models = try await LocalModelDiscovery.scan(
+            searchPaths: LocalModelSearchPaths(
+                primary: temporaryCache.path,
+                additional: [externalModel.path]
+            )
+        )
+
+        let model = try XCTUnwrap(models.first { $0.repoID == externalModel.standardizedFileURL.path })
+        XCTAssertEqual(model.source, .external)
+        XCTAssertTrue(model.capabilities.contains(.text))
     }
 
     func testClassifiesEncoderWithPoolingAsEmbeddingModel() async throws {
@@ -58,7 +81,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             sentenceTransformer: true
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
@@ -71,7 +94,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             sentenceTransformer: false
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertFalse(model.capabilities.contains(.embeddings))
         XCTAssertTrue(model.capabilities.contains(.text))
@@ -85,7 +108,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
             sentenceTransformer: true
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
     }
@@ -99,9 +122,91 @@ final class LocalModelDiscoveryTests: XCTestCase {
             stamp: ["kind": "embedding", "modality": "text"]
         )
 
-        let models = try await LocalModelDiscovery.scan(path: temporaryCache.path)
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
+    }
+
+    func testRequiresEveryShardReferencedBySafetensorsIndex() async throws {
+        try makeShardedTextModelSnapshot(
+            repoID: "org/incomplete-sharded-model",
+            shardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+            availableShardFilenames: ["model-00001-of-00002.safetensors"]
+        )
+        try makeShardedTextModelSnapshot(
+            repoID: "org/complete-sharded-model",
+            shardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+            availableShardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ]
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertFalse(models.contains { $0.repoID == "org/incomplete-sharded-model" })
+        XCTAssertTrue(models.contains { $0.repoID == "org/complete-sharded-model" })
+    }
+
+    func testRejectsMalformedOrEmptySafetensorsIndex() async throws {
+        try makeShardedTextModelSnapshot(
+            repoID: "org/malformed-index",
+            shardFilenames: ["model-00001-of-00001.safetensors"],
+            availableShardFilenames: ["model-00001-of-00001.safetensors"]
+        )
+        try write(
+            "{ not valid JSON",
+            to: snapshotURL(repoID: "org/malformed-index")
+                .appendingPathComponent("model.safetensors.index.json")
+        )
+
+        try makeShardedTextModelSnapshot(
+            repoID: "org/empty-index",
+            shardFilenames: ["model-00001-of-00001.safetensors"],
+            availableShardFilenames: ["model-00001-of-00001.safetensors"]
+        )
+        let emptyIndex: [String: [String: String]] = ["weight_map": [:]]
+        try writeJSON(
+            emptyIndex,
+            to: snapshotURL(repoID: "org/empty-index")
+                .appendingPathComponent("model.safetensors.index.json")
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertFalse(models.contains { $0.repoID == "org/malformed-index" })
+        XCTAssertFalse(models.contains { $0.repoID == "org/empty-index" })
+    }
+
+    func testAcceptsCompletedHuggingFaceShardSymlinks() async throws {
+        let repoID = "org/symlinked-sharded-model"
+        let shardFilename = "model-00001-of-00001.safetensors"
+        try makeShardedTextModelSnapshot(
+            repoID: repoID,
+            shardFilenames: [shardFilename],
+            availableShardFilenames: []
+        )
+
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let blobURL = repository.appendingPathComponent("blobs/completed-shard")
+        try write("weights", to: blobURL)
+        try FileManager.default.createSymbolicLink(
+            at: snapshot.appendingPathComponent(shardFilename),
+            withDestinationURL: blobURL
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertTrue(models.contains { $0.repoID == repoID })
     }
 
     func testSelectsAnyInstalledSpeechToTextModelWithoutKnownModelNames() {
@@ -140,6 +245,93 @@ final class LocalModelDiscoveryTests: XCTestCase {
             ),
             "owner/alpha-listener"
         )
+    }
+
+    func testSpeechToTextPreloadIssueFlagsMissingPreprocessorConfig() throws {
+        let repoID = "aufklarer/Qwen3-ASR-1.7B-MLX-8bit"
+        try makeSpeechSnapshot(
+            repoID: repoID,
+            modelType: "qwen3_asr",
+            includesPreprocessorConfig: false
+        )
+
+        let issue = LocalModelDiscovery.speechToTextPreloadIssue(
+            repoID: repoID,
+            path: temporaryCache.path
+        )
+
+        let message = try XCTUnwrap(issue)
+        XCTAssertTrue(message.contains("preprocessor_config.json"))
+        XCTAssertTrue(message.contains(repoID))
+    }
+
+    func testSpeechToTextPreloadIssueAcceptsCompleteSnapshot() throws {
+        let repoID = "aufklarer/Qwen3-ASR-0.6B-MLX-4bit"
+        try makeSpeechSnapshot(
+            repoID: repoID,
+            modelType: "qwen3_asr",
+            includesPreprocessorConfig: true
+        )
+
+        XCTAssertNil(
+            LocalModelDiscovery.speechToTextPreloadIssue(
+                repoID: repoID,
+                path: temporaryCache.path
+            )
+        )
+    }
+
+    func testSpeechToTextPreloadIssueIgnoresModelTypesWithoutPreprocessor() throws {
+        let repoID = "mlx-community/whisper-tiny"
+        try makeSpeechSnapshot(
+            repoID: repoID,
+            modelType: "whisper",
+            includesPreprocessorConfig: false
+        )
+
+        XCTAssertNil(
+            LocalModelDiscovery.speechToTextPreloadIssue(
+                repoID: repoID,
+                path: temporaryCache.path
+            )
+        )
+    }
+
+    func testSpeechToTextPreloadIssueIgnoresUnknownModel() {
+        XCTAssertNil(
+            LocalModelDiscovery.speechToTextPreloadIssue(
+                repoID: "nobody/not-installed",
+                path: temporaryCache.path
+            )
+        )
+    }
+
+    private func makeSpeechSnapshot(
+        repoID: String,
+        modelType: String,
+        includesPreprocessorConfig: Bool
+    ) throws {
+        let repository = temporaryCache.appendingPathComponent(
+            "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
+            isDirectory: true
+        )
+        let revision = "speech-test-revision"
+        let snapshot =
+            repository
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent(revision, isDirectory: true)
+
+        try write(revision, to: repository.appendingPathComponent("refs/main"))
+        try writeJSON(
+            ["model_type": modelType, "architectures": ["Qwen3ASRForConditionalGeneration"]],
+            to: snapshot.appendingPathComponent("config.json")
+        )
+        if includesPreprocessorConfig {
+            try writeJSON(
+                ["feature_extractor_type": "WhisperFeatureExtractor"],
+                to: snapshot.appendingPathComponent("preprocessor_config.json")
+            )
+        }
     }
 
     private func makeMageFlowSnapshot(repoID: String) throws {
@@ -226,6 +418,46 @@ final class LocalModelDiscoveryTests: XCTestCase {
         }
     }
 
+    private func makeShardedTextModelSnapshot(
+        repoID: String,
+        shardFilenames: [String],
+        availableShardFilenames: Set<String>
+    ) throws {
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let revision = snapshot.lastPathComponent
+
+        try write(revision, to: repository.appendingPathComponent("refs/main"))
+        try writeJSON(
+            ["model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]],
+            to: snapshot.appendingPathComponent("config.json")
+        )
+
+        var weightMap: [String: String] = [:]
+        for (index, filename) in shardFilenames.enumerated() {
+            weightMap["model.layers.\(index).weight"] = filename
+            if availableShardFilenames.contains(filename) {
+                try write("weights", to: snapshot.appendingPathComponent(filename))
+            }
+        }
+        try writeJSON(
+            ["weight_map": weightMap],
+            to: snapshot.appendingPathComponent("model.safetensors.index.json")
+        )
+    }
+
+    private func snapshotURL(repoID: String) -> URL {
+        temporaryCache
+            .appendingPathComponent(
+                "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
+                isDirectory: true
+            )
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent("test-revision", isDirectory: true)
+    }
+
     private func writeJSON(_ object: Any, to url: URL) throws {
         let data = try JSONSerialization.data(
             withJSONObject: object,
@@ -236,6 +468,30 @@ final class LocalModelDiscoveryTests: XCTestCase {
             withIntermediateDirectories: true
         )
         try data.write(to: url)
+    }
+
+    func testDrafterKindDetection() {
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_5_mtp"), "mtp")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "gemma4_assistant"), "mtp")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "eagle3"), "eagle3")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_dflash"), "dflash")
+        XCTAssertEqual(LocalModelDiscovery.drafterKind(fromModelType: "llama_eagle"), "eagle3")
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: "qwen3_5"))
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: nil))
+        XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: ""))
+    }
+
+    func testDrafterExcludedFromLanguageModelPicker() {
+        let drafter = makeModel(
+            repoID: "mlx-community/Qwen3.5-4B-MTP-4bit",
+            capabilities: [.text, .drafter]
+        )
+        let chatModel = makeModel(
+            repoID: "mlx-community/Qwen3.5-4B-MLX-4bit",
+            capabilities: [.text]
+        )
+        XCTAssertFalse(drafter.isEligibleForLanguageModelPicker)
+        XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
     }
 
     private func write(_ string: String, to url: URL) throws {
@@ -260,7 +516,9 @@ final class LocalModelDiscoveryTests: XCTestCase {
             quantizationGroupSize: nil,
             contextSize: nil,
             provider: nil,
-            capabilities: capabilities
+            capabilities: capabilities,
+            drafterKind: nil,
+            hiddenSize: nil
         )
     }
 }

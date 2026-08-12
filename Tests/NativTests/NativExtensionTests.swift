@@ -25,9 +25,17 @@ final class NativExtensionManifestTests: XCTestCase {
         XCTAssertEqual(manifest.id, "com.nativ.voice-dictation")
         XCTAssertEqual(manifest.displayName, "Audio")
         XCTAssertTrue(manifest.included)
+        XCTAssertEqual(manifest.enabledByDefault, false)
         XCTAssertEqual(
             manifest.contributions.sidebar.map(\.id),
             ["com.nativ.voice-dictation.audio"]
+        )
+        XCTAssertEqual(
+            manifest.contributions.shortcuts.map(\.id),
+            [
+                "com.nativ.voice-dictation.transcribe",
+                "com.nativ.voice-dictation.retranscribe",
+            ]
         )
         XCTAssertTrue(manifest.permissions.contains(.systemAudioCapture))
     }
@@ -211,6 +219,15 @@ final class NativExtensionStateStoreTests: XCTestCase {
         XCTAssertEqual(store.state(for: makeManifest(included: false)), .disabled)
     }
 
+    func testIncludedExtensionCanDefaultToDisabled() {
+        let store = NativExtensionStateStore(defaults: defaults)
+
+        XCTAssertEqual(
+            store.state(for: makeManifest(included: true, enabledByDefault: false)),
+            .disabled
+        )
+    }
+
     func testRemovedTombstoneSurvivesStoreRecreation() {
         let key = "state.\(UUID().uuidString)"
         let manifest = makeManifest(included: true)
@@ -232,7 +249,10 @@ final class NativExtensionStateStoreTests: XCTestCase {
         XCTAssertEqual(store.state(for: manifest), .enabled)
     }
 
-    private func makeManifest(included: Bool) -> NativExtensionManifest {
+    private func makeManifest(
+        included: Bool,
+        enabledByDefault: Bool? = nil
+    ) -> NativExtensionManifest {
         NativExtensionManifest(
             id: "com.example.extension",
             version: "1.0.0",
@@ -242,6 +262,7 @@ final class NativExtensionStateStoreTests: XCTestCase {
             developer: "Example",
             systemImage: "puzzlepiece.extension",
             included: included,
+            enabledByDefault: enabledByDefault,
             runtime: .extensionFoundation,
             runtimeBundleIdentifier: "com.example.extension.runtime"
         )

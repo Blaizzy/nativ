@@ -325,6 +325,10 @@ struct NativSettings: Codable, Equatable {
     var modelSearchPath: String
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
+    var mcpServers: [MCPServerConfig]
+    var customTools: [CustomTool]
+    var disabledToolNames: [String]
+    var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
@@ -362,12 +366,20 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    var chatFontScale: Double
+    var sidebarPinnedCollapsed: Bool
+    var sidebarFoldersCollapsed: Bool
+    var sidebarSessionsCollapsed: Bool
     var modelConfigs: [String: ModelConfigProfile]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
         additionalModelSearchPaths: [String] = [],
         languageModelID: String? = nil,
+        mcpServers: [MCPServerConfig] = [],
+        customTools: [CustomTool] = [],
+        disabledToolNames: [String] = [],
+        skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
         speechToTextModelID: String? = nil,
@@ -405,11 +417,19 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
+        chatFontScale: Double = Self.defaultChatFontScale,
+        sidebarPinnedCollapsed: Bool = false,
+        sidebarFoldersCollapsed: Bool = false,
+        sidebarSessionsCollapsed: Bool = false,
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
         self.additionalModelSearchPaths = additionalModelSearchPaths
         self.languageModelID = languageModelID
+        self.mcpServers = mcpServers
+        self.customTools = customTools
+        self.disabledToolNames = disabledToolNames
+        self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
@@ -447,6 +467,10 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.chatFontScale = chatFontScale
+        self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
+        self.sidebarFoldersCollapsed = sidebarFoldersCollapsed
+        self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
         self.modelConfigs = modelConfigs
     }
 
@@ -454,6 +478,10 @@ struct NativSettings: Codable, Equatable {
         case modelSearchPath
         case additionalModelSearchPaths
         case languageModelID
+        case mcpServers
+        case customTools
+        case disabledToolNames
+        case skills
         case imageGenerationModelID
         case textToSpeechModelID
         case speechToTextModelID
@@ -492,6 +520,10 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case chatFontScale
+        case sidebarPinnedCollapsed
+        case sidebarFoldersCollapsed
+        case sidebarSessionsCollapsed
         case modelConfigs
     }
 
@@ -503,6 +535,10 @@ struct NativSettings: Codable, Equatable {
         modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
         additionalModelSearchPaths = try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths) ?? defaults.additionalModelSearchPaths
         languageModelID = try container.decodeIfPresent(String.self, forKey: .languageModelID) ?? legacySelectedModelID ?? defaults.languageModelID
+        mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
+        customTools = try container.decodeIfPresent([CustomTool].self, forKey: .customTools) ?? defaults.customTools
+        disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
+        skills = try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
         speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
@@ -540,6 +576,10 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixCachingEnabled) ?? defaults.prefixCachingEnabled
         prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
         prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
+        chatFontScale = try container.decodeIfPresent(Double.self, forKey: .chatFontScale) ?? defaults.chatFontScale
+        sidebarPinnedCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed) ?? defaults.sidebarPinnedCollapsed
+        sidebarFoldersCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed) ?? defaults.sidebarFoldersCollapsed
+        sidebarSessionsCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed) ?? defaults.sidebarSessionsCollapsed
         modelConfigs = try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs) ?? defaults.modelConfigs
     }
 
@@ -548,6 +588,10 @@ struct NativSettings: Codable, Equatable {
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
+        try container.encode(mcpServers, forKey: .mcpServers)
+        try container.encode(customTools, forKey: .customTools)
+        try container.encode(disabledToolNames, forKey: .disabledToolNames)
+        try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
@@ -584,6 +628,10 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(chatFontScale, forKey: .chatFontScale)
+        try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
+        try container.encode(sidebarFoldersCollapsed, forKey: .sidebarFoldersCollapsed)
+        try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
         try container.encode(modelConfigs, forKey: .modelConfigs)
     }
 
@@ -720,16 +768,52 @@ struct NativSettings: Codable, Equatable {
         settings.structuredOutputName = Self.nonEmpty(settings.structuredOutputName, fallback: "Response")
         settings.prefixCacheBlocks = min(max(settings.prefixCacheBlocks, 1), 1_048_576)
         settings.prefixCacheBlockSize = min(max(settings.prefixCacheBlockSize, 1), 4096)
+        settings.chatFontScale = min(max(settings.chatFontScale, Self.minChatFontScale), Self.maxChatFontScale)
         return settings
+    }
+
+    static let chatFontScaleSteps: [Double] = [0.85, 1.0, 1.15, 1.3, 1.5]
+    static let defaultChatFontScale: Double = 1.0
+    static let minChatFontScale: Double = 0.85
+    static let maxChatFontScale: Double = 1.5
+
+    mutating func stepChatFontScale(by delta: Int) {
+        let steps = Self.chatFontScaleSteps
+        let current = steps.enumerated().min {
+            abs($0.element - chatFontScale) < abs($1.element - chatFontScale)
+        }?.offset ?? 0
+        chatFontScale = steps[min(max(current + delta, 0), steps.count - 1)]
+    }
+
+    mutating func resetChatFontScale() {
+        chatFontScale = Self.defaultChatFontScale
+    }
+
+    var allSidebarSectionsCollapsed: Bool {
+        sidebarPinnedCollapsed && sidebarFoldersCollapsed && sidebarSessionsCollapsed
+    }
+
+    mutating func setAllSidebarSectionsCollapsed(_ collapsed: Bool) {
+        sidebarPinnedCollapsed = collapsed
+        sidebarFoldersCollapsed = collapsed
+        sidebarSessionsCollapsed = collapsed
+    }
+
+    var speculativeDecodingActive: Bool {
+        speculativeDecodingEnabled
+            && !draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func hasSameLaunchConfiguration(as other: Self) -> Bool {
         let lhs = normalized()
         let rhs = other.normalized()
-        let lhsSpeculativeDecodingActive = lhs.speculativeDecodingEnabled && !lhs.draftModelID.isEmpty
-        let rhsSpeculativeDecodingActive = rhs.speculativeDecodingEnabled && !rhs.draftModelID.isEmpty
+        let lhsSpeculativeDecodingActive = lhs.speculativeDecodingActive
+        let rhsSpeculativeDecodingActive = rhs.speculativeDecodingActive
         return lhs.modelSearchPath == rhs.modelSearchPath
             && lhs.languageModelID == rhs.languageModelID
+            && lhs.mcpServers == rhs.mcpServers
+            && lhs.disabledToolNames == rhs.disabledToolNames
+            && lhs.skills == rhs.skills
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID
@@ -838,7 +922,7 @@ struct NativSettings: Codable, Equatable {
             ])
         }
 
-        if settings.speculativeDecodingEnabled, !settings.draftModelID.isEmpty {
+        if settings.speculativeDecodingActive {
             arguments.append(contentsOf: ["--draft-model", settings.draftModelID])
             if settings.draftKind != "auto" {
                 arguments.append(contentsOf: ["--draft-kind", settings.draftKind])
@@ -919,22 +1003,18 @@ struct NativSettings: Codable, Equatable {
         NSString(string: modelSearchPath).expandingTildeInPath
     }
 
+    var localModelSearchPaths: LocalModelSearchPaths {
+        LocalModelSearchPaths(
+            primary: modelSearchPath,
+            additional: additionalModelSearchPaths
+        )
+    }
+
     /// All directories to search for a locally-available model: the primary model
     /// folder, any user-added folders, and the Hugging Face hub cache. Consolidated
     /// here so callers don't each re-derive the roots (and each miss custom folders).
     var modelSearchRoots: [String] {
-        var roots: [String] = []
-        let primary = expandedModelSearchPath.trimmingCharacters(in: .whitespaces)
-        if !primary.isEmpty {
-            roots.append(primary)
-        }
-        for path in additionalModelSearchPaths {
-            let expanded = NSString(string: path).expandingTildeInPath
-                .trimmingCharacters(in: .whitespaces)
-            if !expanded.isEmpty {
-                roots.append(expanded)
-            }
-        }
+        var roots = localModelSearchPaths.all
         if let hubCache = ProcessInfo.processInfo.environment["HF_HUB_CACHE"], !hubCache.isEmpty {
             roots.append(hubCache)
         }

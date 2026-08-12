@@ -126,6 +126,8 @@ struct SystemMonitorSnapshot: Equatable, Sendable {
     var gpu = SystemGPUMetrics()
     var memory = SystemMemoryMetrics()
     var disk = SystemDiskMetrics()
+    var thermal = SystemThermalMetrics()
+    var power = SystemPowerMetrics()
     var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 }
 
@@ -140,6 +142,8 @@ final class SystemMonitorStore: ObservableObject {
     @Published private(set) var swapHistory: [SystemHistorySample] = []
     @Published private(set) var diskReadHistory: [SystemHistorySample] = []
     @Published private(set) var diskWriteHistory: [SystemHistorySample] = []
+    @Published private(set) var temperatureHistory: [SystemHistorySample] = []
+    @Published private(set) var powerHistory: [SystemHistorySample] = []
     @Published private(set) var isSampling = false
 
     private let collector = SystemMetricsCollector()
@@ -216,6 +220,14 @@ final class SystemMonitorStore: ObservableObject {
             swapUsage = 0
         }
         append(swapUsage, at: nextSnapshot.recordedAt, to: &swapHistory)
+
+        if let value = nextSnapshot.thermal.dieTemperatureCelsius {
+            append(value, at: nextSnapshot.recordedAt, to: &temperatureHistory)
+        }
+        if let value = nextSnapshot.power.headlineWatts {
+            append(value, at: nextSnapshot.recordedAt, to: &powerHistory)
+        }
+
         append(
             nextSnapshot.disk.readBytesPerSecond,
             at: nextSnapshot.recordedAt,
@@ -391,6 +403,8 @@ private actor SystemMetricsCollector {
     private var previousCPUTicks: [SystemCPUTicks] = []
     private var previousDiskCounters: SystemDiskCounters?
     private var previousDiskSampleDate: Date?
+    /// Holds the IOReport subscription and SMC connection open across samples.
+    private let sensors = SystemSensorSampler()
 
     func collect() -> SystemMonitorSnapshot {
         let now = Date()
@@ -423,6 +437,8 @@ private actor SystemMetricsCollector {
             gpu: Self.gpuMetrics(),
             memory: Self.memoryMetrics(),
             disk: disk,
+            thermal: sensors.thermalMetrics(),
+            power: sensors.powerMetrics(),
             uptime: ProcessInfo.processInfo.systemUptime
         )
     }

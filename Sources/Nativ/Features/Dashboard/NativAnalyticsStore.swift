@@ -207,9 +207,15 @@ struct NativAnalyticsTTFTEvent: Sendable {
 
 final class NativAnalyticsStore {
     private let databaseURL: URL
+    // Keep one read connection for a dashboard snapshot. Opening a connection
+    // for every metric query repeats schema setup and WAL configuration, and
+    // makes one reload look like several independent database passes.
+    private let connection: SQLiteConnection?
 
     init(databaseURL: URL = NativAnalyticsStore.defaultDatabaseURL()) {
-        self.databaseURL = databaseURL.standardizedFileURL
+        let standardizedURL = databaseURL.standardizedFileURL
+        self.databaseURL = standardizedURL
+        self.connection = try? SQLiteConnection(url: standardizedURL)
     }
 
     static func defaultDatabaseURL() -> URL {
@@ -223,12 +229,25 @@ final class NativAnalyticsStore {
             .appendingPathComponent("Analytics.sqlite3")
     }
 
+    /// Runs a group of dashboard reads against one consistent SQLite snapshot.
+    /// The connection is shared by all fetch methods on this store, so a reload
+    /// does not repeatedly open/configure the database or observe mixed writes.
+    func withReadSnapshot<Result>(_ work: () -> Result) -> Result {
+        guard let connection else {
+            return work()
+        }
+
+        try? connection.execute("BEGIN TRANSACTION;")
+        defer { try? connection.execute("COMMIT;") }
+        return work()
+    }
+
     func fetchSummary(
         range: NativAnalyticsRange = .allTime,
         modelID: String? = nil,
         granularityOverride: NativAnalyticsGranularity? = nil
     ) -> NativHistoricalAnalyticsSummary {
-        guard let connection = try? SQLiteConnection(url: databaseURL) else {
+        guard let connection else {
             return .empty
         }
 
@@ -375,7 +394,7 @@ final class NativAnalyticsStore {
         modelID: String? = nil,
         granularityOverride: NativAnalyticsGranularity? = nil
     ) -> [NativAnalyticsBucketPoint] {
-        guard let connection = try? SQLiteConnection(url: databaseURL) else {
+        guard let connection else {
             return []
         }
 
@@ -502,7 +521,7 @@ final class NativAnalyticsStore {
         granularity: NativAnalyticsGranularity,
         modelID: String? = nil
     ) -> (start: Date, end: Date)? {
-        guard let connection = try? SQLiteConnection(url: databaseURL) else {
+        guard let connection else {
             return nil
         }
 
@@ -542,7 +561,7 @@ final class NativAnalyticsStore {
         modelID: String? = nil,
         limit: Int = 10
     ) -> [NativAnalyticsRequestEvent] {
-        guard let connection = try? SQLiteConnection(url: databaseURL) else {
+        guard let connection else {
             return []
         }
 
@@ -632,7 +651,7 @@ final class NativAnalyticsStore {
         range: NativAnalyticsRange,
         modelID: String? = nil
     ) -> [NativAnalyticsTTFTEvent] {
-        guard let connection = try? SQLiteConnection(url: databaseURL) else {
+        guard let connection else {
             return []
         }
 
@@ -673,7 +692,7 @@ final class NativAnalyticsStore {
     }
 
     func fetchKnownModelIDs() -> [String] {
-        guard let connection = try? SQLiteConnection(url: databaseURL) else {
+        guard let connection else {
             return []
         }
 

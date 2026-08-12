@@ -8,6 +8,7 @@
   "developer": "Nativ",
   "systemImage": "waveform.badge.mic",
   "included": true,
+  "enabledByDefault": false,
   "runtime": "extensionFoundation",
   "extensionPoint": "com.nativ.extension",
   "runtimeBundleIdentifier": "dev.local.Nativ.VoiceDictationExtension",
@@ -37,11 +38,6 @@
         "id": "com.nativ.voice-dictation.retranscribe",
         "title": "Retranscribe",
         "defaultShortcut": "Fn+R"
-      },
-      {
-        "id": "com.nativ.voice-dictation.hands-free",
-        "title": "Hands-free",
-        "defaultShortcut": "Option"
       }
     ],
     "settings": [

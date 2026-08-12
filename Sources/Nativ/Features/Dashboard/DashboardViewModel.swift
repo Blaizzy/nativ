@@ -213,13 +213,13 @@ final class DashboardViewModel: ObservableObject {
         applyPreferredSelectionIfPossible()
     }
 
-    func scanModels(at path: String, additionalPaths: [String] = []) {
+    func scanModels(searchPaths: LocalModelSearchPaths) {
         modelScanTask?.cancel()
         localModelError = nil
 
-        modelScanTask = Task { [path] in
+        modelScanTask = Task {
             do {
-                let models = try await LocalModelDiscovery.scan(path: path, additionalPaths: additionalPaths)
+                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
                 guard !Task.isCancelled else {
                     return
                 }
@@ -252,62 +252,64 @@ final class DashboardViewModel: ObservableObject {
 
         let task = Task.detached(priority: .userInitiated) {
             let store = NativAnalyticsStore(databaseURL: databaseURL)
-            let displayGranularity = Self.displayGranularity(
-                for: range,
-                store: store,
-                modelID: selectedModelID
-            )
-            let summary = store.fetchSummary(
-                range: range.analyticsRange,
-                modelID: selectedModelID,
-                granularityOverride: displayGranularity
-            )
-            let rawBuckets = store.fetchBuckets(
-                range: range.analyticsRange,
-                modelID: selectedModelID,
-                granularityOverride: displayGranularity
-            )
-            let rawActivityBuckets = store.fetchBuckets(
-                range: range.analyticsRange,
-                modelID: selectedModelID,
-                granularityOverride: .hour
-            )
-            let ttftEvents = store.fetchTTFTEvents(
-                range: range.analyticsRange,
-                modelID: selectedModelID
-            )
-            let recentRequestEvents = store.fetchRecentRequestEvents(
-                range: range.analyticsRange,
-                modelID: selectedModelID,
-                limit: 10
-            )
-            let knownModelIDs = store.fetchKnownModelIDs()
-            let points = Self.bucketPoints(
-                from: rawBuckets,
-                ttftEvents: ttftEvents,
-                range: range,
-                granularity: displayGranularity
-            )
-            let activityPoints = Self.activityPoints(from: rawActivityBuckets)
-            let modelPerformance = Self.modelPerformance(from: rawBuckets)
-            let servedModelIDs = Set(modelPerformance.map(\.modelID))
-            let modelBuckets = rawBuckets.filter { servedModelIDs.contains($0.modelID) }
-            let leadingModelIDs = Set(modelPerformance.prefix(12).map(\.modelID))
-            let modelTokenPoints = Self.modelTokenPoints(
-                from: modelBuckets,
-                bucketDates: points.map(\.bucketStart),
-                leadingModelIDs: leadingModelIDs,
-                groupsRemainingModels: modelPerformance.count > 12
-            )
-            return DashboardSnapshot(
-                summary: summary,
-                points: points,
-                activityPoints: activityPoints,
-                modelPerformance: modelPerformance,
-                modelTokenPoints: modelTokenPoints,
-                knownModelIDs: knownModelIDs,
-                recentRequestEvents: recentRequestEvents
-            )
+            return store.withReadSnapshot {
+                let displayGranularity = Self.displayGranularity(
+                    for: range,
+                    store: store,
+                    modelID: selectedModelID
+                )
+                let summary = store.fetchSummary(
+                    range: range.analyticsRange,
+                    modelID: selectedModelID,
+                    granularityOverride: displayGranularity
+                )
+                let rawBuckets = store.fetchBuckets(
+                    range: range.analyticsRange,
+                    modelID: selectedModelID,
+                    granularityOverride: displayGranularity
+                )
+                let rawActivityBuckets = store.fetchBuckets(
+                    range: range.analyticsRange,
+                    modelID: selectedModelID,
+                    granularityOverride: .hour
+                )
+                let ttftEvents = store.fetchTTFTEvents(
+                    range: range.analyticsRange,
+                    modelID: selectedModelID
+                )
+                let recentRequestEvents = store.fetchRecentRequestEvents(
+                    range: range.analyticsRange,
+                    modelID: selectedModelID,
+                    limit: 10
+                )
+                let knownModelIDs = store.fetchKnownModelIDs()
+                let points = Self.bucketPoints(
+                    from: rawBuckets,
+                    ttftEvents: ttftEvents,
+                    range: range,
+                    granularity: displayGranularity
+                )
+                let activityPoints = Self.activityPoints(from: rawActivityBuckets)
+                let modelPerformance = Self.modelPerformance(from: rawBuckets)
+                let servedModelIDs = Set(modelPerformance.map(\.modelID))
+                let modelBuckets = rawBuckets.filter { servedModelIDs.contains($0.modelID) }
+                let leadingModelIDs = Set(modelPerformance.prefix(12).map(\.modelID))
+                let modelTokenPoints = Self.modelTokenPoints(
+                    from: modelBuckets,
+                    bucketDates: points.map(\.bucketStart),
+                    leadingModelIDs: leadingModelIDs,
+                    groupsRemainingModels: modelPerformance.count > 12
+                )
+                return DashboardSnapshot(
+                    summary: summary,
+                    points: points,
+                    activityPoints: activityPoints,
+                    modelPerformance: modelPerformance,
+                    modelTokenPoints: modelTokenPoints,
+                    knownModelIDs: knownModelIDs,
+                    recentRequestEvents: recentRequestEvents
+                )
+            }
         }
         historyLoadTask = task
 
