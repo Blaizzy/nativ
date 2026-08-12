@@ -180,7 +180,7 @@ struct RoutineEditor: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("No additional capabilities")
+                        Text("No tools selected")
                             .font(.system(size: 13, weight: .medium))
                     }
                 }
@@ -229,7 +229,7 @@ struct RoutineEditor: View {
                     isSelectingCapabilities = true
                 } label: {
                     Label(
-                        capabilities.isEmpty ? "Add capabilities" : "Manage capabilities",
+                        capabilities.isEmpty ? "Add tools" : "Manage tools",
                         systemImage: "plus"
                     )
                 }
@@ -293,7 +293,7 @@ struct RoutineEditor: View {
                             .labelsHidden()
                             if requiresToolCalling, !toolCapableModelIDs.contains(modelID) {
                                 Label(
-                                    "Choose a model that supports tools to use these capabilities.",
+                                    "Choose a model that supports tool calling to use these tools.",
                                     systemImage: "exclamationmark.triangle.fill"
                                 )
                                 .font(.caption)
@@ -304,7 +304,7 @@ struct RoutineEditor: View {
                     if draft.routine.runsOnSchedule {
                         field("Schedule") { scheduleContent }
                     }
-                    field("Capabilities") {
+                    field("Tools") {
                         capabilitySelection
                     }
                     box {
@@ -445,7 +445,7 @@ private enum ScheduledCapabilitySection: String, CaseIterable, Identifiable {
 
     var singularTitle: String {
         switch self {
-        case .all: "Capability"
+        case .all: "Tool"
         case .kits: "Kit"
         case .mcpServers: "MCP"
         case .tools: "Tool"
@@ -499,7 +499,7 @@ private struct ScheduledCapabilityOption: Identifiable {
             capability: capability,
             section: section,
             title: title,
-            detail: "This capability is no longer available.",
+            detail: "This tool is no longer available.",
             systemImage: systemImage
         )
     }
@@ -532,9 +532,9 @@ private struct ScheduledCapabilityPicker: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Capabilities")
+                Text("Tools")
                     .font(.system(size: 18, weight: .semibold))
-                Text("Choose what this scheduled task can use.")
+                Text("Choose the tools this scheduled task can use.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -591,7 +591,7 @@ private struct ScheduledCapabilityPicker: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search capabilities", text: $query)
+                TextField("Search tools", text: $query)
                     .textFieldStyle(.plain)
                 if !query.isEmpty {
                     Button {
@@ -614,7 +614,7 @@ private struct ScheduledCapabilityPicker: View {
 
             if filteredOptions.isEmpty {
                 ContentUnavailableView(
-                    "No capabilities",
+                    "No tools",
                     systemImage: "magnifyingglass",
                     description: Text(emptyMessage)
                 )
@@ -682,7 +682,7 @@ private struct ScheduledCapabilityPicker: View {
 
     private var footer: some View {
         HStack {
-            Text(selection.isEmpty ? "No capabilities selected" : "\(selection.count) selected")
+            Text(selection.isEmpty ? "No tools selected" : "\(selection.count) selected")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()

@@ -15,6 +15,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var sessionOrder: Int?
     var folderID: UUID?
     var imageGenerationModelID: String?
+    var scheduledTaskID: String?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -26,7 +27,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
-            folderID: folderID
+            folderID: folderID,
+            scheduledTaskID: scheduledTaskID
         )
     }
 
@@ -110,6 +112,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let scheduledTaskID: String?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {

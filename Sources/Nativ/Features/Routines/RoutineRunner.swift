@@ -70,7 +70,7 @@ final class RoutineRunner {
                 &run,
                 routine: routine,
                 status: .failed,
-                summary: "Unavailable capabilities: \(capabilities.unavailable.joined(separator: ", "))."
+                summary: "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
             )
             return
         }
@@ -279,13 +279,6 @@ final class RoutineRunner {
     }
 
     private func appendRun(routine: Routine, messages: [ChatTranscriptMessage]) -> UUID {
-        if let sessionID = routine.sourceSessionID,
-           var session = sessionStore.loadSession(id: sessionID) {
-            session.messages.append(contentsOf: messages)
-            session.updatedAt = Date()
-            sessionStore.saveSession(session)
-            return sessionID
-        }
         let session = makeSession(routine: routine, messages: messages)
         sessionStore.saveSession(session)
         return session.id
@@ -353,7 +346,8 @@ final class RoutineRunner {
             pinned: nil,
             pinnedOrder: nil,
             sessionOrder: nil,
-            folderID: nil
+            folderID: nil,
+            scheduledTaskID: routine.id
         )
     }
 

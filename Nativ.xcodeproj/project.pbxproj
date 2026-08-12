@@ -66,6 +66,7 @@
 		44F8A17BDE2610C6E90CE53F /* CustomTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */; };
 		45BD4C408B9739ABC051A9E7 /* ControlPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C7712D68B2782589312766 /* ControlPanelView.swift */; };
 		463870509178CCD59287E1BE /* VoiceTranscriptInserter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23155DB5E733D8887D83AFD0 /* VoiceTranscriptInserter.swift */; };
+		4681766DBDD49200E3A90BF0 /* ScheduledTasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5C104E12EEB90C4108DD86 /* ScheduledTasksView.swift */; };
 		482E08D2A8EFADD566FFDC4D /* LocalModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CD53CDD71732DE956F55DC /* LocalModelProvider.swift */; };
 		4882FE7E8C689152D428AB2E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 0D3574097911A448F62ED273 /* Sparkle */; };
 		488BBCB7C0182ABB1FBADAD1 /* NativServerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; };
@@ -100,6 +101,7 @@
 		6C872B0124611E3D0297E2FD /* MCPSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86A814B8C04BCBF1C1F869A8 /* MCPSectionView.swift */; };
 		6CFBB2F5B3720F1334BF3D47 /* UISFXMinimalStop.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 8B12071ED75397C8639954B7 /* UISFXMinimalStop.mp3 */; };
 		6E7B34D02D005C83C71A412F /* NativServerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		6F59E4CC485E211A7E6BC943 /* ScheduledTaskViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7213B7C6CEA995B14EBAC99 /* ScheduledTaskViews.swift */; };
 		71659335E55225ABCBB4E993 /* IssueReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46B388273DDFAD7C6C0F4E1 /* IssueReport.swift */; };
 		732D29870D9B330A520DF15C /* NativEmbeddingsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96185929F990EA1470079AAB /* NativEmbeddingsClient.swift */; };
 		759391363423D786EF850BE3 /* RoutineEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4798C02CC1A5D4A92DA96B0 /* RoutineEditorView.swift */; };
@@ -317,6 +319,7 @@
 		3A546937463F81A0E6913BB3 /* ShellEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellEnvironmentTests.swift; sourceTree = "<group>"; };
 		3B1B970F41F1B5612B791ABE /* KitsSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitsSectionView.swift; sourceTree = "<group>"; };
 		3B965B701714787B0A85AE6B /* AudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTests.swift; sourceTree = "<group>"; };
+		3D5C104E12EEB90C4108DD86 /* ScheduledTasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledTasksView.swift; sourceTree = "<group>"; };
 		3E540204DED30CFBDB0FE1AD /* SystemMonitorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemMonitorStore.swift; sourceTree = "<group>"; };
 		3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXImageModelResolverTests.swift; sourceTree = "<group>"; };
 		41417C210BF817681A8C6D87 /* IntegrationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationsView.swift; sourceTree = "<group>"; };
@@ -391,6 +394,7 @@
 		B0E2EE61C1652C49ECC69658 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B598294F3FC3EA81BCD7A680 /* ChatListModelsTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListModelsTool.swift; sourceTree = "<group>"; };
 		B5C2AB90FC12D1B83D6691F4 /* ArtifactStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactStore.swift; sourceTree = "<group>"; };
+		B7213B7C6CEA995B14EBAC99 /* ScheduledTaskViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledTaskViews.swift; sourceTree = "<group>"; };
 		B7C7712D68B2782589312766 /* ControlPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelView.swift; sourceTree = "<group>"; };
 		B7E0BD007DAD141D50E1BAA4 /* AudioAnalyticsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioAnalyticsStore.swift; sourceTree = "<group>"; };
 		BC6FDB4FAF6F7C9F7EC24F25 /* Nimble.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Nimble.png; sourceTree = "<group>"; };
@@ -489,6 +493,8 @@
 				35C1220F03EC60874920E0CE /* RoutineScheduler.swift */,
 				E2D5C36EAF284CDDE30E19CB /* RoutineStore.swift */,
 				90012E8ECF43A5A55BFD8787 /* RoutineSupport.swift */,
+				3D5C104E12EEB90C4108DD86 /* ScheduledTasksView.swift */,
+				B7213B7C6CEA995B14EBAC99 /* ScheduledTaskViews.swift */,
 			);
 			path = Routines;
 			sourceTree = "<group>";
@@ -1226,6 +1232,8 @@
 				66745D5BB4D1454479FF6C9C /* RoutineScheduler.swift in Sources */,
 				326C969CB7D0F41F38467DFE /* RoutineStore.swift in Sources */,
 				ED6BDF238125ABAB48A4227D /* RoutineSupport.swift in Sources */,
+				6F59E4CC485E211A7E6BC943 /* ScheduledTaskViews.swift in Sources */,
+				4681766DBDD49200E3A90BF0 /* ScheduledTasksView.swift in Sources */,
 				F2D992CF4F2CDFF9BEA13C3B /* ServerPortProbe.swift in Sources */,
 				5620EDCF472DEF4388E8E526 /* SettingsView.swift in Sources */,
 				C8B10834D4DF407907FCCF6C /* ShellEnvironment.swift in Sources */,
