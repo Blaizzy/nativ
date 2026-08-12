@@ -11,6 +11,7 @@
 		025B3FFF2FB85B2511BCA927 /* NativModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAC852B29463217932AE0212 /* NativModel.swift */; };
 		04E587A0A3714FD30ECFDE91 /* ChatListModelsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B598294F3FC3EA81BCD7A680 /* ChatListModelsTool.swift */; };
 		052BF04D854F36CDA740635F /* MarkdownFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0259C7C842DE5ADC12B367 /* MarkdownFormatting.swift */; };
+		060FE6D6E84136D0F760A536 /* HuggingFaceModelReadmeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */; };
 		086BC5B6FF02F0305536333B /* CustomTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */; };
 		088297CDFEFECD2787806AD7 /* VoiceCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D07325FEFBE7AF27167E009 /* VoiceCaptureCoordinator.swift */; };
 		0935A0AC0D6A6298D551EEAE /* ArtifactSemanticSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46BCF5F68C499E27A789A91F /* ArtifactSemanticSearch.swift */; };
@@ -168,6 +169,7 @@
 		C89558DC65CAAEC956198688 /* ExtensionsHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D5BCE1A4769FE7823B5C79D /* ExtensionsHubView.swift */; };
 		C8B10834D4DF407907FCCF6C /* ShellEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5919AB4E9488642C73886266 /* ShellEnvironment.swift */; };
 		C904E51D66BFED1808E18FE5 /* ChatScreenCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A11D3AF5467488478CAC264 /* ChatScreenCapture.swift */; };
+		C92083D5C6AF4F5FE29A39E9 /* HuggingFaceModelReadme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD670E29FC7EBFD886ED2DB8 /* HuggingFaceModelReadme.swift */; };
 		CEE42CCB57866B76CE85E588 /* MCPServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7A7ACB288953FD476C47E8 /* MCPServerConfig.swift */; };
 		D4F073244DE11FD98AD708E2 /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3D808CCA7AE53C7245C3D7 /* Formatting.swift */; };
 		D51D08482F5C0E76ACFEFDB1 /* ChatImageTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87EF3E0B4A9EEC293EFD5F8A /* ChatImageTool.swift */; };
@@ -184,6 +186,7 @@
 		E180E254213BCD770141B872 /* VoiceAnimationPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 632EB67BFAC2BCBE082A3E2B /* VoiceAnimationPreferences.swift */; };
 		E1A4AA0C4AA32599FF2D54E7 /* ChatFontScale.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9C24932DBACE75BA4E0CCB /* ChatFontScale.swift */; };
 		E30FD12D491FF35A89A52754 /* WebSearchSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E295CCB27C6CBD1025E62D11 /* WebSearchSettingsView.swift */; };
+		E36D43D088EF55D617BCDDBB /* HuggingFaceModelReadme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD670E29FC7EBFD886ED2DB8 /* HuggingFaceModelReadme.swift */; };
 		E407C7F9CE883C978DE7D716 /* PersistentMenuActionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E53ACF74DB78DD6DC7DD81C8 /* PersistentMenuActionView.swift */; };
 		E4D299AADEA8470C37256DDE /* SystemMonitorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E540204DED30CFBDB0FE1AD /* SystemMonitorStore.swift */; };
 		E5DF6B83A09106489F564CED /* HuggingFaceCuratedModelLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 908D6ABDFE31E0FFFFF284EC /* HuggingFaceCuratedModelLoaderTests.swift */; };
@@ -308,6 +311,7 @@
 		27F42CEC1B39477AC13352E3 /* NativExtensionStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativExtensionStateStore.swift; sourceTree = "<group>"; };
 		2BDBC269531FA6C6DA9F5DDC /* ModelPrimaryTaskResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolverTests.swift; sourceTree = "<group>"; };
 		2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatConfigurationView.swift; sourceTree = "<group>"; };
+		2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceModelReadmeTests.swift; sourceTree = "<group>"; };
 		30D9C81870FB504D03D2A1D5 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
 		30E2A903D604A57696674510 /* NativSystemPermissionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativSystemPermissionController.swift; sourceTree = "<group>"; };
 		31D10F9AFCCD57FA0625CA24 /* ChatToolRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatToolRegistry.swift; sourceTree = "<group>"; };
@@ -439,6 +443,7 @@
 		F3B8F25491BDEED4717A5D23 /* ChatPromptRevision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPromptRevision.swift; sourceTree = "<group>"; };
 		F553434CA19B929108FF740F /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F84C7B764CE1B6F63746E3BB /* Perplexity.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Perplexity.png; sourceTree = "<group>"; };
+		FD670E29FC7EBFD886ED2DB8 /* HuggingFaceModelReadme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceModelReadme.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -780,6 +785,7 @@
 				1B412A48D040D2DE044FF083 /* HubModelSizeResolver.swift */,
 				E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */,
 				7F7FC582B0E18D226E87A1FE /* HuggingFaceHub.swift */,
+				FD670E29FC7EBFD886ED2DB8 /* HuggingFaceModelReadme.swift */,
 				EE984320AE8CCF8783DD30CE /* LocalModelDiscovery.swift */,
 				F0CD53CDD71732DE956F55DC /* LocalModelProvider.swift */,
 				61126D4235AFF77D82F1F80B /* MLXImageModelResolver.swift */,
@@ -902,6 +908,7 @@
 				DAB72E13D688936495CBA7C8 /* CustomToolTests.swift */,
 				A832F692EF1E810D78BD6B6C /* HuggingFaceCacheTests.swift */,
 				908D6ABDFE31E0FFFFF284EC /* HuggingFaceCuratedModelLoaderTests.swift */,
+				2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */,
 				A1D1AD1FEA6B27EDEC9D49D1 /* IntegrationServicesTests.swift */,
 				C503D1550EDF250574853F25 /* LocalModelDiscoveryTests.swift */,
 				8EBF8B632041559A8097F2E6 /* LocalModelProviderTests.swift */,
@@ -1193,6 +1200,7 @@
 				F58ED8B576ABBE02882D43D1 /* HubModelSizeResolver.swift in Sources */,
 				7936A52CFFF5AB09FC9CDDCD /* HuggingFaceCache.swift in Sources */,
 				B55A6BE5C7B03181E2CD03D6 /* HuggingFaceHub.swift in Sources */,
+				E36D43D088EF55D617BCDDBB /* HuggingFaceModelReadme.swift in Sources */,
 				575DCB7EC96DAB35B415434C /* ImageGenerationView.swift in Sources */,
 				BC0753B567DC8935199FCDFB /* ImageGenerationViewModel.swift in Sources */,
 				2E732395142F22D4CDCA2227 /* IntegrationServices.swift in Sources */,
@@ -1286,6 +1294,8 @@
 				0AB78A4BB9F2D08433653C7C /* HuggingFaceCacheTests.swift in Sources */,
 				E5DF6B83A09106489F564CED /* HuggingFaceCuratedModelLoaderTests.swift in Sources */,
 				D883C59602EE2B16CC7988EE /* HuggingFaceHub.swift in Sources */,
+				C92083D5C6AF4F5FE29A39E9 /* HuggingFaceModelReadme.swift in Sources */,
+				060FE6D6E84136D0F760A536 /* HuggingFaceModelReadmeTests.swift in Sources */,
 				237BB8D2F99FFE536CF0421B /* ImageGenerationViewModel.swift in Sources */,
 				41E383BBE43E9CDE0B70826D /* IntegrationServices.swift in Sources */,
 				351B2202E8690FC608A32AEF /* IntegrationServicesTests.swift in Sources */,
