@@ -160,7 +160,10 @@ struct ModelConfigurationView: View {
         guard settings.speculativeDecodingEnabled else {
             return
         }
-        draftModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
+        draftModelLibrary.scan(
+            searchPaths: settings.localModelSearchPaths,
+            serverBaseURL: settings.serverBaseURL
+        )
     }
 
     private var header: some View {

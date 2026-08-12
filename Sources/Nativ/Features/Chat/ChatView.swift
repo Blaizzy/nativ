@@ -941,7 +941,8 @@ final class ChatViewModel: ObservableObject {
                 try Task.checkCancellation()
                 let installedModels = try await ChatImageModelSelection.installedOptions(
                     modelSearchPath: preparationContext.modelSearchPath,
-                    additionalModelSearchPaths: preparationContext.additionalModelSearchPaths
+                    additionalModelSearchPaths: preparationContext.additionalModelSearchPaths,
+                    serverBaseURL: appModel?.settings.serverBaseURL
                 )
                 guard ChatImageModelSelection.isPrepared(
                     modelID: selectedModel.modelID,
@@ -996,7 +997,8 @@ final class ChatViewModel: ObservableObject {
                         for: operation,
                         modelSearchPath: context.modelSearchPath,
                         additionalModelSearchPaths: context.additionalModelSearchPaths,
-                        huggingFaceToken: context.huggingFaceToken
+                        huggingFaceToken: context.huggingFaceToken,
+                        serverBaseURL: appModel?.settings.serverBaseURL
                     )
                     try Task.checkCancellation()
                     guard self?.imageModelSelectionRequests[toolMessageID]?.operation

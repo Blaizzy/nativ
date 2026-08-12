@@ -4,6 +4,7 @@ public enum NativImageError: Error, LocalizedError, CustomStringConvertible {
     case invalidResponse
     case httpStatus(Int, String)
     case missingImageData
+    case editingUnsupported(String)
 
     public var description: String {
         switch self {
@@ -17,6 +18,10 @@ public enum NativImageError: Error, LocalizedError, CustomStringConvertible {
             )
         case .missingImageData:
             return "Image response did not include image data"
+        case .editingUnsupported(let model):
+            return "\(model) does not support image editing with reference images. "
+                + "Switch to a model that supports editing (for example a FLUX.2 model), "
+                + "or remove the reference image and generate from a prompt."
         }
     }
 

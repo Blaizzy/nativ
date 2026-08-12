@@ -1,4 +1,5 @@
 import Foundation
+import NativServerKit
 
 extension Notification.Name {
     static let localModelLibraryDidChange = Notification.Name("LocalModelLibraryDidChange")
@@ -261,7 +262,9 @@ struct LocalModelMemoryEstimate: Equatable, Sendable {
                 fromByteCount: Int64(clamping: activationReserveBytes),
                 countStyle: .memory
             )
-            return "Estimated weights: \(estimated), plus ~\(reserve) peak activation for image generation. Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
+            return "Estimated weights: \(estimated), plus ~\(reserve) peak activation "
+                + "for image generation. Usable budget: \(budget) of \(total) unified memory, "
+                + "reserving \(headroomPercent)% for KV cache and runtime headroom."
         }
         return "Estimated model memory: \(estimated). Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
     }
@@ -1630,16 +1633,28 @@ final class LocalModelLibrary: ObservableObject {
         scanTask?.cancel()
     }
 
-    func scan(searchPaths: LocalModelSearchPaths) {
+    func scan(searchPaths: LocalModelSearchPaths, serverBaseURL: URL? = nil) {
         scanTask?.cancel()
         isScanning = true
         error = nil
 
         scanTask = Task { [weak self] in
             do {
-                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+                let scanned = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
                 guard !Task.isCancelled else {
                     return
+                }
+                let models: [LocalModel]
+                if let serverBaseURL {
+                    // mlx-vlm is the source of truth for image capabilities:
+                    // overlay its /v1/models answer onto local flags when the
+                    // server is reachable; otherwise keep local heuristics.
+                    let server = await MLXServerModelCapabilities.fetch(baseURL: serverBaseURL)
+                    models = scanned.map {
+                        $0.overlaying(serverCapabilities: server.byModelID)
+                    }
+                } else {
+                    models = scanned
                 }
                 self?.models = models
                 self?.error = nil

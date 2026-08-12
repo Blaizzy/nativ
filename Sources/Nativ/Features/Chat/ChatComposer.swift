@@ -238,10 +238,16 @@ struct ChatComposer: View {
         }
         .padding(.vertical, 18)
         .task(id: modelScanKey) {
-            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
+            localLibrary.scan(
+                searchPaths: model.settings.localModelSearchPaths,
+                serverBaseURL: model.settings.serverBaseURL
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
-            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
+            localLibrary.scan(
+                searchPaths: model.settings.localModelSearchPaths,
+                serverBaseURL: model.settings.serverBaseURL
+            )
         }
         .onChange(of: localLibrary.models) { _, models in
             disableThinkingIfUnsupported(modelID: selectedModelID, models: models)

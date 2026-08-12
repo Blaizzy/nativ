@@ -32,6 +32,7 @@ OVERLAY_SERVER = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py"
 IMAGE_MODEL_MANIFEST_GENERATOR = Path(__file__).with_name(
     "generate_image_model_manifest.py"
 )
+
 DEFAULT_PYTHON_VERSION = "3.12.13"
 DEFAULT_PBS_RELEASE = "20260508"
 DEFAULT_PBS_ASSET = (
