@@ -3581,7 +3581,7 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
 private extension Color {
     static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark ? NSColor.black : NSColor(white: 0.86, alpha: 1)
+        return isDark ? NSColor(white: 0.5, alpha: 1) : NSColor(white: 0.25, alpha: 1)
     })
 }
 
