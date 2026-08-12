@@ -353,6 +353,32 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         )
         XCTAssertTrue(tap(&state, shortcut: shortcut))
     }
+
+    func testPartialReleaseCannotRearmFromStaleModifierSample() {
+        var state = VoiceModifierToggleShortcutState()
+        let shortcut: VoiceShortcutModifiers = [.function, .control]
+
+        XCTAssertFalse(
+            state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(
+            state.update(activeModifiers: [.function], shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(state.isAwaitingFullRelease)
+
+        // A polling sample can briefly report the old fully-held state after
+        // the release event. It must not arm a second toggle.
+        XCTAssertFalse(
+            state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        )
+        XCTAssertFalse(state.isHeld)
+
+        XCTAssertFalse(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut)
+        )
+        XCTAssertFalse(state.isAwaitingFullRelease)
+        XCTAssertTrue(tap(&state, shortcut: shortcut))
+    }
 }
 
 final class PushToTalkHoldStateTests: XCTestCase {

@@ -47,6 +47,7 @@ private struct HubSearchTaskID: Hashable {
     let section: ModelsPageSection
     let query: String
     let sort: HuggingFaceModelSort
+    let direction: HuggingFaceSortDirection
     let capabilities: Set<LocalModelCapability>
     let access: HubAccessFilter
     let authenticationToken: String?
@@ -194,7 +195,8 @@ struct ModelsView: View {
     @State private var typeFilter: ModelsTypeFilter = .all
     @State private var localQuery = ""
     @State private var hubQuery = ""
-    @State private var hubSort: HuggingFaceModelSort = .downloads
+    @State private var hubSort: HuggingFaceModelSort = .trending
+    @State private var hubSortDirection: HuggingFaceSortDirection = .descending
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
@@ -272,6 +274,7 @@ struct ModelsView: View {
             hubLibrary.search(
                 query: hubQuery,
                 sort: hubSort,
+                direction: hubSortDirection,
                 capabilities: hubCapabilityFilters,
                 predicate: hubVisibilityPredicate,
                 token: modelState.effectiveHuggingFaceToken
@@ -801,6 +804,7 @@ struct ModelsView: View {
     private var discoverFilterBar: some View {
         HStack(spacing: 12) {
             hubSortPicker
+            hubSortDirectionPicker
             hubCapabilityPicker
             hubAccessPicker
             Spacer(minLength: 8)
@@ -814,6 +818,17 @@ struct ModelsView: View {
             ForEach(HuggingFaceModelSort.allCases) { sort in
                 Label(sort.displayName, systemImage: sort.systemImage)
                     .tag(sort)
+            }
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
+    }
+
+    private var hubSortDirectionPicker: some View {
+        Picker("Order", selection: $hubSortDirection) {
+            ForEach(HuggingFaceSortDirection.allCases) { direction in
+                Label(direction.displayName, systemImage: direction.systemImage)
+                    .tag(direction)
             }
         }
         .pickerStyle(.menu)
@@ -837,14 +852,22 @@ struct ModelsView: View {
 
                 Divider()
 
-                ForEach(
-                    LocalModelCapability.visibleModelTags.filter { $0 != .embeddings },
-                    id: \.self
-                ) { capability in
-                    Toggle(
-                        capability.displayName,
-                        isOn: capabilitySelectionBinding(for: capability)
-                    )
+                Section("Tasks") {
+                    ForEach(LocalModelCapability.discoverTaskFilters, id: \.self) { capability in
+                        Toggle(
+                            capability.displayName,
+                            isOn: capabilitySelectionBinding(for: capability)
+                        )
+                    }
+                }
+
+                Section("Features") {
+                    ForEach(LocalModelCapability.discoverFeatureFilters, id: \.self) { capability in
+                        Toggle(
+                            capability.displayName,
+                            isOn: capabilitySelectionBinding(for: capability)
+                        )
+                    }
                 }
             } label: {
                 Text(capabilityFilterTitle)
@@ -900,25 +923,9 @@ struct ModelsView: View {
 
     private var discoverResultsHeader: some View {
         HStack(spacing: 12) {
-            discoverResultsTitle
             Spacer(minLength: 8)
-            discoverSortStatus
             openHubLink
         }
-    }
-
-    private var discoverResultsTitle: some View {
-        Text(hubQuery.isEmpty ? "Safetensors models on Hugging Face" : "Search results")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .fixedSize()
-    }
-
-    private var discoverSortStatus: some View {
-        Label("Sorted by \(hubSort.displayName.lowercased())", systemImage: hubSort.systemImage)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize()
     }
 
     private var openHubLink: some View {
@@ -933,9 +940,13 @@ struct ModelsView: View {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
         return { hubModel in
-            let matchesCapability = capabilities.allSatisfy {
-                hubModel.capabilities.contains($0)
-            }
+            // Search results are already restricted to the Hub's SafeTensors
+            // index. Mixed repositories remain visible; the downloader skips
+            // any optional GGUF files they also contain.
+            let matchesCapability = HuggingFaceCapabilityFilter.matches(
+                hubModel,
+                capabilities: capabilities
+            )
             let matchesAccess: Bool
             switch access {
             case .all:
@@ -1021,6 +1032,7 @@ struct ModelsView: View {
             section: renderedSection,
             query: hubQuery,
             sort: hubSort,
+            direction: hubSortDirection,
             capabilities: hubCapabilityFilters,
             access: hubAccessFilter,
             authenticationToken: modelState.effectiveHuggingFaceToken
@@ -1423,12 +1435,33 @@ private struct ActiveDownloadBannerRow: View {
     }
 
     private var statusText: String {
-        switch download.state {
-        case .downloading:
-            "Downloading… \(Int((download.progress * 100).rounded()))%"
-        case .paused:
+        if download.state == .paused {
             "Download paused"
+        } else if ModelDownloadProgressPresentation.isFinalizing(download.progress) {
+            "Finalizing download…"
+        } else {
+            switch download.phase {
+            case .preparing:
+                "Preparing download…"
+            case .downloading:
+                downloadingStatusText
+            case .finalizing:
+                "Finalizing download…"
+            case .retrying:
+                "Connection stalled. Retrying…"
+            }
         }
+    }
+
+    private var downloadingStatusText: String {
+        var details: [String] = []
+        if download.progress > 0 {
+            details.append("\(ModelDownloadProgressPresentation.activePercentage(download.progress))%")
+        }
+        if let speed = ModelDownloadProgressPresentation.formattedSpeed(download.bytesPerSecond) {
+            details.append(speed)
+        }
+        return details.isEmpty ? "Starting download…" : "Downloading… \(details.joined(separator: " · "))"
     }
 }
 
@@ -1458,6 +1491,15 @@ private struct ActiveDownloadBannerView: View {
     }
 }
 
+private struct HubModelMemoryFitWarning: Equatable {
+    let title: String
+    let message: String
+
+    var accessibilityText: String {
+        "\(title). \(message)"
+    }
+}
+
 private struct HubModelRow: View, Equatable {
     let model: HuggingFaceModel
     let downloadSizeBytes: Int64?
@@ -1482,9 +1524,20 @@ private struct HubModelRow: View, Equatable {
             && lhs.downloadError == rhs.downloadError
     }
 
-    private var memoryFitWarning: String? {
+    private var memoryFitWarning: HubModelMemoryFitWarning? {
         if let estimate = model.memoryEstimate, !estimate.isUsable {
-            return "Pre-download estimate. \(estimate.explanation)"
+            let required = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: estimate.workingSetBytes),
+                countStyle: .memory
+            )
+            let total = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: estimate.totalMemoryBytes),
+                countStyle: .memory
+            )
+            return HubModelMemoryFitWarning(
+                title: "May not fit in memory",
+                message: "Needs about \(required); this Mac has \(total). Try a smaller or quantized model."
+            )
         }
         if let sizeBytes = model.sizeBytes, sizeBytes > 0 {
             let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
@@ -1493,7 +1546,10 @@ private struct HubModelRow: View, Equatable {
                 let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .memory)
                 let total = ByteCountFormatter.string(
                     fromByteCount: Int64(clamping: totalMemoryBytes), countStyle: .memory)
-                return "Pre-download estimate. Model weights are ~\(size), larger than your \(total) of unified memory."
+                return HubModelMemoryFitWarning(
+                    title: "May not fit in memory",
+                    message: "About \(size) of model data; this Mac has \(total) of memory. Try a smaller or quantized model."
+                )
             }
         }
         return nil
@@ -1534,16 +1590,7 @@ private struct HubModelRow: View, Equatable {
                             )
                         }
                         if let memoryFitWarning {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(Color.red)
-                                )
-                                .help(memoryFitWarning)
+                            HubModelMemoryWarningBadge(warning: memoryFitWarning)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1602,6 +1649,67 @@ private struct HubModelRow: View, Equatable {
         return model.isGated
             ? "Gated models require Hugging Face authentication."
             : "Download to the configured cache"
+    }
+}
+
+private struct HubModelMemoryWarningBadge: View {
+    let warning: HubModelMemoryFitWarning
+
+    @State private var isTooltipPresented = false
+    @State private var pendingTooltip: Task<Void, Never>?
+
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.red)
+            )
+            .contentShape(Rectangle())
+            .onHover(perform: handleHover)
+            .popover(isPresented: $isTooltipPresented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(warning.title, systemImage: "memorychip")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text(warning.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(width: 230, alignment: .leading)
+                .padding(10)
+            }
+            .accessibilityLabel("Memory warning")
+            .accessibilityValue(warning.accessibilityText)
+            .onDisappear {
+                pendingTooltip?.cancel()
+                pendingTooltip = nil
+                isTooltipPresented = false
+            }
+    }
+
+    private func handleHover(_ isHovering: Bool) {
+        pendingTooltip?.cancel()
+        pendingTooltip = nil
+
+        guard isHovering else {
+            isTooltipPresented = false
+            return
+        }
+
+        pendingTooltip = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(80))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            isTooltipPresented = true
+        }
     }
 }
 
@@ -1753,28 +1861,7 @@ struct ModelDownloadProgressControl: View {
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
-                ZStack {
-                    Circle()
-                        .stroke(Color.secondary.opacity(0.16), lineWidth: 3)
-
-                    Circle()
-                        .trim(from: 0, to: displayedProgress)
-                        .stroke(
-                            isPaused ? Color.orange : Color.accentColor,
-                            style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-
-                    if progress > 0 {
-                        Text("\(Int((progress * 100).rounded()))%")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                    } else {
-                        Image(systemName: isPaused ? "pause.fill" : "arrow.down")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                }
-                .frame(width: 34, height: 34)
+                progressRing
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
@@ -1784,11 +1871,13 @@ struct ModelDownloadProgressControl: View {
         .animation(.snappy(duration: 0.16), value: isHovering)
         .animation(.easeOut(duration: 0.18), value: displayedProgress)
         .help(
-            isPaused ? "Download paused" : "Downloading \(Int((progress * 100).rounded())) percent"
+            progressDescription
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(isPaused ? "Download paused" : "Download progress")
-        .accessibilityValue("\(Int((progress * 100).rounded())) percent")
+        .accessibilityLabel(progressDescription)
+        .accessibilityValue(
+            "\(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
+        )
         .alert("Remove download?", isPresented: $isConfirmingRemoval) {
             Button("Remove Download", role: .destructive, action: onRemove)
                 .keyboardShortcut(.defaultAction)
@@ -1799,7 +1888,42 @@ struct ModelDownloadProgressControl: View {
     }
 
     private var displayedProgress: Double {
-        min(max(progress, 0.025), 1)
+        ModelDownloadProgressPresentation.ringProgress(progress)
+    }
+
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.16), lineWidth: 3)
+
+            Circle()
+                .trim(from: 0, to: displayedProgress)
+                .stroke(
+                    isPaused ? Color.orange : Color.accentColor,
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+
+            if progress > 0 {
+                Text("\(ModelDownloadProgressPresentation.activePercentage(progress))%")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            } else {
+                Image(systemName: isPaused ? "pause.fill" : "arrow.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+        }
+        .frame(width: 34, height: 34)
+    }
+
+    private var progressDescription: String {
+        if isPaused {
+            return "Download paused"
+        }
+        if ModelDownloadProgressPresentation.isFinalizing(progress) {
+            return "Finalizing download"
+        }
+        return "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
     }
 }
 
@@ -2042,6 +2166,24 @@ extension View {
 extension LocalModelCapability {
     fileprivate static let visibleModelTags = allCases.filter { $0 != .text }
 
+    fileprivate static let discoverTaskFilters: [Self] = [
+        .text,
+        .vision,
+        .audio,
+        .video,
+        .imageGeneration,
+        .imageEditing,
+        .speechToText,
+        .textToSpeech,
+        .embeddings,
+    ]
+
+    fileprivate static let discoverFeatureFilters: [Self] = [
+        .reasoning,
+        .tools,
+        .drafter,
+    ]
+
     fileprivate var hubQueryItem: URLQueryItem {
         switch self {
         case .text:
@@ -2067,7 +2209,7 @@ extension LocalModelCapability {
         case .tools:
             URLQueryItem(name: "other", value: "tool-calling")
         case .drafter:
-            URLQueryItem(name: "other", value: "speculative-decoding")
+            URLQueryItem(name: "other", value: "draft-model")
         }
     }
 
@@ -2129,6 +2271,20 @@ extension LocalModelProvider {
         case .liquidAI:
             .primary
         case .zAI:
+            .primary
+        case .inclusionAI:
+            .primary
+        case .miniMax:
+            .primary
+        case .baidu:
+            .primary
+        case .moonshotAI:
+            .primary
+        case .stabilityAI:
+            .primary
+        case .thinkingMachines:
+            .primary
+        case .meituanLongCat:
             .primary
         }
     }

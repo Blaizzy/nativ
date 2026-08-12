@@ -449,6 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
+        HuggingFaceDownloadManager.shared.shutdown()
         extensionManager.shutdown()
         runtime.onUpdate = nil
         systemMenuBarPreferences.onChange = nil
