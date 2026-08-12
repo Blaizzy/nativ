@@ -517,6 +517,20 @@ struct ControlPanelView: View {
             Color.clear
                 .frame(height: ControlPanelLayout.titlebarHeight)
 
+            HStack(spacing: 6) {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 24, height: 24)
+
+                Text("Nativ")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 40)
+            .padding(.horizontal, 16)
+
             sidebarNavigation
                 .padding(.horizontal, 10)
                 .padding(.bottom, 5)
