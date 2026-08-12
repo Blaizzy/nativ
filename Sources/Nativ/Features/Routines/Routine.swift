@@ -213,7 +213,7 @@ struct Routine: Codable, Identifiable, Equatable, Sendable {
         schedule: RoutineSchedule = RoutineSchedule(),
         capabilities: [ScheduledCapability] = [],
         isEnabled: Bool = true,
-        notifyOnFinish: Bool = true,
+        notifyOnFinish: Bool = false,
         createdAt: Date = Date(),
         sourceSessionID: UUID? = nil
     ) {
@@ -254,7 +254,7 @@ struct Routine: Codable, Identifiable, Equatable, Sendable {
             capabilities = []
         }
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
-        notifyOnFinish = try container.decodeIfPresent(Bool.self, forKey: .notifyOnFinish) ?? true
+        notifyOnFinish = try container.decodeIfPresent(Bool.self, forKey: .notifyOnFinish) ?? false
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         sourceSessionID = try container.decodeIfPresent(UUID.self, forKey: .sourceSessionID)
     }

@@ -1,3 +1,4 @@
+import AppKit
 import NativServerKit
 import SwiftUI
 
@@ -7,6 +8,7 @@ struct RoutineEditor: View {
     let toolCapableModelIDs: Set<String>
     @ObservedObject var model: NativModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject private var notifications = NativNotificationService.shared
     let isExistingTask: Bool
     let onSave: (Routine) -> Void
     let onCancel: () -> Void
@@ -288,9 +290,7 @@ struct RoutineEditor: View {
                     field("Tools") {
                         capabilitySelection
                     }
-                    box {
-                        Toggle("Notify me when this scheduled task finishes", isOn: $notifyOnFinish)
-                    }
+                    notificationPreference
                 }
                 .padding(20)
             }
@@ -320,7 +320,77 @@ struct RoutineEditor: View {
                 selection: $capabilities
             )
         }
+        .onAppear {
+            notifications.refreshAuthorizationStatus()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in
+            notifications.refreshAuthorizationStatus()
+        }
         .onExitCommand(perform: onCancel)
+    }
+
+    private var notificationPreference: some View {
+        box {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle(
+                    "Notify me when this scheduled task finishes",
+                    isOn: $notifyOnFinish
+                )
+                .disabled(!notifications.isAuthorized)
+
+                if notifications.authorizationStatus != .authorized {
+                    Divider()
+
+                    HStack(spacing: 12) {
+                        Label(notificationPermissionMessage, systemImage: "bell.badge")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+                        notificationPermissionControl
+                    }
+                }
+            }
+        }
+    }
+
+    private var notificationPermissionMessage: String {
+        switch notifications.authorizationStatus {
+        case .unknown:
+            "Checking notification access…"
+        case .notDetermined:
+            "Allow notifications to receive completion alerts."
+        case .denied:
+            "Notifications are blocked in System Settings."
+        case .authorized:
+            ""
+        }
+    }
+
+    @ViewBuilder
+    private var notificationPermissionControl: some View {
+        switch notifications.authorizationStatus {
+        case .unknown:
+            ProgressView()
+                .controlSize(.small)
+        case .notDetermined:
+            Button(notifications.isRequestingAuthorization ? "Requesting…" : "Allow") {
+                notifications.requestAuthorization()
+            }
+            .controlSize(.small)
+            .disabled(notifications.isRequestingAuthorization)
+        case .denied:
+            Button("Open Settings…") {
+                notifications.openSystemSettings()
+            }
+            .controlSize(.small)
+        case .authorized:
+            EmptyView()
+        }
     }
 
     @ViewBuilder

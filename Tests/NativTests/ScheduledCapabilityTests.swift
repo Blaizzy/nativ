@@ -3,6 +3,16 @@ import Testing
 
 @Suite("Scheduled capabilities")
 struct ScheduledCapabilityTests {
+    @Test("Scheduled task notifications are opt-in")
+    func notificationsAreOptIn() throws {
+        #expect(Routine().notifyOnFinish == false)
+
+        let json = #"{ "id": "scheduled-1" }"#
+        let decoded = try JSONDecoder().decode(Routine.self, from: Data(json.utf8))
+
+        #expect(decoded.notifyOnFinish == false)
+    }
+
     @Test("Capability selections survive persistence")
     func roundTrip() throws {
         let serverID = UUID()
@@ -78,6 +88,7 @@ struct ScheduledCapabilityTests {
         let decoded = try JSONDecoder().decode(Routine.self, from: Data(json.utf8))
 
         #expect(decoded.capabilities == [.kit("engineering")])
+        #expect(decoded.notifyOnFinish)
     }
 
     @Test("New persistence no longer writes the legacy kit field")

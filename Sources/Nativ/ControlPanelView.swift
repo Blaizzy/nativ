@@ -58,6 +58,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
 final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var requestedTab: ControlPanelTab?
     @Published private(set) var requestedExtensionPageID: String?
+    @Published private(set) var requestedChatSessionID: UUID?
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
@@ -70,7 +71,14 @@ final class ControlPanelNavigation: ObservableObject {
 
     func open(_ tab: ControlPanelTab) {
         requestedExtensionPageID = nil
+        requestedChatSessionID = nil
         requestedTab = tab
+    }
+
+    func openChatSession(_ sessionID: UUID) {
+        requestedTab = nil
+        requestedExtensionPageID = nil
+        requestedChatSessionID = sessionID
     }
 
     func openExtensionPage(_ pageID: String) {
@@ -462,6 +470,11 @@ struct ControlPanelView: View {
         .onReceive(navigation.$requestedExtensionPageID) { pageID in
             guard let pageID else { return }
             applySidebarSelection(.extensionPage(pageID))
+        }
+        .onReceive(navigation.$requestedChatSessionID) { sessionID in
+            guard let sessionID else { return }
+            chat.reloadPersistedSessions()
+            applySidebarSelection(.chat(sessionID))
         }
         .onChange(of: extensionManager.records) { _, _ in
             guard case .extensionPage(let pageID) = sidebarSelection,

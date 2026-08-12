@@ -340,7 +340,8 @@ private final class ModelMenuSectionHeaderView: NSView {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
+    @preconcurrency UNUserNotificationCenterDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()
@@ -582,13 +583,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     private func setUpRoutines() {
         RoutineRunCoordinator.shared.configure(runner: routineRunner)
-        routineRunner.onRunCompleted = { [weak self] routine, run in
-            self?.postRoutineNotification(routine: routine, run: run)
+        routineRunner.onRunCompleted = { routine, run in
+            Task { @MainActor in
+                guard routine.notifyOnFinish else { return }
+                await NativNotificationService.shared.deliver(
+                    .scheduledTaskCompletion(routine: routine, run: run)
+                )
+            }
         }
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(
-            options: [.alert, .sound]
-        ) { _, _ in }
         routineStore.onRoutinesChanged = { [weak self] in
             self?.refreshRoutineAgents()
         }
@@ -598,23 +601,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     private func refreshRoutineAgents() {
         RoutineLaunchAgent.refresh(routines: routineStore.routines)
-    }
-
-    private func postRoutineNotification(routine: Routine, run: RoutineRun) {
-        guard routine.notifyOnFinish else {
-            return
-        }
-        let content = UNMutableNotificationContent()
-        content.title = routine.name.isEmpty ? "Scheduled" : routine.name
-        content.body = run.status == .failed
-            ? "Run failed. \(run.resultSummary)"
-            : (run.resultSummary.isEmpty ? "Run finished." : run.resultSummary)
-        if let sessionID = run.sessionID {
-            content.userInfo = ["sessionID": sessionID.uuidString]
-        }
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: run.id, content: content, trigger: nil)
-        )
     }
 
     func userNotificationCenter(
@@ -630,8 +616,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let sessionID = (response.notification.request.content.userInfo["sessionID"] as? String)
+            .flatMap(UUID.init(uuidString:))
         DispatchQueue.main.async { [weak self] in
-            self?.controlPanelNavigation.open(.chat)
+            if let sessionID {
+                self?.controlPanelNavigation.openChatSession(sessionID)
+            } else {
+                self?.controlPanelNavigation.open(.chat)
+            }
             self?.showMainWindow()
         }
         completionHandler()

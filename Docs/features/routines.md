@@ -24,8 +24,8 @@ Removing a scheduled chat cancels its task; editing the task offers removal that
 ## Schedule
 
 Runs are delivered at the configured time and weekdays by a per-task launchd agent that launches a
-headless run. A disabled task does not run. A finished run can post a completion notification when
-enabled.
+headless run. A disabled task does not run. Completion notifications are opt-in per task and are
+delivered only after the user grants notification access in Nativ or System Settings.
 
 ## Capabilities
 
