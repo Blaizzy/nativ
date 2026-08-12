@@ -124,7 +124,10 @@ private struct ChatTranscriptView: View {
                         ChatEmptyTranscriptView(
                             isRunning: model.isRunning,
                             selectedModelID: selectedModelID,
-                            modelLoadingProgress: model.isModelLoading ? model.modelLoadingProgress : nil
+                            loadedModelID: model.metrics?.server.loadedModel,
+                            isModelLoading: model.isModelLoading,
+                            modelLoadingProgress: model.isModelLoading ? model.modelLoadingProgress : nil,
+                            modelLoadFailure: model.modelLoadFailure
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 120)
@@ -3530,32 +3533,18 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
     }
 }
 
-private extension Color {
-    static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark ? NSColor.black : NSColor(white: 0.86, alpha: 1)
-    })
-}
-
 private struct ChatEmptyTranscriptView: View {
     let isRunning: Bool
     let selectedModelID: String?
+    let loadedModelID: String?
+    let isModelLoading: Bool
     let modelLoadingProgress: Double?
+    let modelLoadFailure: ModelLoadFailure?
 
     var body: some View {
         VStack(spacing: 16) {
-            Image("NativMark")
-                .resizable()
-                .renderingMode(.template)
-                .scaledToFit()
-                .frame(width: 64)
-                .foregroundStyle(Color.nativMark)
-
-            if let modelLoadingProgress {
-                ProgressView(value: modelLoadingProgress)
-                    .progressViewStyle(.linear)
-                    .frame(width: 180)
-            }
+            NativProgressMark(phase: markPhase)
+                .frame(height: 64)
 
             VStack(spacing: 7) {
                 Text(title)
@@ -3563,35 +3552,90 @@ private struct ChatEmptyTranscriptView: View {
                 Text(detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .frame(maxWidth: 420)
             }
         }
     }
 
-    private var title: String {
-        if modelLoadingProgress != nil {
-            return "Loading model"
+    private var markPhase: NativProgressMark.Phase {
+        guard isRunning else {
+            return .hidden
         }
+        if isModelLoading {
+            return .loading(modelLoadingProgress)
+        }
+        guard selectedModelLoadFailure == nil,
+              let selectedModelID,
+              selectedModelID == loadedModelID
+        else {
+            return .hidden
+        }
+        return .ready
+    }
+
+    private var title: String {
         if !isRunning {
             return "Server is stopped"
         }
+        if isModelLoading {
+            return "Loading model"
+        }
+        if let selectedModelLoadFailure {
+            return selectedModelLoadFailure.title
+        }
         if selectedModelID == nil {
             return "No model selected"
+        }
+        if selectedModelID != loadedModelID {
+            return "No model loaded"
         }
         return "No messages"
     }
 
     private var detail: String {
-        if let modelLoadingProgress {
-            let percentage = Int((modelLoadingProgress * 100).rounded())
-            return "\(selectedModelID ?? "Model") · \(percentage)%"
-        }
         if !isRunning {
             return "Start the server to chat."
+        }
+        if isModelLoading {
+            guard let percentage = normalizedLoadingPercentage else {
+                return "\(selectedModelDisplayName) · Preparing…"
+            }
+            return "\(selectedModelDisplayName) · \(percentage)%"
+        }
+        if let selectedModelLoadFailure {
+            return selectedModelLoadFailure.message
         }
         if selectedModelID == nil {
             return "Choose a model in Models."
         }
+        if selectedModelID != loadedModelID {
+            return "Load the selected model to chat."
+        }
         return selectedModelID ?? ""
+    }
+
+    private var selectedModelLoadFailure: ModelLoadFailure? {
+        guard let modelLoadFailure else {
+            return nil
+        }
+        guard let failedModelID = modelLoadFailure.modelID else {
+            return modelLoadFailure
+        }
+        return failedModelID == selectedModelID ? modelLoadFailure : nil
+    }
+
+    private var normalizedLoadingPercentage: Int? {
+        guard let modelLoadingProgress, modelLoadingProgress.isFinite else {
+            return nil
+        }
+        let normalizedProgress = min(max(modelLoadingProgress, 0), 1)
+        return Int((normalizedProgress * 100).rounded())
+    }
+
+    private var selectedModelDisplayName: String {
+        selectedModelID?.split(separator: "/").last.map(String.init) ?? "Model"
     }
 }
 

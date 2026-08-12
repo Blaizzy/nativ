@@ -923,7 +923,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
             let rawValue = line[markerRange.upperBound...]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let value = Double(rawValue) {
+            if let value = Double(rawValue), value.isFinite {
                 modelLoadingProgress = min(max(value, 0), 1)
                 if menuIsOpen {
                     notifyMenuStateChanged()
