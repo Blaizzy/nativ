@@ -106,4 +106,30 @@ final class LocalModelCapabilityOverlayTests: XCTestCase {
         )
         XCTAssertEqual(overlay.capabilities, [.imageGeneration])
     }
+
+    func testServerAdoptsToolCallingFlag() {
+        // Server reports a tool-capable LM: .tools is adopted alongside the
+        // image pair being replaced.
+        let local = model(
+            repoID: "org/qwen2",
+            capabilities: [.text, .tools]
+        )
+        let overlay = local.overlaying(
+            serverCapabilities: ["org/qwen2": ["text_generation", "tools"]]
+        )
+        XCTAssertEqual(overlay.capabilities, [.text, .tools])
+    }
+
+    func testServerTruthRemovesLocallyDerivedTools() {
+        // Local heuristic flagged tool calling, but the server's marker scan
+        // found no tool template: server truth wins and .tools is removed.
+        let local = model(
+            repoID: "org/llama",
+            capabilities: [.text, .tools]
+        )
+        let overlay = local.overlaying(
+            serverCapabilities: ["org/llama": ["text_generation"]]
+        )
+        XCTAssertEqual(overlay.capabilities, [.text])
+    }
 }

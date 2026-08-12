@@ -1,9 +1,9 @@
 import Foundation
 
 extension LocalModel {
-    /// Replaces locally-derived image capabilities with server-reported
-    /// truth when the bundled mlx-vlm server reported a capability set for
-    /// this model (mlx-vlm is the source of truth for image capabilities).
+    /// Replaces locally-derived image and tool-calling capabilities with
+    /// server-reported truth when the bundled mlx-vlm server reported a
+    /// capability set for this model (mlx-vlm is the source of truth).
     /// Matching is by repo id or snapshot path; unknown server id tokens are
     /// ignored and local flags for unrelated capabilities are preserved.
     func overlaying(serverCapabilities: [String: Set<String>]) -> LocalModel {
@@ -17,11 +17,15 @@ extension LocalModel {
         var caps = capabilities
         caps.remove(.imageGeneration)
         caps.remove(.imageEditing)
+        caps.remove(.tools)
         if serverSet.contains("image_generation") {
             caps.insert(.imageGeneration)
         }
         if serverSet.contains("image_editing") {
             caps.insert(.imageEditing)
+        }
+        if serverSet.contains("tools") {
+            caps.insert(.tools)
         }
         return LocalModel(
             repoID: repoID,
