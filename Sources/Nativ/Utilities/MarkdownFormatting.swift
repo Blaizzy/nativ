@@ -36,6 +36,42 @@ enum NativMarkdownFormatting {
         return normalizedLines.joined(separator: "\n")
     }
 
+    static func streamingMarkdown(of markdown: String) -> String {
+        guard !markdown.isEmpty else {
+            return markdown
+        }
+
+        let lines = markdown.components(separatedBy: "\n")
+        var activeFence: CodeFence?
+        var fenceOpenedAtLine: Int?
+
+        for (offset, line) in lines.enumerated() {
+            if let fence = activeFence {
+                if isClosingFence(line, for: fence) {
+                    activeFence = nil
+                    fenceOpenedAtLine = nil
+                }
+                continue
+            }
+            if let openingFence = codeFence(in: line) {
+                activeFence = openingFence
+                fenceOpenedAtLine = offset
+            }
+        }
+
+        guard let fence = activeFence, let openedAt = fenceOpenedAtLine else {
+            return markdown
+        }
+
+        let bodyLines = lines[lines.index(after: openedAt)...]
+        guard bodyLines.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+        else {
+            return lines.prefix(openedAt).joined(separator: "\n")
+        }
+
+        return markdown + "\n" + String(repeating: String(fence.marker), count: fence.length)
+    }
+
     private struct CodeFence {
         let marker: Character
         let length: Int
