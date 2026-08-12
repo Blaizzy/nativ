@@ -183,8 +183,6 @@ struct SettingsView: View {
                 .font(.headline)
 
             NativPermissionsCard(store: permissions)
-
-            NativPermissionsSummary(store: permissions)
         }
         .onAppear {
             permissions.refresh()

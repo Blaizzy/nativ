@@ -421,7 +421,7 @@ private struct HuggingFaceHubClient: Sendable {
         }
     }
 
-    func model(id: String, token: String?) async throws -> HuggingFaceModel {
+    func modelData(id: String, token: String?) async throws -> Data {
         var components = URLComponents()
         components.scheme = "https"
         components.host = "huggingface.co"
@@ -447,7 +447,7 @@ private struct HuggingFaceHubClient: Sendable {
             let message = (try? JSONDecoder().decode(HubErrorPayload.self, from: data))?.error ?? ""
             throw HuggingFaceHubError.requestFailed(httpResponse.statusCode, message)
         }
-        return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
+        return data
     }
 
     func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
@@ -492,6 +492,74 @@ private struct HuggingFaceHubClient: Sendable {
 private struct HuggingFaceModelPage: Sendable {
     let models: [HuggingFaceModel]
     let nextPageURL: URL?
+}
+
+struct HuggingFaceCuratedModelLoader: Sendable {
+    typealias FetchModelData = @Sendable (String) async -> Data?
+
+    private let maximumConcurrentRequests: Int
+    private let fetchModelData: FetchModelData
+
+    init(
+        maximumConcurrentRequests: Int = 4,
+        fetchModelData: @escaping FetchModelData
+    ) {
+        precondition(maximumConcurrentRequests > 0)
+        self.maximumConcurrentRequests = maximumConcurrentRequests
+        self.fetchModelData = fetchModelData
+    }
+
+    func load(ids: [String]) async -> [HuggingFaceModel] {
+        let payloads = await fetchPayloads(ids: ids)
+        guard !Task.isCancelled else {
+            return []
+        }
+
+        // Model decoding derives memory metadata and compiles model-name regexes.
+        // Keep it sequential while allowing the network requests to overlap.
+        let decoder = JSONDecoder()
+        return ids.compactMap { id in
+            guard let data = payloads[id] else {
+                return nil
+            }
+            return try? decoder.decode(HuggingFaceModel.self, from: data)
+        }
+    }
+
+    private func fetchPayloads(ids: [String]) async -> [String: Data] {
+        let fetchModelData = self.fetchModelData
+        return await withTaskGroup(
+            of: (String, Data?).self,
+            returning: [String: Data].self
+        ) { group in
+            var iterator = ids.makeIterator()
+            var payloads: [String: Data] = [:]
+            let initialRequestCount = min(maximumConcurrentRequests, ids.count)
+
+            for _ in 0..<initialRequestCount {
+                guard let id = iterator.next() else { break }
+                group.addTask {
+                    (id, await fetchModelData(id))
+                }
+            }
+
+            while let (id, data) = await group.next() {
+                if let data {
+                    payloads[id] = data
+                }
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    break
+                }
+                if let nextID = iterator.next() {
+                    group.addTask {
+                        (nextID, await fetchModelData(nextID))
+                    }
+                }
+            }
+            return payloads
+        }
+    }
 }
 
 enum HuggingFaceModelCatalog {
@@ -595,24 +663,12 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
         searchTask = Task { [weak self] in
             guard let self else { return }
-            var fetched: [String: HuggingFaceModel] = [:]
-            await withTaskGroup(of: (String, HuggingFaceModel?).self) { group in
-                let client = self.client
-                for id in ids {
-                    group.addTask {
-                        do {
-                            return (id, try await client.model(id: id, token: token))
-                        } catch {
-                            return (id, nil)
-                        }
-                    }
-                }
-                for await (id, model) in group where model != nil {
-                    fetched[id] = model
-                }
+            let client = self.client
+            let loader = HuggingFaceCuratedModelLoader { id in
+                try? await client.modelData(id: id, token: token)
             }
+            let ordered = await loader.load(ids: ids)
             guard !Task.isCancelled else { return }
-            let ordered = ids.compactMap { fetched[$0] }
             self.buffer = ordered
             self.models = ordered
             self.error = ordered.isEmpty

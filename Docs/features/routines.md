@@ -18,8 +18,6 @@ an enabled flag — see [`Routine`](../../Sources/Nativ/Features/Routines/Routin
 
 - **New routine** from the sidebar creation menu opens the editor and, on save, creates the
   routine's chat.
-- **Make recurring** from an existing chat prefills a routine from that chat's last prompt, model,
-  and title.
 
 Removing a routine chat cancels its routine; editing a routine offers removal that keeps the chat.
 

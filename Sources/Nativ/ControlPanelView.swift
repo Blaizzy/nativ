@@ -1580,8 +1580,8 @@ struct ControlPanelView: View {
             onTogglePin: {
                 togglePinRecent(recent)
             },
-            onScheduleRoutine: {
-                scheduleRoutine(from: recent)
+            onEditRoutine: {
+                editRoutine(for: recent)
             },
             folders: chat.folders,
             onMoveToFolder: { folderID in
@@ -1612,34 +1612,16 @@ struct ControlPanelView: View {
         return routine.isEnabled ? .scheduled : .disabled
     }
 
-    private func scheduleRoutine(from recent: ControlPanelRecentSession) {
+    private func editRoutine(for recent: ControlPanelRecentSession) {
         guard case .chat(let sessionID) = recent.selection else {
             return
         }
         let settings = model.settings.normalized()
         routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
-        if let existing = RoutineStore.shared.routine(forSession: sessionID) {
-            schedulingRoutineDraft = RoutineDraft(routine: existing)
+        guard let existing = RoutineStore.shared.routine(forSession: sessionID) else {
             return
         }
-        guard let session = ChatSessionStore().loadSession(id: sessionID) else {
-            return
-        }
-        let instructions = session.messages.last { $0.role == .user }?.content ?? ""
-        let modelID = session.messages
-            .last { $0.role == .assistant && !($0.modelID ?? "").isEmpty }?
-            .modelID
-            ?? settings.languageModelID
-            ?? ""
-        schedulingRoutineDraft = RoutineDraft(
-            routine: Routine(
-                name: recent.title,
-                instructions: instructions,
-                modelID: modelID,
-                triggerKind: .schedule,
-                sourceSessionID: sessionID
-            )
-        )
+        schedulingRoutineDraft = RoutineDraft(routine: existing)
     }
 
     private func presentNewRoutine() {
@@ -3863,7 +3845,7 @@ private struct ControlPanelRecentSessionRow: View {
     let onRename: (String) -> Void
     let onNewChat: () -> Void
     let onTogglePin: () -> Void
-    let onScheduleRoutine: () -> Void
+    let onEditRoutine: () -> Void
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
@@ -4041,10 +4023,12 @@ private struct ControlPanelRecentSessionRow: View {
                 )
             }
 
-            Button {
-                onScheduleRoutine()
-            } label: {
-                Label(routineStatus == .none ? "Make recurring" : "Edit routine", systemImage: "bolt")
+            if routineStatus != .none {
+                Button {
+                    onEditRoutine()
+                } label: {
+                    Label("Edit routine", systemImage: "bolt")
+                }
             }
 
             Menu {
