@@ -112,6 +112,7 @@ targets:
     settings:
       base:
         ARCHS: arm64
+        ASSETCATALOG_COMPILER_APPICON_NAME: NotificationAppIcon
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
         CODE_SIGN_ENTITLEMENTS: Configuration/Nativ.entitlements
