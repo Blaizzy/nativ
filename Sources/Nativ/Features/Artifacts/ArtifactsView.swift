@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 import Vision
 
-enum ArtifactLayout {
+enum ArtifactLayout: Hashable {
     case grid
     case list
 }
@@ -115,6 +115,26 @@ struct ArtifactsView: View {
         smartSearchEnabled && (semanticSearch?.isModelInstalled == true)
     }
 
+    private var availableKinds: [ArtifactKind] {
+        ArtifactKind.allCases.filter { kind in
+            store.artifacts.contains { $0.kind == kind }
+        }
+    }
+
+    private var availableSources: [ArtifactSource] {
+        ArtifactSource.allCases.filter { source in
+            store.artifacts.contains { $0.source == source }
+        }
+    }
+
+    private var activeFilterCount: Int {
+        (kindFilter == nil ? 0 : 1)
+            + (sourceFilter == nil ? 0 : 1)
+            + (favoritesOnly ? 1 : 0)
+            + (dateFilter == .all ? 0 : 1)
+            + (groupByChat ? 1 : 0)
+    }
+
     private var filtered: [Artifact] {
         var result = store.artifacts
         if let kindFilter {
@@ -190,7 +210,7 @@ struct ArtifactsView: View {
                 }
                 .controlSize(.small)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 24)
             .padding(.vertical, 10)
             .background(Color(nsColor: .windowBackgroundColor))
             Divider()
@@ -420,7 +440,6 @@ struct ArtifactsView: View {
             semanticBanner
             filterBar
             Divider()
-            controlsBar
             if isSelecting {
                 selectionBar
             }
@@ -683,7 +702,7 @@ struct ArtifactsView: View {
                 semanticSettingsButton(config)
             }
         }
-        .padding(.horizontal, 22)
+        .padding(.horizontal, 24)
         .padding(.leading, titleLeadingInset)
         .padding(.top, 14)
         .padding(.bottom, 12)
@@ -736,110 +755,139 @@ struct ArtifactsView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private var controlsBar: some View {
-        HStack(spacing: 8) {
-            Button(isSelecting ? "Done" : "Select") {
-                isSelecting.toggle()
-                if !isSelecting {
-                    selection.removeAll()
-                }
-            }
-
-            Menu {
-                Toggle(isOn: $groupByChat) {
-                    Label("By Chat", systemImage: "bubble.left.and.bubble.right")
-                }
-                .disabled(isSearching)
-            } label: {
-                Label("Filter", systemImage: "line.3.horizontal.decrease")
-            }
-            .help(isSearching ? "Grouping is off while searching" : "Group artifacts by chat")
-            .fixedSize()
-
-            Menu {
-                Picker("Sort", selection: $sort) {
-                    ForEach(ArtifactSort.allCases) { option in
-                        Text(option.rawValue).tag(option)
-                    }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Label("Sort: \(sort.rawValue)", systemImage: "arrow.up.arrow.down")
-            }
-            .help("Sort artifacts")
-            .fixedSize()
-
-            if !showingByChat {
-                Picker("", selection: $layout) {
-                    Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
-                    Image(systemName: "list.bullet").tag(ArtifactLayout.list)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 84)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 10)
-    }
-
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        VStack(spacing: 7) {
             HStack(spacing: 8) {
-                filterChip(title: "All", isOn: kindFilter == nil && sourceFilter == nil) {
+                filterChip(title: "All", isOn: kindFilter == nil) {
                     kindFilter = nil
-                    sourceFilter = nil
                 }
 
-                ForEach(ArtifactKind.allCases) { kind in
+                ForEach(availableKinds) { kind in
                     let count = store.artifacts.filter { $0.kind == kind }.count
                     filterChip(title: "\(kind.pluralLabel) \(count)", systemImage: kind.systemImage, isOn: kindFilter == kind) {
                         kindFilter = kindFilter == kind ? nil : kind
                     }
                 }
 
-                Divider().frame(height: 16)
-
-                ForEach(ArtifactSource.allCases) { source in
-                    let count = store.artifacts.filter { $0.source == source }.count
-                    filterChip(title: "\(source.label) \(count)", systemImage: source.systemImage, isOn: sourceFilter == source) {
-                        sourceFilter = sourceFilter == source ? nil : source
-                    }
-                }
-
-                Divider().frame(height: 16)
-
-                filterChip(title: "Favorites", systemImage: favoritesOnly ? "star.fill" : "star", isOn: favoritesOnly) {
+                filterChip(
+                    title: "Favorites",
+                    systemImage: favoritesOnly ? "star.fill" : "star",
+                    isOn: favoritesOnly
+                ) {
                     favoritesOnly.toggle()
                 }
 
+                Spacer(minLength: 16)
+
+                Button(isSelecting ? "Done" : "Select") {
+                    isSelecting.toggle()
+                    if !isSelecting {
+                        selection.removeAll()
+                    }
+                }
+
                 Menu {
+                    Toggle(isOn: $groupByChat) {
+                        Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .disabled(isSearching)
+
+                    if !availableSources.isEmpty {
+                        Picker("Source", selection: $sourceFilter) {
+                            Text("All sources").tag(nil as ArtifactSource?)
+                            ForEach(availableSources) { source in
+                                Text(source.label).tag(source as ArtifactSource?)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
+
+                    Divider()
+
                     Picker("Date", selection: $dateFilter) {
                         ForEach(ArtifactDateFilter.allCases) { option in
                             Text(option.rawValue).tag(option)
                         }
                     }
+                    .pickerStyle(.inline)
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "calendar")
-                        Text(dateFilter == .all ? "Date" : dateFilter.rawValue)
-                    }
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(dateFilter != .all ? Color.white : Color.primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(dateFilter != .all ? Color.accentColor : Color(nsColor: .controlBackgroundColor), in: Capsule())
+                    Label(
+                        activeFilterCount == 0 ? "Group by" : "Group by \(activeFilterCount)",
+                        systemImage: "line.3.horizontal.decrease"
+                    )
                 }
-                .menuIndicator(.hidden)
+                .help(isSearching ? "Grouping by chat is off while searching" : "Group artifacts")
                 .fixedSize()
+
+                Menu {
+                    Picker("Sort", selection: $sort) {
+                        ForEach(ArtifactSort.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Sort: \(sort.rawValue)", systemImage: "arrow.up.arrow.down")
+                }
+                .help("Sort artifacts")
+                .fixedSize()
+
+                if !showingByChat {
+                    layoutToggle
+                }
             }
-            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity)
+
+            if activeFilterCount > 0 {
+                HStack {
+                    Text("\(activeFilterCount) \(activeFilterCount == 1 ? "filter" : "filters") applied")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("Clear all filters") {
+                        kindFilter = nil
+                        sourceFilter = nil
+                        favoritesOnly = false
+                        dateFilter = .all
+                        groupByChat = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
-        .padding(.top, 12)
-        .padding(.bottom, 12)
+        .padding(.vertical, 10)
+    }
+
+    private var layoutToggle: some View {
+        HStack(spacing: 0) {
+            layoutButton(.grid, systemImage: "square.grid.2x2", help: "Grid view")
+            layoutButton(.list, systemImage: "list.bullet", help: "List view")
+        }
+        .padding(2)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    private func layoutButton(_ option: ArtifactLayout, systemImage: String, help: String) -> some View {
+        Button {
+            layout = option
+        } label: {
+            Image(systemName: systemImage)
+                .frame(width: 28, height: 24)
+                .foregroundStyle(layout == option ? Color.white : Color.primary)
+                .background(layout == option ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var searchField: some View {
