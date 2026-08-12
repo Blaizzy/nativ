@@ -387,17 +387,19 @@ struct ModelsView: View {
                         .modelsListRow(top: 0)
                 }
 
-                HStack(spacing: 0) {
-                    sectionScroller(showsResultsHeader: false)
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        sectionScroller(showsResultsHeader: false)
 
-                    Divider()
-                    ModelReadmePanel(
-                        selection: readmeSelection,
-                        store: readmeStore,
-                        onClose: { self.readmeSelection = nil }
-                    )
-                    .frame(width: 340)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                        Divider()
+                        ModelReadmePanel(
+                            selection: readmeSelection,
+                            store: readmeStore,
+                            onClose: { self.readmeSelection = nil }
+                        )
+                        .frame(width: geometry.size.width * 0.4)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
             }
         } else {
@@ -1353,7 +1355,7 @@ private struct ModelReadmePanel: View {
                 .textual.imageAttachmentLoader(.image(relativeTo: readmeAssetBaseURL))
                 .textual.overflowMode(.wrap)
                 .textual.textSelection(.enabled)
-                .font(.callout)
+                .font(.system(size: 15))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
             }
