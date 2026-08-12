@@ -198,7 +198,7 @@ private struct KitDetailView: View {
             ForEach(kit.mcpEntries) { entry in
                 KitPartRow(
                     symbol: entry.symbol,
-                    tint: entry.tint,
+                    tint: .nativTint(entry.tintName),
                     logoAssetName: entry.logoAssetName,
                     title: entry.name,
                     subtitle: entry.summary,
@@ -241,19 +241,13 @@ private struct KitDetailView: View {
     // MARK: Bindings
 
     private func mcpBinding(_ entry: MCPCatalogEntry) -> Binding<Bool> {
-        // Match by launch identity (command + arguments), not name, so the
-        // toggle never targets an unrelated server that shares a name.
-        func matches(_ server: MCPServerConfig) -> Bool {
-            server.command == entry.command && server.arguments == entry.arguments
-        }
+        let catalog = MCPServerCatalog.bundled
         return Binding(
-            get: { model.settings.mcpServers.first(where: matches)?.isEnabled ?? false },
+            get: { catalog.isEnabled(entry, in: model.settings.mcpServers) },
             set: { newValue in
-                if let index = model.settings.mcpServers.firstIndex(where: matches) {
-                    model.settings.mcpServers[index].isEnabled = newValue
-                } else if newValue {
-                    model.settings.mcpServers.append(entry.makeConfig())
-                }
+                var servers = model.settings.mcpServers
+                catalog.setEnabled(newValue, for: entry, in: &servers)
+                model.settings.mcpServers = servers
             }
         )
     }

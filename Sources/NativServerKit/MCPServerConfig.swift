@@ -2,6 +2,9 @@ import Foundation
 
 public struct MCPServerConfig: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
+    /// Stable identifier for configurations supplied by Nativ's built-in catalog.
+    /// Custom configurations leave this nil.
+    public var catalogID: String?
     public var name: String
     public var command: String
     public var arguments: [String]
@@ -10,6 +13,7 @@ public struct MCPServerConfig: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         id: UUID = UUID(),
+        catalogID: String? = nil,
         name: String = "",
         command: String = "",
         arguments: [String] = [],
@@ -17,6 +21,7 @@ public struct MCPServerConfig: Codable, Equatable, Identifiable, Sendable {
         isEnabled: Bool = true
     ) {
         self.id = id
+        self.catalogID = catalogID
         self.name = name
         self.command = command
         self.arguments = arguments
