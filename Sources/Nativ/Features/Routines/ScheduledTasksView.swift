@@ -52,19 +52,24 @@ struct ScheduledTasksView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        HStack(spacing: 0) {
+            taskBrowser
+                .frame(
+                    minWidth: draft == nil ? 0 : 320,
+                    idealWidth: draft == nil ? nil : 380,
+                    maxWidth: draft == nil ? .infinity : 440
+                )
 
-            if orderedTasks.isEmpty {
-                ScheduledTasksEmptyState(onCreate: presentNewTask)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                taskList
+            if let draft {
+                Divider()
+                editor(for: draft)
+                    .id(draft.id)
+                    .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        .animation(.snappy(duration: 0.22), value: draft?.id)
         .background(Color.nativMainContentBackground)
-        .sheet(item: $draft, content: editor)
         .alert(
             "Delete scheduled task?",
             isPresented: Binding(
@@ -85,6 +90,20 @@ struct ScheduledTasksView: View {
         }
     }
 
+    private var taskBrowser: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+
+            if orderedTasks.isEmpty {
+                ScheduledTasksEmptyState(onCreate: presentNewTask)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                taskList
+            }
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
@@ -98,10 +117,16 @@ struct ScheduledTasksView: View {
             Spacer()
 
             Button(action: presentNewTask) {
-                Label("New scheduled task", systemImage: "plus")
+                if draft == nil {
+                    Label("New scheduled task", systemImage: "plus")
+                } else {
+                    Image(systemName: "plus")
+                        .frame(width: 18, height: 18)
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .help("New scheduled task")
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
@@ -283,6 +308,9 @@ struct ScheduledTasksView: View {
                 + store.runs(forRoutine: task.id).compactMap(\.sessionID)
         )
         store.delete(id: task.id)
+        if draft?.id == task.id {
+            draft = nil
+        }
         onDeleteSessions(sessionIDs)
     }
 }

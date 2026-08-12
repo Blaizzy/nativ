@@ -60,6 +60,10 @@ struct RoutineEditor: View {
             && (!requiresToolCalling || toolCapableModelIDs.contains(modelID))
     }
 
+    private var isExistingTask: Bool {
+        onDelete != nil
+    }
+
     private var requiresToolCalling: Bool {
         capabilities.contains { capability in
             switch capability {
@@ -253,20 +257,33 @@ struct RoutineEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(name.trimmingCharacters(in: .whitespaces).isEmpty ? "New scheduled task" : name)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isExistingTask ? "Edit scheduled task" : "New scheduled task")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(
+                        name.trimmingCharacters(in: .whitespaces).isEmpty
+                            ? "Scheduled task title"
+                            : name
+                    )
                     .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if onDelete != nil {
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if isExistingTask {
                     Button("Delete", role: .destructive) {
                         isConfirmingDelete = true
                     }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.red)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
                 }
+
+                NativHoverCloseButton(action: onCancel, help: "Close editor")
             }
-            .padding(16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
 
             Divider()
 
@@ -319,7 +336,7 @@ struct RoutineEditor: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
-                Button("Save") {
+                Button(isExistingTask ? "Save" : "Create") {
                     onSave(makeRoutine())
                 }
                 .buttonStyle(.borderedProminent)
@@ -327,8 +344,8 @@ struct RoutineEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 680)
-        .frame(minHeight: 620, idealHeight: 720)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.nativMainContentBackground)
         .sheet(isPresented: $isSelectingCapabilities) {
             ScheduledCapabilityPicker(
                 options: capabilityOptions,
@@ -344,6 +361,7 @@ struct RoutineEditor: View {
         } message: {
             Text("This scheduled task and its run history will be permanently deleted.")
         }
+        .onExitCommand(perform: onCancel)
     }
 
     @ViewBuilder
