@@ -3874,7 +3874,7 @@ private struct ControlPanelRecentSessionRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 2) {
+        ZStack(alignment: .trailing) {
             if isRenaming {
                 HStack(spacing: 7) {
                     Circle()
@@ -3897,16 +3897,12 @@ private struct ControlPanelRecentSessionRow: View {
                             if !focused, isRenaming { commitRename() }
                         }
                 }
+                .padding(.trailing, 52)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
             } else {
                 Button {
-                    if isSelecting {
-                        onToggleSelect()
-                    } else if isSelected, recent.isChat {
-                        beginRename()
-                    } else {
-                        onSelect()
-                    }
+                    activateRow()
                 } label: {
                     HStack(spacing: 7) {
                         if isSelecting {
@@ -3942,52 +3938,68 @@ private struct ControlPanelRecentSessionRow: View {
 
                         Spacer(minLength: 0)
                     }
+                    .padding(.trailing, 52)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(.rect)
+                    .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
                 }
                 .buttonStyle(.plain)
                 .disabled(isSelectionDisabled && !isSelecting)
                 .help(recent.title)
             }
 
-            Menu {
-                rowMenuContents
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.caption)
-                    .frame(width: 24, height: 20)
-                    .contentShape(.rect)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .foregroundStyle(.secondary)
-            .help("Actions")
-            .opacity(isHovering && !isSelecting ? 1 : 0)
-            .allowsHitTesting(isHovering && !isSelecting)
+            HStack(spacing: 2) {
+                Menu {
+                    rowMenuContents
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.caption)
+                        .frame(width: 24, height: 20)
+                        .contentShape(.rect)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .help("Actions")
+                .opacity(isHovering && !isSelecting ? 1 : 0)
+                .allowsHitTesting(isHovering && !isSelecting)
 
-            Button(role: .destructive, action: onDelete) {
-                Image(systemName: "trash")
-                    .font(.caption)
-                    .frame(width: 26, height: 20)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(isDeleteHovering ? Color.red.opacity(0.13) : Color.clear)
-                    )
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .frame(width: 26, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(isDeleteHovering ? Color.red.opacity(0.13) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
+                .disabled(isDeleteDisabled)
+                .help("Delete \(recent.title)")
+                .opacity(isHovering && !isSelecting && !isDeleteDisabled ? 1 : 0)
+                .allowsHitTesting(isHovering && !isSelecting && !isDeleteDisabled)
+                .onHover { isDeleteHovering = $0 }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
-            .disabled(isDeleteDisabled)
-            .help("Delete \(recent.title)")
-            .opacity(isHovering && !isSelecting && !isDeleteDisabled ? 1 : 0)
-            .allowsHitTesting(isHovering && !isSelecting && !isDeleteDisabled)
-            .onHover { isDeleteHovering = $0 }
+            .padding(.trailing, 7)
         }
-        .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 1)
         .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
         .onHover { isHovering = $0 }
         .contextMenu {
             rowMenuContents
+        }
+    }
+
+    private func activateRow() {
+        if isSelecting {
+            onToggleSelect()
+        } else if isSelected, recent.isChat {
+            beginRename()
+        } else {
+            onSelect()
         }
     }
 
