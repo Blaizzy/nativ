@@ -240,6 +240,10 @@ enum HuggingFaceModelReadmeFormatting {
 
     private static func normalizeHTMLFragment(_ markdown: String) -> String {
         var output = markdown
+        output = replacingMatches(in: output, pattern: "<table\\b[^>]*>(.*?)</table\\s*>") {
+            match, source in
+            markdownTable(from: capture(1, from: match, source: source))
+        }
         output = replacingMatches(in: output, pattern: "<!--.*?-->") { _, _ in "" }
         output = replacingMatches(in: output, pattern: "<(script|style|svg)\\b[^>]*>.*?</\\1\\s*>") {
             _, _ in ""
@@ -312,6 +316,103 @@ enum HuggingFaceModelReadmeFormatting {
         return output
             .replacingOccurrences(of: "[ \\t]+\\n", with: "\n", options: .regularExpression)
             .replacingOccurrences(of: "\\n(?:[ \\t]*\\n){2,}", with: "\n\n", options: .regularExpression)
+    }
+
+    private struct HTMLTableCell {
+        let text: String
+        let isHeader: Bool
+    }
+
+    /// Foundation parses GitHub-style Markdown tables but not raw HTML tables.
+    /// Translate complete rows before the general HTML cleanup so model-card
+    /// comparisons retain their columns and can scroll horizontally.
+    private static func markdownTable(from html: String) -> String {
+        guard let rowExpression = try? NSRegularExpression(
+            pattern: "<tr\\b[^>]*>(.*?)</tr\\s*>",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ),
+        let cellExpression = try? NSRegularExpression(
+            pattern: "<(th|td)\\b([^>]*)>(.*?)</\\1\\s*>",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return ""
+        }
+
+        let source = html as NSString
+        let rowMatches = rowExpression.matches(
+            in: html,
+            range: NSRange(location: 0, length: source.length)
+        )
+        var rows: [[HTMLTableCell]] = []
+        var columnCount = 0
+
+        for rowMatch in rowMatches {
+            let rowHTML = capture(1, from: rowMatch, source: source)
+            let rowSource = rowHTML as NSString
+            let cellMatches = cellExpression.matches(
+                in: rowHTML,
+                range: NSRange(location: 0, length: rowSource.length)
+            )
+            var cells: [HTMLTableCell] = []
+
+            for cellMatch in cellMatches {
+                let tagName = capture(1, from: cellMatch, source: rowSource).lowercased()
+                let attributes = capture(2, from: cellMatch, source: rowSource)
+                let cellHTML = capture(3, from: cellMatch, source: rowSource)
+                let colspan = max(Int(htmlAttribute("colspan", in: attributes) ?? "") ?? 1, 1)
+                cells.append(
+                    HTMLTableCell(
+                        text: normalizedHTMLTableCell(cellHTML),
+                        isHeader: tagName == "th"
+                    )
+                )
+                cells.append(
+                    contentsOf: repeatElement(
+                        HTMLTableCell(text: "", isHeader: false),
+                        count: colspan - 1
+                    )
+                )
+            }
+
+            guard !cells.isEmpty else { continue }
+            columnCount = max(columnCount, cells.count)
+            rows.append(cells)
+        }
+
+        guard !rows.isEmpty, columnCount > 0 else { return "" }
+        let emptyCell = HTMLTableCell(text: "", isHeader: false)
+        rows = rows.map { row in
+            row + Array(repeating: emptyCell, count: columnCount - row.count)
+        }
+
+        func markdownRow(_ row: [HTMLTableCell], isFirstRow: Bool = false) -> String {
+            let values = row.map { cell -> String in
+                guard !isFirstRow, cell.isHeader, !cell.text.isEmpty else {
+                    return cell.text
+                }
+                return "**\(cell.text)**"
+            }
+            return "| \(values.joined(separator: " | ")) |"
+        }
+
+        var markdownRows = [markdownRow(rows[0], isFirstRow: true)]
+        markdownRows.append(
+            "| \(Array(repeating: "---", count: columnCount).joined(separator: " | ")) |"
+        )
+        markdownRows.append(contentsOf: rows.dropFirst().map { markdownRow($0) })
+        return "\n\n\(markdownRows.joined(separator: "\n"))\n\n"
+    }
+
+    private static func normalizedHTMLTableCell(_ html: String) -> String {
+        normalizeHTMLFragment(html)
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(
+                of: "(?<!\\\\)\\|",
+                with: "\\\\|",
+                options: .regularExpression
+            )
     }
 
     private static func replacingMatches(

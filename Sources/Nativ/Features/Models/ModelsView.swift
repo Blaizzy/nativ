@@ -376,21 +376,24 @@ struct ModelsView: View {
 
     @ViewBuilder
     private var sectionResults: some View {
-        if let readmeSelection, section == renderedSection {
-            VStack(spacing: 0) {
-                switch renderedSection {
-                case .installed:
-                    installedResultsHeader
-                        .modelsListRow(top: 0)
-                case .discover:
-                    discoverResultsHeader
-                        .modelsListRow(top: 0)
-                }
+        // Keep the results hierarchy mounted when details open. Replacing the
+        // whole scroller here made a card click wait for the visible rows to
+        // be rebuilt before SwiftUI could present the README loading state.
+        VStack(spacing: 0) {
+            switch renderedSection {
+            case .installed:
+                installedResultsHeader
+                    .modelsListRow(top: 0)
+            case .discover:
+                discoverResultsHeader
+                    .modelsListRow(top: 0)
+            }
 
-                GeometryReader { geometry in
-                    HStack(spacing: 0) {
-                        sectionScroller(showsResultsHeader: false)
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    sectionScroller(showsResultsHeader: false)
 
+                    if let readmeSelection, section == renderedSection {
                         Divider()
                         ModelReadmePanel(
                             selection: readmeSelection,
@@ -402,8 +405,6 @@ struct ModelsView: View {
                     }
                 }
             }
-        } else {
-            sectionScroller(showsResultsHeader: true)
         }
     }
 
@@ -1352,8 +1353,9 @@ private struct ModelReadmePanel: View {
                     syntaxExtensions: [.math]
                 )
                 .textual.structuredTextStyle(.gitHub)
+                .textual.tableStyle(.overflow(relativeWidth: 4))
                 .textual.imageAttachmentLoader(.image(relativeTo: readmeAssetBaseURL))
-                .textual.overflowMode(.wrap)
+                .textual.overflowMode(.scroll)
                 .textual.textSelection(.enabled)
                 .font(.system(size: 15))
                 .frame(maxWidth: .infinity, alignment: .leading)

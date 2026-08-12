@@ -62,6 +62,30 @@ final class HuggingFaceModelReadmeTests: XCTestCase {
         )
     }
 
+    func testDisplayMarkdownConvertsHTMLTableIntoCompleteMarkdownRows() {
+        let markdown = """
+        <table>
+          <thead><tr><th>Benchmark</th><th>Model A</th><th>Model B</th></tr></thead>
+          <tbody>
+            <tr><th>Coding Agent</th><td>88.8</td><td>84.6</td></tr>
+            <tr><th colspan="3">Repository tasks</th></tr>
+            <tr><td>NL2Repo</td><td>69.4</td><td>47.2</td></tr>
+          </tbody>
+        </table>
+        """
+
+        XCTAssertEqual(
+            HuggingFaceModelReadmeFormatting.displayMarkdown(markdown),
+            """
+            | Benchmark | Model A | Model B |
+            | --- | --- | --- |
+            | **Coding Agent** | 88.8 | 84.6 |
+            | **Repository tasks** |  |  |
+            | NL2Repo | 69.4 | 47.2 |
+            """
+        )
+    }
+
     func testRemovingDuplicateLeadingTitleMatchesRepositoryName() {
         let markdown = """
         # North Micro Vision Instruct
