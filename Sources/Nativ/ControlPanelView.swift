@@ -587,7 +587,10 @@ struct ControlPanelView: View {
         } message: { recent in
             if case .chat(let sessionID) = recent.selection,
                let routine = routineStore.routine(forSession: sessionID) {
-                Text("“\(recent.title)” has a routine (\(RoutineFormatting.summary(routine))). Deleting the chat cancels the routine.")
+                Text(
+                    "“\(recent.title)” is scheduled "
+                        + "(\(RoutineFormatting.summary(routine))). Deleting the chat cancels it."
+                )
             } else {
                 Text("“\(recent.title)” will be permanently deleted.")
             }
@@ -624,9 +627,12 @@ struct ControlPanelView: View {
             Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
         }
         .sheet(item: $schedulingRoutineDraft) { draft in
-            let textModelIDs = routineModelLibrary.models
+            let textModels = routineModelLibrary.models
                 .filter { $0.capabilities.contains(.text) }
-                .map(\.repoID)
+            let textModelIDs = textModels.map(\.repoID)
+            let toolCapableModelIDs = Set(
+                textModels.filter { $0.capabilities.contains(.tools) }.map(\.repoID)
+            )
             let snapshotModelID = draft.routine.modelID
             let availableModelIDs = (
                 snapshotModelID.isEmpty || textModelIDs.contains(snapshotModelID)
@@ -637,6 +643,9 @@ struct ControlPanelView: View {
             RoutineEditor(
                 draft: draft,
                 availableModelIDs: availableModelIDs,
+                toolCapableModelIDs: toolCapableModelIDs,
+                model: model,
+                mcpHost: mcpHost,
                 onSave: { routine in
                     saveScheduledRoutine(routine)
                     schedulingRoutineDraft = nil
@@ -1153,7 +1162,7 @@ struct ControlPanelView: View {
                 Button {
                     presentNewRoutine()
                 } label: {
-                    Label("New routine", systemImage: "bolt")
+                    Label("New scheduled task", systemImage: "clock.badge.checkmark")
                 }
             } label: {
                 Image(systemName: "plus")
@@ -1612,6 +1621,7 @@ struct ControlPanelView: View {
         }
         let settings = model.settings.normalized()
         routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
+        mcpHost.reload(servers: settings.mcpServers)
         guard let existing = RoutineStore.shared.routine(forSession: sessionID) else {
             return
         }
@@ -1621,6 +1631,7 @@ struct ControlPanelView: View {
     private func presentNewRoutine() {
         let settings = model.settings.normalized()
         routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
+        mcpHost.reload(servers: settings.mcpServers)
         schedulingRoutineDraft = RoutineDraft(
             routine: Routine(modelID: settings.languageModelID ?? "")
         )
@@ -1628,11 +1639,28 @@ struct ControlPanelView: View {
 
     private func saveScheduledRoutine(_ routine: Routine) {
         var routine = routine
+        let existingCapabilities = RoutineStore.shared.routine(id: routine.id)?.capabilities ?? []
+        let existingKitIDs = Set(existingCapabilities.compactMap { capability -> String? in
+            guard case .kit(let id) = capability else { return nil }
+            return id
+        })
+        for capability in routine.capabilities {
+            guard case .kit(let kitID) = capability,
+                  !existingKitIDs.contains(kitID),
+                  let kit = NativKit.all.first(where: { $0.id == kitID })
+            else { continue }
+            NativKitActivation.setEnabled(
+                true,
+                kit: kit,
+                model: model,
+                manager: extensionManager
+            )
+        }
         if routine.sourceSessionID == nil {
             let now = Date()
             let session = ChatSession(
                 id: UUID(),
-                title: routine.name.isEmpty ? "Routine" : routine.name,
+                title: routine.name.isEmpty ? "Scheduled" : routine.name,
                 createdAt: now,
                 updatedAt: now,
                 messages: []
@@ -3855,20 +3883,20 @@ private struct ControlPanelRecentSessionRow: View {
         case .none:
             EmptyView()
         case .disabled:
-            Image(systemName: "bolt.slash")
+            Image(systemName: "clock.badge.xmark")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .help("Routine paused")
+                .help("Scheduled task paused")
         case .scheduled:
-            Image(systemName: "bolt.fill")
+            Image(systemName: "clock.fill")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .help("Routine scheduled")
+                .help("Scheduled task active")
         case .running:
-            Image(systemName: "bolt.fill")
+            Image(systemName: "clock.badge.checkmark.fill")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.green)
-                .help("Routine running now")
+                .help("Scheduled task running now")
         }
     }
 
@@ -4021,7 +4049,7 @@ private struct ControlPanelRecentSessionRow: View {
                 Button {
                     onEditRoutine()
                 } label: {
-                    Label("Edit routine", systemImage: "bolt")
+                    Label("Edit scheduled task", systemImage: "clock.badge.checkmark")
                 }
             }
 

@@ -27,16 +27,13 @@ final class MCPHostManager: ObservableObject {
 
     func toolDefinitions() -> [MLXChatToolDefinition] {
         connections.values.flatMap { connection in
-            connection.tools.map { tool in
-                MLXChatToolDefinition(
-                    function: MLXChatFunctionDefinition(
-                        name: Self.toolName(slug: connection.slug, tool: tool.name),
-                        description: tool.description,
-                        parameters: tool.parameters
-                    )
-                )
-            }
+            Self.toolDefinitions(for: connection)
         }
+    }
+
+    func toolDefinitions(forServer id: UUID) -> [MLXChatToolDefinition] {
+        guard let connection = connections[id] else { return [] }
+        return Self.toolDefinitions(for: connection)
     }
 
     func tools(forServer id: UUID) -> [(name: String, displayName: String)] {
@@ -61,6 +58,14 @@ final class MCPHostManager: ObservableObject {
         guard servers != appliedServers else { return }
         appliedServers = servers
         scheduleReload(servers: servers, debounce: true)
+    }
+
+    func prepare(servers: [MCPServerConfig]) async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        reloadTask?.cancel()
+        appliedServers = servers
+        await applyReload(servers: servers, generation: generation)
     }
 
     func reconnect(_ serverID: UUID) {
@@ -184,6 +189,18 @@ final class MCPHostManager: ObservableObject {
         let tools: [MCPToolInfo]?
         let error: String?
         let client: MCPClient
+    }
+
+    private static func toolDefinitions(for connection: Connection) -> [MLXChatToolDefinition] {
+        connection.tools.map { tool in
+            MLXChatToolDefinition(
+                function: MLXChatFunctionDefinition(
+                    name: toolName(slug: connection.slug, tool: tool.name),
+                    description: tool.description,
+                    parameters: tool.parameters
+                )
+            )
+        }
     }
 
     private func route(for name: String) -> (client: MCPClient, toolName: String)? {

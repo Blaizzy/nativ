@@ -605,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             return
         }
         let content = UNMutableNotificationContent()
-        content.title = routine.name.isEmpty ? "Routine" : routine.name
+        content.title = routine.name.isEmpty ? "Scheduled" : routine.name
         content.body = run.status == .failed
             ? "Run failed. \(run.resultSummary)"
             : (run.resultSummary.isEmpty ? "Run finished." : run.resultSummary)
