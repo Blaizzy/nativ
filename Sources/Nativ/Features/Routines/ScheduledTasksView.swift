@@ -264,15 +264,12 @@ struct ScheduledTasksView: View {
             toolCapableModelIDs: toolCapableModelIDs,
             model: model,
             mcpHost: mcpHost,
+            isExistingTask: isExisting,
             onSave: { task in
                 save(task)
                 self.draft = nil
             },
-            onCancel: { self.draft = nil },
-            onDelete: isExisting ? {
-                delete(draft.routine)
-                self.draft = nil
-            } : nil
+            onCancel: { self.draft = nil }
         )
     }
 

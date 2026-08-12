@@ -7,9 +7,9 @@ struct RoutineEditor: View {
     let toolCapableModelIDs: Set<String>
     @ObservedObject var model: NativModel
     @ObservedObject var mcpHost: MCPHostManager
+    let isExistingTask: Bool
     let onSave: (Routine) -> Void
     let onCancel: () -> Void
-    var onDelete: (() -> Void)?
 
     @State private var name: String
     @State private var instructions: String
@@ -18,7 +18,6 @@ struct RoutineEditor: View {
     @State private var time: Date
     @State private var capabilities: Set<ScheduledCapability>
     @State private var notifyOnFinish: Bool
-    @State private var isConfirmingDelete = false
     @State private var isSelectingCapabilities = false
 
     init(
@@ -27,18 +26,18 @@ struct RoutineEditor: View {
         toolCapableModelIDs: Set<String>,
         model: NativModel,
         mcpHost: MCPHostManager,
+        isExistingTask: Bool,
         onSave: @escaping (Routine) -> Void,
-        onCancel: @escaping () -> Void,
-        onDelete: (() -> Void)? = nil
+        onCancel: @escaping () -> Void
     ) {
         self.draft = draft
         self.availableModelIDs = availableModelIDs
         self.toolCapableModelIDs = toolCapableModelIDs
         self.model = model
         self.mcpHost = mcpHost
+        self.isExistingTask = isExistingTask
         self.onSave = onSave
         self.onCancel = onCancel
-        self.onDelete = onDelete
 
         let routine = draft.routine
         _name = State(initialValue: routine.name)
@@ -58,10 +57,6 @@ struct RoutineEditor: View {
             && !modelID.isEmpty
             && !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (!requiresToolCalling || toolCapableModelIDs.contains(modelID))
-    }
-
-    private var isExistingTask: Bool {
-        onDelete != nil
     }
 
     private var requiresToolCalling: Bool {
@@ -256,37 +251,6 @@ struct RoutineEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(isExistingTask ? "Edit scheduled task" : "New scheduled task")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(
-                        name.trimmingCharacters(in: .whitespaces).isEmpty
-                            ? "Scheduled task title"
-                            : name
-                    )
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if isExistingTask {
-                    Button("Delete", role: .destructive) {
-                        isConfirmingDelete = true
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.red)
-                }
-
-                NativHoverCloseButton(action: onCancel, help: "Close editor")
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-
-            Divider()
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     field("Name") {
@@ -346,20 +310,15 @@ struct RoutineEditor: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.nativMainContentBackground)
+        .overlay(alignment: .topTrailing) {
+            NativHoverCloseButton(action: onCancel, help: "Close editor")
+                .padding(16)
+        }
         .sheet(isPresented: $isSelectingCapabilities) {
             ScheduledCapabilityPicker(
                 options: capabilityOptions,
                 selection: $capabilities
             )
-        }
-        .alert("Delete scheduled task?", isPresented: $isConfirmingDelete) {
-            Button("Delete", role: .destructive) {
-                onDelete?()
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This scheduled task and its run history will be permanently deleted.")
         }
         .onExitCommand(perform: onCancel)
     }
