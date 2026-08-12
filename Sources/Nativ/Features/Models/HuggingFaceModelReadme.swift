@@ -314,6 +314,14 @@ enum HuggingFaceModelReadmeFormatting {
 
         output = decodeHTMLEntities(output)
         return output
+            // HTML model cards commonly indent links inside centered paragraphs.
+            // Once converted to Markdown, four leading spaces turn those links
+            // into code blocks instead of interactive links.
+            .replacingOccurrences(
+                of: "(?m)^[ \\t]+(?=(?:!?\\[|\\*\\*|#{1,6}[ \\t]))",
+                with: "",
+                options: .regularExpression
+            )
             .replacingOccurrences(of: "[ \\t]+\\n", with: "\n", options: .regularExpression)
             .replacingOccurrences(of: "\\n(?:[ \\t]*\\n){2,}", with: "\n\n", options: .regularExpression)
     }

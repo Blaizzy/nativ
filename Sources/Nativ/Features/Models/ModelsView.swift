@@ -272,8 +272,15 @@ struct ModelsView: View {
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
                     renderedSection = newSection
+                    selectFirstReadme(in: newSection)
                 }
             }
+        }
+        .onChange(of: localLibrary.models.map(\.repoID)) { _, _ in
+            selectFirstVisibleReadmeIfNeeded(in: .installed)
+        }
+        .onChange(of: hubLibrary.models.map(\.id)) { _, _ in
+            selectFirstVisibleReadmeIfNeeded(in: .discover)
         }
         .task(id: hubSearchTaskID) {
             guard renderedSection == .discover else { return }
@@ -745,6 +752,45 @@ struct ModelsView: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             readmeSelection = selection
+        }
+    }
+
+    private func selectFirstVisibleReadmeIfNeeded(in targetSection: ModelsPageSection) {
+        guard renderedSection == targetSection else { return }
+        let visibleIDs: [String] = switch targetSection {
+        case .installed:
+            filteredLocalModels.map(\.repoID)
+        case .discover:
+            filteredHubModels.map(\.id)
+        }
+        guard readmeSelection == nil || !visibleIDs.contains(readmeSelection?.repoID ?? "") else {
+            return
+        }
+        selectFirstReadme(in: targetSection)
+    }
+
+    private func selectFirstReadme(in targetSection: ModelsPageSection) {
+        switch targetSection {
+        case .installed:
+            guard let model = filteredLocalModels.first else {
+                readmeSelection = nil
+                return
+            }
+            showReadme(
+                repoID: model.repoID,
+                provider: model.provider,
+                localSnapshotURL: model.snapshotURL
+            )
+        case .discover:
+            guard let model = filteredHubModels.first else {
+                readmeSelection = nil
+                return
+            }
+            showReadme(
+                repoID: model.id,
+                provider: model.provider,
+                localSnapshotURL: nil
+            )
         }
     }
 

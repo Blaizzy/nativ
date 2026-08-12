@@ -45,6 +45,8 @@ final class HuggingFaceModelReadmeTests: XCTestCase {
         XCTAssertTrue(output.contains("[Hugging Face](https://huggingface.co/google/gemma-4)"))
         XCTAssertTrue(output.contains("[GitHub](https://github.com/google-deepmind/gemma)"))
         XCTAssertTrue(output.contains("**License:** Apache 2.0"))
+        XCTAssertFalse(output.contains("    [Hugging Face]"))
+        XCTAssertFalse(output.contains("    [GitHub]"))
         XCTAssertFalse(output.contains("<div"))
         XCTAssertFalse(output.contains("<a "))
     }
