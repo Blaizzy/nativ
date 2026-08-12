@@ -372,6 +372,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var modelScanError: String?
     private var lastScannedModelPath: String?
     private weak var highlightedMenuItem: NSMenuItem?
+    private var downloadShutdownTask: Task<Void, Never>?
+    private var didFinishDownloadShutdown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
@@ -439,6 +441,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         false
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !didFinishDownloadShutdown else { return .terminateNow }
+        guard HuggingFaceDownloadManager.shared.activeCount > 0 else { return .terminateNow }
+
+        if downloadShutdownTask == nil {
+            downloadShutdownTask = Task { [weak self, weak sender] in
+                await HuggingFaceDownloadManager.shared.shutdownForTermination()
+                guard let self, let sender else { return }
+                didFinishDownloadShutdown = true
+                downloadShutdownTask = nil
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
+    }
+
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
@@ -449,7 +467,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     func applicationWillTerminate(_ notification: Notification) {
         modelScanTask?.cancel()
-        HuggingFaceDownloadManager.shared.shutdown()
         extensionManager.shutdown()
         runtime.onUpdate = nil
         systemMenuBarPreferences.onChange = nil

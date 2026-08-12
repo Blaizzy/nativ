@@ -1106,15 +1106,30 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
     }
 
-    func shutdown() {
+    /// Stops downloader subprocesses before the app exits while preserving the
+    /// Hugging Face cache, including resumable `.incomplete` files.
+    func shutdownForTermination(timeout: Duration = .seconds(2)) async {
         let activeContexts = Array(contexts.values)
-        activeContexts.forEach {
-            $0.operation?.cancel()
-            $0.task?.cancel()
+        let waiters = activeContexts.flatMap { $0.waiters.values }
+        let operations = activeContexts.compactMap(\.operation)
+
+        activeContexts.forEach { context in
+            context.task?.cancel()
+            context.operation?.cancel()
         }
+
         contexts.removeAll()
         downloads.removeAll()
         progressUpdateTimes.removeAll()
+        waiters.forEach { $0.resume(throwing: CancellationError()) }
+
+        await withTaskGroup(of: Void.self) { group in
+            for operation in operations {
+                group.addTask {
+                    await operation.waitForExit(timeout: timeout)
+                }
+            }
+        }
     }
 
     private func enqueue(
@@ -1543,12 +1558,14 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         from tqdm.auto import tqdm
         from huggingface_hub import snapshot_download
 
-        parent_pid = os.getppid()
-        def exit_if_parent_stops():
+        parent_pid = int(sys.argv[3])
+
+        def exit_if_parent_terminates():
             while os.getppid() == parent_pid:
-                time.sleep(1)
-            os._exit(143)
-        threading.Thread(target=exit_if_parent_stops, daemon=True).start()
+                time.sleep(0.25)
+            os._exit(0)
+
+        threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
 
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
         expected_bytes = 0
@@ -1619,7 +1636,13 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
 
         self.executableURL = pythonURL
-        self.arguments = ["-c", script, repoID, cachePath]
+        self.arguments = [
+            "-c",
+            script,
+            repoID,
+            cachePath,
+            String(ProcessInfo.processInfo.processIdentifier)
+        ]
         self.environment = environment
         self.repoID = repoID
         self.cachePath = cachePath
@@ -1799,6 +1822,22 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
     }
 
+    func waitForExit(timeout: Duration) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while currentProcess?.isRunning == true, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+
+        guard let process = currentProcess, process.isRunning else { return }
+        Darwin.kill(process.processIdentifier, SIGKILL)
+
+        let forcedExitDeadline = clock.now.advanced(by: .seconds(1))
+        while process.isRunning, clock.now < forcedExitDeadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     func pause() {
         lock.lock()
         isPaused = true
@@ -1830,6 +1869,12 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return wasCancelled
+    }
+
+    private var currentProcess: Process? {
+        lock.lock()
+        defer { lock.unlock() }
+        return process
     }
 
     private func clearProcess(_ process: Process) {
