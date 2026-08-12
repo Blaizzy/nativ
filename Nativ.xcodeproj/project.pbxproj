@@ -12,6 +12,7 @@
 		04E587A0A3714FD30ECFDE91 /* ChatListModelsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B598294F3FC3EA81BCD7A680 /* ChatListModelsTool.swift */; };
 		052BF04D854F36CDA740635F /* MarkdownFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD0259C7C842DE5ADC12B367 /* MarkdownFormatting.swift */; };
 		060FE6D6E84136D0F760A536 /* HuggingFaceModelReadmeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */; };
+		07E17841B388FBBD8C8A28EF /* NativSystemPermissionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30E2A903D604A57696674510 /* NativSystemPermissionController.swift */; };
 		086BC5B6FF02F0305536333B /* CustomTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */; };
 		088297CDFEFECD2787806AD7 /* VoiceCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D07325FEFBE7AF27167E009 /* VoiceCaptureCoordinator.swift */; };
 		0935A0AC0D6A6298D551EEAE /* ArtifactSemanticSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46BCF5F68C499E27A789A91F /* ArtifactSemanticSearch.swift */; };
@@ -1318,6 +1319,7 @@
 				90EE7AA87400E84D947CBBF3 /* NativSettings.swift in Sources */,
 				DEDEBC7EB86CE9711D0D5E8C /* NativSettingsTests.swift in Sources */,
 				ACBA3EAEE7677FCAD4977850 /* NativSkill.swift in Sources */,
+				07E17841B388FBBD8C8A28EF /* NativSystemPermissionController.swift in Sources */,
 				BE908F6A41DDF52B149830D9 /* ShellEnvironment.swift in Sources */,
 				36405D7EB30E430CF06956EB /* ShellEnvironmentTests.swift in Sources */,
 				293A976A334DFC98CFED82A0 /* SystemMonitorStore.swift in Sources */,

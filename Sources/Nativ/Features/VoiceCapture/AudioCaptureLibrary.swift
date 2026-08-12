@@ -90,7 +90,7 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
-    @Published private(set) var shouldOfferScreenCaptureSettings = false
+    @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
     @Published private(set) var isPlaybackPaused = false
 
@@ -217,7 +217,7 @@ final class AudioCaptureLibrary: ObservableObject {
         meterState.update(0)
         lastMeterPublishAt = .distantPast
 
-        guard Self.hasMicrophoneAccess() else {
+        guard await NativSystemPermissionController.requestMicrophone() else {
             fail(AudioCaptureLibraryError.microphonePermissionRequired)
             return
         }
@@ -279,7 +279,15 @@ final class AudioCaptureLibrary: ObservableObject {
 
     func clearLastError() {
         lastErrorMessage = nil
-        shouldOfferScreenCaptureSettings = false
+        permissionRequiringSettings = nil
+    }
+
+    func openPermissionSettings() {
+        guard let permissionRequiringSettings else {
+            return
+        }
+        clearLastError()
+        NativSystemPermissionController.openSettings(for: permissionRequiringSettings)
     }
 
     func stop() async {
@@ -712,12 +720,16 @@ final class AudioCaptureLibrary: ObservableObject {
 
     private func fail(_ error: Error) {
         lastErrorMessage = error.localizedDescription
-        if let captureError = error as? AudioCaptureLibraryError,
-           case .screenCapturePermissionRequired = captureError
-        {
-            shouldOfferScreenCaptureSettings = true
-        } else {
-            shouldOfferScreenCaptureSettings = false
+        permissionRequiringSettings = nil
+        if let captureError = error as? AudioCaptureLibraryError {
+            switch captureError {
+            case .microphonePermissionRequired:
+                permissionRequiringSettings = .microphone
+            case .screenCapturePermissionRequired:
+                permissionRequiringSettings = .screenRecording
+            default:
+                break
+            }
         }
         resetCaptureState()
     }
@@ -810,10 +822,6 @@ final class AudioCaptureLibrary: ObservableObject {
         meterState.update(level)
         self.elapsed = elapsed
         updateRecordingOverlay(level: level, elapsed: elapsed)
-    }
-
-    private static func hasMicrophoneAccess() -> Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private static func makeOutputURL(

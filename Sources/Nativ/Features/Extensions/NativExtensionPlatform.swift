@@ -398,7 +398,8 @@ final class NativExtensionManager: ObservableObject {
             markPermissionRequested(permission)
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .notDetermined:
-                NativSystemPermissionController.requestMicrophone { [weak self] _ in
+                Task { [weak self] in
+                    _ = await NativSystemPermissionController.requestMicrophone()
                     self?.refreshPermissionStatuses()
                 }
             case .denied, .restricted:

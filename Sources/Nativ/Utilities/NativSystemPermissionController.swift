@@ -4,14 +4,30 @@ import AVFoundation
 
 enum NativSystemPermissionController {
     @MainActor
-    static func requestMicrophone(
-        completion: @escaping @MainActor (Bool) -> Void
-    ) {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-            Task { @MainActor in
-                completion(granted)
-            }
+    static func requestMicrophone() async -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        if status == .notDetermined {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        return await resolveMicrophoneAccess(status: status) {
+            await AVCaptureDevice.requestAccess(for: .audio)
+        }
+    }
+
+    @MainActor
+    static func resolveMicrophoneAccess(
+        status: AVAuthorizationStatus,
+        requestAccess: @MainActor () async -> Bool
+    ) async -> Bool {
+        switch status {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await requestAccess()
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
         }
     }
 
@@ -72,6 +88,18 @@ enum NativSystemPermissionController {
     @MainActor
     static func openScreenCaptureSettings() {
         openPrivacyPane("Privacy_ScreenCapture")
+    }
+
+    @MainActor
+    static func openSettings(for permission: NativPermission) {
+        switch permission {
+        case .microphone:
+            openMicrophoneSettings()
+        case .accessibility:
+            openAccessibilitySettings()
+        case .screenRecording:
+            openScreenCaptureSettings()
+        }
     }
 
     @MainActor
@@ -191,14 +219,7 @@ final class NativPermissionStore: ObservableObject {
     }
 
     func openSettings(for permission: NativPermission) {
-        switch permission {
-        case .microphone:
-            NativSystemPermissionController.openMicrophoneSettings()
-        case .accessibility:
-            NativSystemPermissionController.openAccessibilitySettings()
-        case .screenRecording:
-            NativSystemPermissionController.openScreenCaptureSettings()
-        }
+        NativSystemPermissionController.openSettings(for: permission)
     }
 
     private func resolvedStatus(for permission: NativPermission) -> NativPermissionStatus {
@@ -232,7 +253,8 @@ final class NativPermissionStore: ObservableObject {
         switch permission {
         case .microphone:
             pendingPermission = permission
-            NativSystemPermissionController.requestMicrophone { [weak self] _ in
+            Task { [weak self] in
+                _ = await NativSystemPermissionController.requestMicrophone()
                 self?.pendingPermission = nil
                 self?.refresh()
             }
