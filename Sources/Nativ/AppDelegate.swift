@@ -1405,9 +1405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     private var modelScanKey: String {
-        let settings = model.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        model.settings.localModelSearchPaths.cacheKey
     }
 
     private func refreshLocalModelsIfNeeded() {
@@ -1419,9 +1417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     private func refreshLocalModels() {
         modelScanTask?.cancel()
-        let settings = model.settings.normalized()
-        let searchPath = settings.expandedModelSearchPath
-        let additionalPaths = settings.additionalModelSearchPaths
+        let searchPaths = model.settings.localModelSearchPaths
         let scanKey = modelScanKey
         modelScanInProgress = true
         modelScanError = nil
@@ -1433,7 +1429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             }
 
             do {
-                let models = try await LocalModelDiscovery.scan(path: searchPath, additionalPaths: additionalPaths)
+                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
                 guard !Task.isCancelled else {
                     return
                 }

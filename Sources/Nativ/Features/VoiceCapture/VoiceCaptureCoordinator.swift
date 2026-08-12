@@ -274,8 +274,10 @@ final class VoiceCaptureCoordinator {
             let installedModels: [LocalModel]
             do {
                 installedModels = try await LocalModelDiscovery.scan(
-                    path: configuration.modelSearchPath,
-                    additionalPaths: configuration.additionalModelSearchPaths
+                    searchPaths: LocalModelSearchPaths(
+                        primary: configuration.modelSearchPath,
+                        additional: configuration.additionalModelSearchPaths
+                    )
                 )
             } catch {
                 guard !Task.isCancelled else {

@@ -105,10 +105,7 @@ struct AudioView: View {
         .onAppear {
             handleViewAppear()
         }
-        .onChange(of: model.settings.modelSearchPath) { _, _ in
-            refreshLocalModels()
-        }
-        .onChange(of: model.settings.additionalModelSearchPaths) { _, _ in
+        .onChange(of: model.settings.localModelSearchPaths) { _, _ in
             refreshLocalModels()
         }
         .onChange(of: inputDevices.selectedDeviceID) { _, _ in
@@ -2180,11 +2177,7 @@ struct AudioView: View {
     }
 
     private func refreshLocalModels() {
-        let settings = model.settings.normalized()
-        localLibrary.scan(
-            path: settings.modelSearchPath,
-            additionalPaths: settings.additionalModelSearchPaths
-        )
+        localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
     }
 
     private func startInputMonitoringIfNeeded() {

@@ -592,8 +592,10 @@ final class AudioCaptureLibrary: ObservableObject {
             throw AudioCaptureLibraryError.serverNotRunning
         }
         let installedModels = try await LocalModelDiscovery.scan(
-            path: configuration.modelSearchPath,
-            additionalPaths: configuration.additionalModelSearchPaths
+            searchPaths: LocalModelSearchPaths(
+                primary: configuration.modelSearchPath,
+                additional: configuration.additionalModelSearchPaths
+            )
         )
         guard let modelID = LocalModelDiscovery.speechToTextModelID(
             in: installedModels,
@@ -620,8 +622,10 @@ final class AudioCaptureLibrary: ObservableObject {
             throw AudioCaptureLibraryError.serverNotRunning
         }
         let installedModels = try await LocalModelDiscovery.scan(
-            path: configuration.modelSearchPath,
-            additionalPaths: configuration.additionalModelSearchPaths
+            searchPaths: LocalModelSearchPaths(
+                primary: configuration.modelSearchPath,
+                additional: configuration.additionalModelSearchPaths
+            )
         )
         let languageModels = installedModels.filter(\.isEligibleForLanguageModelPicker)
         let modelID = configuration.languageModelID.flatMap { selectedID in

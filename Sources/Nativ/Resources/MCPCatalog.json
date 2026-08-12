@@ -59,5 +59,14 @@
     "symbol": "cylinder.split.1x2",
     "tint": "green",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
+  },
+  {
+    "id": "parallel-search",
+    "name": "Parallel Search",
+    "summary": "Search the live web and fetch clean content from URLs.",
+    "command": "npx",
+    "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only"],
+    "symbol": "globe",
+    "tint": "indigo"
   }
 ]

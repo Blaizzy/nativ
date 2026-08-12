@@ -2,6 +2,21 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testLocalModelSearchPathsIncludeNormalizedAdditionalFolders() {
+        let settings = NativSettings(
+            modelSearchPath: "~/managed-models",
+            additionalModelSearchPaths: [" ~/external-models ", "~/external-models", " "]
+        )
+
+        XCTAssertEqual(
+            settings.localModelSearchPaths,
+            LocalModelSearchPaths(
+                primary: "~/managed-models",
+                additional: ["~/external-models"]
+            )
+        )
+    }
+
     func testLaunchArgumentsRouteEachPreloadedModelToItsOwnFlag() {
         let settings = NativSettings(
             languageModelID: "org/language",
