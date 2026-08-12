@@ -41,6 +41,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var lastMetricsFetchAt: Date?
     @Published private(set) var allTimeStats = NativAllTimeStats()
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
+    /// How long a model switch may stay unconfirmed before the controls unlock.
+    static let modelSwitchTimeout: TimeInterval = 180
+
     @Published private(set) var modelSwitchInProgress = false
     @Published private(set) var modelSwitchTargetID: String?
     @Published private(set) var modelLoadingProgress: Double?
@@ -611,6 +614,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         settings = nextSettings
         modelSwitchInProgress = true
         modelSwitchTargetID = normalizedModelID
+        armModelSwitchWatchdog()
         notifyMenuStateChanged()
 
         Task { @MainActor [weak self] in
@@ -1011,5 +1015,36 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     private func notifyMenuStateChanged() {
         onMenuStateChanged?()
+    }
+
+    /// Unlocks the model controls if a switch never reports back.
+    ///
+    /// `modelSwitchInProgress` normally clears once metrics confirm the newly
+    /// started server. When that server comes up but never serves metrics, the
+    /// flag used to stay set forever, disabling the model picker and the
+    /// start/stop buttons with no way to recover short of relaunching. The
+    /// watchdog re-checks the flag and target before acting, so a stale one that
+    /// fires after a successful switch is a no-op.
+    private func armModelSwitchWatchdog(
+        timeout: TimeInterval = NativModel.modelSwitchTimeout
+    ) {
+        let targetID = modelSwitchTargetID
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(timeout))
+            guard let self,
+                  self.modelSwitchInProgress,
+                  self.modelSwitchTargetID == targetID
+            else {
+                return
+            }
+            self.appendLog(
+                "\nModel switch did not confirm within \(Int(timeout))s; "
+                    + "unlocking model controls.\n"
+            )
+            self.modelSwitchInProgress = false
+            self.modelSwitchTargetID = nil
+            self.clearPreservedSessionStats()
+            self.notifyMenuStateChanged()
+        }
     }
 }
