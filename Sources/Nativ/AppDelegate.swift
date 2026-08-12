@@ -351,10 +351,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
+    private let routineSessionStore = ChatSessionStore()
     private lazy var routineRunner = RoutineRunner(
         model: model,
         store: routineStore,
-        sessionStore: ChatSessionStore()
+        sessionStore: routineSessionStore
     )
     private lazy var routineScheduler = RoutineScheduler(
         store: routineStore,
@@ -582,6 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     }
 
     private func setUpRoutines() {
+        restoreScheduledTaskChats()
         RoutineRunCoordinator.shared.configure(runner: routineRunner)
         routineRunner.onRunCompleted = { routine, run in
             Task { @MainActor in
@@ -597,6 +599,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         }
         refreshRoutineAgents()
         routineScheduler.start()
+    }
+
+    private func restoreScheduledTaskChats() {
+        guard !routineStore.routines.isEmpty else { return }
+
+        for routine in routineStore.routines {
+            let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
+                for: routine,
+                runs: routineStore.runs(forRoutine: routine.id),
+                sessionStore: routineSessionStore
+            )
+            if linkedRoutine != routine {
+                routineStore.upsert(linkedRoutine)
+            }
+        }
+        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func refreshRoutineAgents() {

@@ -154,6 +154,7 @@ targets:
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
+      - path: Sources/Nativ/Features/Routines/ScheduledTaskChatLinker.swift
       - path: Sources/Nativ/Features/Routines/ScheduledTaskNotification.swift
       - path: Sources/Nativ/Utilities/NativNotificationService.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift

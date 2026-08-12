@@ -36,6 +36,9 @@ struct ChatSession: Identifiable, Equatable, Codable {
         if let customTitle, !customTitle.isEmpty {
             return customTitle
         }
+        if scheduledTaskID != nil, !title.isEmpty {
+            return title
+        }
         return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
     }
 

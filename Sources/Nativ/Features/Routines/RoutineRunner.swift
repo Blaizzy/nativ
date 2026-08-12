@@ -26,7 +26,15 @@ final class RoutineRunner {
     }
 
     func run(_ routine: Routine, source: RoutineRunSource) {
-        queue.append((routine, source))
+        let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
+            for: routine,
+            runs: store.runs(forRoutine: routine.id),
+            sessionStore: sessionStore
+        )
+        if linkedRoutine != routine {
+            store.upsert(linkedRoutine)
+        }
+        queue.append((linkedRoutine, source))
         drain()
     }
 
@@ -279,9 +287,13 @@ final class RoutineRunner {
     }
 
     private func appendRun(routine: Routine, messages: [ChatTranscriptMessage]) -> UUID {
-        let session = makeSession(routine: routine, messages: messages)
+        let sessionID = routine.sourceSessionID ?? UUID()
+        var session = sessionStore.loadSession(id: sessionID)
+            ?? ScheduledTaskChatLinker.makeSession(for: routine, id: sessionID)
+        session.messages.append(contentsOf: messages)
+        session.updatedAt = Date()
         sessionStore.saveSession(session)
-        return session.id
+        return sessionID
     }
 
     private func finish(
@@ -332,23 +344,6 @@ final class RoutineRunner {
         }
         instructions.append(contentsOf: capabilities.skills.map(\.instructions).filter { !$0.isEmpty })
         return instructions.joined(separator: "\n\n")
-    }
-
-    private func makeSession(routine: Routine, messages: [ChatTranscriptMessage]) -> ChatSession {
-        let now = Date()
-        return ChatSession(
-            id: UUID(),
-            title: routine.name.isEmpty ? "Scheduled" : routine.name,
-            customTitle: nil,
-            createdAt: now,
-            updatedAt: now,
-            messages: messages,
-            pinned: nil,
-            pinnedOrder: nil,
-            sessionOrder: nil,
-            folderID: nil,
-            scheduledTaskID: routine.id
-        )
     }
 
     private static func summarize(_ content: String) -> String {

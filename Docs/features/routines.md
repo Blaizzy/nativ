@@ -15,11 +15,12 @@ legacy `kitID` field migrate to a kit capability when loaded.
 
 ## Creating a scheduled task
 
-- **New scheduled task** from the sidebar creation menu opens the editor and, on save, creates its
+- **New scheduled task** from the Scheduled page opens the editor and, on save, creates its linked
   chat. Selecting a kit enables the kit's constituent integrations; individual selections remain
   narrow allowlists for that task.
 
-Removing a scheduled chat cancels its task; editing the task offers removal that keeps the chat.
+Deleting a scheduled chat also deletes its task and run history. Deleting the task from the
+Scheduled page removes the same linked data.
 
 ## Schedule
 

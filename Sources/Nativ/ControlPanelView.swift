@@ -603,7 +603,15 @@ struct ControlPanelView: View {
                 pendingDeleteRecent = nil
             }
         } message: { recent in
-            Text("“\(recent.title)” will be permanently deleted.")
+            if case .chat(let sessionID) = recent.selection,
+               routineStore.routine(forSession: sessionID) != nil {
+                Text(
+                    "“\(recent.title)” is a scheduled task. Deleting this chat also deletes "
+                        + "the scheduled task and its run history."
+                )
+            } else {
+                Text("“\(recent.title)” will be permanently deleted.")
+            }
         }
         .alert(
             "Delete folder?",
@@ -634,7 +642,7 @@ struct ControlPanelView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
+            Text(bulkDeleteDescription)
         }
     }
 
@@ -1472,18 +1480,26 @@ struct ControlPanelView: View {
     private var recentSessions: [ControlPanelRecentSession] {
         (
             chat.sessions
-                .filter {
-                    $0.scheduledTaskID == nil && !scheduledSessionIDs.contains($0.id)
-                }
+                .filter(shouldDisplayChatSession)
                 .map(ControlPanelRecentSession.init(chat:))
                 + imageGeneration.sessions.map(ControlPanelRecentSession.init(imageGeneration:))
         )
             .sorted(by: ControlPanelRecentSession.recencySort)
     }
 
-    private var scheduledSessionIDs: Set<UUID> {
+    private var scheduledTaskChatIDs: Set<UUID> {
         Set(routineStore.routines.compactMap(\.sourceSessionID))
-            .union(routineStore.runs.compactMap(\.sessionID))
+    }
+
+    private var scheduledRunChatIDs: Set<UUID> {
+        Set(routineStore.runs.compactMap(\.sessionID))
+    }
+
+    private func shouldDisplayChatSession(_ session: ChatSessionSummary) -> Bool {
+        if scheduledTaskChatIDs.contains(session.id) {
+            return true
+        }
+        return session.scheduledTaskID == nil && !scheduledRunChatIDs.contains(session.id)
     }
 
     private var pinnedSessions: [ControlPanelRecentSession] {
@@ -1685,6 +1701,29 @@ struct ControlPanelView: View {
         recentSessions.filter { $0.isChat && selectedRecentIDs.contains($0.id) }
     }
 
+    private var selectedScheduledTaskCount: Int {
+        selectedChats.reduce(into: 0) { count, recent in
+            guard let sessionID = recent.chatID,
+                  routineStore.routine(forSession: sessionID) != nil
+            else {
+                return
+            }
+            count += 1
+        }
+    }
+
+    private var bulkDeleteDescription: String {
+        let base = "The selected chats are permanently deleted."
+        let folders = "Selected folders are removed but their chats are kept."
+        guard selectedScheduledTaskCount > 0 else {
+            return "\(base) \(folders)"
+        }
+        let scheduledData = selectedScheduledTaskCount == 1
+            ? "1 linked scheduled task and its run history"
+            : "\(selectedScheduledTaskCount) linked scheduled tasks and their run history"
+        return "\(base) This also deletes \(scheduledData). \(folders)"
+    }
+
     private var hasSelectedChats: Bool {
         !selectedChats.isEmpty
     }
@@ -1773,7 +1812,7 @@ struct ControlPanelView: View {
             for recent in targets {
                 switch recent.selection {
                 case .chat(let sessionID):
-                    chat.deleteSession(sessionID)
+                    deleteChatSession(sessionID)
                 case .imageGeneration(let sessionID):
                     imageGeneration.deleteSession(sessionID)
                 case .tab, .extensionPage:
@@ -2168,7 +2207,7 @@ struct ControlPanelView: View {
 
         switch recent.selection {
         case .chat(let sessionID):
-            chat.deleteSession(sessionID)
+            deleteChatSession(sessionID)
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
         case .tab, .extensionPage:
@@ -2188,6 +2227,22 @@ struct ControlPanelView: View {
             case .chat, .tab, .extensionPage:
                 createChatSession()
             }
+        }
+    }
+
+    private func deleteChatSession(_ sessionID: UUID) {
+        guard let routine = routineStore.routine(forSession: sessionID) else {
+            chat.deleteSession(sessionID)
+            return
+        }
+
+        let sessionIDs = Set(
+            [routine.sourceSessionID].compactMap { $0 }
+                + routineStore.runs(forRoutine: routine.id).compactMap(\.sessionID)
+        )
+        routineStore.delete(id: routine.id)
+        for linkedSessionID in sessionIDs {
+            chat.deleteSession(linkedSessionID)
         }
     }
 
@@ -3663,6 +3718,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let scheduledTaskID: String?
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
@@ -3673,6 +3729,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         pinnedOrder = session.pinnedOrder
         sessionOrder = session.sessionOrder
         folderID = session.folderID
+        scheduledTaskID = session.scheduledTaskID
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -3684,6 +3741,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         pinnedOrder = nil
         sessionOrder = nil
         folderID = nil
+        scheduledTaskID = nil
     }
 
     var chatID: UUID? {
@@ -3716,9 +3774,18 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     var badgeSystemImage: String? {
         switch id {
         case .chat:
-            nil
+            scheduledTaskID == nil ? nil : "clock"
         case .imageGeneration:
             "photo"
+        }
+    }
+
+    var badgeLabel: String? {
+        switch id {
+        case .chat:
+            scheduledTaskID == nil ? nil : "Scheduled task"
+        case .imageGeneration:
+            "Image session"
         }
     }
 
@@ -3841,8 +3908,8 @@ private struct ControlPanelRecentSessionRow: View {
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                                         .fill(Color.secondary.opacity(0.1))
                                 )
-                                .help("Image session")
-                                .accessibilityLabel("Image session")
+                                .help(recent.badgeLabel ?? "Session")
+                                .accessibilityLabel(recent.badgeLabel ?? "Session")
                         }
 
                         TextShimmerWave(text: recent.title, active: isActive)
