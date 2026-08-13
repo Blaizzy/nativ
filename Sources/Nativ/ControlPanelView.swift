@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import NativServerKit
 import NativExtensionSDK
 import SwiftUI
@@ -256,89 +255,9 @@ private struct GlobalModelLoadFailureBanner: View {
     }
 }
 
-/// Filters app-wide model updates down to state that can change the control
-/// panel shell. Metrics and token-stat updates are intentionally excluded so
-/// their polling cadence does not rebuild the sidebar and all session menus.
-@MainActor
-private final class ControlPanelNativState: ObservableObject {
-    @Published private(set) var settings: NativSettings
-    @Published private(set) var isRunning: Bool
-    @Published private(set) var modelSwitchInProgress: Bool
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var metricsLoading: Bool
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
-    @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
-
-    private var cancellables = Set<AnyCancellable>()
-
-    init(model: NativModel) {
-        settings = model.settings
-        isRunning = model.isRunning
-        modelSwitchInProgress = model.modelSwitchInProgress
-        modelLoadingProgress = model.modelLoadingProgress
-        metricsLoading = model.metricsLoading
-        modelLoadFailure = model.modelLoadFailure
-        modelPreloadMemoryWarning = model.modelPreloadMemoryWarning
-        systemHuggingFaceCredential = model.systemHuggingFaceCredential
-
-        model.$settings
-            .removeDuplicates()
-            .sink { [weak self] in self?.settings = $0 }
-            .store(in: &cancellables)
-        model.$isRunning
-            .removeDuplicates()
-            .sink { [weak self] in self?.isRunning = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchInProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchInProgress = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadingProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadingProgress = $0 }
-            .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] in self?.metricsLoading = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadFailure
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadFailure = $0 }
-            .store(in: &cancellables)
-        model.$modelPreloadMemoryWarning
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelPreloadMemoryWarning = $0 }
-            .store(in: &cancellables)
-        model.$systemHuggingFaceCredential
-            .removeDuplicates()
-            .sink { [weak self] in self?.systemHuggingFaceCredential = $0 }
-            .store(in: &cancellables)
-    }
-
-    var isModelLoading: Bool {
-        modelSwitchInProgress
-            || (settings.normalized().languageModelID != nil
-                && (metricsLoading || modelLoadingProgress != nil))
-    }
-
-    var modelLoadingPercentageText: String? {
-        modelLoadingProgress.map { progress in
-            "\(min(max(Int((progress * 100).rounded()), 0), 100))%"
-        }
-    }
-
-    var effectiveHuggingFaceToken: String? {
-        HuggingFaceAuthentication.effectiveToken(
-            customToken: settings.huggingFaceToken,
-            environmentToken: systemHuggingFaceCredential?.token
-        )
-    }
-}
-
 struct ControlPanelView: View {
     @Environment(\.displayScale) private var displayScale
-    let model: NativModel
+    @ObservedObject var model: NativModel
     @ObservedObject var navigation: ControlPanelNavigation
     // Only the Developer page observes live runtime values. Keeping this as a
     // plain reference prevents its one-second polling cycle from invalidating
@@ -346,7 +265,6 @@ struct ControlPanelView: View {
     let runtime: SystemRuntimeMonitor
     @ObservedObject var extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
-    @StateObject private var modelState: ControlPanelNativState
     @StateObject private var chat = ChatViewModel()
     @StateObject private var mcpHost = MCPHostManager()
     @StateObject private var imageGeneration = ImageGenerationViewModel()
@@ -364,7 +282,7 @@ struct ControlPanelView: View {
         guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
             return nil
         }
-        let settings = modelState.settings.normalized()
+        let settings = model.settings.normalized()
         let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
             ?? URL(string: "http://127.0.0.1:8080")!
         let modelID = Self.embeddingModelID
@@ -386,7 +304,7 @@ struct ControlPanelView: View {
                     repoID: modelID,
                     sizeBytes: Self.embeddingModelSize,
                     cachePath: settings.modelSearchPath,
-                    token: modelState.effectiveHuggingFaceToken
+                    token: model.effectiveHuggingFaceToken
                 ) {
                     EmbeddingModelPreparer.prepare(
                         repoID: modelID,
@@ -449,21 +367,6 @@ struct ControlPanelView: View {
     @State private var pendingDeleteFolder: ChatFolder?
     @State private var isConfirmingBulkDelete = false
 
-    init(
-        model: NativModel,
-        navigation: ControlPanelNavigation,
-        runtime: SystemRuntimeMonitor,
-        extensionManager: NativExtensionManager,
-        softwareUpdater: SoftwareUpdater
-    ) {
-        self.model = model
-        self.navigation = navigation
-        self.runtime = runtime
-        self.extensionManager = extensionManager
-        self.softwareUpdater = softwareUpdater
-        _modelState = StateObject(wrappedValue: ControlPanelNativState(model: model))
-    }
-
     var body: some View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
@@ -507,7 +410,7 @@ struct ControlPanelView: View {
         }
         .overlay(alignment: .top) {
             Group {
-                if selectedTab != .models, let failure = modelState.modelLoadFailure {
+                if selectedTab != .models, let failure = model.modelLoadFailure {
                     GlobalModelLoadFailureBanner(
                         failure: failure,
                         onOpenModels: { navigation.open(.models) },
@@ -540,7 +443,7 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
-            embeddingLibrary.scan(searchPaths: modelState.settings.localModelSearchPaths)
+            embeddingLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -865,8 +768,8 @@ struct ControlPanelView: View {
                 Spacer(minLength: 0)
                 if tab == .models {
                     HStack(spacing: 6) {
-                        if modelState.isModelLoading,
-                           let percentage = modelState.modelLoadingPercentageText {
+                        if model.isModelLoading,
+                           let percentage = model.modelLoadingPercentageText {
                             Text(percentage)
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
@@ -910,7 +813,7 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            if !modelState.settings.sidebarPinnedCollapsed {
+            if !model.settings.sidebarPinnedCollapsed {
                 Group {
                     if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
                         emptyPinnedHint
@@ -954,7 +857,7 @@ struct ControlPanelView: View {
                 .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
 
-            if !modelState.settings.sidebarSessionsCollapsed {
+            if !model.settings.sidebarSessionsCollapsed {
                 ForEach(ungroupedSessions) { recent in
                     draggableRow(recent, isPinnedRow: false)
                         .overlay(alignment: .top) {
@@ -984,7 +887,7 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            if !modelState.settings.sidebarFoldersCollapsed {
+            if !model.settings.sidebarFoldersCollapsed {
                 if unpinnedFolders.isEmpty {
                     emptyFoldersHint
                 } else {
@@ -1381,7 +1284,7 @@ struct ControlPanelView: View {
     private var sidebarPinnedHeader: some View {
         sidebarSectionHeader(
             title: "Pinned",
-            isCollapsed: modelState.settings.sidebarPinnedCollapsed,
+            isCollapsed: model.settings.sidebarPinnedCollapsed,
             onToggle: { model.settings.sidebarPinnedCollapsed.toggle() }
         ) {
             EmptyView()
@@ -1391,7 +1294,7 @@ struct ControlPanelView: View {
     private var sidebarFoldersHeader: some View {
         sidebarSectionHeader(
             title: "Folders",
-            isCollapsed: modelState.settings.sidebarFoldersCollapsed,
+            isCollapsed: model.settings.sidebarFoldersCollapsed,
             onToggle: { model.settings.sidebarFoldersCollapsed.toggle() }
         ) {
             Button {
@@ -1413,7 +1316,7 @@ struct ControlPanelView: View {
     private var sidebarRecentsHeader: some View {
         sidebarSectionHeader(
             title: "Sessions",
-            isCollapsed: modelState.settings.sidebarSessionsCollapsed,
+            isCollapsed: model.settings.sidebarSessionsCollapsed,
             onToggle: { model.settings.sidebarSessionsCollapsed.toggle() }
         ) {
             EmptyView()
@@ -1421,7 +1324,7 @@ struct ControlPanelView: View {
     }
 
     private var allSidebarSectionsCollapsed: Bool {
-        modelState.settings.allSidebarSectionsCollapsed
+        model.settings.allSidebarSectionsCollapsed
             && !chat.folders.contains { !$0.isCollapsed }
     }
 
@@ -1520,15 +1423,15 @@ struct ControlPanelView: View {
     private var serverToggleButton: some View {
         footerControl(
             .server,
-            tooltip: modelState.isRunning ? "Stop Server" : "Start Server"
+            tooltip: model.isRunning ? "Stop Server" : "Start Server"
         ) {
             Button {
                 model.toggleServer()
             } label: {
-                footerIcon(systemName: modelState.isRunning ? "stop.circle" : "play.circle")
+                footerIcon(systemName: model.isRunning ? "stop.circle" : "play.circle")
             }
             .buttonStyle(.plain)
-            .disabled(modelState.modelSwitchInProgress)
+            .disabled(model.modelSwitchInProgress)
         }
     }
 
@@ -1730,7 +1633,7 @@ struct ControlPanelView: View {
         guard case .chat(let sessionID) = recent.selection else {
             return
         }
-        let settings = modelState.settings.normalized()
+        let settings = model.settings.normalized()
         routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
         guard let existing = RoutineStore.shared.routine(forSession: sessionID) else {
             return
@@ -1739,7 +1642,7 @@ struct ControlPanelView: View {
     }
 
     private func presentNewRoutine() {
-        let settings = modelState.settings.normalized()
+        let settings = model.settings.normalized()
         routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
         schedulingRoutineDraft = RoutineDraft(
             routine: Routine(modelID: settings.languageModelID ?? "")
@@ -2014,7 +1917,7 @@ struct ControlPanelView: View {
         .alert(
             "Models May Not Fit in Memory",
             isPresented: Binding(
-                get: { modelState.modelPreloadMemoryWarning != nil },
+                get: { model.modelPreloadMemoryWarning != nil },
                 set: { isPresented in
                     if !isPresented {
                         model.cancelPendingModelPreloadSwitch()
@@ -2030,7 +1933,7 @@ struct ControlPanelView: View {
                 model.cancelPendingModelPreloadSwitch()
             }
         } message: {
-            Text(modelState.modelPreloadMemoryWarning?.message ?? "")
+            Text(model.modelPreloadMemoryWarning?.message ?? "")
         }
     }
 
@@ -2492,7 +2395,7 @@ struct ControlPanelView: View {
 private struct ChatWorkspaceView: View {
     let mode: ChatWorkspaceMode
     let onSelectMode: (ChatWorkspaceMode) -> Void
-    let model: NativModel
+    @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager

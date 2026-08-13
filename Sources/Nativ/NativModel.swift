@@ -727,11 +727,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func refreshMetricsIfRunning(force: Bool = false) {
-        let serverIsRunning = server.isRunning
-        if isRunning != serverIsRunning {
-            isRunning = serverIsRunning
-        }
-        guard serverIsRunning else {
+        isRunning = server.isRunning
+        guard isRunning else {
             stopMetricsPolling(clearSession: true)
             notifyMenuStateChanged()
             return
@@ -862,9 +859,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             return
         }
 
-        if !isRunning {
-            isRunning = true
-        }
+        isRunning = true
         lastMetricsError = nil
         metricsStartupGraceUntil = nil
         metricsLoading = false
