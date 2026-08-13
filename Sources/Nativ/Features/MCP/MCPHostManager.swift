@@ -132,10 +132,15 @@ final class MCPHostManager: ObservableObject {
                 states[config.id] = .failed("Couldn’t find “\(config.command)”")
                 continue
             }
+            let catalogEntry = MCPServerCatalog.bundled.entry(matching: config)
             let client = MCPClient(
                 executableURL: executable,
                 arguments: config.arguments,
-                environment: Self.childEnvironment(searchPath: searchPath, overrides: config.environment),
+                environment: Self.childEnvironment(
+                    searchPath: searchPath,
+                    overrides: config.environment,
+                    excluding: catalogEntry?.excludedEnvironment ?? []
+                ),
                 workingDirectory: Self.workingDirectory(for: config.id.uuidString)
             )
             pending.append((config, client))
@@ -214,6 +219,20 @@ final class MCPHostManager: ObservableObject {
     }
 
     private static func resolveExecutable(_ command: String, searchPath: String?) -> URL? {
+        let bundledPrefix = "@bundled/"
+        if command.hasPrefix(bundledPrefix) {
+            let name = String(command.dropFirst(bundledPrefix.count))
+            guard !name.isEmpty, !name.contains("/") else { return nil }
+            guard let url = Bundle.main.url(
+                forResource: name,
+                withExtension: nil,
+                subdirectory: "MCPServers"
+            ) else {
+                return nil
+            }
+            return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+        }
+
         let expanded = (command as NSString).expandingTildeInPath
         if expanded.contains("/") {
             return FileManager.default.isExecutableFile(atPath: expanded)
@@ -231,7 +250,8 @@ final class MCPHostManager: ObservableObject {
 
     private static func childEnvironment(
         searchPath: String?,
-        overrides: [String: String]
+        overrides: [String: String],
+        excluding excludedNames: [String]
     ) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         if let searchPath, !searchPath.isEmpty {
@@ -239,6 +259,9 @@ final class MCPHostManager: ObservableObject {
         }
         for (key, value) in overrides {
             environment[key] = value
+        }
+        for name in excludedNames {
+            environment[name] = nil
         }
         return environment
     }
