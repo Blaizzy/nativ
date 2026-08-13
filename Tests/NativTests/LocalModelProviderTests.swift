@@ -291,46 +291,87 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
     }
 }
 
-final class HuggingFaceDownloadProgressStateTests: XCTestCase {
-    func testAllocatedBytesProvideMonotonicAggregateProgress() {
-        let start = Date(timeIntervalSinceReferenceDate: 1_000)
-        var state = HuggingFaceDownloadProgressState(now: start)
+final class ModelDownloadProgressTests: XCTestCase {
+    func testInvalidTotalIsUnknown() {
+        let progress = ModelDownloadProgress(totalBytes: 0)
 
-        XCTAssertEqual(
-            state.recordAllocatedBytes(25, expectedBytes: 100, at: start),
-            0.25
+        XCTAssertNil(progress.totalBytes)
+        XCTAssertEqual(progress.fractionCompleted, 0)
+        XCTAssertNil(progress.remainingBytes)
+    }
+
+    func testCompletedBytesAreClampedToTotal() throws {
+        let progress = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 120, totalBytes: 100)
         )
-        XCTAssertNil(
-            state.recordReportedProgress(0.10, at: start.addingTimeInterval(1))
+
+        XCTAssertEqual(progress.completedBytes, 100)
+        XCTAssertEqual(progress.fractionCompleted, 1)
+        XCTAssertEqual(progress.remainingBytes, 0)
+    }
+
+    func testMergeIsMonotonicForTheSameTotal() throws {
+        var progress = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 50, totalBytes: 100)
         )
-        XCTAssertEqual(state.progress, 0.25)
+        let olderUpdate = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 25, totalBytes: 100)
+        )
+
+        XCTAssertFalse(progress.merge(olderUpdate))
+        XCTAssertEqual(progress.completedBytes, 50)
+    }
+}
+
+final class HuggingFaceDownloadOutputTests: XCTestCase {
+    func testParsesProgress() throws {
+        let output = try XCTUnwrap(
+            HuggingFaceDownloadOutput(line: "__NATIV_PROGRESS__:34:80")
+        )
+        guard case .progress(let progress) = output else {
+            return XCTFail("Expected a progress event")
+        }
+
+        XCTAssertEqual(progress.completedBytes, 34)
+        XCTAssertEqual(progress.totalBytes, 80)
+    }
+
+    func testParsesTransferredBytes() {
         XCTAssertEqual(
-            state.recordAllocatedBytes(75, expectedBytes: 100, at: start.addingTimeInterval(2)),
-            0.75
+            HuggingFaceDownloadOutput(line: "__NATIV_TRANSFERRED__:2048"),
+            .transferredBytes(2_048)
         )
     }
 
-    func testNewCacheBytesResetTheStallDeadline() {
-        let start = Date(timeIntervalSinceReferenceDate: 2_000)
-        var state = HuggingFaceDownloadProgressState(now: start)
+    func testRejectsMalformedOutput() {
+        XCTAssertNil(HuggingFaceDownloadOutput(line: "__NATIV_PROGRESS__:34:0"))
+        XCTAssertNil(HuggingFaceDownloadOutput(line: "ordinary log output"))
+    }
+}
 
+final class HuggingFaceDownloadProgressStateTests: XCTestCase {
+    func testProgressIsMonotonicAndResetsTheStallDeadline() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+        let first = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 25, totalBytes: 100)
+        )
+        let older = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 10, totalBytes: 100)
+        )
+
+        XCTAssertEqual(state.recordProgress(first, at: start), first)
+        XCTAssertNil(state.recordProgress(older, at: start.addingTimeInterval(1)))
         XCTAssertFalse(
             state.isStalled(at: start.addingTimeInterval(59), timeout: 60, isPaused: false)
         )
-        XCTAssertEqual(
-            state.recordAllocatedBytes(1, expectedBytes: 10, at: start.addingTimeInterval(59)),
-            0.1
-        )
-        XCTAssertFalse(
-            state.isStalled(at: start.addingTimeInterval(100), timeout: 60, isPaused: false)
-        )
         XCTAssertTrue(
-            state.isStalled(at: start.addingTimeInterval(119), timeout: 60, isPaused: false)
+            state.isStalled(at: start.addingTimeInterval(60), timeout: 60, isPaused: false)
         )
     }
 
     func testPausedDownloadNeverTriggersRecovery() {
-        let start = Date(timeIntervalSinceReferenceDate: 3_000)
+        let start = Date(timeIntervalSinceReferenceDate: 2_000)
         let state = HuggingFaceDownloadProgressState(now: start)
 
         XCTAssertFalse(
@@ -338,43 +379,64 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
     }
 
-    func testNearCompleteProgressUsesFinalizingState() {
-        let start = Date(timeIntervalSinceReferenceDate: 4_000)
+    func testNearCompleteProgressUsesFinalizingState() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 3_000)
         var state = HuggingFaceDownloadProgressState(now: start)
+        let progress = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 995, totalBytes: 1_000)
+        )
 
-        _ = state.recordReportedProgress(0.995, at: start)
+        _ = state.recordProgress(progress, at: start)
 
         XCTAssertTrue(state.isFinalizing)
     }
 
-    func testAllocatedBytesProduceSmoothedTransferSpeed() {
-        let start = Date(timeIntervalSinceReferenceDate: 5_000)
+    func testTransferredBytesProduceSmoothedTransferSpeed() {
+        let start = Date(timeIntervalSinceReferenceDate: 4_000)
         var state = HuggingFaceDownloadProgressState(now: start)
 
-        _ = state.recordAllocatedBytes(100, expectedBytes: nil, at: start)
-        XCTAssertNil(state.bytesPerSecond)
-
-        _ = state.recordAllocatedBytes(1_100, expectedBytes: nil, at: start.addingTimeInterval(1))
+        _ = state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
         XCTAssertEqual(state.bytesPerSecond, 1_000)
 
-        _ = state.recordAllocatedBytes(3_100, expectedBytes: nil, at: start.addingTimeInterval(2))
+        _ = state.recordTransferredBytes(3_000, at: start.addingTimeInterval(2))
         XCTAssertEqual(state.bytesPerSecond, 1_350)
     }
 
-    func testTransferSpeedFallsToZeroAfterNoNewBytes() {
+    func testTransferBytesAdvanceProgressBetweenReconstructionUpdates() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 5_000)
+        var state = HuggingFaceDownloadProgressState(now: start)
+        let initial = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 0, totalBytes: 1_000)
+        )
+        let reconstructed = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 200, totalBytes: 1_000)
+        )
+
+        _ = state.recordProgress(initial, at: start)
+        XCTAssertEqual(
+            state.recordTransferredBytes(100, at: start.addingTimeInterval(0.1))?.completedBytes,
+            100
+        )
+        _ = state.recordProgress(reconstructed, at: start.addingTimeInterval(0.2))
+        XCTAssertEqual(
+            state.recordTransferredBytes(200, at: start.addingTimeInterval(0.3))?.completedBytes,
+            350
+        )
+    }
+
+    func testTransferSpeedBecomesUnknownWhenStale() {
         let start = Date(timeIntervalSinceReferenceDate: 6_000)
         var state = HuggingFaceDownloadProgressState(now: start)
 
-        _ = state.recordAllocatedBytes(0, expectedBytes: nil, at: start)
-        _ = state.recordAllocatedBytes(1_000, expectedBytes: nil, at: start.addingTimeInterval(1))
-        XCTAssertNotNil(state.bytesPerSecond)
-
-        _ = state.recordAllocatedBytes(1_000, expectedBytes: nil, at: start.addingTimeInterval(3))
-        XCTAssertEqual(state.bytesPerSecond, 0)
+        _ = state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
+        XCTAssertEqual(state.transferSpeed(at: start.addingTimeInterval(2)), 1_000)
+        XCTAssertNil(state.transferSpeed(at: start.addingTimeInterval(3)))
     }
 }
 
 final class ModelDownloadProgressPresentationTests: XCTestCase {
+    private let testLocale = Locale(identifier: "en_US_POSIX")
+
     func testActiveDownloadNeverDisplaysOneHundredPercent() {
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0), 0)
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0.994), 99)
@@ -393,9 +455,33 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
 
     func testTransferSpeedFormatting() {
         XCTAssertNil(ModelDownloadProgressPresentation.formattedSpeed(nil))
-        XCTAssertEqual(ModelDownloadProgressPresentation.formattedSpeed(0), "0 B/s")
-        XCTAssertTrue(
-            ModelDownloadProgressPresentation.formattedSpeed(1_000_000)?.hasSuffix("/s") == true
+        XCTAssertEqual(
+            ModelDownloadProgressPresentation.formattedSpeed(0, locale: testLocale),
+            "0 B/s"
+        )
+        XCTAssertEqual(
+            ModelDownloadProgressPresentation.formattedSpeed(
+                1_000_000,
+                locale: testLocale
+            ),
+            "1 MB/s"
+        )
+    }
+
+    func testByteProgressFormatting() throws {
+        let progress = try XCTUnwrap(
+            ModelDownloadProgress(
+                completedBytes: 3_400_000_000,
+                totalBytes: 8_000_000_000
+            )
+        )
+
+        XCTAssertEqual(
+            ModelDownloadProgressPresentation.formattedByteProgress(
+                progress,
+                locale: testLocale
+            ),
+            "3.4 GB / 8 GB"
         )
     }
 }

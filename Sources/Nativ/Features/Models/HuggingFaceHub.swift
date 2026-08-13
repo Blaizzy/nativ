@@ -884,6 +884,44 @@ final class HuggingFaceModelLibrary: ObservableObject {
     }
 }
 
+struct ModelDownloadProgress: Equatable, Sendable {
+    private(set) var completedBytes: Int64
+    private(set) var totalBytes: Int64?
+
+    init(totalBytes: Int64?) {
+        self.completedBytes = 0
+        self.totalBytes = totalBytes.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    init?(completedBytes: Int64, totalBytes: Int64) {
+        guard totalBytes > 0 else { return nil }
+        self.completedBytes = min(max(completedBytes, 0), totalBytes)
+        self.totalBytes = totalBytes
+    }
+
+    var fractionCompleted: Double {
+        guard let totalBytes else { return 0 }
+        return Double(completedBytes) / Double(totalBytes)
+    }
+
+    var remainingBytes: Int64? {
+        totalBytes.map { max($0 - completedBytes, 0) }
+    }
+
+    mutating func merge(_ update: Self) -> Bool {
+        guard update.totalBytes != totalBytes || update.completedBytes > completedBytes else {
+            return false
+        }
+
+        if update.totalBytes == totalBytes {
+            completedBytes = max(completedBytes, update.completedBytes)
+        } else {
+            self = update
+        }
+        return true
+    }
+}
+
 @MainActor
 final class HuggingFaceDownloadManager: ObservableObject {
     static let shared = HuggingFaceDownloadManager()
@@ -909,13 +947,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     struct ActiveDownload: Identifiable, Equatable {
         let modelID: String
-        let sizeBytes: Int64?
-        var progress: Double
+        var metrics: ModelDownloadProgress
         var bytesPerSecond: Double?
         var state: DownloadState
         var phase: DownloadPhase
 
         var id: String { modelID }
+        var progress: Double { metrics.fractionCompleted }
     }
 
     private final class DownloadContext {
@@ -942,7 +980,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     let rowUpdates = PassthroughSubject<String?, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
-    private var progressUpdateTimes: [String: Date] = [:]
     private var freeDiskCache: [String: (timestamp: Date, bytes: Int64?)] = [:]
 
     deinit {
@@ -956,10 +993,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     var reservedBytes: Int64 {
         downloads.reduce(Int64(0)) { total, download in
-            guard let sizeBytes = download.sizeBytes else { return total }
-            let remaining = Double(sizeBytes) * (1 - download.progress)
-            guard remaining > 0 else { return total }
-            return total + Int64(remaining)
+            total + (download.metrics.remainingBytes ?? 0)
         }
     }
 
@@ -1120,7 +1154,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
         contexts.removeAll()
         downloads.removeAll()
-        progressUpdateTimes.removeAll()
         waiters.forEach { $0.resume(throwing: CancellationError()) }
 
         await withTaskGroup(of: Void.self) { group in
@@ -1151,8 +1184,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         downloads.append(
             ActiveDownload(
                 modelID: repoID,
-                sizeBytes: sizeBytes,
-                progress: 0,
+                metrics: ModelDownloadProgress(totalBytes: sizeBytes),
                 bytesPerSecond: nil,
                 state: .downloading,
                 phase: .preparing
@@ -1174,7 +1206,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
             repoID: repoID,
             cachePath: context.cachePath,
             token: normalizedToken,
-            expectedBytes: downloads.first { $0.modelID == repoID }?.sizeBytes,
             progress: { progress in
                 Task { @MainActor [weak self] in
                     self?.updateProgress(repoID, progress)
@@ -1226,28 +1257,15 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
     }
 
-    private func updateProgress(_ modelID: String, _ progress: Double) {
+    private func updateProgress(_ modelID: String, _ progress: ModelDownloadProgress) {
         guard contexts[modelID] != nil,
               let index = downloads.firstIndex(where: { $0.modelID == modelID })
         else {
             return
         }
-        let previousProgress = downloads[index].progress
-        let clampedProgress = max(previousProgress, min(max(progress, 0), 1))
-        let now = Date()
-        let lastUpdate = progressUpdateTimes[modelID] ?? .distantPast
-
-        // Python reports byte progress frequently. Coalesce those reports on
-        // the main actor so a download does not invalidate every visible row
-        // (and the scroll view) for tiny, visually indistinguishable changes.
-        guard clampedProgress >= 1
-            || clampedProgress - previousProgress >= 0.01
-            || now.timeIntervalSince(lastUpdate) >= 0.10
-        else {
-            return
-        }
-        downloads[index].progress = clampedProgress
-        progressUpdateTimes[modelID] = now
+        var metrics = downloads[index].metrics
+        guard metrics.merge(progress) else { return }
+        downloads[index].metrics = metrics
         rowUpdates.send(modelID)
     }
 
@@ -1288,7 +1306,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private func removeContext(_ modelID: String) {
         contexts.removeValue(forKey: modelID)
         downloads.removeAll { $0.modelID == modelID }
-        progressUpdateTimes.removeValue(forKey: modelID)
         rowUpdates.send(nil)
     }
 
@@ -1342,52 +1359,135 @@ private enum HuggingFaceSnapshotDownloader {
 }
 
 struct HuggingFaceDownloadProgressState: Equatable {
-    private(set) var progress: Double
-    private(set) var lastActivity: Date
-    private(set) var allocatedBytes: Int64
-    private(set) var bytesPerSecond: Double?
-    private var speedSampleBytes: Int64
-    private var speedSampleTime: Date
-    private var hasSpeedSample = false
+    private static let activeProgressLimit = 0.994
+    private static let speedSampleInterval: TimeInterval = 0.4
+    private static let speedStaleInterval: TimeInterval = 2
 
-    init(now: Date = Date(), progress: Double = 0, allocatedBytes: Int64 = 0) {
-        self.progress = min(max(progress, 0), 1)
+    private(set) var progress: ModelDownloadProgress?
+    private(set) var lastActivity: Date
+    private(set) var bytesPerSecond: Double?
+    private var reconstructedBytes: Int64 = 0
+    private var transferredBytes: Int64 = 0
+    private var speedSampleBytes: Int64 = 0
+    private var speedSampleTime: Date
+    private var lastTransferTime: Date?
+    private var checkpointReconstructedBytes: Int64 = 0
+    private var checkpointTransferredBytes: Int64 = 0
+    private var checkpointDisplayedBytes: Int64 = 0
+    private var logicalBytesPerTransferByte = 1.0
+
+    init(now: Date = .now) {
         self.lastActivity = now
-        self.allocatedBytes = max(allocatedBytes, 0)
         self.bytesPerSecond = nil
-        self.speedSampleBytes = max(allocatedBytes, 0)
         self.speedSampleTime = now
     }
 
-    mutating func beginAttempt(at now: Date = Date()) {
+    mutating func beginAttempt(at now: Date = .now) {
         lastActivity = now
         bytesPerSecond = nil
-        speedSampleBytes = allocatedBytes
+        transferredBytes = 0
+        speedSampleBytes = 0
         speedSampleTime = now
-        hasSpeedSample = false
+        lastTransferTime = nil
+        checkpointReconstructedBytes = reconstructedBytes
+        checkpointTransferredBytes = 0
+        checkpointDisplayedBytes = progress?.completedBytes ?? 0
     }
 
-    mutating func recordReportedProgress(_ fraction: Double, at now: Date = Date()) -> Double? {
-        recordProgress(fraction, at: now)
+    mutating func resume(at now: Date = .now) {
+        lastActivity = now
+        bytesPerSecond = nil
+        speedSampleBytes = transferredBytes
+        speedSampleTime = now
+        lastTransferTime = nil
     }
 
-    mutating func recordAllocatedBytes(
-        _ bytes: Int64,
-        expectedBytes: Int64?,
-        at now: Date = Date()
-    ) -> Double? {
-        let clampedBytes = max(bytes, 0)
-        recordTransferSpeed(clampedBytes, at: now)
-        if clampedBytes > allocatedBytes {
-            allocatedBytes = clampedBytes
-            lastActivity = now
+    mutating func recordProgress(
+        _ update: ModelDownloadProgress,
+        at now: Date = .now
+    ) -> ModelDownloadProgress? {
+        let hasNewBytes = update.completedBytes > reconstructedBytes
+        let hasNewTotal = update.totalBytes != progress?.totalBytes
+        guard hasNewBytes || hasNewTotal else { return nil }
+
+        let nextReconstructedBytes = max(reconstructedBytes, update.completedBytes)
+        let logicalDelta = nextReconstructedBytes - checkpointReconstructedBytes
+        let transferDelta = transferredBytes - checkpointTransferredBytes
+        if logicalDelta > 0, transferDelta > 0 {
+            // Xet reconstructs in buffered bursts. Re-anchor to each exact
+            // update, then advance smoothly using network bytes between them.
+            let observedRatio = Double(logicalDelta) / Double(transferDelta)
+            let boundedRatio = min(max(observedRatio, 0.25), 4)
+            logicalBytesPerTransferByte = (logicalBytesPerTransferByte + boundedRatio) / 2
         }
-        guard let expectedBytes, expectedBytes > 0 else { return nil }
-        return recordProgress(Double(clampedBytes) / Double(expectedBytes), at: now)
+
+        reconstructedBytes = nextReconstructedBytes
+        let displayedBytes = max(progress?.completedBytes ?? 0, reconstructedBytes)
+        guard let totalBytes = update.totalBytes,
+              let nextProgress = ModelDownloadProgress(
+                  completedBytes: displayedBytes,
+                  totalBytes: totalBytes
+              )
+        else {
+            return nil
+        }
+
+        checkpointReconstructedBytes = reconstructedBytes
+        checkpointTransferredBytes = transferredBytes
+        checkpointDisplayedBytes = nextProgress.completedBytes
+        lastActivity = now
+        guard nextProgress != progress else { return nil }
+        progress = nextProgress
+        return nextProgress
+    }
+
+    mutating func recordTransferredBytes(
+        _ bytes: Int64,
+        at now: Date = .now
+    ) -> ModelDownloadProgress? {
+        let bytes = max(bytes, 0)
+        guard bytes > transferredBytes else { return nil }
+
+        transferredBytes = bytes
+        lastActivity = now
+        lastTransferTime = now
+
+        let elapsed = now.timeIntervalSince(speedSampleTime)
+        if elapsed >= Self.speedSampleInterval {
+            let currentSpeed = Double(bytes - speedSampleBytes) / elapsed
+            bytesPerSecond = bytesPerSecond.map {
+                ($0 * 0.65) + (currentSpeed * 0.35)
+            } ?? currentSpeed
+            speedSampleBytes = bytes
+            speedSampleTime = now
+        }
+
+        guard let totalBytes = progress?.totalBytes else { return nil }
+        let transferDelta = bytes - checkpointTransferredBytes
+        let estimatedBytes = checkpointDisplayedBytes
+            + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
+        let activeLimit = Int64(Double(totalBytes) * Self.activeProgressLimit)
+        guard let estimate = ModelDownloadProgress(
+            completedBytes: min(estimatedBytes, activeLimit),
+            totalBytes: totalBytes
+        ), var progress, progress.merge(estimate) else {
+            return nil
+        }
+        self.progress = progress
+        return progress
+    }
+
+    func transferSpeed(at now: Date = .now) -> Double? {
+        guard let lastTransferTime,
+              now.timeIntervalSince(lastTransferTime) < Self.speedStaleInterval
+        else {
+            return nil
+        }
+        return bytesPerSecond
     }
 
     func isStalled(
-        at now: Date = Date(),
+        at now: Date = .now,
         timeout: TimeInterval,
         isPaused: Bool
     ) -> Bool {
@@ -1395,42 +1495,7 @@ struct HuggingFaceDownloadProgressState: Equatable {
     }
 
     var isFinalizing: Bool {
-        ModelDownloadProgressPresentation.isFinalizing(progress)
-    }
-
-    private mutating func recordTransferSpeed(_ bytes: Int64, at now: Date) {
-        guard hasSpeedSample else {
-            speedSampleBytes = bytes
-            speedSampleTime = now
-            hasSpeedSample = true
-            return
-        }
-
-        let elapsed = now.timeIntervalSince(speedSampleTime)
-        guard elapsed >= 0.4 else { return }
-        let byteDelta = bytes - speedSampleBytes
-        if byteDelta > 0 {
-            let instantaneousSpeed = Double(byteDelta) / elapsed
-            if let currentSpeed = bytesPerSecond {
-                bytesPerSecond = (currentSpeed * 0.65) + (instantaneousSpeed * 0.35)
-            } else {
-                bytesPerSecond = instantaneousSpeed
-            }
-        } else {
-            // Xet commits downloaded blocks in bursts. Keep the field stable
-            // between writes instead of making it repeatedly appear and vanish.
-            bytesPerSecond = 0
-        }
-        speedSampleBytes = bytes
-        speedSampleTime = now
-    }
-
-    private mutating func recordProgress(_ fraction: Double, at now: Date) -> Double? {
-        let clampedProgress = min(max(fraction, 0), 1)
-        guard clampedProgress > progress else { return nil }
-        progress = clampedProgress
-        lastActivity = now
-        return clampedProgress
+        ModelDownloadProgressPresentation.isFinalizing(progress?.fractionCompleted ?? 0)
     }
 }
 
@@ -1453,18 +1518,30 @@ enum ModelDownloadProgressPresentation {
         min(max(progress, 0.025), 0.99)
     }
 
-    static func formattedSpeed(_ bytesPerSecond: Double?) -> String? {
+    static func formattedSpeed(
+        _ bytesPerSecond: Double?,
+        locale: Locale = .current
+    ) -> String? {
         guard let bytesPerSecond, bytesPerSecond.isFinite, bytesPerSecond >= 0 else {
             return nil
         }
-        if bytesPerSecond == 0 {
-            return "0 B/s"
-        }
-        let formattedBytes = ByteCountFormatter.string(
-            fromByteCount: Int64(bytesPerSecond.rounded()),
-            countStyle: .file
-        )
-        return "\(formattedBytes)/s"
+        let bytes = Int64(bytesPerSecond.rounded())
+        guard bytes > 0 else { return "0 B/s" }
+        return "\(formattedBytes(bytes, locale: locale))/s"
+    }
+
+    static func formattedByteProgress(
+        _ progress: ModelDownloadProgress,
+        locale: Locale = .current
+    ) -> String? {
+        guard let totalBytes = progress.totalBytes else { return nil }
+        let completed = formattedBytes(progress.completedBytes, locale: locale)
+        let total = formattedBytes(totalBytes, locale: locale)
+        return "\(completed) / \(total)"
+    }
+
+    private static func formattedBytes(_ bytes: Int64, locale: Locale) -> String {
+        bytes.formatted(.byteCount(style: .file).locale(locale))
     }
 }
 
@@ -1473,39 +1550,68 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
     private var state = HuggingFaceDownloadProgressState()
 
     func beginAttempt() {
-        lock.lock()
-        state.beginAttempt()
-        lock.unlock()
+        lock.withLock { state.beginAttempt() }
     }
 
-    func recordReportedProgress(_ fraction: Double) -> Double? {
-        lock.lock()
-        defer { lock.unlock() }
-        return state.recordReportedProgress(fraction)
+    func resume() {
+        lock.withLock { state.resume() }
     }
 
-    func recordAllocatedBytes(_ bytes: Int64, expectedBytes: Int64?) -> Double? {
-        lock.lock()
-        defer { lock.unlock() }
-        return state.recordAllocatedBytes(bytes, expectedBytes: expectedBytes)
+    func recordProgress(_ progress: ModelDownloadProgress) -> ModelDownloadProgress? {
+        lock.withLock { state.recordProgress(progress) }
+    }
+
+    func recordTransferredBytes(_ bytes: Int64) -> ModelDownloadProgress? {
+        lock.withLock { state.recordTransferredBytes(bytes) }
     }
 
     var bytesPerSecond: Double? {
-        lock.lock()
-        defer { lock.unlock() }
-        return state.bytesPerSecond
+        lock.withLock { state.transferSpeed() }
     }
 
     func isStalled(timeout: TimeInterval, isPaused: Bool) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return state.isStalled(timeout: timeout, isPaused: isPaused)
+        lock.withLock { state.isStalled(timeout: timeout, isPaused: isPaused) }
     }
 
     var isFinalizing: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return state.isFinalizing
+        lock.withLock { state.isFinalizing }
+    }
+}
+
+enum HuggingFaceDownloadOutput: Equatable {
+    case progress(ModelDownloadProgress)
+    case transferredBytes(Int64)
+    case phase(HuggingFaceDownloadManager.DownloadPhase)
+
+    init?(line: String) {
+        if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
+           let separator = payload.firstIndex(of: ":"),
+           let completedBytes = Int64(payload[..<separator]),
+           let totalBytes = Int64(payload[payload.index(after: separator)...]),
+           let progress = ModelDownloadProgress(
+               completedBytes: completedBytes,
+               totalBytes: totalBytes
+           ) {
+            self = .progress(progress)
+        } else if let payload = Self.payload(in: line, after: "__NATIV_TRANSFERRED__:"),
+                  let bytes = Int64(payload) {
+            self = .transferredBytes(max(bytes, 0))
+        } else if let payload = Self.payload(in: line, after: "__NATIV_STAGE__:") {
+            switch payload {
+            case "preparing": self = .phase(.preparing)
+            case "downloading": self = .phase(.downloading)
+            case "finalizing": self = .phase(.finalizing)
+            default: return nil
+            }
+        } else {
+            return nil
+        }
+    }
+
+    private static func payload(in line: String, after marker: String) -> Substring? {
+        guard let markerRange = line.range(of: marker) else { return nil }
+        return line[markerRange.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)[...]
     }
 }
 
@@ -1523,10 +1629,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private let executableURL: URL
     private let arguments: [String]
     private let environment: [String: String]
-    private let repoID: String
-    private let cachePath: String
-    private let expectedBytes: Int64?
-    private let progress: @Sendable (Double) -> Void
+    private let progress: @Sendable (ModelDownloadProgress) -> Void
     private let transferSpeed: @Sendable (Double?) -> Void
     private let phase: @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
     private let activity = HuggingFaceDownloadActivity()
@@ -1539,8 +1642,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         repoID: String,
         cachePath: String,
         token: String?,
-        expectedBytes: Int64?,
-        progress: @escaping @Sendable (Double) -> Void,
+        progress: @escaping @Sendable (ModelDownloadProgress) -> Void,
         transferSpeed: @escaping @Sendable (Double?) -> Void,
         phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
     ) throws {
@@ -1555,8 +1657,8 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         import sys
         import threading
         import time
-        from tqdm.auto import tqdm
         from huggingface_hub import snapshot_download
+        from huggingface_hub.utils import tqdm
 
         parent_pid = int(sys.argv[3])
 
@@ -1568,60 +1670,85 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
 
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
-        expected_bytes = 0
+        total_bytes = 0
+        cached_bytes = 0
         print("__NATIV_STAGE__:preparing", flush=True)
         try:
-            pending_files = snapshot_download(
+            files = snapshot_download(
                 repo_id=sys.argv[1],
                 cache_dir=sys.argv[2],
                 dry_run=True,
                 ignore_patterns=ignored_patterns,
             )
-            expected_bytes = sum(
-                item.file_size for item in pending_files if item.will_download
-            )
+            total_bytes = sum(item.file_size for item in files)
+            cached_bytes = sum(item.file_size for item in files if not item.will_download)
         except Exception:
             pass
+        print(f"__NATIV_PROGRESS__:{cached_bytes}:{total_bytes}", flush=True)
 
-        class MLXProgressTqdm(tqdm):
+        class NativProgress(tqdm):
+            _lock = threading.Lock()
+            _total_bytes = total_bytes
+            _reconstructed_bytes = cached_bytes
+            _transferred_bytes = 0
+            _last_progress_report = 0.0
+            _last_transfer_report = 0.0
+
             def __init__(self, *args, **kwargs):
-                self._mlx_reports_bytes = kwargs.get("unit") == "B"
-                self._mlx_last_progress = -1.0
-                self._mlx_last_report = 0.0
+                self._nativ_name = kwargs.get("name")
+                kwargs["disable"] = True
                 super().__init__(*args, **kwargs)
-                self._mlx_report()
 
-            def update(self, n=1):
-                result = super().update(n)
-                self._mlx_report()
+            def update(self, count=1):
+                result = super().update(count)
+                count = int(count or 0)
+                if count == 0:
+                    return result
+
+                with NativProgress._lock:
+                    now = time.monotonic()
+                    if self._nativ_name == "huggingface_hub.snapshot_download":
+                        observed_total = cached_bytes + int(self.total or 0)
+                        NativProgress._total_bytes = max(
+                            NativProgress._total_bytes,
+                            observed_total,
+                        )
+                        NativProgress._reconstructed_bytes += count
+                        NativProgress._emit_progress(now)
+                    elif self._nativ_name == "huggingface_hub.snapshot_download.transfer":
+                        NativProgress._transferred_bytes += count
+                        NativProgress._emit_transfer(now)
+                    else:
+                        return result
                 return result
 
-            def refresh(self, *args, **kwargs):
-                result = super().refresh(*args, **kwargs)
-                self._mlx_report()
-                return result
-
-            def _mlx_report(self):
-                if not self._mlx_reports_bytes:
+            @classmethod
+            def _emit_progress(cls, now):
+                if cls._total_bytes <= 0 or now - cls._last_progress_report < 0.1:
                     return
-                total = float(expected_bytes or self.total or 0)
-                value = float(self.n or 0)
-                progress = min(max(value / total, 0.0), 1.0) if total > 0 else 0.0
-                now = time.monotonic()
-                changed = abs(progress - self._mlx_last_progress)
-                stale = now - self._mlx_last_report >= 0.25
-                if progress >= 1.0 or changed >= 0.002 or (changed > 0.0 and stale):
-                    self._mlx_last_progress = progress
-                    self._mlx_last_report = now
-                    print(f"__MLX_PROGRESS__:{progress:.6f}", flush=True)
+                cls._last_progress_report = now
+                completed = min(max(cls._reconstructed_bytes, 0), cls._total_bytes)
+                print(
+                    f"__NATIV_PROGRESS__:{completed}:{cls._total_bytes}",
+                    flush=True,
+                )
+
+            @classmethod
+            def _emit_transfer(cls, now):
+                if now - cls._last_transfer_report < 0.1:
+                    return
+                cls._last_transfer_report = now
+                print(f"__NATIV_TRANSFERRED__:{cls._transferred_bytes}", flush=True)
 
         print("__NATIV_STAGE__:downloading", flush=True)
         snapshot_download(
             repo_id=sys.argv[1],
             cache_dir=sys.argv[2],
             ignore_patterns=ignored_patterns,
-            tqdm_class=MLXProgressTqdm,
+            tqdm_class=NativProgress,
         )
+        final_bytes = NativProgress._total_bytes
+        print(f"__NATIV_PROGRESS__:{final_bytes}:{final_bytes}", flush=True)
         print("__NATIV_STAGE__:finalizing", flush=True)
         """
 
@@ -1644,9 +1771,6 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             String(ProcessInfo.processInfo.processIdentifier)
         ]
         self.environment = environment
-        self.repoID = repoID
-        self.cachePath = cachePath
-        self.expectedBytes = expectedBytes
         self.progress = progress
         self.transferSpeed = transferSpeed
         self.phase = phase
@@ -1687,7 +1811,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         var output = Data()
         outputGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            [activity, phase, progress, transferSpeed] in
+            [activity, phase, progress] in
             var lineBuffer = ""
             while true {
                 let data = pipe.fileHandleForReading.availableData
@@ -1705,22 +1829,18 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 let lines = lineBuffer.components(separatedBy: "\n")
                 lineBuffer = lines.last ?? ""
                 for line in lines.dropLast() {
-                    if let markerRange = line.range(of: "__MLX_PROGRESS__:") {
-                        let value = line[markerRange.upperBound...]
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let fraction = Double(value),
-                           let updatedProgress = activity.recordReportedProgress(fraction) {
+                    guard let output = HuggingFaceDownloadOutput(line: line) else { continue }
+                    switch output {
+                    case .progress(let reportedProgress):
+                        if let updatedProgress = activity.recordProgress(reportedProgress) {
                             progress(updatedProgress)
                         }
-                    } else if let markerRange = line.range(of: "__NATIV_STAGE__:") {
-                        let value = line[markerRange.upperBound...]
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        switch value {
-                        case "preparing": phase(.preparing)
-                        case "downloading": phase(.downloading)
-                        case "finalizing": phase(.finalizing)
-                        default: break
+                    case .transferredBytes(let bytes):
+                        if let updatedProgress = activity.recordTransferredBytes(bytes) {
+                            progress(updatedProgress)
                         }
+                    case .phase(let downloadPhase):
+                        phase(downloadPhase)
                     }
                 }
             }
@@ -1761,17 +1881,6 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 break
             }
             if !flags.paused {
-                let allocatedBytes = Self.cachedBlobAllocatedBytes(
-                    repoID: repoID,
-                    cachePath: cachePath
-                )
-                if let updatedProgress = activity.recordAllocatedBytes(
-                    allocatedBytes,
-                    expectedBytes: expectedBytes
-                ) {
-                    progress(updatedProgress)
-                    phase(updatedProgress >= 1 ? .finalizing : .downloading)
-                }
                 transferSpeed(activity.bytesPerSecond)
                 let timeout = activity.isFinalizing
                     ? Self.finalizationStallTimeout
@@ -1853,7 +1962,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         isPaused = false
         let process = self.process
         lock.unlock()
-        activity.beginAttempt()
+        activity.resume()
         if let process, process.isRunning {
             Darwin.kill(process.processIdentifier, SIGCONT)
         }
@@ -1897,34 +2006,4 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
     }
 
-    private static func cachedBlobAllocatedBytes(repoID: String, cachePath: String) -> Int64 {
-        let repositoryDirectory = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
-        let blobsURL = URL(fileURLWithPath: cachePath, isDirectory: true)
-            .appendingPathComponent(repositoryDirectory, isDirectory: true)
-            .appendingPathComponent("blobs", isDirectory: true)
-        let keys: Set<URLResourceKey> = [
-            .isRegularFileKey,
-            .fileAllocatedSizeKey,
-            .totalFileAllocatedSizeKey
-        ]
-        guard let enumerator = FileManager.default.enumerator(
-            at: blobsURL,
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsSubdirectoryDescendants]
-        ) else {
-            return 0
-        }
-
-        var total: Int64 = 0
-        for case let fileURL as URL in enumerator {
-            guard let values = try? fileURL.resourceValues(forKeys: keys),
-                  values.isRegularFile == true
-            else {
-                continue
-            }
-            let allocatedSize = values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0
-            total += Int64(max(allocatedSize, 0))
-        }
-        return total
-    }
 }
