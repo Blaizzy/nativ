@@ -1587,6 +1587,7 @@ private struct ServerEndpoint: Identifiable {
         .init(method: .post, path: "/v1/images/edits", category: .openAI),
         .init(method: .get, path: "/v1/models", category: .openAI),
         .init(method: .post, path: "/v1/embeddings", category: .openAI),
+        .init(method: .post, path: "/v1/rerank", category: .openAI),
         .init(method: .post, path: "/v1/audio/speech", category: .openAI),
         .init(method: .post, path: "/v1/audio/transcriptions", category: .openAI),
         .init(method: .post, path: "/v1/audio/translations", category: .openAI),

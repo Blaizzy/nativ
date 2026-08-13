@@ -24,6 +24,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
     case image = "Image"
     case speech = "Speech"
     case embeddings = "Embeddings"
+    case reranking = "Reranking"
 
     var id: String { rawValue }
 
@@ -39,6 +40,8 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
             !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
         case .embeddings:
             capabilities.contains(.embeddings)
+        case .reranking:
+            capabilities.contains(.reranking)
         }
     }
 
@@ -796,7 +799,8 @@ struct ModelsView: View {
 
     private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
         var slots: [ModelPreloadSlot] = []
-        if localModel.capabilities.contains(.text) {
+        if localModel.capabilities.contains(.text)
+            && !localModel.capabilities.contains(.reranking) {
             slots.append(.language)
         }
         if localModel.capabilities.contains(.imageGeneration) {
@@ -829,6 +833,8 @@ struct ModelsView: View {
                 nil
             case .embeddings:
                 .embeddings
+            case .reranking:
+                nil
             }
         if let preferredSlot, slots.contains(preferredSlot) {
             return preferredSlot
@@ -2504,6 +2510,7 @@ extension LocalModelCapability {
         .speechToText,
         .textToSpeech,
         .embeddings,
+        .reranking,
     ]
 
     fileprivate static let discoverFeatureFilters: [Self] = [
@@ -2532,6 +2539,8 @@ extension LocalModelCapability {
             URLQueryItem(name: "pipeline_tag", value: "text-to-speech")
         case .embeddings:
             URLQueryItem(name: "pipeline_tag", value: "feature-extraction")
+        case .reranking:
+            URLQueryItem(name: "pipeline_tag", value: "text-ranking")
         case .reasoning:
             URLQueryItem(name: "other", value: "reasoning")
         case .tools:
@@ -2552,6 +2561,7 @@ extension LocalModelCapability {
         case .speechToText: "captions.bubble"
         case .textToSpeech: "speaker.wave.2"
         case .embeddings: "circle.grid.3x3"
+        case .reranking: "arrow.up.arrow.down.circle"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
         case .drafter: "hare"
