@@ -3521,9 +3521,8 @@ private struct ChatStreamingMarkdownText: View {
                     .equatable()
             }
             if !throttle.split.pending.isEmpty {
-                Text(throttle.split.pending)
-                    .textSelection(.enabled)
-                    .font(ChatFontMetrics.bodyFont(scale: fontScale))
+                ChatMarkdownText(markdown: throttle.split.pending, fontScale: fontScale)
+                    .equatable()
             }
         }
         .onChange(of: content, initial: true) { _, latest in
