@@ -1483,7 +1483,7 @@ private struct InstalledModelRow: View, Equatable {
         HStack(spacing: 10) {
             Button(action: onShowReadme) {
                 HStack(spacing: 14) {
-                    ModelProviderBadge(provider: localModel.provider, isHighlighted: isSelected)
+                    ModelProviderBadge(provider: localModel.provider)
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 7) {
@@ -1581,37 +1581,11 @@ private struct InstalledModelRow: View, Equatable {
 
             loadButton
 
-            if isDeleting {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 30, height: 30)
-                    .help("Deleting model")
-            } else if let snapshotURL = localModel.snapshotURL {
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
-                } label: {
-                    Image(systemName: "arrow.up.forward.square")
-                        .frame(width: 20, height: 20)
-                }
-                .buttonStyle(.borderless)
-                .help("Show in Finder")
-                .accessibilityLabel("Show \(localModel.repoID) in Finder")
-            }
-
-            ModelDownloadActionButton(
-                title: canDelete
-                    ? "Delete installed model"
-                    : "Stop the server before deleting this model",
-                systemImage: "trash",
-                tint: .red,
-                isDisabled: !canDelete || isDeleting
-            ) {
-                showsDeleteConfirmation = true
-            }
+            modelActionsMenu
         }
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .modelRowBackground(isHighlighted: isReadmeSelected || isSelected)
+        .modelRowBackground(isHighlighted: isReadmeSelected)
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -1630,6 +1604,49 @@ private struct InstalledModelRow: View, Equatable {
     }
 
     @ViewBuilder
+    private var modelActionsMenu: some View {
+        if isDeleting {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 30, height: 30)
+                .help("Deleting model")
+        } else {
+            Menu {
+                if let snapshotURL = localModel.snapshotURL {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
+                    } label: {
+                        Label("Show in Finder", systemImage: "arrow.up.forward.square")
+                    }
+
+                    Divider()
+                }
+
+                Button(role: .destructive) {
+                    showsDeleteConfirmation = true
+                } label: {
+                    Label("Delete Model…", systemImage: "trash")
+                }
+                .disabled(!canDelete)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .rotationEffect(.degrees(90))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(
+                canDelete
+                    ? "Model actions"
+                    : "Model actions — stop the server before deleting this model"
+            )
+            .accessibilityLabel("Actions for \(localModel.repoID)")
+        }
+    }
+
+    @ViewBuilder
     private var loadButton: some View {
         if let preferredPreloadSlot {
             let isLoaded = selectedPreloadSlots.contains(preferredPreloadSlot)
@@ -1637,21 +1654,13 @@ private struct InstalledModelRow: View, Equatable {
                 guard !isSelectionDisabled else { return }
                 onSetPreload(preferredPreloadSlot, !isLoaded)
             } label: {
-                Label(
-                    isLoaded ? "Unload" : "Load",
-                    systemImage: isLoaded ? "stop.fill" : "play.fill"
-                )
-                .font(.callout.weight(.medium))
-                .foregroundStyle(isLoaded ? Color.primary : Color.white)
-                .padding(.horizontal, 11)
-                .frame(height: 30)
+                Image(systemName: isLoaded ? "stop.fill" : "play.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 30)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(
-                            isLoaded
-                                ? Color.secondary.opacity(0.12)
-                                : Color.accentColor
-                        )
+                        .fill(isLoaded ? Color.red : Color.accentColor)
                 )
                 .contentShape(Rectangle())
             }
@@ -2445,9 +2454,6 @@ private struct ModelRowBackground: ViewModifier {
     }
 
     private var backgroundColor: Color {
-        if isHighlighted {
-            return Color.accentColor.opacity(0.38)
-        }
         if isHovered {
             return Color.accentColor.opacity(0.08)
         }

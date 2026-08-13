@@ -135,6 +135,8 @@ private enum ControlPanelLayout {
     static let sidebarMaximumWidth: CGFloat = 320
     static let detailMinimumWidth: CGFloat = 720
     static let titlebarHeight: CGFloat = 52
+    static let sidebarBrandTopClearance: CGFloat = 46
+    static let sidebarBrandBottomClearance: CGFloat = 8
     static let collapsedSidebarTitleClearance: CGFloat = 108
     static let sidebarButtonLeadingPadding: CGFloat = 88
     static let modelConfigurationButtonTrailingPadding: CGFloat = 12
@@ -515,7 +517,7 @@ struct ControlPanelView: View {
     private var sidebar: some View {
         VStack(spacing: 0) {
             Color.clear
-                .frame(height: ControlPanelLayout.titlebarHeight)
+                .frame(height: ControlPanelLayout.sidebarBrandTopClearance)
 
             HStack(spacing: 6) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
@@ -530,6 +532,7 @@ struct ControlPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 40)
             .padding(.horizontal, 16)
+            .padding(.bottom, ControlPanelLayout.sidebarBrandBottomClearance)
 
             sidebarNavigation
                 .padding(.horizontal, 10)
