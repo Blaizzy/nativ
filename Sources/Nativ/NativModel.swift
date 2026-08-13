@@ -46,6 +46,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     @Published private(set) var modelSwitchInProgress = false
     @Published private(set) var modelSwitchTargetID: String?
+    private var modelSwitchWatchdog: Task<Void, Never>?
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var modelLoadFailure: ModelLoadFailure?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
@@ -1022,16 +1023,23 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     /// `modelSwitchInProgress` normally clears once metrics confirm the newly
     /// started server. When that server comes up but never serves metrics, the
     /// flag used to stay set forever, disabling the model picker and the
-    /// start/stop buttons with no way to recover short of relaunching. The
-    /// watchdog re-checks the flag and target before acting, so a stale one that
-    /// fires after a successful switch is a no-op.
+    /// start/stop buttons with no way to recover short of relaunching.
+    ///
+    /// Each switch replaces the previous watchdog, so only the newest one can
+    /// fire. Comparing the target alone is not enough: switching away from a
+    /// model and back again would otherwise let the first watchdog time out the
+    /// second switch early.
     private func armModelSwitchWatchdog(
         timeout: TimeInterval = NativModel.modelSwitchTimeout
     ) {
+        modelSwitchWatchdog?.cancel()
         let targetID = modelSwitchTargetID
-        Task { @MainActor [weak self] in
+        modelSwitchWatchdog = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(timeout))
-            guard let self,
+            // `try?` swallows the cancellation error, so check explicitly rather
+            // than acting on a watchdog that has already been replaced.
+            guard !Task.isCancelled,
+                  let self,
                   self.modelSwitchInProgress,
                   self.modelSwitchTargetID == targetID
             else {
