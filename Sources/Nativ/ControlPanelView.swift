@@ -135,7 +135,7 @@ private enum ControlPanelLayout {
     static let sidebarMaximumWidth: CGFloat = 320
     static let detailMinimumWidth: CGFloat = 720
     static let titlebarHeight: CGFloat = 52
-    static let sidebarBrandTopClearance: CGFloat = 36
+    static let sidebarBrandTopClearance: CGFloat = 46
     static let sidebarBrandBottomClearance: CGFloat = 8
     static let collapsedSidebarTitleClearance: CGFloat = 108
     static let sidebarButtonLeadingPadding: CGFloat = 88
