@@ -1,9 +1,9 @@
 import Foundation
 import XCTest
 
-final class MarkdownStreamingTests: XCTestCase {
-    private func streaming(_ markdown: String) -> String {
-        NativMarkdownFormatting.streamingMarkdown(of: markdown)
+final class MarkdownStreamingSplitTests: XCTestCase {
+    private func split(_ markdown: String) -> NativMarkdownFormatting.StreamingSplit {
+        NativMarkdownFormatting.streamingSplit(of: markdown)
     }
 
     private func openFenceCount(in markdown: String) -> Int {
@@ -16,10 +16,9 @@ final class MarkdownStreamingTests: XCTestCase {
             let run = trimmed.prefix(while: { $0 == first }).count
             guard run >= 3 else { continue }
             if let active = marker {
-                guard first == active, run >= length else { continue }
-                guard trimmed.dropFirst(run).allSatisfy({ $0 == " " || $0 == "\t" }) else {
-                    continue
-                }
+                guard first == active, run >= length,
+                      trimmed.dropFirst(run).allSatisfy({ $0 == " " || $0 == "\t" })
+                else { continue }
                 marker = nil
                 open -= 1
             } else {
@@ -31,50 +30,60 @@ final class MarkdownStreamingTests: XCTestCase {
         return open
     }
 
-    func testEmptyInputIsUnchanged() {
-        XCTAssertEqual(streaming(""), "")
+    func testEmptyInputSplitsIntoNothing() {
+        XCTAssertEqual(split(""), .init(settled: "", pending: ""))
     }
 
-    func testTextWithoutFencesIsUnchanged() {
-        let source = "# Title\n\nA partially written paragr"
-        XCTAssertEqual(streaming(source), source)
-    }
-
-    func testBalancedFencesAreUnchanged() {
-        let source = "Intro\n\n```swift\nlet a = 1\n```\n\nOutro"
-        XCTAssertEqual(streaming(source), source)
-    }
-
-    func testOpenFenceIsClosedSoCodeRendersWhileStreaming() {
+    func testAnIncompleteFirstBlockStaysPending() {
         XCTAssertEqual(
-            streaming("Here:\n\n```swift\nlet a = 1\nlet b = 2"),
-            "Here:\n\n```swift\nlet a = 1\nlet b = 2\n```"
+            split("Intro line one\nline two partia"),
+            .init(settled: "", pending: "Intro line one\nline two partia")
         )
     }
 
-    func testFenceOpenerWithoutBodyIsWithheld() {
-        XCTAssertEqual(streaming("Intro\n\n```swift"), "Intro\n")
-        XCTAssertEqual(streaming("Intro\n\n```swift\n"), "Intro\n")
-        XCTAssertEqual(streaming("```"), "")
+    func testCompletedBlocksSettle() {
+        XCTAssertEqual(
+            split("## Title\n\n- one\n- tw"),
+            .init(settled: "## Title\n", pending: "- one\n- tw")
+        )
+    }
+
+    func testMidParagraphNeverSplits() {
+        let result = split("First para.\n\nSecond para keeps\ngrowing here")
+        XCTAssertEqual(result.settled, "First para.\n")
+        XCTAssertEqual(result.pending, "Second para keeps\ngrowing here")
+    }
+
+    func testOpenFenceSettlesWithAVirtualClose() {
+        let result = split("Here:\n\n```swift\nlet a = 1\nlet b = 2")
+        XCTAssertEqual(result.pending, "")
+        XCTAssertTrue(result.settled.hasSuffix("\n```"))
+        XCTAssertTrue(result.settled.contains("let b = 2"))
+    }
+
+    func testFenceOpenerWithoutBodyDoesNotEmitAnEmptyCodeBlock() {
+        let result = split("Intro\n\n```swift")
+        XCTAssertEqual(result.settled, "Intro\n")
+        XCTAssertEqual(result.pending, "```swift")
     }
 
     func testClosingFenceMatchesTheOpeningMarkerAndLength() {
-        XCTAssertEqual(streaming("~~~\nx = 1"), "~~~\nx = 1\n~~~")
-        XCTAssertEqual(streaming("````\nnested ``` here"), "````\nnested ``` here\n````")
+        XCTAssertTrue(split("~~~\nx = 1").settled.hasSuffix("\n~~~"))
+        XCTAssertTrue(split("````\nnested ``` here").settled.hasSuffix("\n````"))
     }
 
-    func testOnlyTheLastUnclosedFenceIsClosed() {
+    func testAClosedFenceIsABlockBoundary() {
         XCTAssertEqual(
-            streaming("```\nfirst\n```\n\n```py\nsecond"),
-            "```\nfirst\n```\n\n```py\nsecond\n```"
+            split("```\ncode\n```\nAfter tex"),
+            .init(settled: "```\ncode\n```", pending: "After tex")
         )
     }
 
     func testBlankLinesInsideAFenceStayInsideIt() {
-        XCTAssertEqual(streaming("```\nfirst\n\nsecond"), "```\nfirst\n\nsecond\n```")
+        XCTAssertTrue(split("```\nfirst\n\nsecond").settled.contains("first\n\nsecond"))
     }
 
-    func testEveryStreamPrefixRendersWithBalancedFences() {
+    func testSettledMarkdownAlwaysHasBalancedFences() {
         let corpus = [
             "# Report\n\nIntro line.\n\n```swift\nlet x = 1\n```\n\n- one\n- two\n\nDone.",
             "no fences at all, just prose",
@@ -84,32 +93,55 @@ final class MarkdownStreamingTests: XCTestCase {
         ]
         for text in corpus {
             for length in 1...text.count {
-                let source = String(text.prefix(length))
+                let result = split(String(text.prefix(length)))
                 XCTAssertEqual(
-                    openFenceCount(in: streaming(source)),
+                    openFenceCount(in: result.settled),
                     0,
-                    "unbalanced fence at length \(length) of \(text.debugDescription)"
+                    "unbalanced settled fence at length \(length) of \(text.debugDescription)"
                 )
             }
         }
     }
 
-    func testEveryStreamPrefixOnlyAddsAClosingFenceOrTrimsAnEmptyOpener() {
-        let text = "Intro\n\n```swift\nlet x = 1\n```\n\nOutro\n\n~~~\ntail"
+    func testSettledGrowsMonotonicallyAndNeverLosesContent() {
+        let text = "# Report\n\nIntro line.\n\n```swift\nlet x = 1\n```\n\n- one\n- two\n\nDone."
+        var previousSettledLength = 0
         for length in 1...text.count {
             let source = String(text.prefix(length))
-            let result = streaming(source)
-            let addedClosing = result.hasPrefix(source)
-            let trimmedOpener = source.hasPrefix(result)
+            let result = split(source)
+
+            var sourceWithoutTrailingNewlines = source
+            while sourceWithoutTrailingNewlines.hasSuffix("\n") {
+                sourceWithoutTrailingNewlines.removeLast()
+            }
+
+            var stripped = result.settled
+            if result.pending.isEmpty {
+                for fence in ["\n```", "\n~~~"]
+                where stripped.hasSuffix(fence)
+                    && !sourceWithoutTrailingNewlines.hasSuffix(fence)
+                {
+                    stripped = String(stripped.dropLast(fence.count))
+                    break
+                }
+            }
             XCTAssertTrue(
-                addedClosing || trimmedOpener,
-                "result diverged from the source at length \(length)"
+                source.hasPrefix(stripped),
+                "settled was not a source prefix at length \(length)"
+            )
+            XCTAssertGreaterThanOrEqual(
+                stripped.count,
+                previousSettledLength,
+                "settled shrank at length \(length)"
+            )
+            previousSettledLength = stripped.count
+
+            let visible = stripped.count + result.pending.count
+            XCTAssertGreaterThanOrEqual(
+                visible + 1,
+                source.count,
+                "content dropped at length \(length)"
             )
         }
-    }
-
-    func testCompletedMarkdownIsNeverAltered() {
-        let text = "# Report\n\nIntro line.\n\n```swift\nlet x = 1\n```\n\n- one\n- two\n"
-        XCTAssertEqual(streaming(text), text)
     }
 }

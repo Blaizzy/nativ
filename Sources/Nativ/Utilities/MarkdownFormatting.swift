@@ -36,40 +36,65 @@ enum NativMarkdownFormatting {
         return normalizedLines.joined(separator: "\n")
     }
 
-    static func streamingMarkdown(of markdown: String) -> String {
+    struct StreamingSplit: Equatable {
+        var settled: String
+        var pending: String
+    }
+
+    static func streamingSplit(of markdown: String) -> StreamingSplit {
         guard !markdown.isEmpty else {
-            return markdown
+            return StreamingSplit(settled: "", pending: "")
         }
 
         let lines = markdown.components(separatedBy: "\n")
         var activeFence: CodeFence?
         var fenceOpenedAtLine: Int?
+        var lastBlockBoundary: Int?
 
         for (offset, line) in lines.enumerated() {
             if let fence = activeFence {
                 if isClosingFence(line, for: fence) {
                     activeFence = nil
                     fenceOpenedAtLine = nil
+                    lastBlockBoundary = offset + 1
                 }
                 continue
             }
             if let openingFence = codeFence(in: line) {
                 activeFence = openingFence
                 fenceOpenedAtLine = offset
+                continue
+            }
+            if offset < lines.count - 1, line.trimmingCharacters(in: .whitespaces).isEmpty {
+                lastBlockBoundary = offset + 1
             }
         }
 
         guard let fence = activeFence, let openedAt = fenceOpenedAtLine else {
-            return markdown
+            return split(lines, at: lastBlockBoundary)
         }
 
         let bodyLines = lines[lines.index(after: openedAt)...]
         guard bodyLines.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
         else {
-            return lines.prefix(openedAt).joined(separator: "\n")
+            return split(lines, at: lastBlockBoundary)
         }
 
-        return markdown + "\n" + String(repeating: String(fence.marker), count: fence.length)
+        let closing = String(repeating: String(fence.marker), count: fence.length)
+        return StreamingSplit(
+            settled: lines.joined(separator: "\n") + "\n" + closing,
+            pending: ""
+        )
+    }
+
+    private static func split(_ lines: [String], at boundary: Int?) -> StreamingSplit {
+        guard let boundary, boundary > 0, boundary <= lines.count else {
+            return StreamingSplit(settled: "", pending: lines.joined(separator: "\n"))
+        }
+        return StreamingSplit(
+            settled: lines.prefix(boundary).joined(separator: "\n"),
+            pending: lines.dropFirst(boundary).joined(separator: "\n")
+        )
     }
 
     private struct CodeFence {
