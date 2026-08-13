@@ -3434,26 +3434,98 @@ private struct ChatMessageText: View {
                 content: content,
                 fontScale: chatFontScale
             )
+        } else if rendersMarkdown && !isStreaming {
+            ChatMarkdownText(markdown: content, fontScale: chatFontScale)
         } else if rendersMarkdown {
-            StructuredText(
-                markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: renderableMarkdown),
-                syntaxExtensions: [.math]
-            )
-            .textual.structuredTextStyle(.gitHub)
-            .textual.textSelection(.enabled)
-            .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            ChatStreamingMarkdownText(content: content, fontScale: chatFontScale)
         } else {
             Text(content)
                 .textSelection(.enabled)
                 .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         }
     }
+}
 
-    private var renderableMarkdown: String {
-        guard isStreaming else {
-            return content
+private struct ChatMarkdownText: View, Equatable {
+    let markdown: String
+    let fontScale: Double
+
+    var body: some View {
+        StructuredText(
+            markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: markdown),
+            syntaxExtensions: [.math]
+        )
+        .textual.structuredTextStyle(.gitHub)
+        .textual.textSelection(.enabled)
+        .font(ChatFontMetrics.bodyFont(scale: fontScale))
+    }
+}
+
+private struct ChatStreamingMarkdownText: View {
+    let content: String
+    let fontScale: Double
+
+    @StateObject private var throttle = ChatStreamingMarkdownThrottle()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: blockSpacing) {
+            if !throttle.split.settled.isEmpty {
+                ChatMarkdownText(markdown: throttle.split.settled, fontScale: fontScale)
+                    .equatable()
+            }
+            if !throttle.split.pending.isEmpty {
+                Text(throttle.split.pending)
+                    .textSelection(.enabled)
+                    .font(ChatFontMetrics.bodyFont(scale: fontScale))
+            }
         }
-        return NativMarkdownFormatting.streamingMarkdown(of: content)
+        .onChange(of: content, initial: true) { _, latest in
+            throttle.update(latest)
+        }
+    }
+
+    private var blockSpacing: CGFloat {
+        throttle.split.settled.isEmpty || throttle.split.pending.isEmpty ? 0 : 16
+    }
+}
+
+@MainActor
+private final class ChatStreamingMarkdownThrottle: ObservableObject {
+    static let interval: TimeInterval = 0.1
+
+    @Published private(set) var split = NativMarkdownFormatting.StreamingSplit(
+        settled: "",
+        pending: ""
+    )
+
+    private var latestMarkdown = ""
+    private var lastCommitAt = Date.distantPast
+    private var pendingCommit: Task<Void, Never>?
+
+    func update(_ markdown: String) {
+        latestMarkdown = markdown
+
+        let remaining = Self.interval - Date().timeIntervalSince(lastCommitAt)
+        guard remaining > 0 else {
+            commit()
+            return
+        }
+        guard pendingCommit == nil else {
+            return
+        }
+        pendingCommit = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.pendingCommit = nil
+            self.commit()
+        }
+    }
+
+    private func commit() {
+        lastCommitAt = Date()
+        split = NativMarkdownFormatting.streamingSplit(of: latestMarkdown)
     }
 }
 
