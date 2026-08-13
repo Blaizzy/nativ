@@ -704,6 +704,10 @@ struct NativSettings: Codable, Equatable {
             settings.serverAPIKey = legacyToken
         }
 
+        if MCPServerCatalog.bundled.migrateConfigurations(in: &settings.mcpServers) {
+            try? settings.writePropertyList(to: url)
+        }
+
         return settings
     }
 
