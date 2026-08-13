@@ -161,6 +161,8 @@ final class ChatToolRegistryTests: XCTestCase {
         }
         XCTAssertEqual(request.operation, .generate)
         XCTAssertEqual(request.models.map(\.modelID), ["org/generator", "org/both"])
+        XCTAssertEqual(request.models.map(\.displayName), ["generator", "both"])
+        XCTAssertFalse(request.requiresInstallation)
     }
 
     func testSingleCompatibleModelStillRequiresExplicitSelection() {
@@ -221,7 +223,7 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(request.models.map(\.modelID), ["org/editor", "org/both"])
     }
 
-    func testNoInstalledImageModelStillPresentsExploreFlow() {
+    func testNoInstalledImageModelRequiresInstallationRecovery() {
         let resolution = ChatImageModelSelection.resolve(
             operation: .generate,
             selectedModelID: nil,
@@ -233,175 +235,25 @@ final class ChatToolRegistryTests: XCTestCase {
         }
         XCTAssertEqual(request.operation, .generate)
         XCTAssertTrue(request.models.isEmpty)
+        XCTAssertTrue(request.requiresInstallation)
     }
 
-    func testPickerShowsAllDownloadedModelsAndThreeHubRecommendations() {
-        let installed = [
-            imageModelOption("org/local-b"),
-            imageModelOption("org/local-a"),
-        ]
-        let downloadable = (1...5).map {
-            imageModelOption(
-                "org/remote-\($0)",
-                availability: .downloadable(sizeBytes: Int64($0) * 1_000)
-            )
-        }
-
-        let options = ChatImageModelSelection.displayOptions(
-            for: .generate,
-            installedModels: installed,
-            downloadableModels: downloadable
-        )
-
-        XCTAssertEqual(options.count, 5)
-        XCTAssertEqual(Array(options.prefix(2).map(\.modelID)), ["org/local-a", "org/local-b"])
-        XCTAssertEqual(options.filter { !$0.isInstalled }.count, 3)
-    }
-
-    func testPickerAlwaysShowsEveryDownloadedModel() {
-        let installed = (1...7).map { imageModelOption("org/local-\($0)") }
-        let downloadable = (1...5).map {
-            imageModelOption(
-                "org/remote-\($0)",
-                availability: .downloadable(sizeBytes: Int64($0) * 1_000)
-            )
-        }
-
-        let options = ChatImageModelSelection.displayOptions(
-            for: .generate,
-            installedModels: installed,
-            downloadableModels: downloadable
-        )
-
-        XCTAssertEqual(options.count, 10)
-        XCTAssertEqual(options.filter(\.isInstalled).count, 7)
-        XCTAssertEqual(options.filter { !$0.isInstalled }.count, 3)
-    }
-
-    func testOfflinePickerShowsOnlyDownloadedModels() {
-        let installed = [imageModelOption("org/local")]
-
-        let options = ChatImageModelSelection.displayOptions(
-            for: .generate,
-            installedModels: installed,
-            downloadableModels: []
-        )
-
-        XCTAssertEqual(options, installed)
-    }
-
-    func testOfflineRecommendationFailureReturnsAnEmptyPicker() async throws {
+    func testMissingModelCacheReturnsNoOptions() async throws {
         let missingPath = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .path
         let options = try await ChatImageModelSelection.availableOptions(
             for: .generate,
             modelSearchPath: missingPath,
-            additionalModelSearchPaths: [],
-            huggingFaceToken: nil,
-            recommendationLoader: { _, _ in
-                throw URLError(.notConnectedToInternet)
-            }
+            additionalModelSearchPaths: []
         )
 
         XCTAssertTrue(options.isEmpty)
     }
 
-    func testRecommendationsOnlyAcceptSupportedMLXImageFamilies() {
-        XCTAssertEqual(
-            ChatImageModelSelection.downloadableCapabilities(
-                modelID: "mlx-community/flux2-klein-4b-8bit",
-                tags: ["mlx"]
-            ),
-            [.imageGeneration, .imageEditing]
-        )
-        XCTAssertEqual(
-            ChatImageModelSelection.downloadableCapabilities(
-                modelID: "mlx-community/stable-diffusion-xl",
-                tags: ["mlx"]
-            ),
-            []
-        )
-        XCTAssertEqual(
-            ChatImageModelSelection.downloadableCapabilities(
-                modelID: "MLXBits/ideogram-4-mlx-q4",
-                tags: ["gguf"]
-            ),
-            []
-        )
-    }
-
-    func testDownloadedModelIsValidatedBeforeToolExecution() {
-        let model = imageModelOption("org/generator")
-
-        XCTAssertTrue(ChatImageModelSelection.isPrepared(
-            modelID: model.modelID,
-            for: .generate,
-            installedModels: [model]
-        ))
-        XCTAssertFalse(ChatImageModelSelection.isPrepared(
-            modelID: model.modelID,
-            for: .edit,
-            installedModels: [model]
-        ))
-    }
-
     func testExploreModelsUsesTheRequestedImageCapability() {
         XCTAssertEqual(ChatImageOperation.generate.requiredCapability, .imageGeneration)
         XCTAssertEqual(ChatImageOperation.edit.requiredCapability, .imageEditing)
-    }
-
-    func testPickerDoesNotRecommendAnAlreadyDownloadedModel() {
-        let installed = [imageModelOption("org/shared")]
-        let downloadable = [
-            imageModelOption(
-                "org/shared",
-                availability: .downloadable(sizeBytes: nil)
-            ),
-            imageModelOption(
-                "org/remote",
-                availability: .downloadable(sizeBytes: nil)
-            ),
-        ]
-
-        let options = ChatImageModelSelection.displayOptions(
-            for: .generate,
-            installedModels: installed,
-            downloadableModels: downloadable
-        )
-
-        XCTAssertEqual(options.map(\.modelID), ["org/shared", "org/remote"])
-    }
-
-    func testSavedDownloadableModelStillRequiresUserSelection() {
-        let downloadable = imageModelOption(
-            "org/remote",
-            availability: .downloadable(sizeBytes: nil)
-        )
-
-        let resolution = ChatImageModelSelection.resolve(
-            operation: .generate,
-            selectedModelID: downloadable.modelID,
-            availableModels: [downloadable]
-        )
-
-        guard case .selectionRequired(let request) = resolution else {
-            return XCTFail("a remote recommendation must not download without consent")
-        }
-        XCTAssertEqual(request.models, [downloadable])
-    }
-
-    func testPreselectedDownloadedModelSkipsHubRecommendations() {
-        let installed = [imageModelOption("org/local")]
-
-        XCTAssertFalse(ChatImageModelSelection.needsRecommendations(
-            preferredInstalledModelID: "org/local",
-            installedModels: installed
-        ))
-        XCTAssertTrue(ChatImageModelSelection.needsRecommendations(
-            preferredInstalledModelID: "org/missing",
-            installedModels: installed
-        ))
     }
 
     func testNativeSelectionRejectsAnIdentifierOutsideItsRequest() throws {
@@ -443,7 +295,7 @@ final class ChatToolRegistryTests: XCTestCase {
         var didStartExecution = false
         var imageContext = makeContext(modelSearchPath: missingPath)
         imageContext.imageToolDependencies = ChatImageToolDependencies(
-            discoverModels: { _, path, additionalPaths, _, _ in
+            discoverModels: { _, path, additionalPaths in
                 try await ChatImageModelSelection.installedOptions(
                     modelSearchPath: path,
                     additionalModelSearchPaths: additionalPaths
@@ -476,6 +328,84 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     @MainActor
+    func testNoInstalledModelPresentsRecoveryWithoutStartingGeneration() async throws {
+        var presentedRequest: ChatImageModelSelectionRequest?
+        var didStartExecution = false
+        var context = makeContext()
+        context.imageToolDependencies = ChatImageToolDependencies(
+            discoverModels: { _, _, _ in [] },
+            execute: { _, _, _, _, _ in
+                throw FakeToolError()
+            }
+        )
+        context.imageModelSelection = { request in
+            presentedRequest = request
+            return "org/not-offered"
+        }
+        context.imageExecutionWillStart = { _ in
+            didStartExecution = true
+        }
+
+        do {
+            _ = try await ChatToolDispatcher.execute(
+                call: makeCall(
+                    name: ChatImageToolRegistry.generateToolName,
+                    arguments: #"{"prompt":"A lake"}"#
+                ),
+                context: context
+            )
+            XCTFail("generation must wait for an installed model")
+        } catch let error as ChatImageToolError {
+            guard case .modelSelectionUnavailable(.generate) = error else {
+                return XCTFail("expected modelSelectionUnavailable(.generate), got \(error)")
+            }
+        }
+
+        XCTAssertEqual(presentedRequest?.operation, .generate)
+        XCTAssertEqual(presentedRequest?.models, [])
+        XCTAssertEqual(presentedRequest?.requiresInstallation, true)
+        XCTAssertFalse(didStartExecution)
+    }
+
+    @MainActor
+    func testPreselectedModelPropagatesExactIDWithoutPresentingSelection() async throws {
+        let selectedModel = ChatImageModelOption(
+            displayName: "Image Model",
+            modelID: "org/preselected-image-model",
+            capabilities: [.imageGeneration]
+        )
+        let recorder = ImageToolExecutionRecorder()
+        var sessionModelID: String?
+        var context = makeContext(imageModelID: selectedModel.modelID)
+        context.imageToolDependencies = ChatImageToolDependencies(
+            discoverModels: { _, _, _ in [selectedModel] },
+            execute: { _, modelID, _, _, _ in
+                await recorder.record(modelID: modelID)
+                return ChatImageToolExecution(content: #"{"ok":true}"#, attachments: [])
+            }
+        )
+        context.imageModelSelection = { _ in
+            XCTFail("a valid preselection must not present the model picker")
+            return "org/unexpected"
+        }
+        context.imageExecutionWillStart = { modelID in
+            sessionModelID = modelID
+        }
+
+        _ = try await ChatToolDispatcher.execute(
+            call: makeCall(
+                name: ChatImageToolRegistry.generateToolName,
+                arguments: #"{"prompt":"A lake"}"#
+            ),
+            context: context
+        )
+
+        XCTAssertEqual(sessionModelID, selectedModel.modelID)
+        let executedModelID = await recorder.recordedModelID()
+        XCTAssertEqual(executedModelID, selectedModel.modelID)
+    }
+
+    @MainActor
     func testNativeSelectionPropagatesExactModelIDToExecutionAndSessionCallback() async throws {
         let selectedModel = ChatImageModelOption(
             displayName: "Image Model",
@@ -491,7 +421,7 @@ final class ChatToolRegistryTests: XCTestCase {
         var sessionModelID: String?
         var context = makeContext()
         context.imageToolDependencies = ChatImageToolDependencies(
-            discoverModels: { _, _, _, _, _ in [selectedModel, languageModel] },
+            discoverModels: { _, _, _ in [selectedModel, languageModel] },
             execute: { _, modelID, _, _, _ in
                 await recorder.record(modelID: modelID)
                 return ChatImageToolExecution(content: #"{"ok":true}"#, attachments: [])
@@ -646,17 +576,6 @@ final class ChatToolRegistryTests: XCTestCase {
         ]
     }
 
-    private func imageModelOption(
-        _ modelID: String,
-        availability: ChatImageModelOption.Availability = .installed
-    ) -> ChatImageModelOption {
-        ChatImageModelOption(
-            displayName: modelID.split(separator: "/").last.map(String.init) ?? modelID,
-            modelID: modelID,
-            capabilities: [.imageGeneration],
-            availability: availability
-        )
-    }
 }
 
 @MainActor

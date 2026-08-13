@@ -12,7 +12,6 @@ struct ChatToolExecutionContext {
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
-    var huggingFaceToken: String? = nil
     var analyticsDatabaseURL: URL? = nil
     var imageToolDependencies = ChatImageToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
@@ -131,9 +130,7 @@ enum ChatToolDispatcher {
         let availableModels = try await context.imageToolDependencies.discoverModels(
             imageRequest.operation,
             context.modelSearchPath,
-            context.additionalModelSearchPaths,
-            context.huggingFaceToken,
-            context.imageGenerationModelID
+            context.additionalModelSearchPaths
         )
         let imageModelID: String
         switch ChatImageModelSelection.resolve(
