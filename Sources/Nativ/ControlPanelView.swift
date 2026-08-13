@@ -2416,7 +2416,8 @@ private struct ChatWorkspaceView: View {
                     viewModel: imageGeneration,
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
-                    conversationWidthReduction: conversationWidthReduction
+                    conversationWidthReduction: conversationWidthReduction,
+                    onExploreImageModels: { onExploreImageModels(.generate) }
                 )
             }
         }

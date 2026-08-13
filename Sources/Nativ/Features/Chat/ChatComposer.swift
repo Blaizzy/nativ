@@ -291,6 +291,8 @@ struct ChatComposer: View {
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
             shortcutLabel: "⌃⇧M",
+            emptyStateActionTitle: nil,
+            onEmptyStateAction: nil,
             onSelectModel: select,
             onSwitchModel: { model.switchLanguageModel(to: $0) }
         )
@@ -646,6 +648,8 @@ struct ComposerModelPicker: View {
     let helpText: String
     let accessibilityValue: String
     let shortcutLabel: String?
+    let emptyStateActionTitle: String?
+    let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
 
@@ -663,6 +667,8 @@ struct ComposerModelPicker: View {
                 isEnabled: !isDisabled,
                 usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
+                emptyStateActionTitle: emptyStateActionTitle,
+                onEmptyStateAction: onEmptyStateAction,
                 onSelectModel: onSelectModel,
                 onSwitchModel: onSwitchModel,
                 onTrackingChanged: { isTracking in
@@ -746,6 +752,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let isEnabled: Bool
     let usesSelectModelShortcut: Bool
     let statusLabel: String
+    let emptyStateActionTitle: String?
+    let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
     let onTrackingChanged: (Bool) -> Void
@@ -876,9 +884,26 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                 let item = NSMenuItem(title: parent.statusLabel, action: nil, keyEquivalent: "")
                 item.isEnabled = false
                 menu.addItem(item)
+
+                if let actionTitle = parent.emptyStateActionTitle,
+                   parent.onEmptyStateAction != nil {
+                    menu.addItem(.separator())
+                    let actionItem = NSMenuItem(
+                        title: actionTitle,
+                        action: #selector(performEmptyStateAction),
+                        keyEquivalent: ""
+                    )
+                    actionItem.target = self
+                    actionItem.isEnabled = true
+                    menu.addItem(actionItem)
+                }
             }
 
             return menu
+        }
+
+        @objc private func performEmptyStateAction() {
+            parent.onEmptyStateAction?()
         }
 
         private func makeSecondaryMenu(
