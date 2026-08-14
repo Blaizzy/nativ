@@ -784,8 +784,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     func deleteSession(_ sessionID: UUID) {
-        guard !isSessionBusy(sessionID) else {
-            return
+        // A busy session used to be undeletable, so a chat whose stream never
+        // finished could not be removed at all. Cancel its work and delete it.
+        if isSessionBusy(sessionID) {
+            cancelRequests(for: sessionID)
         }
 
         storedSessions.removeAll { $0.id == sessionID }
@@ -1072,6 +1074,49 @@ final class ChatViewModel: ObservableObject {
 
     func cancel() {
         activeTask?.cancel()
+        // Do not wait for the task to unwind: a stalled stream may stay parked in
+        // URLSession until its idle timeout fires, and the composer must become
+        // usable the moment the user asks to stop.
+        if let sessionID = activeRequestSessionID {
+            finishActiveAssistantAsCancelled(in: sessionID)
+        }
+        releaseActiveRequestSlot(matching: nil)
+        startNextRequestIfNeeded()
+    }
+
+    /// Cancels in-flight and queued work for one session, leaving other sessions
+    /// untouched.
+    private func cancelRequests(for sessionID: UUID) {
+        requestQueue.removeAll { $0.sessionID == sessionID }
+        guard activeRequestSessionID == sessionID else {
+            return
+        }
+        activeTask?.cancel()
+        finishActiveAssistantAsCancelled(in: sessionID)
+        releaseActiveRequestSlot(matching: nil)
+        startNextRequestIfNeeded()
+    }
+
+    /// Frees the single in-flight request slot.
+    ///
+    /// Pass the owning request's id to release it only if that request still owns
+    /// the slot, or `nil` to force-release whatever is active (user-driven
+    /// recovery). `activeTask` is always cleared together with the rest of the
+    /// slot so `startNextRequestIfNeeded()` can never be blocked by a handle that
+    /// outlived its request.
+    private func releaseActiveRequestSlot(matching requestID: UUID?) {
+        if let requestID, activeRequestID != requestID {
+            return
+        }
+        activeRequestID = nil
+        activeAssistantMessageID = nil
+        activeRequestSessionID = nil
+        sendingStartedAt = nil
+        activeTask = nil
+    }
+
+    private func ownsActiveRequest(_ requestID: UUID) -> Bool {
+        activeRequestID == requestID
     }
 
     func prioritizeQueuedRequest(_ requestID: UUID) {
@@ -1226,14 +1271,36 @@ final class ChatViewModel: ObservableObject {
                     return
                 }
 
+                // Release the in-flight slot on every exit path. Clearing it only
+                // after the request returned normally meant a stalled stream left
+                // the session marked busy forever, which is what made a frozen
+                // chat impossible to delete, stop, or switch away from.
+                defer {
+                    let ownedRequest = ownsActiveRequest(queuedRequest.id)
+                    releaseActiveRequestSlot(matching: queuedRequest.id)
+                    if ownedRequest {
+                        if currentSessionID == queuedRequest.sessionID {
+                            bumpScroll()
+                        }
+                        startNextRequestIfNeeded()
+                    }
+                }
+
                 do {
                     try await runChatLoop(queuedRequest)
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    if ownsActiveRequest(queuedRequest.id) {
+                        finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    }
                 } catch let error as URLError where error.code == .cancelled {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    if ownsActiveRequest(queuedRequest.id) {
+                        finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    }
                 } catch {
+                    guard ownsActiveRequest(queuedRequest.id) else {
+                        return
+                    }
                     appModel?.reportModelLoadFailure(
                         modelID: queuedRequest.settings.languageModelID,
                         error: error
@@ -1247,19 +1314,6 @@ final class ChatViewModel: ObservableObject {
                     }
                     appModel?.refreshMetricsIfRunning(force: true)
                 }
-
-                guard activeRequestID == queuedRequest.id else {
-                    return
-                }
-                activeRequestID = nil
-                activeAssistantMessageID = nil
-                activeRequestSessionID = nil
-                sendingStartedAt = nil
-                activeTask = nil
-                if currentSessionID == queuedRequest.sessionID {
-                    bumpScroll()
-                }
-                startNextRequestIfNeeded()
             }
             return
         }
@@ -1564,6 +1618,9 @@ final class ChatViewModel: ObservableObject {
             }
 
             toolRounds += 1
+            guard ownsActiveRequest(queuedRequest.id) else {
+                throw CancellationError()
+            }
             assistantMessageID = UUID()
             activeAssistantMessageID = assistantMessageID
             guard insertAssistantMessage(

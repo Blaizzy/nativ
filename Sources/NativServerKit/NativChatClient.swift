@@ -542,18 +542,30 @@ public final class NativChatClient {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
+    /// How long a streaming response may go without delivering any bytes before
+    /// the request fails. `timeoutIntervalForRequest` is an inactivity timer that
+    /// URLSession resets whenever new data arrives, so this bounds a stalled
+    /// stream without limiting a healthy one.
+    public static let defaultIdleTimeout: TimeInterval = 120
+
+    /// Total budget for one request. Long generations legitimately run for many
+    /// minutes, so this only exists to stop a connection leaking forever; stalls
+    /// are caught by `idleTimeout`, not here.
+    public static let defaultResourceTimeout: TimeInterval = 3_600
+
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:8080")!,
         apiKey: String? = nil,
-        timeout: TimeInterval = 600
+        idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
+        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout
     ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
-        self.timeout = timeout
+        self.timeout = idleTimeout
 
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
+        configuration.timeoutIntervalForRequest = idleTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: configuration)
     }

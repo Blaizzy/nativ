@@ -2309,8 +2309,11 @@ struct ControlPanelView: View {
 
     private func isRecentDeleteDisabled(_ recent: ControlPanelRecentSession) -> Bool {
         switch recent.selection {
-        case .chat(let sessionID):
-            return chat.isSessionBusy(sessionID)
+        case .chat:
+            // Deleting a chat now cancels its in-flight request first, so a busy
+            // session is safe to remove. Disabling this button left a chat whose
+            // stream never finished permanently undeletable.
+            return false
         case .imageGeneration:
             return imageGeneration.isGenerating
         case .tab, .extensionPage:

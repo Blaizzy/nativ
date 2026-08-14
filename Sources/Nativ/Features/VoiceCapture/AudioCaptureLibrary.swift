@@ -638,7 +638,7 @@ final class AudioCaptureLibrary: ObservableObject {
         let client = NativChatClient(
             baseURL: configuration.serverBaseURL,
             apiKey: configuration.serverAPIKey,
-            timeout: 1_800
+            resourceTimeout: 1_800
         )
         let chunks = Self.transcriptChunks(transcript, maximumCharacters: 14_000)
         var partialSummaries: [String] = []
