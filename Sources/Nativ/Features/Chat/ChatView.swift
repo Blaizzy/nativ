@@ -2404,6 +2404,7 @@ private struct ChatMessageRow: View, Equatable {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
                         isThinking: message.isStreaming && message.content.isEmpty,
+                        isStreaming: message.isStreaming,
                         thinkingDuration: message.thinkingDuration
                     )
                 }
@@ -3165,8 +3166,11 @@ private struct ChatMessageActionButton: View {
 }
 
 private struct ChatThinkingBubble: View {
+    private static let collapsedPreviewCharacterLimit = 1_000
+
     let content: String
     let isThinking: Bool
+    let isStreaming: Bool
     let thinkingDuration: TimeInterval?
     @State private var isExpanded = false
 
@@ -3207,8 +3211,8 @@ private struct ChatThinkingBubble: View {
                     if isExpanded {
                         ChatMessageText(
                             content: content,
-                            rendersMarkdown: !isThinking,
-                            isStreaming: isThinking
+                            rendersMarkdown: true,
+                            isStreaming: isStreaming
                         )
                         .font(.callout)
                         .lineSpacing(2)
@@ -3217,7 +3221,7 @@ private struct ChatThinkingBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(12)
                     } else {
-                        Text(content)
+                        Text(collapsedPreviewContent)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineSpacing(2)
@@ -3249,6 +3253,10 @@ private struct ChatThinkingBubble: View {
             return "Worked"
         }
         return "Worked for \(NativFormatting.elapsedDuration(thinkingDuration))"
+    }
+
+    private var collapsedPreviewContent: String {
+        String(content.suffix(Self.collapsedPreviewCharacterLimit))
     }
 }
 
@@ -3538,7 +3546,12 @@ private struct ChatMessageText: View {
                 content: content,
                 fontScale: chatFontScale
             )
-        } else if rendersMarkdown && !isStreaming {
+        } else if rendersMarkdown && isStreaming {
+            ChatStreamingMarkdownText(
+                content: content,
+                fontScale: chatFontScale
+            )
+        } else if rendersMarkdown {
             StructuredText(
                 markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
@@ -3564,6 +3577,54 @@ private struct ChatMessageText: View {
         }
 
         return Text(attributed)
+    }
+}
+
+private struct ChatStreamingMarkdownText: View {
+    private static let chunkSpacing: CGFloat = 16
+
+    let document: NativStreamingMarkdownDocument
+    let fontScale: Double
+
+    init(content: String, fontScale: Double) {
+        document = NativMarkdownFormatting.streamingDocument(in: content)
+        self.fontScale = fontScale
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Self.chunkSpacing) {
+            ForEach(document.completedChunks) { chunk in
+                ChatStreamingMarkdownChunk(chunk: chunk)
+                    .equatable()
+            }
+
+            if !document.tail.isEmpty {
+                InlineText(
+                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                        in: document.tail
+                    ),
+                    syntaxExtensions: [.math]
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .textual.structuredTextStyle(.gitHub)
+        .textual.textSelection(.enabled)
+        .font(ChatFontMetrics.bodyFont(scale: fontScale))
+    }
+}
+
+private struct ChatStreamingMarkdownChunk: View, Equatable {
+    let chunk: NativStreamingMarkdownDocument.Chunk
+
+    var body: some View {
+        StructuredText(
+            markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                in: chunk.markdown
+            ),
+            syntaxExtensions: [.math]
+        )
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
