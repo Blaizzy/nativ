@@ -59,20 +59,60 @@ struct SystemMemoryMetrics: Equatable, Sendable {
 }
 
 struct SystemDiskMetrics: Equatable, Sendable {
-    var totalBytes: UInt64 = 0
-    var availableBytes: UInt64 = 0
+    var totalBytes: UInt64?
+    var availableBytes: UInt64?
     var readBytesPerSecond: Double = 0
     var writeBytesPerSecond: Double = 0
     var cumulativeReadBytes: UInt64 = 0
     var cumulativeWriteBytes: UInt64 = 0
 
-    var usedBytes: UInt64 {
-        totalBytes > availableBytes ? totalBytes - availableBytes : 0
+    var usedBytes: UInt64? {
+        guard let totalBytes, let availableBytes, availableBytes <= totalBytes else {
+            return nil
+        }
+        return totalBytes - availableBytes
     }
 
-    var usage: Double {
-        guard totalBytes > 0 else { return 0 }
-        return min(max(Double(usedBytes) / Double(totalBytes), 0), 1)
+    var usage: Double? {
+        guard let totalBytes, totalBytes > 0, let usedBytes else { return nil }
+        return Double(usedBytes) / Double(totalBytes)
+    }
+
+    /// Resolves the capacities used by macOS storage UI.
+    ///
+    /// Important-usage capacity includes space the system can reclaim, such as
+    /// purgeable APFS data. Raw available capacity is retained as a fallback for
+    /// file systems that do not expose the preferred value. Inconsistent values
+    /// are rejected so a failed capacity read is not presented as an empty disk.
+    static func resolvedCapacity(
+        total: Int?,
+        availableForImportantUsage: Int64?,
+        available: Int?
+    ) -> (total: UInt64, available: UInt64)? {
+        guard let total = validatedBytes(total), total > 0 else { return nil }
+
+        if let important = validatedBytes(
+            availableForImportantUsage,
+            notExceeding: total
+        ) {
+            return (total, important)
+        }
+        guard let fallback = validatedBytes(available, notExceeding: total) else {
+            return nil
+        }
+        return (total, fallback)
+    }
+
+    private static func validatedBytes<Value: BinaryInteger>(
+        _ value: Value?,
+        notExceeding upperBound: UInt64 = .max
+    ) -> UInt64? {
+        guard let value,
+              let bytes = UInt64(exactly: value),
+              bytes <= upperBound else {
+            return nil
+        }
+        return bytes
     }
 }
 
@@ -669,10 +709,14 @@ private actor SystemMetricsCollector {
         let rootURL = URL(fileURLWithPath: "/")
         let values = try? rootURL.resourceValues(forKeys: [
             .volumeTotalCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey,
             .volumeAvailableCapacityKey,
         ])
-        let total = UInt64(max(values?.volumeTotalCapacity ?? 0, 0))
-        let available = UInt64(max(values?.volumeAvailableCapacity ?? 0, 0))
+        let capacity = SystemDiskMetrics.resolvedCapacity(
+            total: values?.volumeTotalCapacity,
+            availableForImportantUsage: values?.volumeAvailableCapacityForImportantUsage,
+            available: values?.volumeAvailableCapacity
+        )
 
         let interval = max(elapsed ?? 0, 0)
         let readRate: Double
@@ -694,8 +738,8 @@ private actor SystemMetricsCollector {
         }
 
         return SystemDiskMetrics(
-            totalBytes: total,
-            availableBytes: available,
+            totalBytes: capacity?.total,
+            availableBytes: capacity?.available,
             readBytesPerSecond: readRate,
             writeBytesPerSecond: writeRate,
             cumulativeReadBytes: current.readBytes,
