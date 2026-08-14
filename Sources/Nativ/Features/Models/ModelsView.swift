@@ -33,7 +33,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
         case .all:
             true
         case .language:
-            capabilities.contains(.text)
+            capabilities.contains(.text) && !capabilities.contains(.reranking)
         case .image:
             !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing])
         case .speech:
