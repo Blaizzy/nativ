@@ -117,6 +117,8 @@ enum HuggingFaceCapabilityFilter {
             return "text-to-speech"
         case .embeddings:
             return "feature-extraction"
+        case .reranking:
+            return "text-ranking"
         case .reasoning, .tools, .drafter:
             return nil
         }
@@ -353,6 +355,12 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             || descriptors.contains("embedding")
             || descriptors.contains("sentence-transformers") {
             result.insert(.embeddings)
+        }
+
+        if pipeline == "text-ranking"
+            || descriptors.contains("reranker")
+            || descriptors.contains("reranking") {
+            result.insert(.reranking)
         }
 
         if descriptors.contains("reasoning") || descriptors.contains("thinking") {

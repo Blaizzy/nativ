@@ -152,6 +152,9 @@ private final class ModelMenuRowView: NSView {
             case .embeddings:
                 symbolName = "circle.grid.3x3.fill"
                 description = capability.displayName
+            case .reranking:
+                symbolName = "arrow.up.arrow.down.circle.fill"
+                description = capability.displayName
             case .reasoning:
                 symbolName = "brain.fill"
                 description = capability.displayName
