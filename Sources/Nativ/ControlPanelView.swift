@@ -278,18 +278,125 @@ final class ControlPanelChromeState: ObservableObject {
     }
 }
 
-/// Projects the low-frequency feature state needed by the sidebar and global
-/// presentation. High-frequency page state remains observed by its leaf views.
+/// Precomputes the merged recents index so the sidebar does not repeatedly map,
+/// merge, filter, and sort sessions during view evaluation.
+private struct SidebarRecentsSnapshot: Equatable {
+    let recentSessions: [ControlPanelRecentSession]
+    let pinnedSessions: [ControlPanelRecentSession]
+    let unpinnedSessions: [ControlPanelRecentSession]
+    let ungroupedSessions: [ControlPanelRecentSession]
+    let folders: [ChatFolder]
+    let pinnedFolders: [ChatFolder]
+    let unpinnedFolders: [ChatFolder]
+    private let sessionsByFolder: [UUID: [ControlPanelRecentSession]]
+    private let chatSessionIDs: Set<UUID>
+    private let imageSessionIDs: Set<UUID>
+
+    init(
+        chatSessions: [ChatSessionSummary],
+        folders: [ChatFolder],
+        imageSessions: [ImageGenerationSessionSummary]
+    ) {
+        let recentSessions = (
+            chatSessions.map(ControlPanelRecentSession.init(chat:))
+                + imageSessions.map(ControlPanelRecentSession.init(imageGeneration:))
+        ).sorted(by: ControlPanelRecentSession.recencySort)
+        let pinnedSessions = recentSessions
+            .filter(\.pinned)
+            .sorted(by: ControlPanelRecentSession.pinnedSort)
+        let unpinnedSessions = recentSessions
+            .filter { !$0.pinned }
+            .sorted(by: ControlPanelRecentSession.sessionSort)
+        let folderIDs = Set(folders.map(\.id))
+
+        self.recentSessions = recentSessions
+        self.pinnedSessions = pinnedSessions
+        self.unpinnedSessions = unpinnedSessions
+        ungroupedSessions = unpinnedSessions.filter { recent in
+            guard let folderID = recent.folderID else { return true }
+            return !folderIDs.contains(folderID)
+        }
+        self.folders = folders
+        pinnedFolders = folders.filter(\.isPinned)
+        unpinnedFolders = folders.filter { !$0.isPinned }
+        var sessionsByFolder: [UUID: [ControlPanelRecentSession]] = [:]
+        for recent in unpinnedSessions {
+            guard let folderID = recent.folderID else { continue }
+            sessionsByFolder[folderID, default: []].append(recent)
+        }
+        self.sessionsByFolder = sessionsByFolder
+        chatSessionIDs = Set(chatSessions.map(\.id))
+        imageSessionIDs = Set(imageSessions.map(\.id))
+    }
+
+    func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
+        sessionsByFolder[folderID] ?? []
+    }
+
+    func containsChatSession(_ sessionID: UUID) -> Bool {
+        chatSessionIDs.contains(sessionID)
+    }
+
+    func containsImageSession(_ sessionID: UUID) -> Bool {
+        imageSessionIDs.contains(sessionID)
+    }
+
+    func chatTitle(for sessionID: UUID) -> String? {
+        recentSessions.first { $0.chatID == sessionID }?.title
+    }
+}
+
+/// Exposes only the session index consumed by the control-panel sidebar. The
+/// transcript, composer, attachment, streaming, and tool state remain observed
+/// exclusively by `ChatView` and cannot invalidate the recents surface.
+@MainActor
+private final class ChatSidebarState: ObservableObject {
+    @Published private(set) var recents: SidebarRecentsSnapshot
+    @Published private(set) var currentChatSessionID: UUID?
+    @Published private(set) var currentImageSessionID: UUID?
+    @Published private(set) var isGeneratingImage: Bool
+
+    init(chat: ChatViewModel, imageGeneration: ImageGenerationViewModel) {
+        recents = SidebarRecentsSnapshot(
+            chatSessions: chat.sessions,
+            folders: chat.folders,
+            imageSessions: imageGeneration.sessions
+        )
+        currentChatSessionID = chat.currentSessionID
+        currentImageSessionID = imageGeneration.currentSessionID
+        isGeneratingImage = imageGeneration.isGenerating
+
+        Publishers.CombineLatest3(
+            chat.$sessions.removeDuplicates(),
+            chat.$folders.removeDuplicates(),
+            imageGeneration.$sessions.removeDuplicates()
+        )
+        .map { sessions, folders, imageSessions in
+            SidebarRecentsSnapshot(
+                chatSessions: sessions,
+                folders: folders,
+                imageSessions: imageSessions
+            )
+        }
+        .removeDuplicates()
+        .assign(to: &$recents)
+        chat.$currentSessionID
+            .removeDuplicates()
+            .assign(to: &$currentChatSessionID)
+        imageGeneration.$currentSessionID
+            .removeDuplicates()
+            .assign(to: &$currentImageSessionID)
+        imageGeneration.$isGenerating
+            .removeDuplicates()
+            .assign(to: &$isGeneratingImage)
+    }
+}
+
+/// Projects the remaining low-frequency global presentation state. High-frequency
+/// page state remains observed by its leaf views.
 @MainActor
 final class ControlPanelContentState: ObservableObject {
     private struct Snapshot: Equatable {
-        var chatSessions: [ChatSessionSummary]
-        var chatFolders: [ChatFolder]
-        var currentChatSessionID: UUID?
-        var imageSessions: [ImageGenerationSessionSummary]
-        var currentImageSessionID: UUID?
-        var isGeneratingImage: Bool
-        var activeDownloadCount: Int
         var extensionSidebarContributions: [NativSidebarContribution]
         var routines: [Routine]
         var routineRuns: [RoutineRun]
@@ -304,48 +411,12 @@ final class ControlPanelContentState: ObservableObject {
         extensionManager: NativExtensionManager
     ) {
         snapshot = Snapshot(
-            chatSessions: dependencies.chat.sessions,
-            chatFolders: dependencies.chat.folders,
-            currentChatSessionID: dependencies.chat.currentSessionID,
-            imageSessions: dependencies.imageGeneration.sessions,
-            currentImageSessionID: dependencies.imageGeneration.currentSessionID,
-            isGeneratingImage: dependencies.imageGeneration.isGenerating,
-            activeDownloadCount: dependencies.downloads.activeCount,
             extensionSidebarContributions: extensionManager.enabledSidebarContributions,
             routines: dependencies.routineStore.routines,
             routineRuns: dependencies.routineStore.runs,
             launchAtLoginErrorMessage: dependencies.launchAtLogin.errorMessage
         )
 
-        dependencies.chat.$sessions
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.chatSessions = value } }
-            .store(in: &cancellables)
-        dependencies.chat.$folders
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.chatFolders = value } }
-            .store(in: &cancellables)
-        dependencies.chat.$currentSessionID
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.currentChatSessionID = value } }
-            .store(in: &cancellables)
-        dependencies.imageGeneration.$sessions
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.imageSessions = value } }
-            .store(in: &cancellables)
-        dependencies.imageGeneration.$currentSessionID
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.currentImageSessionID = value } }
-            .store(in: &cancellables)
-        dependencies.imageGeneration.$isGenerating
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.isGeneratingImage = value } }
-            .store(in: &cancellables)
-        dependencies.downloads.$downloads
-            .map(\.count)
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.activeDownloadCount = value } }
-            .store(in: &cancellables)
         extensionManager.$records
             .map(Self.enabledSidebarContributions)
             .removeDuplicates()
@@ -369,13 +440,6 @@ final class ControlPanelContentState: ObservableObject {
             .store(in: &cancellables)
     }
 
-    var chatSessions: [ChatSessionSummary] { snapshot.chatSessions }
-    var chatFolders: [ChatFolder] { snapshot.chatFolders }
-    var currentChatSessionID: UUID? { snapshot.currentChatSessionID }
-    var imageSessions: [ImageGenerationSessionSummary] { snapshot.imageSessions }
-    var currentImageSessionID: UUID? { snapshot.currentImageSessionID }
-    var isGeneratingImage: Bool { snapshot.isGeneratingImage }
-    var activeDownloadCount: Int { snapshot.activeDownloadCount }
     var extensionSidebarContributions: [NativSidebarContribution] {
         snapshot.extensionSidebarContributions
     }
@@ -495,6 +559,33 @@ private struct ModelsDownloadArrow: View {
     }
 }
 
+/// Owns the control-panel's download-count projection and listens only for the
+/// manager's structural add/remove signal, not its progress publications.
+private struct ModelsDownloadBadge: View {
+    let downloads: HuggingFaceDownloadManager
+    @State private var activeCount: Int
+
+    init(downloads: HuggingFaceDownloadManager) {
+        self.downloads = downloads
+        _activeCount = State(initialValue: downloads.activeCount)
+    }
+
+    var body: some View {
+        Group {
+            if activeCount > 0 {
+                ModelsDownloadArrow(count: activeCount)
+            }
+        }
+        .onReceive(
+            downloads.rowUpdates
+                .compactMap { updatedModelID in
+                    updatedModelID == nil ? downloads.activeCount : nil
+                }
+                .removeDuplicates()
+        ) { activeCount = $0 }
+    }
+}
+
 private struct SidebarNavigationLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
@@ -560,6 +651,7 @@ struct ControlPanelView: View {
 
     private let dependencies: ControlPanelDependencies
     @StateObject private var chromeState: ControlPanelChromeState
+    @StateObject private var sidebarState: ChatSidebarState
     @StateObject private var contentState: ControlPanelContentState
     @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
     private var isExtensionsBadgeDismissed = false
@@ -622,6 +714,12 @@ struct ControlPanelView: View {
         self.softwareUpdater = softwareUpdater
         self.dependencies = dependencies
         _chromeState = StateObject(wrappedValue: ControlPanelChromeState(model: model))
+        _sidebarState = StateObject(
+            wrappedValue: ChatSidebarState(
+                chat: dependencies.chat,
+                imageGeneration: dependencies.imageGeneration
+            )
+        )
         _contentState = StateObject(
             wrappedValue: ControlPanelContentState(
                 dependencies: dependencies,
@@ -1041,9 +1139,7 @@ struct ControlPanelView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: 34, alignment: .trailing)
                         }
-                        if contentState.activeDownloadCount > 0 {
-                            ModelsDownloadArrow(count: contentState.activeDownloadCount)
-                        }
+                        ModelsDownloadBadge(downloads: downloads)
                     }
                 }
             }
@@ -1322,7 +1418,7 @@ struct ControlPanelView: View {
         isPinnedRow: Bool
     ) {
         guard let draggedID = UUID(uuidString: draggedPayload),
-              contentState.chatSessions.contains(where: { $0.id == draggedID }),
+              sidebarState.recents.containsChatSession(draggedID),
               let targetID = target.chatID,
               draggedID != targetID
         else {
@@ -1353,7 +1449,7 @@ struct ControlPanelView: View {
         reorderTargetID = nil
         reorderInsertAfter = false
         guard let draggedID = UUID(uuidString: draggedPayload),
-              contentState.chatSessions.contains(where: { $0.id == draggedID }),
+              sidebarState.recents.containsChatSession(draggedID),
               let targetID = target.chatID,
               draggedID != targetID
         else {
@@ -1429,7 +1525,7 @@ struct ControlPanelView: View {
                     .foregroundStyle(Color.secondary.opacity(0.7))
             }
             .buttonStyle(.plain)
-            .disabled(recentSessions.isEmpty && contentState.chatFolders.isEmpty)
+            .disabled(recentSessions.isEmpty && sidebarState.recents.folders.isEmpty)
             .help("Select multiple")
 
             Menu {
@@ -1457,7 +1553,7 @@ struct ControlPanelView: View {
             .disabled(
                 selectedTab == .chat
                     && chatWorkspaceMode == .images
-                    && contentState.isGeneratingImage
+                    && sidebarState.isGeneratingImage
             )
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
@@ -1593,7 +1689,7 @@ struct ControlPanelView: View {
         chromeState.sidebarPinnedCollapsed
             && chromeState.sidebarFoldersCollapsed
             && chromeState.sidebarSessionsCollapsed
-            && !contentState.chatFolders.contains { !$0.isCollapsed }
+            && !sidebarState.recents.folders.contains { !$0.isCollapsed }
     }
 
     private func revealSidebarSection(_ keyPath: WritableKeyPath<NativSettings, Bool>) {
@@ -1785,45 +1881,31 @@ struct ControlPanelView: View {
     }
 
     private var recentSessions: [ControlPanelRecentSession] {
-        (
-            contentState.chatSessions.map(ControlPanelRecentSession.init(chat:))
-                + contentState.imageSessions.map(ControlPanelRecentSession.init(imageGeneration:))
-        )
-            .sorted(by: ControlPanelRecentSession.recencySort)
+        sidebarState.recents.recentSessions
     }
 
     private var pinnedSessions: [ControlPanelRecentSession] {
-        recentSessions
-            .filter(\.pinned)
-            .sorted(by: ControlPanelRecentSession.pinnedSort)
+        sidebarState.recents.pinnedSessions
     }
 
     private var unpinnedSessions: [ControlPanelRecentSession] {
-        recentSessions.filter { !$0.pinned }.sorted(by: ControlPanelRecentSession.sessionSort)
+        sidebarState.recents.unpinnedSessions
     }
 
     private var ungroupedSessions: [ControlPanelRecentSession] {
-        let folderIDs = Set(contentState.chatFolders.map(\.id))
-        return unpinnedSessions.filter { recent in
-            guard let folderID = recent.folderID else {
-                return true
-            }
-            return !folderIDs.contains(folderID)
-        }
+        sidebarState.recents.ungroupedSessions
     }
 
     private var pinnedFolders: [ChatFolder] {
-        contentState.chatFolders.filter(\.isPinned)
+        sidebarState.recents.pinnedFolders
     }
 
     private var unpinnedFolders: [ChatFolder] {
-        contentState.chatFolders.filter { !$0.isPinned }
+        sidebarState.recents.unpinnedFolders
     }
 
     private func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
-        recentSessions
-            .filter { !$0.pinned && $0.folderID == folderID }
-            .sorted(by: ControlPanelRecentSession.sessionSort)
+        sidebarState.recents.sessions(inFolder: folderID)
     }
 
     @ViewBuilder
@@ -1868,7 +1950,7 @@ struct ControlPanelView: View {
             onEditRoutine: {
                 editRoutine(for: recent)
             },
-            folders: contentState.chatFolders,
+            folders: sidebarState.recents.folders,
             onMoveToFolder: { folderID in
                 moveRecentToFolder(recent, folderID: folderID)
             },
@@ -1952,7 +2034,7 @@ struct ControlPanelView: View {
     private func draggedChatID(from items: [String]) -> UUID? {
         for item in items {
             if let id = UUID(uuidString: item),
-               contentState.chatSessions.contains(where: { $0.id == id }) {
+               sidebarState.recents.containsChatSession(id) {
                 return id
             }
         }
@@ -2001,7 +2083,7 @@ struct ControlPanelView: View {
         guard dragged != target else {
             return
         }
-        var order = contentState.chatFolders.map(\.id)
+        var order = sidebarState.recents.folders.map(\.id)
         order.removeAll { $0 == dragged }
         if let index = order.firstIndex(of: target) {
             order.insert(dragged, at: index)
@@ -2048,7 +2130,7 @@ struct ControlPanelView: View {
     }
 
     private var selectedFolders: [ChatFolder] {
-        contentState.chatFolders.filter { selectedFolderIDs.contains($0.id) }
+        sidebarState.recents.folders.filter { selectedFolderIDs.contains($0.id) }
     }
 
     private var hasSelectedPinnable: Bool {
@@ -2331,7 +2413,7 @@ struct ControlPanelView: View {
             }
             if tab == .chat {
                 switch chatWorkspaceMode {
-                case .chat where contentState.currentChatSessionID == nil:
+                case .chat where sidebarState.currentChatSessionID == nil:
                     chat.createSession()
                 default:
                     break
@@ -2350,7 +2432,7 @@ struct ControlPanelView: View {
             sidebarSelection = selection
             selectedTab = .extensions
         case .chat(let sessionID):
-            if contentState.chatSessions.contains(where: { $0.id == sessionID }) {
+            if sidebarState.recents.containsChatSession(sessionID) {
                 chat.selectSession(sessionID)
                 sidebarSelection = selection
             } else {
@@ -2359,7 +2441,7 @@ struct ControlPanelView: View {
             chatWorkspaceMode = .chat
             selectedTab = .chat
         case .imageGeneration(let sessionID):
-            if contentState.imageSessions.contains(where: { $0.id == sessionID }) {
+            if sidebarState.recents.containsImageSession(sessionID) {
                 imageGeneration.selectSession(sessionID)
                 sidebarSelection = selection
             } else {
@@ -2471,8 +2553,7 @@ struct ControlPanelView: View {
             guard let text = chat.conversationText(for: sessionID) else {
                 continue
             }
-            let title = contentState.chatSessions.first { $0.id == sessionID }?.title
-                ?? sessionID.uuidString
+            let title = sidebarState.recents.chatTitle(for: sessionID) ?? sessionID.uuidString
             let base = sanitizedFileName(title)
             var candidate = base
             var suffix = 2
@@ -2565,10 +2646,10 @@ struct ControlPanelView: View {
         }
         switch (sidebarSelection, recent.selection) {
         case (.tab(.chat), .chat(let sessionID)):
-            return chatWorkspaceMode == .chat && sessionID == contentState.currentChatSessionID
+            return chatWorkspaceMode == .chat && sessionID == sidebarState.currentChatSessionID
         case (.tab(.chat), .imageGeneration(let sessionID)):
             return chatWorkspaceMode == .images
-                && sessionID == contentState.currentImageSessionID
+                && sessionID == sidebarState.currentImageSessionID
         default:
             return false
         }
@@ -2577,9 +2658,9 @@ struct ControlPanelView: View {
     private func isCurrentRecent(_ recent: ControlPanelRecentSession) -> Bool {
         switch recent.selection {
         case .chat(let sessionID):
-            return sessionID == contentState.currentChatSessionID
+            return sessionID == sidebarState.currentChatSessionID
         case .imageGeneration(let sessionID):
-            return sessionID == contentState.currentImageSessionID
+            return sessionID == sidebarState.currentImageSessionID
         case .tab, .extensionPage:
             return false
         }
@@ -2593,7 +2674,7 @@ struct ControlPanelView: View {
             // stream never finished permanently undeletable.
             return false
         case .imageGeneration:
-            return contentState.isGeneratingImage
+            return sidebarState.isGeneratingImage
         case .tab, .extensionPage:
             return false
         }
@@ -2604,7 +2685,7 @@ struct ControlPanelView: View {
         case .chat:
             return false
         case .imageGeneration:
-            return contentState.isGeneratingImage
+            return sidebarState.isGeneratingImage
         case .tab, .extensionPage:
             return false
         }
@@ -2647,19 +2728,19 @@ struct ControlPanelView: View {
     }
 
     private func showChatWorkspace() {
-        if contentState.currentChatSessionID == nil {
+        if sidebarState.currentChatSessionID == nil {
             chat.createSession()
         }
         chatWorkspaceMode = .chat
         selectedTab = .chat
-        sidebarSelection = contentState.currentChatSessionID.map(ControlPanelSidebarSelection.chat)
+        sidebarSelection = sidebarState.currentChatSessionID.map(ControlPanelSidebarSelection.chat)
             ?? .tab(.chat)
     }
 
     private func showImageWorkspace() {
         chatWorkspaceMode = .images
         selectedTab = .chat
-        sidebarSelection = contentState.currentImageSessionID
+        sidebarSelection = sidebarState.currentImageSessionID
             .map(ControlPanelSidebarSelection.imageGeneration)
             ?? .tab(.chat)
     }
