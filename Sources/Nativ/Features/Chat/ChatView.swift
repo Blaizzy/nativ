@@ -3538,26 +3538,32 @@ private struct ChatMessageText: View {
                 content: content,
                 fontScale: chatFontScale
             )
-        } else if rendersMarkdown {
+        } else if rendersMarkdown && !isStreaming {
             StructuredText(
-                markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: renderableMarkdown),
+                markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
             )
             .textual.structuredTextStyle(.gitHub)
             .textual.textSelection(.enabled)
             .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else {
-            Text(content)
+            renderedText
                 .textSelection(.enabled)
                 .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         }
     }
 
-    private var renderableMarkdown: String {
-        guard isStreaming else {
-            return content
+    private var renderedText: Text {
+        guard rendersMarkdown,
+              let attributed = try? AttributedString(
+                markdown: content,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+              )
+        else {
+            return Text(content)
         }
-        return NativMarkdownFormatting.streamingMarkdown(of: content)
+
+        return Text(attributed)
     }
 }
 
