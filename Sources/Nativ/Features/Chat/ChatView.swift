@@ -145,7 +145,8 @@ private struct ChatTranscriptView: View {
                     ForEach(chat.visibleMessages) { message in
                         let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
                         ChatMessageRow(
-                            message: message,
+                            sourceMessage: message,
+                            streamState: chat.streamState(for: message),
                             imageModelSelectionRequest: chat.imageModelSelectionRequest(
                                 for: message.id
                             ),
@@ -157,7 +158,12 @@ private struct ChatTranscriptView: View {
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
                             onCancelImageModelSelection: chat.cancelImageModelSelection,
-                            onExploreImageModels: onExploreImageModels
+                            onExploreImageModels: onExploreImageModels,
+                            onStreamingContentChange: {
+                                if followsLatestMessage {
+                                    transcriptScrollPosition.scrollTo(edge: .bottom)
+                                }
+                            }
                         )
                         .equatable()
                         .id(message.id)
@@ -351,11 +357,82 @@ private struct ChatComposerContainer: View {
 }
 
 @MainActor
+fileprivate final class ChatMessageStreamState: ObservableObject {
+    struct Snapshot: Equatable {
+        var content: String
+        var reasoningContent: String
+        var thinkingDuration: TimeInterval?
+        var responseMetrics: ChatResponseMetrics?
+        var revision: Int
+    }
+
+    @Published private(set) var snapshot: Snapshot
+
+    init(message: ChatTranscriptMessage? = nil) {
+        snapshot = Snapshot(
+            content: message?.content ?? "",
+            reasoningContent: message?.reasoningContent ?? "",
+            thinkingDuration: message?.thinkingDuration,
+            responseMetrics: message?.responseMetrics,
+            revision: 0
+        )
+    }
+
+    func append(
+        content: String,
+        reasoning: String,
+        metrics: MLXChatStreamDelta?,
+        createdAt: Date
+    ) {
+        var next = snapshot
+        if !reasoning.isEmpty {
+            next.reasoningContent.append(reasoning)
+        }
+        if !content.isEmpty {
+            if !next.reasoningContent.isEmpty, next.thinkingDuration == nil {
+                next.thinkingDuration = Date().timeIntervalSince(createdAt)
+            }
+            next.content.append(content)
+        }
+        if let metrics {
+            next.responseMetrics = ChatResponseMetrics(
+                totalTokens: next.responseMetrics?.totalTokens,
+                generatedTokens: metrics.generatedTokens
+                    ?? next.responseMetrics?.generatedTokens,
+                decodeTokensPerSecond: metrics.decodeTokensPerSecond
+                    ?? next.responseMetrics?.decodeTokensPerSecond,
+                peakMemoryGB: next.responseMetrics?.peakMemoryGB,
+                specAcceptanceRate: next.responseMetrics?.specAcceptanceRate
+            )
+        }
+        guard next != snapshot else {
+            return
+        }
+        next.revision += 1
+        snapshot = next
+    }
+
+    func apply(to message: inout ChatTranscriptMessage) {
+        message.content = snapshot.content
+        message.reasoningContent = snapshot.reasoningContent
+        message.thinkingDuration = snapshot.thinkingDuration
+        message.responseMetrics = snapshot.responseMetrics
+    }
+
+    func applying(to message: ChatTranscriptMessage) -> ChatTranscriptMessage {
+        var message = message
+        apply(to: &message)
+        return message
+    }
+}
+
+@MainActor
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
+    private static let inactiveStreamState = ChatMessageStreamState()
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -409,6 +486,7 @@ final class ChatViewModel: ObservableObject {
     private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
     private var streamFlushDates: [UUID: Date] = [:]
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
+    private var messageStreamStates: [UUID: ChatMessageStreamState] = [:]
     private weak var appModel: NativModel?
     private let toolConsentGate = ChatToolConsentGate()
     private let imageModelSelectionGate = ChatImageModelSelectionGate()
@@ -469,6 +547,20 @@ final class ChatViewModel: ObservableObject {
                     && $0.reasoningContent.isEmpty
                     && !$0.toolCalls.isEmpty)
         }
+    }
+
+    fileprivate func streamState(
+        for message: ChatTranscriptMessage
+    ) -> ChatMessageStreamState {
+        guard message.role == .assistant, message.isStreaming else {
+            return Self.inactiveStreamState
+        }
+        if let state = messageStreamStates[message.id] {
+            return state
+        }
+        let state = ChatMessageStreamState(message: message)
+        messageStreamStates[message.id] = state
+        return state
     }
 
     var currentSessionQueuedPrompts: [ChatQueuedPrompt] {
@@ -1972,6 +2064,7 @@ final class ChatViewModel: ObservableObject {
     private func removeMessage(_ messageID: UUID, from sessionID: UUID) {
         if currentSessionID == sessionID {
             messages.removeAll { $0.id == messageID }
+            messageStreamStates.removeValue(forKey: messageID)
             return
         }
         guard let sessionIndex = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
@@ -2039,32 +2132,39 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        updateMessage(id, in: sessionID) { message in
-            if !reasoning.isEmpty {
-                message.reasoningContent.append(reasoning)
-            }
-            if !content.isEmpty {
-                if !message.reasoningContent.isEmpty, message.thinkingDuration == nil {
-                    message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
+        if currentSessionID == sessionID,
+           let message = message(id, in: sessionID) {
+            streamState(for: message).append(
+                content: content,
+                reasoning: reasoning,
+                metrics: metrics,
+                createdAt: message.createdAt
+            )
+        } else {
+            updateMessage(id, in: sessionID) { message in
+                if !reasoning.isEmpty {
+                    message.reasoningContent.append(reasoning)
                 }
-                message.content.append(content)
-            }
-            if let metrics {
-                message.responseMetrics = ChatResponseMetrics(
-                    totalTokens: message.responseMetrics?.totalTokens,
-                    generatedTokens: metrics.generatedTokens
-                        ?? message.responseMetrics?.generatedTokens,
-                    decodeTokensPerSecond: metrics.decodeTokensPerSecond
-                        ?? message.responseMetrics?.decodeTokensPerSecond,
-                    peakMemoryGB: message.responseMetrics?.peakMemoryGB,
-                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
-                )
+                if !content.isEmpty {
+                    if !message.reasoningContent.isEmpty, message.thinkingDuration == nil {
+                        message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
+                    }
+                    message.content.append(content)
+                }
+                if let metrics {
+                    message.responseMetrics = ChatResponseMetrics(
+                        totalTokens: message.responseMetrics?.totalTokens,
+                        generatedTokens: metrics.generatedTokens
+                            ?? message.responseMetrics?.generatedTokens,
+                        decodeTokensPerSecond: metrics.decodeTokensPerSecond
+                            ?? message.responseMetrics?.decodeTokensPerSecond,
+                        peakMemoryGB: message.responseMetrics?.peakMemoryGB,
+                        specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
+                    )
+                }
             }
         }
         streamFlushDates[id] = Date()
-        if (!content.isEmpty || !reasoning.isEmpty), currentSessionID == sessionID {
-            bumpScroll()
-        }
     }
 
     private func clearStreamBuffers(_ id: UUID) {
@@ -2110,7 +2210,9 @@ final class ChatViewModel: ObservableObject {
         flushStream(id, in: sessionID)
         clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
+        let streamState = messageStreamStates[id]
         updateMessage(id, in: sessionID) { message in
+            streamState?.apply(to: &message)
             message.isStreaming = false
             if message.content.isEmpty {
                 message.content = fallbackContent
@@ -2133,13 +2235,19 @@ final class ChatViewModel: ObservableObject {
                 ? responseMetrics
                 : nil
         }
+        messageStreamStates.removeValue(forKey: id)
         persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
     }
 
     private func failAssistantMessage(_ id: UUID, in sessionID: UUID, error: Error) {
         clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
+        let streamState = messageStreamStates[id]
         guard updateMessage(id, in: sessionID, mutate: { message in
+            streamState?.apply(to: &message)
             message.role = .error
             message.content = error.localizedDescription
             message.isStreaming = false
@@ -2150,7 +2258,11 @@ final class ChatViewModel: ObservableObject {
         }) else {
             return
         }
+        messageStreamStates.removeValue(forKey: id)
         persistSession(sessionID, updateTimestamp: true)
+        if currentSessionID == sessionID {
+            bumpScroll()
+        }
     }
 
     @discardableResult
@@ -2184,6 +2296,7 @@ final class ChatViewModel: ObservableObject {
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
+        messageStreamStates.removeAll(keepingCapacity: true)
         messages = ChatSessionLoadPolicy.shouldNormalizeOnApply(
             sessionID: session.id,
             activeRequestSessionID: activeRequestSessionID
@@ -2249,8 +2362,14 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        session.messages = messages
-        session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
+        let materializedMessages = messages.map { message in
+            messageStreamStates[message.id]?.applying(to: message) ?? message
+        }
+        session.messages = materializedMessages
+        session.title = ChatSession.defaultTitle(
+            for: materializedMessages,
+            createdAt: session.createdAt
+        )
         if updateTimestamp {
             session.updatedAt = Date()
         }
@@ -2361,8 +2480,10 @@ final class ChatViewModel: ObservableObject {
 
 private struct ChatMessageRow: View, Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
+    private static let streamScrollInterval: TimeInterval = 1.0 / 8.0
 
-    let message: ChatTranscriptMessage
+    let sourceMessage: ChatTranscriptMessage
+    @ObservedObject var streamState: ChatMessageStreamState
     let imageModelSelectionRequest: ChatImageModelSelectionRequest?
     let canEditUserMessage: Bool
     let editUserMessageUnavailableReason: String?
@@ -2373,15 +2494,25 @@ private struct ChatMessageRow: View, Equatable {
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onStreamingContentChange: () -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
+    @State private var lastStreamScrollDate = Date.distantPast
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.message == rhs.message
+        lhs.sourceMessage == rhs.sourceMessage
+            && lhs.streamState === rhs.streamState
             && lhs.imageModelSelectionRequest == rhs.imageModelSelectionRequest
             && lhs.canEditUserMessage == rhs.canEditUserMessage
             && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
             && lhs.isEditingUserMessage == rhs.isEditingUserMessage
+    }
+
+    private var message: ChatTranscriptMessage {
+        guard sourceMessage.role == .assistant, sourceMessage.isStreaming else {
+            return sourceMessage
+        }
+        return streamState.applying(to: sourceMessage)
     }
 
     var body: some View {
@@ -2468,6 +2599,19 @@ private struct ChatMessageRow: View, Equatable {
         .frame(maxWidth: .infinity, alignment: rowAlignment)
         .contentShape(.rect)
         .onHover { isHoveringMessage = $0 }
+        .onChange(of: streamState.snapshot.revision) { _, _ in
+            guard sourceMessage.role == .assistant, sourceMessage.isStreaming else {
+                return
+            }
+            let now = Date()
+            guard now.timeIntervalSince(lastStreamScrollDate)
+                    >= Self.streamScrollInterval
+            else {
+                return
+            }
+            lastStreamScrollDate = now
+            onStreamingContentChange()
+        }
         .animation(.easeInOut(duration: 0.14), value: isHoveringMessage)
     }
 
@@ -3181,6 +3325,7 @@ private struct ChatThinkingBubble: View {
     let content: String
     let isThinking: Bool
     let thinkingDuration: TimeInterval?
+    @Environment(\.chatFontScale) private var chatFontScale
     @State private var isExpanded = false
 
     var body: some View {
@@ -3230,10 +3375,11 @@ private struct ChatThinkingBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(12)
                     } else {
-                        Text(content)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineSpacing(2)
+                        ChatStreamingText(
+                            content: content,
+                            fontScale: chatFontScale,
+                            style: .thinkingPreview
+                        )
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(height: 58, alignment: .bottomLeading)
@@ -3551,7 +3697,12 @@ private struct ChatMessageText: View {
                 content: content,
                 fontScale: chatFontScale
             )
-        } else if rendersMarkdown && !isStreaming {
+        } else if isStreaming {
+            ChatStreamingText(
+                content: content,
+                fontScale: chatFontScale
+            )
+        } else if rendersMarkdown {
             StructuredText(
                 markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
@@ -3560,23 +3711,165 @@ private struct ChatMessageText: View {
             .textual.textSelection(.enabled)
             .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else {
-            renderedText
+            Text(content)
                 .textSelection(.enabled)
                 .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         }
     }
+}
 
-    private var renderedText: Text {
-        guard rendersMarkdown,
-              let attributed = try? AttributedString(
-                markdown: content,
-                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-              )
-        else {
-            return Text(content)
+private struct ChatStreamingText: NSViewRepresentable {
+    enum Style {
+        case response
+        case thinkingPreview
+
+        func font(scale: Double) -> NSFont {
+            switch self {
+            case .response:
+                ChatFontMetrics.bodyNSFont(scale: scale)
+            case .thinkingPreview:
+                NSFont.systemFont(
+                    ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize * scale
+                )
+            }
         }
 
-        return Text(attributed)
+        var color: NSColor {
+            switch self {
+            case .response:
+                .labelColor
+            case .thinkingPreview:
+                .secondaryLabelColor
+            }
+        }
+    }
+
+    let content: String
+    let fontScale: Double
+    var style: Style = .response
+
+    final class Coordinator {
+        private var contentUTF16Length = 0
+        private var font: NSFont?
+
+        func update(
+            _ textView: NSTextView,
+            content: String,
+            font newFont: NSFont,
+            color: NSColor
+        ) {
+            guard let textStorage = textView.textStorage else {
+                return
+            }
+
+            let source = content as NSString
+            let canAppend = source.length >= contentUTF16Length
+                && textStorage.length == contentUTF16Length
+            if canAppend {
+                let delta = source.substring(from: contentUTF16Length)
+                if !delta.isEmpty {
+                    textStorage.append(NSAttributedString(
+                        string: delta,
+                        attributes: Self.textAttributes(font: newFont, color: color)
+                    ))
+                }
+            } else {
+                textStorage.setAttributedString(NSAttributedString(
+                    string: content,
+                    attributes: Self.textAttributes(font: newFont, color: color)
+                ))
+            }
+            contentUTF16Length = source.length
+
+            if font != newFont {
+                font = newFont
+                textStorage.addAttributes(
+                    Self.textAttributes(font: newFont, color: color),
+                    range: NSRange(location: 0, length: textStorage.length)
+                )
+                textView.typingAttributes = Self.textAttributes(font: newFont, color: color)
+            }
+
+            textView.needsDisplay = true
+        }
+
+        private static func textAttributes(
+            font: NSFont,
+            color: NSColor
+        ) -> [NSAttributedString.Key: Any] {
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineBreakMode = .byWordWrapping
+            paragraphStyle.lineSpacing = 2
+            return [
+                .font: font,
+                .foregroundColor: color,
+                .paragraphStyle: paragraphStyle,
+            ]
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        context.coordinator.update(
+            textView,
+            content: content,
+            font: style.font(scale: fontScale),
+            color: style.color
+        )
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        context.coordinator.update(
+            textView,
+            content: content,
+            font: style.font(scale: fontScale),
+            color: style.color
+        )
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: NSTextView,
+        context: Context
+    ) -> CGSize? {
+        guard let textContainer = textView.textContainer,
+              let layoutManager = textView.layoutManager
+        else {
+            return nil
+        }
+
+        let availableWidth = proposal.width
+            ?? (textView.bounds.width > 0 ? textView.bounds.width : 1)
+        if abs(textContainer.containerSize.width - availableWidth) > 0.5 {
+            textContainer.containerSize = CGSize(
+                width: availableWidth,
+                height: .greatestFiniteMagnitude
+            )
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        return CGSize(
+            width: availableWidth,
+            height: max(1, ceil(usedRect.height))
+        )
     }
 }
 
