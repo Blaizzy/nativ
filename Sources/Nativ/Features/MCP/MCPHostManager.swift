@@ -1,4 +1,3 @@
-import AppKit
 import Combine
 import Foundation
 import NativServerKit
@@ -261,13 +260,6 @@ final class MCPHostManager: ObservableObject {
                             code: authorization.userCode,
                             verificationURL: authorization.verificationURL
                         )
-                        let pasteboard = NSPasteboard.general
-                        pasteboard.clearContents()
-                        pasteboard.setString(
-                            authorization.userCode,
-                            forType: .string
-                        )
-                        NSWorkspace.shared.open(authorization.verificationURL)
                     }
                 },
                 onInstallationRequired: { [weak self] installationURL in
@@ -278,7 +270,6 @@ final class MCPHostManager: ObservableObject {
                         self.states[config.id] = .installingGitHub(
                             installationURL
                         )
-                        NSWorkspace.shared.open(installationURL)
                     }
                 }
             )

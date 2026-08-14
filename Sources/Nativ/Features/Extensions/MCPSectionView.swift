@@ -1,3 +1,4 @@
+import AppKit
 import NativServerKit
 import SwiftUI
 
@@ -167,47 +168,101 @@ private struct MCPServerRow: View {
     let onEdit: () -> Void
     let onDelete: (() -> Void)?
 
+    @State private var copiedAuthorizationCode = false
+
     var body: some View {
-        HStack(spacing: 12) {
-            NativStatusDot(tone: statusTone, pulsing: isConnecting)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(server.name.isEmpty ? "Untitled server" : server.name)
-                    .font(.system(size: 13, weight: .medium))
-                statusView
-            }
-            Spacer(minLength: 12)
-            if server.isEnabled, let onReconnect {
-                Button(action: onReconnect) {
-                    Image(systemName: "arrow.clockwise")
+        VStack(alignment: .leading, spacing: showsGitHubSetup ? 10 : 0) {
+            HStack(spacing: 12) {
+                NativStatusDot(tone: statusTone, pulsing: isConnecting)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.name.isEmpty ? "Untitled server" : server.name)
+                        .font(.system(size: 13, weight: .medium))
+                    Text(statusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                if server.isEnabled, let onReconnect {
+                    Button(action: onReconnect) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Reconnect")
+                }
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Reconnect")
-            }
-            Button(action: onEdit) {
-                Image(systemName: "pencil")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Edit")
-            if let onDelete {
-                Menu {
-                    Button(role: .destructive, action: onDelete) {
-                        Label("Delete", systemImage: "trash")
+                .help("Edit")
+                if let onDelete {
+                    Menu {
+                        Button(role: .destructive, action: onDelete) {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 22)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 22)
+                Toggle("", isOn: Binding(get: { server.isEnabled }, set: { _ in onToggle() }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-            Toggle("", isOn: Binding(get: { server.isEnabled }, set: { _ in onToggle() }))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
+
+            if case .authorizingGitHub(let code, let verificationURL) = state {
+                GitHubSetupCallout(
+                    icon: "key.fill",
+                    title: "Authorize Nativ on GitHub",
+                    message: "Enter this one-time code on GitHub to continue.",
+                    actionTitle: "Open GitHub",
+                    actionIcon: "arrow.up.right",
+                    destination: verificationURL
+                ) {
+                    HStack(spacing: 6) {
+                        Text(code)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 10)
+                            .frame(height: 26)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                        Button {
+                            copyAuthorizationCode(code)
+                        } label: {
+                            Label(
+                                copiedAuthorizationCode ? "Copied" : "Copy code",
+                                systemImage: copiedAuthorizationCode ? "checkmark" : "doc.on.doc"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(.leading, 20)
+            } else if case .installingGitHub(let installationURL) = state {
+                GitHubSetupCallout(
+                    icon: "folder.badge.plus",
+                    title: "Choose repository access",
+                    message: "GitHub authorization is complete. Select which repositories Nativ can use. You can change this later on GitHub.",
+                    actionTitle: "Choose repositories",
+                    actionIcon: "arrow.up.right",
+                    destination: installationURL
+                )
+                .padding(.leading, 20)
+            }
         }
         .padding(.vertical, 11)
+    }
+
+    private var showsGitHubSetup: Bool {
+        if case .authorizingGitHub = state { return true }
+        if case .installingGitHub = state { return true }
+        return false
     }
 
     private var isConnecting: Bool {
@@ -230,34 +285,104 @@ private struct MCPServerRow: View {
         switch state {
         case .connected(let count): "\(count) tool\(count == 1 ? "" : "s")"
         case .connecting: "Connecting\u{2026}"
-        case .authorizingGitHub: "Waiting for GitHub authorization"
-        case .installingGitHub: "Waiting for repository access"
+        case .authorizingGitHub: "Authorization required"
+        case .installingGitHub: "Repository access required"
         case .failed(let message): message.isEmpty ? "Failed to connect" : message
         case .disabled: "Off"
         case .none: server.isEnabled ? "Not connected" : "Off"
         }
     }
 
-    @ViewBuilder
-    private var statusView: some View {
-        if case .authorizingGitHub(let code, let verificationURL) = state {
-            Link(
-                "Enter \(code) on GitHub (copied to clipboard)",
-                destination: verificationURL
-            )
-            .font(.system(size: 11))
-            .help("Open GitHub authorization")
-        } else if case .installingGitHub(let installationURL) = state {
-            Link(
-                "Select repositories on GitHub",
-                destination: installationURL
-            )
-            .font(.system(size: 11))
-            .help("Install the Nativ GitHub App")
-        } else {
-            Text(statusText)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+    private func copyAuthorizationCode(_ code: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        copiedAuthorizationCode = true
+    }
+}
+
+private struct GitHubSetupCallout<Accessory: View>: View {
+    let icon: String
+    let title: String
+    let message: String
+    let actionTitle: String
+    let actionIcon: String
+    let destination: URL
+    @ViewBuilder let accessory: Accessory
+
+    init(
+        icon: String,
+        title: String,
+        message: String,
+        actionTitle: String,
+        actionIcon: String,
+        destination: URL,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.icon = icon
+        self.title = title
+        self.message = message
+        self.actionTitle = actionTitle
+        self.actionIcon = actionIcon
+        self.destination = destination
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 28, height: 28)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                accessory
+            }
+
+            Spacer(minLength: 12)
+
+            Link(destination: destination) {
+                Label(actionTitle, systemImage: actionIcon)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: 650, alignment: .leading)
+        .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+        }
+    }
+}
+
+private extension GitHubSetupCallout where Accessory == EmptyView {
+    init(
+        icon: String,
+        title: String,
+        message: String,
+        actionTitle: String,
+        actionIcon: String,
+        destination: URL
+    ) {
+        self.init(
+            icon: icon,
+            title: title,
+            message: message,
+            actionTitle: actionTitle,
+            actionIcon: actionIcon,
+            destination: destination
+        ) {
+            EmptyView()
         }
     }
 }
