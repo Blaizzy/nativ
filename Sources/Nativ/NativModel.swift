@@ -42,7 +42,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var allTimeStats = NativAllTimeStats()
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     /// How long a model switch may stay unconfirmed before the controls unlock.
-    static let modelSwitchTimeout: TimeInterval = 180
+    nonisolated static let modelSwitchTimeout: TimeInterval = 180
 
     @Published private(set) var modelSwitchInProgress = false
     @Published private(set) var modelSwitchTargetID: String?

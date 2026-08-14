@@ -123,6 +123,361 @@ final class ControlPanelNavigation: ObservableObject {
     }
 }
 
+@MainActor
+final class ControlPanelDependencies: ObservableObject {
+    lazy var chat = ChatViewModel()
+    lazy var mcpHost = MCPHostManager()
+    lazy var imageGeneration = ImageGenerationViewModel()
+    lazy var artifacts = ArtifactStore()
+    lazy var dashboard = DashboardViewModel()
+    lazy var systemMonitor = SystemMonitorStore()
+    lazy var launchAtLogin = LaunchAtLoginController()
+    lazy var downloads = HuggingFaceDownloadManager.shared
+    lazy var embeddingLibrary = LocalModelLibrary()
+    lazy var routineStore = RoutineStore.shared
+    lazy var routineModelLibrary = LocalModelLibrary()
+}
+
+/// Filters `NativModel` down to values that can change control-panel chrome.
+@MainActor
+final class ControlPanelChromeState: ObservableObject {
+    struct ArtifactSettings: Equatable {
+        let serverPort: Int
+        let serverAPIKey: String?
+        let modelSearchPath: String
+        let localModelSearchPaths: LocalModelSearchPaths
+    }
+
+    private struct SettingsProjection: Equatable {
+        let languageModelID: String?
+        let sidebarPinnedCollapsed: Bool
+        let sidebarFoldersCollapsed: Bool
+        let sidebarSessionsCollapsed: Bool
+        let artifactSettings: ArtifactSettings
+    }
+
+    private struct Snapshot: Equatable {
+        var isRunning: Bool
+        var modelSwitchInProgress: Bool
+        var modelLoadingPercentage: Int?
+        var metricsLoading: Bool
+        var modelLoadFailure: ModelLoadFailure?
+        var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
+        var languageModelID: String?
+        var sidebarPinnedCollapsed: Bool
+        var sidebarFoldersCollapsed: Bool
+        var sidebarSessionsCollapsed: Bool
+        var artifactSettings: ArtifactSettings
+    }
+
+    @Published private var snapshot: Snapshot
+    private var cancellables = Set<AnyCancellable>()
+
+    init(model: NativModel) {
+        let settings = Self.settingsProjection(model.settings)
+        snapshot = Snapshot(
+            isRunning: model.isRunning,
+            modelSwitchInProgress: model.modelSwitchInProgress,
+            modelLoadingPercentage: Self.loadingPercentage(model.modelLoadingProgress),
+            metricsLoading: model.metricsLoading,
+            modelLoadFailure: model.modelLoadFailure,
+            modelPreloadMemoryWarning: model.modelPreloadMemoryWarning,
+            languageModelID: settings.languageModelID,
+            sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
+            sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
+            sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
+            artifactSettings: settings.artifactSettings
+        )
+
+        model.$isRunning
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.isRunning = value } }
+            .store(in: &cancellables)
+        model.$modelSwitchInProgress
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelSwitchInProgress = value } }
+            .store(in: &cancellables)
+        model.$modelLoadingProgress
+            .map(Self.loadingPercentage)
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelLoadingPercentage = value } }
+            .store(in: &cancellables)
+        model.$metricsLoading
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.metricsLoading = value } }
+            .store(in: &cancellables)
+        model.$modelLoadFailure
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelLoadFailure = value } }
+            .store(in: &cancellables)
+        model.$modelPreloadMemoryWarning
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelPreloadMemoryWarning = value } }
+            .store(in: &cancellables)
+        model.$settings
+            .map(Self.settingsProjection)
+            .removeDuplicates()
+            .sink { [weak self] value in
+                self?.update {
+                    $0.languageModelID = value.languageModelID
+                    $0.sidebarPinnedCollapsed = value.sidebarPinnedCollapsed
+                    $0.sidebarFoldersCollapsed = value.sidebarFoldersCollapsed
+                    $0.sidebarSessionsCollapsed = value.sidebarSessionsCollapsed
+                    $0.artifactSettings = value.artifactSettings
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    var isRunning: Bool { snapshot.isRunning }
+    var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var modelLoadFailure: ModelLoadFailure? { snapshot.modelLoadFailure }
+    var modelPreloadMemoryWarning: ModelPreloadMemoryWarning? {
+        snapshot.modelPreloadMemoryWarning
+    }
+    var sidebarPinnedCollapsed: Bool { snapshot.sidebarPinnedCollapsed }
+    var sidebarFoldersCollapsed: Bool { snapshot.sidebarFoldersCollapsed }
+    var sidebarSessionsCollapsed: Bool { snapshot.sidebarSessionsCollapsed }
+    var artifactSettings: ArtifactSettings { snapshot.artifactSettings }
+
+    var isModelLoading: Bool {
+        snapshot.modelSwitchInProgress
+            || (snapshot.languageModelID != nil
+                && (snapshot.metricsLoading || snapshot.modelLoadingPercentage != nil))
+    }
+
+    var modelLoadingPercentageText: String? {
+        snapshot.modelLoadingPercentage.map { "\($0)%" }
+    }
+
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
+    }
+
+    private static func loadingPercentage(_ progress: Double?) -> Int? {
+        progress.map { min(max(Int(($0 * 100).rounded()), 0), 100) }
+    }
+
+    private static func settingsProjection(_ value: NativSettings) -> SettingsProjection {
+        let settings = value.normalized()
+        return SettingsProjection(
+            languageModelID: settings.languageModelID,
+            sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
+            sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
+            sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
+            artifactSettings: ArtifactSettings(
+                serverPort: settings.serverPort,
+                serverAPIKey: settings.serverAPIKey,
+                modelSearchPath: settings.modelSearchPath,
+                localModelSearchPaths: settings.localModelSearchPaths
+            )
+        )
+    }
+}
+
+/// Precomputes the merged recents index so the sidebar does not repeatedly map,
+/// merge, filter, and sort sessions during view evaluation.
+private struct SidebarRecentsSnapshot: Equatable {
+    let recentSessions: [ControlPanelRecentSession]
+    let pinnedSessions: [ControlPanelRecentSession]
+    let unpinnedSessions: [ControlPanelRecentSession]
+    let ungroupedSessions: [ControlPanelRecentSession]
+    let folders: [ChatFolder]
+    let pinnedFolders: [ChatFolder]
+    let unpinnedFolders: [ChatFolder]
+    private let sessionsByFolder: [UUID: [ControlPanelRecentSession]]
+    private let chatSessionIDs: Set<UUID>
+    private let imageSessionIDs: Set<UUID>
+
+    init(
+        chatSessions: [ChatSessionSummary],
+        folders: [ChatFolder],
+        imageSessions: [ImageGenerationSessionSummary]
+    ) {
+        let recentSessions = (
+            chatSessions.map(ControlPanelRecentSession.init(chat:))
+                + imageSessions.map(ControlPanelRecentSession.init(imageGeneration:))
+        ).sorted(by: ControlPanelRecentSession.recencySort)
+        let pinnedSessions = recentSessions
+            .filter(\.pinned)
+            .sorted(by: ControlPanelRecentSession.pinnedSort)
+        let unpinnedSessions = recentSessions
+            .filter { !$0.pinned }
+            .sorted(by: ControlPanelRecentSession.sessionSort)
+        let folderIDs = Set(folders.map(\.id))
+
+        self.recentSessions = recentSessions
+        self.pinnedSessions = pinnedSessions
+        self.unpinnedSessions = unpinnedSessions
+        ungroupedSessions = unpinnedSessions.filter { recent in
+            guard let folderID = recent.folderID else { return true }
+            return !folderIDs.contains(folderID)
+        }
+        self.folders = folders
+        pinnedFolders = folders.filter(\.isPinned)
+        unpinnedFolders = folders.filter { !$0.isPinned }
+        var sessionsByFolder: [UUID: [ControlPanelRecentSession]] = [:]
+        for recent in unpinnedSessions {
+            guard let folderID = recent.folderID else { continue }
+            sessionsByFolder[folderID, default: []].append(recent)
+        }
+        self.sessionsByFolder = sessionsByFolder
+        chatSessionIDs = Set(chatSessions.map(\.id))
+        imageSessionIDs = Set(imageSessions.map(\.id))
+    }
+
+    func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
+        sessionsByFolder[folderID] ?? []
+    }
+
+    func containsChatSession(_ sessionID: UUID) -> Bool {
+        chatSessionIDs.contains(sessionID)
+    }
+
+    func containsImageSession(_ sessionID: UUID) -> Bool {
+        imageSessionIDs.contains(sessionID)
+    }
+
+    func chatTitle(for sessionID: UUID) -> String? {
+        recentSessions.first { $0.chatID == sessionID }?.title
+    }
+}
+
+/// Exposes only the session index consumed by the control-panel sidebar. The
+/// transcript, composer, attachment, streaming, and tool state remain observed
+/// exclusively by `ChatView` and cannot invalidate the recents surface.
+@MainActor
+private final class ChatSidebarState: ObservableObject {
+    @Published private(set) var recents: SidebarRecentsSnapshot
+    @Published private(set) var currentChatSessionID: UUID?
+    @Published private(set) var currentImageSessionID: UUID?
+    @Published private(set) var isGeneratingImage: Bool
+
+    init(chat: ChatViewModel, imageGeneration: ImageGenerationViewModel) {
+        recents = SidebarRecentsSnapshot(
+            chatSessions: chat.sessions,
+            folders: chat.folders,
+            imageSessions: imageGeneration.sessions
+        )
+        currentChatSessionID = chat.currentSessionID
+        currentImageSessionID = imageGeneration.currentSessionID
+        isGeneratingImage = imageGeneration.isGenerating
+
+        Publishers.CombineLatest3(
+            chat.$sessions.removeDuplicates(),
+            chat.$folders.removeDuplicates(),
+            imageGeneration.$sessions.removeDuplicates()
+        )
+        .map { sessions, folders, imageSessions in
+            SidebarRecentsSnapshot(
+                chatSessions: sessions,
+                folders: folders,
+                imageSessions: imageSessions
+            )
+        }
+        .removeDuplicates()
+        .assign(to: &$recents)
+        chat.$currentSessionID
+            .removeDuplicates()
+            .assign(to: &$currentChatSessionID)
+        imageGeneration.$currentSessionID
+            .removeDuplicates()
+            .assign(to: &$currentImageSessionID)
+        imageGeneration.$isGenerating
+            .removeDuplicates()
+            .assign(to: &$isGeneratingImage)
+    }
+}
+
+/// Projects the remaining low-frequency global presentation state. High-frequency
+/// page state remains observed by its leaf views.
+@MainActor
+final class ControlPanelContentState: ObservableObject {
+    private struct Snapshot: Equatable {
+        var extensionSidebarContributions: [NativSidebarContribution]
+        var routines: [Routine]
+        var routineRuns: [RoutineRun]
+        var launchAtLoginErrorMessage: String?
+    }
+
+    @Published private var snapshot: Snapshot
+    private var cancellables = Set<AnyCancellable>()
+
+    init(
+        dependencies: ControlPanelDependencies,
+        extensionManager: NativExtensionManager
+    ) {
+        snapshot = Snapshot(
+            extensionSidebarContributions: extensionManager.enabledSidebarContributions,
+            routines: dependencies.routineStore.routines,
+            routineRuns: dependencies.routineStore.runs,
+            launchAtLoginErrorMessage: dependencies.launchAtLogin.errorMessage
+        )
+
+        extensionManager.$records
+            .map(Self.enabledSidebarContributions)
+            .removeDuplicates()
+            .sink { [weak self] value in
+                self?.update { $0.extensionSidebarContributions = value }
+            }
+            .store(in: &cancellables)
+        dependencies.routineStore.$routines
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.routines = value } }
+            .store(in: &cancellables)
+        dependencies.routineStore.$runs
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.routineRuns = value } }
+            .store(in: &cancellables)
+        dependencies.launchAtLogin.$errorMessage
+            .removeDuplicates()
+            .sink { [weak self] value in
+                self?.update { $0.launchAtLoginErrorMessage = value }
+            }
+            .store(in: &cancellables)
+    }
+
+    var extensionSidebarContributions: [NativSidebarContribution] {
+        snapshot.extensionSidebarContributions
+    }
+    var launchAtLoginErrorMessage: String? { snapshot.launchAtLoginErrorMessage }
+
+    func routine(forSession sessionID: UUID) -> Routine? {
+        snapshot.routines.first { $0.sourceSessionID == sessionID }
+    }
+
+    func isRoutineRunning(forSession sessionID: UUID) -> Bool {
+        guard let routine = routine(forSession: sessionID) else { return false }
+        return snapshot.routineRuns.contains {
+            $0.routineID == routine.id && $0.status == .running
+        }
+    }
+
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
+    }
+
+    private static func enabledSidebarContributions(
+        records: [NativExtensionRecord]
+    ) -> [NativSidebarContribution] {
+        records
+            .filter { $0.isEnabled && $0.hasRuntime }
+            .flatMap(\.manifest.contributions.sidebar)
+            .sorted {
+                if $0.order == $1.order {
+                    return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                }
+                return $0.order < $1.order
+            }
+    }
+}
+
 private enum FooterControl {
     case settings
     case support
@@ -204,6 +559,33 @@ private struct ModelsDownloadArrow: View {
     }
 }
 
+/// Owns the control-panel's download-count projection and listens only for the
+/// manager's structural add/remove signal, not its progress publications.
+private struct ModelsDownloadBadge: View {
+    let downloads: HuggingFaceDownloadManager
+    @State private var activeCount: Int
+
+    init(downloads: HuggingFaceDownloadManager) {
+        self.downloads = downloads
+        _activeCount = State(initialValue: downloads.activeCount)
+    }
+
+    var body: some View {
+        Group {
+            if activeCount > 0 {
+                ModelsDownloadArrow(count: activeCount)
+            }
+        }
+        .onReceive(
+            downloads.rowUpdates
+                .compactMap { updatedModelID in
+                    updatedModelID == nil ? downloads.activeCount : nil
+                }
+                .removeDuplicates()
+        ) { activeCount = $0 }
+    }
+}
+
 private struct SidebarNavigationLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
@@ -258,171 +640,28 @@ private struct GlobalModelLoadFailureBanner: View {
     }
 }
 
-/// Filters app-wide model updates down to state that can change the control
-/// panel shell. Metrics and token-stat updates are intentionally excluded so
-/// their polling cadence does not rebuild the sidebar and all session menus.
-@MainActor
-private final class ControlPanelNativState: ObservableObject {
-    @Published private(set) var settings: NativSettings
-    @Published private(set) var isRunning: Bool
-    @Published private(set) var modelSwitchInProgress: Bool
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var metricsLoading: Bool
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
-    @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
-
-    private var cancellables = Set<AnyCancellable>()
-
-    init(model: NativModel) {
-        settings = model.settings
-        isRunning = model.isRunning
-        modelSwitchInProgress = model.modelSwitchInProgress
-        modelLoadingProgress = model.modelLoadingProgress
-        metricsLoading = model.metricsLoading
-        modelLoadFailure = model.modelLoadFailure
-        modelPreloadMemoryWarning = model.modelPreloadMemoryWarning
-        systemHuggingFaceCredential = model.systemHuggingFaceCredential
-
-        model.$settings
-            .removeDuplicates()
-            .sink { [weak self] in self?.settings = $0 }
-            .store(in: &cancellables)
-        model.$isRunning
-            .removeDuplicates()
-            .sink { [weak self] in self?.isRunning = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchInProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchInProgress = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadingProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadingProgress = $0 }
-            .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] in self?.metricsLoading = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadFailure
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadFailure = $0 }
-            .store(in: &cancellables)
-        model.$modelPreloadMemoryWarning
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelPreloadMemoryWarning = $0 }
-            .store(in: &cancellables)
-        model.$systemHuggingFaceCredential
-            .removeDuplicates()
-            .sink { [weak self] in self?.systemHuggingFaceCredential = $0 }
-            .store(in: &cancellables)
-    }
-
-    var isModelLoading: Bool {
-        modelSwitchInProgress
-            || (settings.normalized().languageModelID != nil
-                && (metricsLoading || modelLoadingProgress != nil))
-    }
-
-    var modelLoadingPercentageText: String? {
-        modelLoadingProgress.map { progress in
-            "\(min(max(Int((progress * 100).rounded()), 0), 100))%"
-        }
-    }
-
-    var effectiveHuggingFaceToken: String? {
-        HuggingFaceAuthentication.effectiveToken(
-            customToken: settings.huggingFaceToken,
-            environmentToken: systemHuggingFaceCredential?.token
-        )
-    }
-}
-
 struct ControlPanelView: View {
     @Environment(\.displayScale) private var displayScale
+
     let model: NativModel
-    @ObservedObject var navigation: ControlPanelNavigation
-    // Only the Developer page observes live runtime values. Keeping this as a
-    // plain reference prevents its one-second polling cycle from invalidating
-    // the entire control panel (including the Models result list).
+    let navigation: ControlPanelNavigation
     let runtime: SystemRuntimeMonitor
-    @ObservedObject var extensionManager: NativExtensionManager
+    let extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
-    @StateObject private var modelState: ControlPanelNativState
-    @StateObject private var chat = ChatViewModel()
-    @StateObject private var mcpHost = MCPHostManager()
-    @StateObject private var imageGeneration = ImageGenerationViewModel()
-    @StateObject private var artifacts = ArtifactStore()
-    @StateObject private var dashboard = DashboardViewModel()
-    @StateObject private var systemMonitor = SystemMonitorStore()
-    @StateObject private var launchAtLogin = LaunchAtLoginController()
-    @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
-    @StateObject private var embeddingLibrary = LocalModelLibrary()
 
-    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
-    private static let embeddingModelSize: Int64 = 4_300_000_000
-
-    private var artifactSemanticSearch: ArtifactSemanticSearchConfig? {
-        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
-            return nil
-        }
-        let settings = modelState.settings.normalized()
-        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
-            ?? URL(string: "http://127.0.0.1:8080")!
-        let modelID = Self.embeddingModelID
-        let insufficientReason = downloads.capacityBlocker(
-            sizeBytes: Self.embeddingModelSize,
-            cachePath: settings.modelSearchPath
-        )
-        return ArtifactSemanticSearchConfig(
-            modelID: modelID,
-            sizeBytes: Self.embeddingModelSize,
-            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
-            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
-            isDownloading: downloads.isDownloading(modelID),
-            downloadProgress: downloads.progress(for: modelID),
-            canInstall: insufficientReason == nil,
-            insufficientReason: insufficientReason,
-            onEnable: {
-                downloads.download(
-                    repoID: modelID,
-                    sizeBytes: Self.embeddingModelSize,
-                    cachePath: settings.modelSearchPath,
-                    token: modelState.effectiveHuggingFaceToken
-                ) {
-                    EmbeddingModelPreparer.prepare(
-                        repoID: modelID,
-                        searchPath: settings.modelSearchPath
-                    )
-                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
-                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
-                }
-                navigation.open(.models)
-            },
-            onRemove: {
-                Task {
-                    try? await LocalModelDiscovery.delete(
-                        repoID: modelID,
-                        path: settings.modelSearchPath
-                    )
-                    embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
-                    NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
-                }
-            },
-            prepareModel: {
-                EmbeddingModelPreparer.prepare(
-                    repoID: modelID,
-                    searchPath: settings.modelSearchPath
-                )
-            }
-        )
-    }
+    private let dependencies: ControlPanelDependencies
+    @StateObject private var chromeState: ControlPanelChromeState
+    @StateObject private var sidebarState: ChatSidebarState
+    @StateObject private var contentState: ControlPanelContentState
     @AppStorage(ControlPanelOnboarding.extensionsBadgeDismissedKey)
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
     @State private var selectedExtensionsHubSection: ExtensionsHubView.HubSection = .kits
     @State private var chatWorkspaceMode: ChatWorkspaceMode = .chat
+    @State private var speechModelDiscoveryRequest: Int
+    @State private var imageModelDiscoveryRequest: Int
+    @State private var imageModelDiscoveryCapability: LocalModelCapability
     @State private var hoveredFooterControl: FooterControl?
     @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
@@ -431,8 +670,6 @@ struct ControlPanelView: View {
     @State private var detailTransitionOffset: CGFloat = 0
     @State private var isSidebarTransitioning = false
     @State private var sidebarTransitionGeneration = 0
-    @ObservedObject private var routineStore = RoutineStore.shared
-    @StateObject private var routineModelLibrary = LocalModelLibrary()
     @State private var schedulingRoutineDraft: RoutineDraft?
     @State private var isModelConfigurationVisible = false
     @State private var selectedDevSection: DevHubView.Section = .integrations
@@ -451,19 +688,54 @@ struct ControlPanelView: View {
     @State private var pendingDeleteFolder: ChatFolder?
     @State private var isConfirmingBulkDelete = false
 
+    private var chat: ChatViewModel { dependencies.chat }
+    private var mcpHost: MCPHostManager { dependencies.mcpHost }
+    private var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
+    private var artifacts: ArtifactStore { dependencies.artifacts }
+    private var dashboard: DashboardViewModel { dependencies.dashboard }
+    private var systemMonitor: SystemMonitorStore { dependencies.systemMonitor }
+    private var launchAtLogin: LaunchAtLoginController { dependencies.launchAtLogin }
+    private var downloads: HuggingFaceDownloadManager { dependencies.downloads }
+    private var embeddingLibrary: LocalModelLibrary { dependencies.embeddingLibrary }
+    private var routineStore: RoutineStore { dependencies.routineStore }
+    private var routineModelLibrary: LocalModelLibrary { dependencies.routineModelLibrary }
+
     init(
         model: NativModel,
         navigation: ControlPanelNavigation,
         runtime: SystemRuntimeMonitor,
         extensionManager: NativExtensionManager,
-        softwareUpdater: SoftwareUpdater
+        softwareUpdater: SoftwareUpdater,
+        dependencies: ControlPanelDependencies
     ) {
         self.model = model
         self.navigation = navigation
         self.runtime = runtime
         self.extensionManager = extensionManager
         self.softwareUpdater = softwareUpdater
-        _modelState = StateObject(wrappedValue: ControlPanelNativState(model: model))
+        self.dependencies = dependencies
+        _chromeState = StateObject(wrappedValue: ControlPanelChromeState(model: model))
+        _sidebarState = StateObject(
+            wrappedValue: ChatSidebarState(
+                chat: dependencies.chat,
+                imageGeneration: dependencies.imageGeneration
+            )
+        )
+        _contentState = StateObject(
+            wrappedValue: ControlPanelContentState(
+                dependencies: dependencies,
+                extensionManager: extensionManager
+            )
+        )
+        _speechModelDiscoveryRequest = State(
+            initialValue: navigation.speechModelDiscoveryRequest
+        )
+        _imageModelDiscoveryRequest = State(
+            initialValue: navigation.imageModelDiscoveryRequest
+        )
+        _imageModelDiscoveryCapability = State(
+            initialValue: navigation.imageModelDiscoveryCapability
+        )
     }
 
     var body: some View {
@@ -509,7 +781,7 @@ struct ControlPanelView: View {
         }
         .overlay(alignment: .top) {
             Group {
-                if selectedTab != .models, let failure = modelState.modelLoadFailure {
+                if selectedTab != .models, let failure = chromeState.modelLoadFailure {
                     GlobalModelLoadFailureBanner(
                         failure: failure,
                         onOpenModels: { navigation.open(.models) },
@@ -542,7 +814,7 @@ struct ControlPanelView: View {
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
-            embeddingLibrary.scan(searchPaths: modelState.settings.localModelSearchPaths)
+            embeddingLibrary.scan(searchPaths: chromeState.artifactSettings.localModelSearchPaths)
             artifacts.onDeleteArtifact = { artifact in
                 switch artifact.source {
                 case .uploaded:
@@ -568,23 +840,32 @@ struct ControlPanelView: View {
             guard let pageID else { return }
             applySidebarSelection(.extensionPage(pageID))
         }
-        .onChange(of: extensionManager.records) { _, _ in
+        .onChange(of: contentState.extensionSidebarContributions) { _, contributions in
             guard case .extensionPage(let pageID) = sidebarSelection,
-                  !extensionManager.enabledSidebarContributions.contains(
+                  !contributions.contains(
                     where: { $0.id == pageID }
                   ) else {
                 return
             }
             applySidebarSelection(.tab(.extensions))
         }
-        .onChange(of: navigation.newChatRequest) { _, _ in
+        .onReceive(navigation.$newChatRequest) { _ in
             handleNewChatRequest()
         }
-        .onChange(of: navigation.toggleSidebarRequest) { _, _ in
+        .onReceive(navigation.$toggleSidebarRequest) { _ in
             handleToggleSidebarRequest()
         }
-        .onChange(of: navigation.collapseAllSectionsRequest) { _, _ in
+        .onReceive(navigation.$collapseAllSectionsRequest) { _ in
             handleCollapseAllSectionsRequest()
+        }
+        .onReceive(navigation.$speechModelDiscoveryRequest) { request in
+            speechModelDiscoveryRequest = request
+        }
+        .onReceive(navigation.$imageModelDiscoveryRequest) { request in
+            imageModelDiscoveryRequest = request
+        }
+        .onReceive(navigation.$imageModelDiscoveryCapability) { capability in
+            imageModelDiscoveryCapability = capability
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullScreen = true
@@ -602,7 +883,7 @@ struct ControlPanelView: View {
         .alert(
             "Unable to Update Start at Login",
             isPresented: Binding(
-                get: { launchAtLogin.errorMessage != nil },
+                get: { contentState.launchAtLoginErrorMessage != nil },
                 set: { isPresented in
                     if !isPresented {
                         launchAtLogin.errorMessage = nil
@@ -615,7 +896,7 @@ struct ControlPanelView: View {
             }
             .keyboardShortcut(.defaultAction)
         } message: {
-            Text(launchAtLogin.errorMessage ?? "An unknown error occurred.")
+            Text(contentState.launchAtLoginErrorMessage ?? "An unknown error occurred.")
         }
     }
 
@@ -708,7 +989,7 @@ struct ControlPanelView: View {
             }
         } message: { recent in
             if case .chat(let sessionID) = recent.selection,
-               let routine = routineStore.routine(forSession: sessionID) {
+               let routine = contentState.routine(forSession: sessionID) {
                 Text("“\(recent.title)” has a routine (\(RoutineFormatting.summary(routine))). Deleting the chat cancels the routine.")
             } else {
                 Text("“\(recent.title)” will be permanently deleted.")
@@ -746,28 +1027,19 @@ struct ControlPanelView: View {
             Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
         }
         .sheet(item: $schedulingRoutineDraft) { draft in
-            let textModelIDs = routineModelLibrary.models
-                .filter { $0.capabilities.contains(.text) }
-                .map(\.repoID)
-            let snapshotModelID = draft.routine.modelID
-            let availableModelIDs = (
-                snapshotModelID.isEmpty || textModelIDs.contains(snapshotModelID)
-                    ? textModelIDs
-                    : textModelIDs + [snapshotModelID]
-            ).sorted()
-            let isExistingRoutine = RoutineStore.shared.routine(id: draft.routine.id) != nil
-            RoutineEditor(
+            RoutineEditorSheetHost(
                 draft: draft,
-                availableModelIDs: availableModelIDs,
+                modelLibrary: routineModelLibrary,
+                routineStore: routineStore,
                 onSave: { routine in
                     saveScheduledRoutine(routine)
                     schedulingRoutineDraft = nil
                 },
                 onCancel: { schedulingRoutineDraft = nil },
-                onDelete: isExistingRoutine ? {
-                    RoutineStore.shared.delete(id: draft.routine.id)
+                onDelete: {
+                    routineStore.delete(id: draft.routine.id)
                     schedulingRoutineDraft = nil
-                } : nil
+                }
             )
         }
     }
@@ -841,7 +1113,7 @@ struct ControlPanelView: View {
                 sidebarTabButton(tab)
 
                 if tab == .chat {
-                    ForEach(extensionManager.enabledSidebarContributions) { contribution in
+                    ForEach(contentState.extensionSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }
                 }
@@ -868,16 +1140,14 @@ struct ControlPanelView: View {
                 Spacer(minLength: 0)
                 if tab == .models {
                     HStack(spacing: 6) {
-                        if modelState.isModelLoading,
-                           let percentage = modelState.modelLoadingPercentageText {
+                        if chromeState.isModelLoading,
+                           let percentage = chromeState.modelLoadingPercentageText {
                             Text(percentage)
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                                 .frame(width: 34, alignment: .trailing)
                         }
-                        if downloads.activeCount > 0 {
-                            ModelsDownloadArrow(count: downloads.activeCount)
-                        }
+                        ModelsDownloadBadge(downloads: downloads)
                     }
                 }
             }
@@ -913,7 +1183,7 @@ struct ControlPanelView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
-            if !modelState.settings.sidebarPinnedCollapsed {
+            if !chromeState.sidebarPinnedCollapsed {
                 Group {
                     if pinnedSessions.isEmpty && pinnedFolders.isEmpty {
                         emptyPinnedHint
@@ -957,7 +1227,7 @@ struct ControlPanelView: View {
                 .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
 
-            if !modelState.settings.sidebarSessionsCollapsed {
+            if !chromeState.sidebarSessionsCollapsed {
                 ForEach(ungroupedSessions) { recent in
                     draggableRow(recent, isPinnedRow: false)
                         .overlay(alignment: .top) {
@@ -987,7 +1257,7 @@ struct ControlPanelView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
-            if !modelState.settings.sidebarFoldersCollapsed {
+            if !chromeState.sidebarFoldersCollapsed {
                 if unpinnedFolders.isEmpty {
                     emptyFoldersHint
                 } else {
@@ -1156,7 +1426,7 @@ struct ControlPanelView: View {
         isPinnedRow: Bool
     ) {
         guard let draggedID = UUID(uuidString: draggedPayload),
-              chat.sessions.contains(where: { $0.id == draggedID }),
+              sidebarState.recents.containsChatSession(draggedID),
               let targetID = target.chatID,
               draggedID != targetID
         else {
@@ -1187,7 +1457,7 @@ struct ControlPanelView: View {
         reorderTargetID = nil
         reorderInsertAfter = false
         guard let draggedID = UUID(uuidString: draggedPayload),
-              chat.sessions.contains(where: { $0.id == draggedID }),
+              sidebarState.recents.containsChatSession(draggedID),
               let targetID = target.chatID,
               draggedID != targetID
         else {
@@ -1263,7 +1533,7 @@ struct ControlPanelView: View {
                     .foregroundStyle(Color.secondary.opacity(0.7))
             }
             .buttonStyle(.plain)
-            .disabled(recentSessions.isEmpty && chat.folders.isEmpty)
+            .disabled(recentSessions.isEmpty && sidebarState.recents.folders.isEmpty)
             .help("Select multiple")
 
             Menu {
@@ -1291,7 +1561,7 @@ struct ControlPanelView: View {
             .disabled(
                 selectedTab == .chat
                     && chatWorkspaceMode == .images
-                    && imageGeneration.isGenerating
+                    && sidebarState.isGeneratingImage
             )
             .help(newRecentHelp)
             .onHover { isNewChatHovering = $0 }
@@ -1384,7 +1654,7 @@ struct ControlPanelView: View {
     private var sidebarPinnedHeader: some View {
         sidebarSectionHeader(
             title: "Pinned",
-            isCollapsed: modelState.settings.sidebarPinnedCollapsed,
+            isCollapsed: chromeState.sidebarPinnedCollapsed,
             onToggle: { model.settings.sidebarPinnedCollapsed.toggle() }
         ) {
             EmptyView()
@@ -1394,7 +1664,7 @@ struct ControlPanelView: View {
     private var sidebarFoldersHeader: some View {
         sidebarSectionHeader(
             title: "Folders",
-            isCollapsed: modelState.settings.sidebarFoldersCollapsed,
+            isCollapsed: chromeState.sidebarFoldersCollapsed,
             onToggle: { model.settings.sidebarFoldersCollapsed.toggle() }
         ) {
             Button {
@@ -1416,7 +1686,7 @@ struct ControlPanelView: View {
     private var sidebarRecentsHeader: some View {
         sidebarSectionHeader(
             title: "Sessions",
-            isCollapsed: modelState.settings.sidebarSessionsCollapsed,
+            isCollapsed: chromeState.sidebarSessionsCollapsed,
             onToggle: { model.settings.sidebarSessionsCollapsed.toggle() }
         ) {
             EmptyView()
@@ -1424,8 +1694,10 @@ struct ControlPanelView: View {
     }
 
     private var allSidebarSectionsCollapsed: Bool {
-        modelState.settings.allSidebarSectionsCollapsed
-            && !chat.folders.contains { !$0.isCollapsed }
+        chromeState.sidebarPinnedCollapsed
+            && chromeState.sidebarFoldersCollapsed
+            && chromeState.sidebarSessionsCollapsed
+            && !sidebarState.recents.folders.contains { !$0.isCollapsed }
     }
 
     private func revealSidebarSection(_ keyPath: WritableKeyPath<NativSettings, Bool>) {
@@ -1523,15 +1795,15 @@ struct ControlPanelView: View {
     private var serverToggleButton: some View {
         footerControl(
             .server,
-            tooltip: modelState.isRunning ? "Stop Server" : "Start Server"
+            tooltip: chromeState.isRunning ? "Stop Server" : "Start Server"
         ) {
             Button {
                 model.toggleServer()
             } label: {
-                footerIcon(systemName: modelState.isRunning ? "stop.circle" : "play.circle")
+                footerIcon(systemName: chromeState.isRunning ? "stop.circle" : "play.circle")
             }
             .buttonStyle(.plain)
-            .disabled(modelState.modelSwitchInProgress)
+            .disabled(chromeState.modelSwitchInProgress)
         }
     }
 
@@ -1617,45 +1889,31 @@ struct ControlPanelView: View {
     }
 
     private var recentSessions: [ControlPanelRecentSession] {
-        (
-            chat.sessions.map(ControlPanelRecentSession.init(chat:))
-                + imageGeneration.sessions.map(ControlPanelRecentSession.init(imageGeneration:))
-        )
-            .sorted(by: ControlPanelRecentSession.recencySort)
+        sidebarState.recents.recentSessions
     }
 
     private var pinnedSessions: [ControlPanelRecentSession] {
-        recentSessions
-            .filter(\.pinned)
-            .sorted(by: ControlPanelRecentSession.pinnedSort)
+        sidebarState.recents.pinnedSessions
     }
 
     private var unpinnedSessions: [ControlPanelRecentSession] {
-        recentSessions.filter { !$0.pinned }.sorted(by: ControlPanelRecentSession.sessionSort)
+        sidebarState.recents.unpinnedSessions
     }
 
     private var ungroupedSessions: [ControlPanelRecentSession] {
-        let folderIDs = Set(chat.folders.map(\.id))
-        return unpinnedSessions.filter { recent in
-            guard let folderID = recent.folderID else {
-                return true
-            }
-            return !folderIDs.contains(folderID)
-        }
+        sidebarState.recents.ungroupedSessions
     }
 
     private var pinnedFolders: [ChatFolder] {
-        chat.folders.filter(\.isPinned)
+        sidebarState.recents.pinnedFolders
     }
 
     private var unpinnedFolders: [ChatFolder] {
-        chat.folders.filter { !$0.isPinned }
+        sidebarState.recents.unpinnedFolders
     }
 
     private func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
-        recentSessions
-            .filter { !$0.pinned && $0.folderID == folderID }
-            .sorted(by: ControlPanelRecentSession.sessionSort)
+        sidebarState.recents.sessions(inFolder: folderID)
     }
 
     @ViewBuilder
@@ -1700,7 +1958,7 @@ struct ControlPanelView: View {
             onEditRoutine: {
                 editRoutine(for: recent)
             },
-            folders: chat.folders,
+            folders: sidebarState.recents.folders,
             onMoveToFolder: { folderID in
                 moveRecentToFolder(recent, folderID: folderID)
             },
@@ -1719,11 +1977,11 @@ struct ControlPanelView: View {
 
     private func routineStatus(for recent: ControlPanelRecentSession) -> RoutineRowStatus {
         guard case .chat(let sessionID) = recent.selection,
-              let routine = routineStore.routine(forSession: sessionID)
+              let routine = contentState.routine(forSession: sessionID)
         else {
             return .none
         }
-        if routineStore.isRoutineRunning(forSession: sessionID) {
+        if contentState.isRoutineRunning(forSession: sessionID) {
             return .running
         }
         return routine.isEnabled ? .scheduled : .disabled
@@ -1733,17 +1991,16 @@ struct ControlPanelView: View {
         guard case .chat(let sessionID) = recent.selection else {
             return
         }
-        let settings = modelState.settings.normalized()
-        routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
-        guard let existing = RoutineStore.shared.routine(forSession: sessionID) else {
+        routineModelLibrary.scan(searchPaths: chromeState.artifactSettings.localModelSearchPaths)
+        guard let existing = routineStore.routine(forSession: sessionID) else {
             return
         }
         schedulingRoutineDraft = RoutineDraft(routine: existing)
     }
 
     private func presentNewRoutine() {
-        let settings = modelState.settings.normalized()
-        routineModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
+        let settings = model.settings.normalized()
+        routineModelLibrary.scan(searchPaths: chromeState.artifactSettings.localModelSearchPaths)
         schedulingRoutineDraft = RoutineDraft(
             routine: Routine(modelID: settings.languageModelID ?? "")
         )
@@ -1785,7 +2042,7 @@ struct ControlPanelView: View {
     private func draggedChatID(from items: [String]) -> UUID? {
         for item in items {
             if let id = UUID(uuidString: item),
-               chat.sessions.contains(where: { $0.id == id }) {
+               sidebarState.recents.containsChatSession(id) {
                 return id
             }
         }
@@ -1834,7 +2091,7 @@ struct ControlPanelView: View {
         guard dragged != target else {
             return
         }
-        var order = chat.folders.map(\.id)
+        var order = sidebarState.recents.folders.map(\.id)
         order.removeAll { $0 == dragged }
         if let index = order.firstIndex(of: target) {
             order.insert(dragged, at: index)
@@ -1881,7 +2138,7 @@ struct ControlPanelView: View {
     }
 
     private var selectedFolders: [ChatFolder] {
-        chat.folders.filter { selectedFolderIDs.contains($0.id) }
+        sidebarState.recents.folders.filter { selectedFolderIDs.contains($0.id) }
     }
 
     private var hasSelectedPinnable: Bool {
@@ -2017,7 +2274,7 @@ struct ControlPanelView: View {
         .alert(
             "Models May Not Fit in Memory",
             isPresented: Binding(
-                get: { modelState.modelPreloadMemoryWarning != nil },
+                get: { chromeState.modelPreloadMemoryWarning != nil },
                 set: { isPresented in
                     if !isPresented {
                         model.cancelPendingModelPreloadSwitch()
@@ -2033,7 +2290,7 @@ struct ControlPanelView: View {
                 model.cancelPendingModelPreloadSwitch()
             }
         } message: {
-            Text(modelState.modelPreloadMemoryWarning?.message ?? "")
+            Text(chromeState.modelPreloadMemoryWarning?.message ?? "")
         }
     }
 
@@ -2056,10 +2313,14 @@ struct ControlPanelView: View {
                 onExploreImageModels: navigation.openImageModelDiscovery
             )
         case .artifacts:
-            ArtifactsView(
+            ArtifactsPageHost(
                 store: artifacts,
-                semanticSearch: artifactSemanticSearch,
+                model: model,
+                downloads: downloads,
+                embeddingLibrary: embeddingLibrary,
+                settings: chromeState.artifactSettings,
                 titleLeadingInset: detailTitleLeadingInset,
+                onOpenModels: { navigation.open(.models) },
                 onOpenChat: { artifact in
                     switch artifact.source {
                     case .uploaded:
@@ -2100,9 +2361,9 @@ struct ControlPanelView: View {
                 model: model,
                 showsConfiguration: $isModelConfigurationVisible,
                 titleLeadingInset: detailTitleLeadingInset,
-                speechModelDiscoveryRequest: navigation.speechModelDiscoveryRequest,
-                imageModelDiscoveryRequest: navigation.imageModelDiscoveryRequest,
-                imageModelDiscoveryCapability: navigation.imageModelDiscoveryCapability
+                speechModelDiscoveryRequest: speechModelDiscoveryRequest,
+                imageModelDiscoveryRequest: imageModelDiscoveryRequest,
+                imageModelDiscoveryCapability: imageModelDiscoveryCapability
             )
             .equatable()
         case .extensions:
@@ -2162,7 +2423,7 @@ struct ControlPanelView: View {
             }
             if tab == .chat {
                 switch chatWorkspaceMode {
-                case .chat where chat.currentSessionID == nil:
+                case .chat where sidebarState.currentChatSessionID == nil:
                     chat.createSession()
                 default:
                     break
@@ -2171,7 +2432,7 @@ struct ControlPanelView: View {
             sidebarSelection = selection
             selectedTab = tab
         case .extensionPage(let pageID):
-            guard extensionManager.enabledSidebarContributions.contains(
+            guard contentState.extensionSidebarContributions.contains(
                 where: { $0.id == pageID }
             ) else {
                 sidebarSelection = .tab(.extensions)
@@ -2181,7 +2442,7 @@ struct ControlPanelView: View {
             sidebarSelection = selection
             selectedTab = .extensions
         case .chat(let sessionID):
-            if chat.sessions.contains(where: { $0.id == sessionID }) {
+            if sidebarState.recents.containsChatSession(sessionID) {
                 chat.selectSession(sessionID)
                 sidebarSelection = selection
             } else {
@@ -2190,7 +2451,7 @@ struct ControlPanelView: View {
             chatWorkspaceMode = .chat
             selectedTab = .chat
         case .imageGeneration(let sessionID):
-            if imageGeneration.sessions.contains(where: { $0.id == sessionID }) {
+            if sidebarState.recents.containsImageSession(sessionID) {
                 imageGeneration.selectSession(sessionID)
                 sidebarSelection = selection
             } else {
@@ -2302,7 +2563,7 @@ struct ControlPanelView: View {
             guard let text = chat.conversationText(for: sessionID) else {
                 continue
             }
-            let title = chat.sessions.first { $0.id == sessionID }?.title ?? sessionID.uuidString
+            let title = sidebarState.recents.chatTitle(for: sessionID) ?? sessionID.uuidString
             let base = sanitizedFileName(title)
             var candidate = base
             var suffix = 2
@@ -2395,9 +2656,10 @@ struct ControlPanelView: View {
         }
         switch (sidebarSelection, recent.selection) {
         case (.tab(.chat), .chat(let sessionID)):
-            return chatWorkspaceMode == .chat && sessionID == chat.currentSessionID
+            return chatWorkspaceMode == .chat && sessionID == sidebarState.currentChatSessionID
         case (.tab(.chat), .imageGeneration(let sessionID)):
-            return chatWorkspaceMode == .images && sessionID == imageGeneration.currentSessionID
+            return chatWorkspaceMode == .images
+                && sessionID == sidebarState.currentImageSessionID
         default:
             return false
         }
@@ -2406,9 +2668,9 @@ struct ControlPanelView: View {
     private func isCurrentRecent(_ recent: ControlPanelRecentSession) -> Bool {
         switch recent.selection {
         case .chat(let sessionID):
-            return sessionID == chat.currentSessionID
+            return sessionID == sidebarState.currentChatSessionID
         case .imageGeneration(let sessionID):
-            return sessionID == imageGeneration.currentSessionID
+            return sessionID == sidebarState.currentImageSessionID
         case .tab, .extensionPage:
             return false
         }
@@ -2422,7 +2684,7 @@ struct ControlPanelView: View {
             // stream never finished permanently undeletable.
             return false
         case .imageGeneration:
-            return imageGeneration.isGenerating
+            return sidebarState.isGeneratingImage
         case .tab, .extensionPage:
             return false
         }
@@ -2433,7 +2695,7 @@ struct ControlPanelView: View {
         case .chat:
             return false
         case .imageGeneration:
-            return imageGeneration.isGenerating
+            return sidebarState.isGeneratingImage
         case .tab, .extensionPage:
             return false
         }
@@ -2476,23 +2738,144 @@ struct ControlPanelView: View {
     }
 
     private func showChatWorkspace() {
-        if chat.currentSessionID == nil {
+        if sidebarState.currentChatSessionID == nil {
             chat.createSession()
         }
         chatWorkspaceMode = .chat
         selectedTab = .chat
-        sidebarSelection = chat.currentSessionID.map(ControlPanelSidebarSelection.chat)
+        sidebarSelection = sidebarState.currentChatSessionID.map(ControlPanelSidebarSelection.chat)
             ?? .tab(.chat)
     }
 
     private func showImageWorkspace() {
         chatWorkspaceMode = .images
         selectedTab = .chat
-        sidebarSelection = imageGeneration.currentSessionID
+        sidebarSelection = sidebarState.currentImageSessionID
             .map(ControlPanelSidebarSelection.imageGeneration)
             ?? .tab(.chat)
     }
 
+}
+
+private struct RoutineEditorSheetHost: View {
+    let draft: RoutineDraft
+    @ObservedObject var modelLibrary: LocalModelLibrary
+    @ObservedObject var routineStore: RoutineStore
+    let onSave: (Routine) -> Void
+    let onCancel: () -> Void
+    let onDelete: () -> Void
+
+    private var availableModelIDs: [String] {
+        let textModelIDs = modelLibrary.models
+            .filter { $0.capabilities.contains(.text) }
+            .map(\.repoID)
+        let snapshotModelID = draft.routine.modelID
+        return (
+            snapshotModelID.isEmpty || textModelIDs.contains(snapshotModelID)
+                ? textModelIDs
+                : textModelIDs + [snapshotModelID]
+        ).sorted()
+    }
+
+    var body: some View {
+        RoutineEditor(
+            draft: draft,
+            availableModelIDs: availableModelIDs,
+            onSave: onSave,
+            onCancel: onCancel,
+            onDelete: routineStore.routine(id: draft.routine.id) == nil ? nil : onDelete
+        )
+    }
+}
+
+private struct ArtifactsPageHost: View {
+    private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
+    private static let embeddingModelSize: Int64 = 4_300_000_000
+
+    let store: ArtifactStore
+    let model: NativModel
+    @ObservedObject var downloads: HuggingFaceDownloadManager
+    @ObservedObject var embeddingLibrary: LocalModelLibrary
+    let settings: ControlPanelChromeState.ArtifactSettings
+    let titleLeadingInset: CGFloat
+    let onOpenModels: () -> Void
+    let onOpenChat: (Artifact) -> Void
+    let onUseInChat: (Artifact) -> Void
+    let onUseAsReference: (Artifact) -> Void
+
+    private var semanticSearch: ArtifactSemanticSearchConfig? {
+        guard ProcessInfo.processInfo.physicalMemory >= 16_000_000_000 else {
+            return nil
+        }
+        let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
+            ?? URL(string: "http://127.0.0.1:8080")!
+        let modelID = Self.embeddingModelID
+        let insufficientReason = downloads.capacityBlocker(
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath
+        )
+        return ArtifactSemanticSearchConfig(
+            modelID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            client: NativEmbeddingsClient(baseURL: baseURL, apiKey: settings.serverAPIKey),
+            isModelInstalled: embeddingLibrary.models.contains { $0.repoID == modelID },
+            isDownloading: downloads.isDownloading(modelID),
+            downloadProgress: downloads.progress(for: modelID),
+            canInstall: insufficientReason == nil,
+            insufficientReason: insufficientReason,
+            onEnable: enableSemanticSearch,
+            onRemove: removeSemanticSearchModel,
+            prepareModel: prepareSemanticSearchModel
+        )
+    }
+
+    var body: some View {
+        ArtifactsView(
+            store: store,
+            semanticSearch: semanticSearch,
+            titleLeadingInset: titleLeadingInset,
+            onOpenChat: onOpenChat,
+            onUseInChat: onUseInChat,
+            onUseAsReference: onUseAsReference
+        )
+    }
+
+    private func enableSemanticSearch() {
+        let modelID = Self.embeddingModelID
+        downloads.download(
+            repoID: modelID,
+            sizeBytes: Self.embeddingModelSize,
+            cachePath: settings.modelSearchPath,
+            token: model.effectiveHuggingFaceToken
+        ) {
+            EmbeddingModelPreparer.prepare(
+                repoID: modelID,
+                searchPath: settings.modelSearchPath
+            )
+            embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
+            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        }
+        onOpenModels()
+    }
+
+    private func removeSemanticSearchModel() {
+        let modelID = Self.embeddingModelID
+        Task {
+            try? await LocalModelDiscovery.delete(
+                repoID: modelID,
+                path: settings.modelSearchPath
+            )
+            embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
+            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        }
+    }
+
+    private func prepareSemanticSearchModel() {
+        EmbeddingModelPreparer.prepare(
+            repoID: Self.embeddingModelID,
+            searchPath: settings.modelSearchPath
+        )
+    }
 }
 
 private struct ChatWorkspaceView: View {
@@ -2500,9 +2883,9 @@ private struct ChatWorkspaceView: View {
     let onSelectMode: (ChatWorkspaceMode) -> Void
     let model: NativModel
     let chat: ChatViewModel
-    @ObservedObject var mcpHost: MCPHostManager
-    @ObservedObject var extensionManager: NativExtensionManager
-    @ObservedObject var imageGeneration: ImageGenerationViewModel
+    let mcpHost: MCPHostManager
+    let extensionManager: NativExtensionManager
+    let imageGeneration: ImageGenerationViewModel
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
@@ -4389,6 +4772,7 @@ private extension View {
         navigation: .init(),
         runtime: .init(),
         extensionManager: .init(builtInExtensions: []),
-        softwareUpdater: .init()
+        softwareUpdater: .init(),
+        dependencies: .init()
     )
 }

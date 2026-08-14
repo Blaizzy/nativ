@@ -15,6 +15,7 @@ enum WelcomePreferences {
 
 struct WelcomeGateView: View {
     @AppStorage(WelcomePreferences.completionKey) private var hasCompletedWelcome = false
+    @StateObject private var controlPanelDependencies = ControlPanelDependencies()
 
     let model: NativModel
     let navigation: ControlPanelNavigation
@@ -31,7 +32,8 @@ struct WelcomeGateView: View {
                     navigation: navigation,
                     runtime: runtime,
                     extensionManager: extensionManager,
-                    softwareUpdater: softwareUpdater
+                    softwareUpdater: softwareUpdater,
+                    dependencies: controlPanelDependencies
                 )
             } else {
                 WelcomeView(model: model) { modelID, serverAPIKey in
