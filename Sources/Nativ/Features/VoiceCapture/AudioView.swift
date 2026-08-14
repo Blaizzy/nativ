@@ -153,10 +153,9 @@ struct AudioView: View {
                 }
             )
         ) {
-            if captureLibrary.shouldOfferScreenCaptureSettings {
+            if captureLibrary.permissionRequiringSettings != nil {
                 Button("Open System Settings") {
-                    captureLibrary.clearLastError()
-                    NativSystemPermissionController.openScreenCaptureSettings()
+                    captureLibrary.openPermissionSettings()
                 }
                 Button("Not Now", role: .cancel) {
                     captureLibrary.clearLastError()

@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import NativServerKit
 
 struct VoiceTranscriptionConfiguration {
@@ -121,24 +120,13 @@ final class VoiceCaptureCoordinator {
             guard let self else {
                 return
             }
-            let status = AVCaptureDevice.authorizationStatus(for: .audio)
-            let granted: Bool
-            switch status {
-            case .authorized:
-                granted = true
-            case .notDetermined:
-                granted = await AVCaptureDevice.requestAccess(for: .audio)
-            default:
-                granted = false
-            }
+            let granted = await NativSystemPermissionController.requestMicrophone()
             guard !Task.isCancelled, self.isShortcutHeld else {
                 return
             }
             guard granted else {
                 self.overlay.showFailure()
-                if status == .denied || status == .restricted {
-                    self.presentMicrophonePermissionAlert()
-                }
+                self.presentMicrophonePermissionAlert()
                 return
             }
 
