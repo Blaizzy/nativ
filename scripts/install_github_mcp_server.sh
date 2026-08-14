@@ -12,22 +12,54 @@ if (($# != 1)); then
 fi
 
 readonly version="1.9.0"
-readonly expected_checksum="cd38785573052942c337805ea365bbc27718e0bd254ee4a48e668a76b3f4a1ce"
-readonly archive_name="github-mcp-server_Darwin_arm64.tar.gz"
+
+case "$(uname -s):$(uname -m)" in
+    Darwin:arm64)
+        readonly platform="Darwin"
+        readonly architecture="arm64"
+        readonly expected_checksum="cd38785573052942c337805ea365bbc27718e0bd254ee4a48e668a76b3f4a1ce"
+        ;;
+    Darwin:x86_64)
+        readonly platform="Darwin"
+        readonly architecture="x86_64"
+        readonly expected_checksum="7a6395a29752b3ad771bfb9d66fd1bfcb088fcbdfeb65fc22cb1146b67a3621a"
+        ;;
+    Linux:aarch64|Linux:arm64)
+        readonly platform="Linux"
+        readonly architecture="arm64"
+        readonly expected_checksum="11e14ce34492b6a07ae4bc567d8773fc4cd3dd77e91daf3f9cacc88b15d840ea"
+        ;;
+    Linux:x86_64)
+        readonly platform="Linux"
+        readonly architecture="x86_64"
+        readonly expected_checksum="cbf38bd3364518ccf80b6a25587d5ef11655b15d63cbb48bc066384d0b5b5964"
+        ;;
+    *)
+        fail "GitHub MCP Server is not packaged for $(uname -s) $(uname -m)"
+        ;;
+esac
+
+readonly archive_name="github-mcp-server_${platform}_${architecture}.tar.gz"
 readonly download_url="https://github.com/github/github-mcp-server/releases/download/v${version}/${archive_name}"
 readonly output_directory="$1"
-readonly cache_directory="${DERIVED_FILE_DIR:-${TMPDIR:-/tmp}/nativ-derived}/github-mcp-server/${version}"
+readonly cache_directory="${DERIVED_FILE_DIR:-${TMPDIR:-/tmp}/nativ-derived}/github-mcp-server/${version}/${platform}_${architecture}"
 readonly archive_path="${cache_directory}/${archive_name}"
 readonly extracted_directory="${cache_directory}/extracted"
 readonly cached_executable="${extracted_directory}/github-mcp-server"
 
-[[ "$(uname -m)" == "arm64" ]] || fail "GitHub MCP Server is currently packaged for arm64 only"
+archive_checksum() {
+    if [[ "$platform" == "Darwin" ]]; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        sha256sum "$1" | awk '{print $1}'
+    fi
+}
 
 mkdir -p "$cache_directory"
 
 archive_is_valid=false
 if [[ -f "$archive_path" ]]; then
-    actual_checksum="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+    actual_checksum="$(archive_checksum "$archive_path")"
     [[ "$actual_checksum" == "$expected_checksum" ]] && archive_is_valid=true
 fi
 
@@ -41,7 +73,7 @@ if [[ "$archive_is_valid" != true ]]; then
         --show-error \
         --output "$temporary_archive" \
         "$download_url"
-    actual_checksum="$(shasum -a 256 "$temporary_archive" | awk '{print $1}')"
+    actual_checksum="$(archive_checksum "$temporary_archive")"
     [[ "$actual_checksum" == "$expected_checksum" ]] || \
         fail "GitHub MCP Server checksum mismatch"
     mv "$temporary_archive" "$archive_path"

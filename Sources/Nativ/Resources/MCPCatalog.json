@@ -25,6 +25,7 @@
     "summary": "Search and manage GitHub issues, PRs, and code.",
     "command": "@bundled/github-mcp-server",
     "args": ["stdio"],
+    "verificationEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
     "symbol": "chevron.left.forwardslash.chevron.right",
     "tint": "primary",
     "excludedEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
