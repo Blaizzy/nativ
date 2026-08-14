@@ -173,9 +173,7 @@ private struct MCPServerRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.name.isEmpty ? "Untitled server" : server.name)
                     .font(.system(size: 13, weight: .medium))
-                Text(statusText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                statusView
             }
             Spacer(minLength: 12)
             if server.isEnabled, let onReconnect {
@@ -214,13 +212,15 @@ private struct MCPServerRow: View {
 
     private var isConnecting: Bool {
         if case .connecting = state { return true }
+        if case .authorizingGitHub = state { return true }
+        if case .installingGitHub = state { return true }
         return false
     }
 
     private var statusTone: NativStatusTone {
         switch state {
         case .connected: .success
-        case .connecting: .warning
+        case .connecting, .authorizingGitHub, .installingGitHub: .warning
         case .failed: .danger
         case .disabled, .none: .neutral
         }
@@ -230,9 +230,34 @@ private struct MCPServerRow: View {
         switch state {
         case .connected(let count): "\(count) tool\(count == 1 ? "" : "s")"
         case .connecting: "Connecting\u{2026}"
+        case .authorizingGitHub: "Waiting for GitHub authorization"
+        case .installingGitHub: "Waiting for repository access"
         case .failed(let message): message.isEmpty ? "Failed to connect" : message
         case .disabled: "Off"
         case .none: server.isEnabled ? "Not connected" : "Off"
+        }
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        if case .authorizingGitHub(let code, let verificationURL) = state {
+            Link(
+                "Enter \(code) on GitHub (copied to clipboard)",
+                destination: verificationURL
+            )
+            .font(.system(size: 11))
+            .help("Open GitHub authorization")
+        } else if case .installingGitHub(let installationURL) = state {
+            Link(
+                "Select repositories on GitHub",
+                destination: installationURL
+            )
+            .font(.system(size: 11))
+            .help("Install the Nativ GitHub App")
+        } else {
+            Text(statusText)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
     }
 }

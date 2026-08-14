@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import NativServerKit
@@ -5,6 +6,8 @@ import NativServerKit
 enum MCPServerConnectionState: Equatable {
     case disabled
     case connecting
+    case authorizingGitHub(code: String, verificationURL: URL)
+    case installingGitHub(URL)
     case connected(toolCount: Int)
     case failed(String)
 }
@@ -24,6 +27,13 @@ final class MCPHostManager: ObservableObject {
     private var appliedServers: [MCPServerConfig] = []
     private var reloadTask: Task<Void, Never>?
     private var reloadGeneration = 0
+    private let githubOAuth: (any GitHubOAuthAuthorizing)?
+
+    init(
+        githubOAuth: (any GitHubOAuthAuthorizing)? = GitHubOAuthManager.configured()
+    ) {
+        self.githubOAuth = githubOAuth
+    }
 
     func toolDefinitions() -> [MLXChatToolDefinition] {
         connections.values.flatMap { connection in
@@ -127,12 +137,17 @@ final class MCPHostManager: ObservableObject {
         guard generation == reloadGeneration else { return }
 
         var pending: [(config: MCPServerConfig, client: MCPClient)] = []
+        var githubPending: [(config: MCPServerConfig, executable: URL)] = []
         for config in toConnect where connections[config.id] == nil {
             guard let executable = Self.resolveExecutable(config.command, searchPath: searchPath) else {
                 states[config.id] = .failed("Couldn’t find “\(config.command)”")
                 continue
             }
             let catalogEntry = MCPServerCatalog.bundled.entry(matching: config)
+            if catalogEntry?.id == "github" {
+                githubPending.append((config, executable))
+                continue
+            }
             let client = MCPClient(
                 executableURL: executable,
                 arguments: config.arguments,
@@ -145,18 +160,51 @@ final class MCPHostManager: ObservableObject {
             )
             pending.append((config, client))
         }
-        guard !pending.isEmpty else { return }
 
         // Connect every server concurrently so a slow or hung one can't hold up
         // the rest; each has its own handshake deadline.
+        if !pending.isEmpty {
+            await connect(pending, generation: generation)
+        }
+        guard generation == reloadGeneration else { return }
+
+        // GitHub needs a user token before its local MCP process starts. Nativ
+        // obtains that token once, keeps it in Keychain, and refreshes it
+        // silently on later launches. Other MCP servers are already connected
+        // while the user completes this first-run authorization.
+        for item in githubPending where connections[item.config.id] == nil {
+            await connectGitHub(
+                config: item.config,
+                executable: item.executable,
+                searchPath: searchPath,
+                generation: generation
+            )
+            guard generation == reloadGeneration else { return }
+        }
+    }
+
+    private func connect(
+        _ pending: [(config: MCPServerConfig, client: MCPClient)],
+        generation: Int
+    ) async {
         await withTaskGroup(of: ConnectOutcome.self) { group in
             for item in pending {
                 group.addTask {
                     do {
                         let tools = try await item.client.connectAndListTools()
-                        return ConnectOutcome(config: item.config, tools: tools, error: nil, client: item.client)
+                        return ConnectOutcome(
+                            config: item.config,
+                            tools: tools,
+                            error: nil,
+                            client: item.client
+                        )
                     } catch {
-                        return ConnectOutcome(config: item.config, tools: nil, error: error.localizedDescription, client: item.client)
+                        return ConnectOutcome(
+                            config: item.config,
+                            tools: nil,
+                            error: error.localizedDescription,
+                            client: item.client
+                        )
                     }
                 }
             }
@@ -168,7 +216,10 @@ final class MCPHostManager: ObservableObject {
                     continue
                 }
                 if let tools = outcome.tools {
-                    let slug = Self.uniqueSlug(for: outcome.config, used: &usedSlugs)
+                    let slug = Self.uniqueSlug(
+                        for: outcome.config,
+                        used: &usedSlugs
+                    )
                     connections[outcome.config.id] = Connection(
                         config: outcome.config,
                         client: outcome.client,
@@ -178,9 +229,100 @@ final class MCPHostManager: ObservableObject {
                     states[outcome.config.id] = .connected(toolCount: tools.count)
                 } else {
                     await outcome.client.disconnect()
-                    states[outcome.config.id] = .failed(outcome.error ?? "Failed to connect")
+                    states[outcome.config.id] = .failed(
+                        outcome.error ?? "Failed to connect"
+                    )
                 }
             }
+        }
+    }
+
+    private func connectGitHub(
+        config: MCPServerConfig,
+        executable: URL,
+        searchPath: String?,
+        generation: Int
+    ) async {
+        guard let githubOAuth else {
+            states[config.id] = .failed(
+                GitHubOAuthError.notConfigured.localizedDescription
+            )
+            return
+        }
+
+        do {
+            let token = try await githubOAuth.accessToken(
+                onDeviceAuthorization: { [weak self] authorization in
+                    await MainActor.run {
+                        guard let self, generation == self.reloadGeneration else {
+                            return
+                        }
+                        self.states[config.id] = .authorizingGitHub(
+                            code: authorization.userCode,
+                            verificationURL: authorization.verificationURL
+                        )
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(
+                            authorization.userCode,
+                            forType: .string
+                        )
+                        NSWorkspace.shared.open(authorization.verificationURL)
+                    }
+                },
+                onInstallationRequired: { [weak self] installationURL in
+                    await MainActor.run {
+                        guard let self, generation == self.reloadGeneration else {
+                            return
+                        }
+                        self.states[config.id] = .installingGitHub(
+                            installationURL
+                        )
+                        NSWorkspace.shared.open(installationURL)
+                    }
+                }
+            )
+            guard generation == reloadGeneration else { return }
+
+            let catalogEntry = MCPServerCatalog.bundled.entry(matching: config)
+            var environment = Self.childEnvironment(
+                searchPath: searchPath,
+                overrides: config.environment,
+                excluding: catalogEntry?.excludedEnvironment ?? []
+            )
+            environment["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
+
+            states[config.id] = .connecting
+            let client = MCPClient(
+                executableURL: executable,
+                arguments: config.arguments,
+                environment: environment,
+                workingDirectory: Self.workingDirectory(
+                    for: config.id.uuidString
+                )
+            )
+            do {
+                let tools = try await client.connectAndListTools()
+                guard generation == reloadGeneration else {
+                    await client.disconnect()
+                    return
+                }
+                var usedSlugs = Set(connections.values.map(\.slug))
+                let slug = Self.uniqueSlug(for: config, used: &usedSlugs)
+                connections[config.id] = Connection(
+                    config: config,
+                    client: client,
+                    slug: slug,
+                    tools: tools
+                )
+                states[config.id] = .connected(toolCount: tools.count)
+            } catch {
+                await client.disconnect()
+                states[config.id] = .failed(error.localizedDescription)
+            }
+        } catch {
+            guard generation == reloadGeneration else { return }
+            states[config.id] = .failed(error.localizedDescription)
         }
     }
 
