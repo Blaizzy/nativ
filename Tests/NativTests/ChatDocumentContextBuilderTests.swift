@@ -8,7 +8,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             content: "Summarize this report.",
             attachments: [attachment(filename: "report.pdf")]
         )
-        let extractor = StubDocumentTextExtractor(contents: [
+        let builder = builder(contents: [
             "report.pdf": ExtractedDocumentContent(
                 filename: "report.pdf",
                 mimeType: "application/pdf",
@@ -19,7 +19,6 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
                 ]
             )
         ])
-        let builder = ChatDocumentContextBuilder(extractor: extractor)
 
         let contexts = try await builder.contexts(for: [message])
         let context = try XCTUnwrap(contexts[message.id])
@@ -32,11 +31,10 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
 
     func testAppliesPerDocumentLimitAndMarksTruncatedContent() async throws {
         let message = userMessage(attachments: [attachment(filename: "long.pdf")])
-        let extractor = StubDocumentTextExtractor(contents: [
-            "long.pdf": content(filename: "long.pdf", text: "abcdefghij")
-        ])
-        let builder = ChatDocumentContextBuilder(
-            extractor: extractor,
+        let builder = builder(
+            contents: [
+                "long.pdf": content(filename: "long.pdf", text: "abcdefghij")
+            ],
             maximumCharactersPerDocument: 4,
             maximumCharactersPerRequest: 100
         )
@@ -52,12 +50,11 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
     func testRequestLimitPrioritizesNewestMessages() async throws {
         let olderMessage = userMessage(attachments: [attachment(filename: "older.pdf")])
         let newerMessage = userMessage(attachments: [attachment(filename: "newer.pdf")])
-        let extractor = StubDocumentTextExtractor(contents: [
-            "older.pdf": content(filename: "older.pdf", text: "older"),
-            "newer.pdf": content(filename: "newer.pdf", text: "newer"),
-        ])
-        let builder = ChatDocumentContextBuilder(
-            extractor: extractor,
+        let builder = builder(
+            contents: [
+                "older.pdf": content(filename: "older.pdf", text: "older"),
+                "newer.pdf": content(filename: "newer.pdf", text: "newer"),
+            ],
             maximumCharactersPerDocument: 10,
             maximumCharactersPerRequest: 5
         )
@@ -82,7 +79,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             attachments: [mimeTypeAttachment, extensionAttachment, imageAttachment]
         )
         let extractor = RecordingDocumentTextExtractor()
-        let builder = ChatDocumentContextBuilder(extractor: extractor)
+        let builder = builder(extract: extractor.extract)
 
         _ = try await builder.contexts(for: [message])
 
@@ -93,10 +90,9 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
     func testSanitizesFilenameUsedInDocumentDelimiters() async throws {
         let filename = "quarterly\nreport.pdf"
         let message = userMessage(attachments: [attachment(filename: filename)])
-        let extractor = StubDocumentTextExtractor(contents: [
+        let builder = builder(contents: [
             filename: content(filename: filename, text: "Results")
         ])
-        let builder = ChatDocumentContextBuilder(extractor: extractor)
 
         let contexts = try await builder.contexts(for: [message])
         let context = try XCTUnwrap(contexts[message.id])
@@ -118,10 +114,9 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
                 attachment(filename: "readable.pdf"),
             ]
         )
-        let extractor = StubDocumentTextExtractor(contents: [
+        let builder = builder(contents: [
             "readable.pdf": content(filename: "readable.pdf", text: "Available text")
         ])
-        let builder = ChatDocumentContextBuilder(extractor: extractor)
 
         let contexts = try await builder.contexts(for: [message])
         let context = try XCTUnwrap(contexts[message.id])
@@ -133,9 +128,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
 
     func testPropagatesCancellation() async throws {
         let message = userMessage(attachments: [attachment(filename: "report.pdf")])
-        let builder = ChatDocumentContextBuilder(
-            extractor: StubDocumentTextExtractor(contents: [:])
-        )
+        let builder = builder(contents: [:])
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
             return try await builder.contexts(for: [message])
@@ -210,7 +203,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         let extractor = CountingDocumentTextExtractor(
             content: content(filename: "report.pdf", text: "Report contents")
         )
-        let extractionCache = ChatDocumentExtractionCache(extractor: extractor)
+        let extractionCache = ChatDocumentExtractionCache(extract: extractor.extract)
         let validator = ChatAttachmentValidator(extractionCache: extractionCache)
         let builder = ChatDocumentContextBuilder(extractionCache: extractionCache)
 
@@ -252,24 +245,40 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             sections: [ExtractedDocumentSection(pageNumber: 1, text: text)]
         )
     }
-}
 
-private struct StubDocumentTextExtractor: DocumentTextExtracting {
-    let contents: [String: ExtractedDocumentContent]
-
-    func extract(
-        data: Data,
-        filename: String,
-        mimeType: String
-    ) async throws -> ExtractedDocumentContent {
-        guard let content = contents[filename] else {
-            throw DocumentTextExtractionError.invalidDocument
+    private func builder(
+        contents: [String: ExtractedDocumentContent],
+        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument,
+        maximumCharactersPerRequest: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
+    ) -> ChatDocumentContextBuilder {
+        builder(
+            maximumCharactersPerDocument: maximumCharactersPerDocument,
+            maximumCharactersPerRequest: maximumCharactersPerRequest
+        ) { _, filename, _ in
+            guard let content = contents[filename] else {
+                throw DocumentTextExtractionError.invalidDocument
+            }
+            return content
         }
-        return content
+    }
+
+    private func builder(
+        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument,
+        maximumCharactersPerRequest: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest,
+        extract: @escaping ChatDocumentExtractionCache.Extraction
+    ) -> ChatDocumentContextBuilder {
+        let cache = ChatDocumentExtractionCache(
+            maximumCharactersPerDocument: maximumCharactersPerDocument,
+            extract: extract
+        )
+        return ChatDocumentContextBuilder(
+            extractionCache: cache,
+            maximumCharactersPerRequest: maximumCharactersPerRequest
+        )
     }
 }
 
-private actor RecordingDocumentTextExtractor: DocumentTextExtracting {
+private actor RecordingDocumentTextExtractor {
     private(set) var filenames: [String] = []
 
     func extract(
@@ -287,7 +296,7 @@ private actor RecordingDocumentTextExtractor: DocumentTextExtracting {
     }
 }
 
-private actor CountingDocumentTextExtractor: DocumentTextExtracting {
+private actor CountingDocumentTextExtractor {
     let content: ExtractedDocumentContent
     private(set) var extractionCount = 0
 

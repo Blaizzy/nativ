@@ -2,6 +2,12 @@ import Foundation
 
 /// Shares bounded PDF extraction results between attachment validation and request construction.
 actor ChatDocumentExtractionCache {
+    typealias Extraction = @Sendable (
+        _ data: Data,
+        _ filename: String,
+        _ mimeType: String
+    ) async throws -> ExtractedDocumentContent
+
     struct Document: Sendable {
         let content: ExtractedDocumentContent
         let sourceCharacterCount: Int
@@ -9,16 +15,27 @@ actor ChatDocumentExtractionCache {
 
     nonisolated let maximumCharactersPerDocument: Int
 
-    private let extractor: any DocumentTextExtracting
+    private let extract: Extraction
     private var documents: [UUID: Document] = [:]
     private var extractionTasks: [UUID: Task<Document, Error>] = [:]
 
     init(
-        extractor: any DocumentTextExtracting = PDFDocumentTextExtractor(),
         maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument
     ) {
         precondition(maximumCharactersPerDocument > 0)
-        self.extractor = extractor
+        let extractor = PDFDocumentTextExtractor()
+        self.extract = { data, filename, mimeType in
+            try await extractor.extract(data: data, filename: filename, mimeType: mimeType)
+        }
+        self.maximumCharactersPerDocument = maximumCharactersPerDocument
+    }
+
+    init(
+        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument,
+        extract: @escaping Extraction
+    ) {
+        precondition(maximumCharactersPerDocument > 0)
+        self.extract = extract
         self.maximumCharactersPerDocument = maximumCharactersPerDocument
     }
 
@@ -38,14 +55,10 @@ actor ChatDocumentExtractionCache {
             throw DocumentTextExtractionError.invalidDocument
         }
 
-        let extractor = self.extractor
+        let extract = self.extract
         let characterLimit = maximumCharactersPerDocument
         let task = Task {
-            let content = try await extractor.extract(
-                data: data,
-                filename: attachment.filename,
-                mimeType: attachment.mimeType
-            )
+            let content = try await extract(data, attachment.filename, attachment.mimeType)
             return Self.boundedDocument(from: content, characterLimit: characterLimit)
         }
         extractionTasks[attachment.id] = task

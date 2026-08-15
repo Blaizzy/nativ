@@ -14,21 +14,6 @@ struct ChatDocumentContextBuilder: Sendable {
     private let maximumCharactersPerRequest: Int
 
     init(
-        extractor: any DocumentTextExtracting = PDFDocumentTextExtractor(),
-        maximumCharactersPerDocument: Int = defaultMaximumCharactersPerDocument,
-        maximumCharactersPerRequest: Int = defaultMaximumCharactersPerRequest
-    ) {
-        precondition(maximumCharactersPerDocument > 0)
-        precondition(maximumCharactersPerRequest > 0)
-        self.extractionCache = ChatDocumentExtractionCache(
-            extractor: extractor,
-            maximumCharactersPerDocument: maximumCharactersPerDocument
-        )
-        self.maximumCharactersPerDocument = maximumCharactersPerDocument
-        self.maximumCharactersPerRequest = maximumCharactersPerRequest
-    }
-
-    init(
         extractionCache: ChatDocumentExtractionCache,
         maximumCharactersPerRequest: Int = defaultMaximumCharactersPerRequest
     ) {

@@ -66,9 +66,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     }
 
     func testPDFWithoutEmbeddedTextExplainsOCRLimitation() async throws {
-        let validator = ChatAttachmentValidator(
-            extractor: ThrowingDocumentTextExtractor(error: .noExtractableText)
-        )
+        let validator = validator(result: .failure(.noExtractableText))
 
         let validation = try await validator.validatePDF(attachment(filename: "scan.pdf"))
 
@@ -80,9 +78,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     }
 
     func testPasswordProtectedPDFExplainsHowToProceed() async throws {
-        let validator = ChatAttachmentValidator(
-            extractor: ThrowingDocumentTextExtractor(error: .passwordProtected)
-        )
+        let validator = validator(result: .failure(.passwordProtected))
 
         let validation = try await validator.validatePDF(attachment(filename: "private.pdf"))
 
@@ -100,8 +96,8 @@ final class ChatAttachmentValidatorTests: XCTestCase {
             pageCount: 1,
             sections: [ExtractedDocumentSection(pageNumber: 1, text: "123456")]
         )
-        let validator = ChatAttachmentValidator(
-            extractor: StubAttachmentDocumentTextExtractor(content: content),
+        let validator = validator(
+            result: .success(content),
             maximumCharactersPerDocument: 5
         )
 
@@ -122,9 +118,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
             pageCount: 1,
             sections: [ExtractedDocumentSection(pageNumber: 1, text: "Report text")]
         )
-        let validator = ChatAttachmentValidator(
-            extractor: StubAttachmentDocumentTextExtractor(content: content)
-        )
+        let validator = validator(result: .success(content))
 
         let validation = try await validator.validatePDF(attachment(filename: "report.pdf"))
 
@@ -135,9 +129,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     }
 
     func testValidationPropagatesCancellation() async throws {
-        let validator = ChatAttachmentValidator(
-            extractor: ThrowingDocumentTextExtractor(error: .invalidDocument)
-        )
+        let validator = validator(result: .failure(.invalidDocument))
         let pdf = attachment(filename: "report.pdf")
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
@@ -164,28 +156,16 @@ final class ChatAttachmentValidatorTests: XCTestCase {
             base64Data: Data("pdf-data".utf8).base64EncodedString()
         )
     }
-}
 
-private struct StubAttachmentDocumentTextExtractor: DocumentTextExtracting {
-    let content: ExtractedDocumentContent
-
-    func extract(
-        data: Data,
-        filename: String,
-        mimeType: String
-    ) async throws -> ExtractedDocumentContent {
-        content
-    }
-}
-
-private struct ThrowingDocumentTextExtractor: DocumentTextExtracting {
-    let error: DocumentTextExtractionError
-
-    func extract(
-        data: Data,
-        filename: String,
-        mimeType: String
-    ) async throws -> ExtractedDocumentContent {
-        throw error
+    private func validator(
+        result: Result<ExtractedDocumentContent, DocumentTextExtractionError>,
+        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument
+    ) -> ChatAttachmentValidator {
+        let cache = ChatDocumentExtractionCache(
+            maximumCharactersPerDocument: maximumCharactersPerDocument
+        ) { _, _, _ in
+            try result.get()
+        }
+        return ChatAttachmentValidator(extractionCache: cache)
     }
 }

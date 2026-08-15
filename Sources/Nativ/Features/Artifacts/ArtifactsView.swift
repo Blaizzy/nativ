@@ -66,7 +66,7 @@ struct ArtifactGroup: Identifiable {
 }
 
 struct ArtifactsView: View {
-    private static let pdfTextExtractor: any DocumentTextExtracting = PDFDocumentTextExtractor()
+    private static let pdfTextExtractor = PDFDocumentTextExtractor()
 
     @ObservedObject var store: ArtifactStore
     let semanticSearch: ArtifactSemanticSearchConfig?
@@ -336,8 +336,7 @@ struct ArtifactsView: View {
                 return await Self.pdfTextChunks(
                     at: url,
                     filename: artifact.filename,
-                    mimeType: artifact.mimeType,
-                    extractor: Self.pdfTextExtractor
+                    mimeType: artifact.mimeType
                 )
             }
             return await Task.detached(priority: .utility) {
@@ -352,14 +351,13 @@ struct ArtifactsView: View {
     private static func pdfTextChunks(
         at url: URL,
         filename: String,
-        mimeType: String,
-        extractor: any DocumentTextExtracting
+        mimeType: String
     ) async -> [String] {
         do {
             let data = try await Task.detached(priority: .utility) {
                 try Data(contentsOf: url, options: .mappedIfSafe)
             }.value
-            let content = try await extractor.extract(
+            let content = try await pdfTextExtractor.extract(
                 data: data,
                 filename: filename,
                 mimeType: mimeType
