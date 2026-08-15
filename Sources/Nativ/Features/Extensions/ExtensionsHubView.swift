@@ -102,11 +102,15 @@ struct ExtensionsHubView: View {
 }
 
 private struct OpenExtensionsHubSectionKey: EnvironmentKey {
-    static let defaultValue: (ExtensionsHubView.HubSection) -> Void = { _ in }
+    static let defaultValue: @MainActor @Sendable (
+        ExtensionsHubView.HubSection
+    ) -> Void = { _ in }
 }
 
 extension EnvironmentValues {
-    var openExtensionsHubSection: (ExtensionsHubView.HubSection) -> Void {
+    var openExtensionsHubSection: @MainActor @Sendable (
+        ExtensionsHubView.HubSection
+    ) -> Void {
         get { self[OpenExtensionsHubSectionKey.self] }
         set { self[OpenExtensionsHubSectionKey.self] = newValue }
     }

@@ -613,7 +613,7 @@ public final class NativChatClient {
 
     public func streamChat(
         _ request: MLXChatCompletionRequest,
-        onDelta: @escaping (String) async -> Void
+        onDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> MLXChatCompletion {
         try await streamChat(request, onEvent: { event in
             if let content = event.content, !content.isEmpty {
@@ -624,7 +624,7 @@ public final class NativChatClient {
 
     public func streamChat(
         _ request: MLXChatCompletionRequest,
-        onEvent: @escaping (MLXChatStreamDelta) async -> Void
+        onEvent: @escaping @Sendable (MLXChatStreamDelta) async -> Void
     ) async throws -> MLXChatCompletion {
         var payload = request
         payload.stream = true

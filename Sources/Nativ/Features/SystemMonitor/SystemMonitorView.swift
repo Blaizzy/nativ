@@ -612,6 +612,7 @@ private struct SystemDeviceArtwork: View {
     }
 }
 
+@MainActor
 private enum SystemDeviceArtworkProvider {
     private static let coreTypesResourcesURL = URL(
         fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle"

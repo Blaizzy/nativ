@@ -37,16 +37,25 @@ private enum NativExtensionHostBrokerError: LocalizedError {
     }
 }
 
+private struct NativExtensionHostReply: @unchecked Sendable {
+    let body: (Data?, String?) -> Void
+
+    func callAsFunction(_ data: Data?, _ errorMessage: String?) {
+        body(data, errorMessage)
+    }
+}
+
 final class NativExtensionHostBroker:
     NSObject,
-    NativExtensionHostXPCProtocol
+    NativExtensionHostXPCProtocol,
+    @unchecked Sendable
 {
     private let extensionID: String
     private let hostVersion: String
     private let grantedPermissions: Set<NativExtensionPermission>
     private let storageDirectory: URL
     private let transcriptionConfiguration:
-        @MainActor () -> VoiceTranscriptionConfiguration?
+        @MainActor @Sendable () -> VoiceTranscriptionConfiguration?
 
     init(
         extensionID: String,
@@ -54,7 +63,7 @@ final class NativExtensionHostBroker:
         grantedPermissions: Set<NativExtensionPermission>,
         storageDirectory: URL,
         transcriptionConfiguration:
-            @escaping @MainActor () -> VoiceTranscriptionConfiguration?
+            @escaping @MainActor @Sendable () -> VoiceTranscriptionConfiguration?
     ) {
         self.extensionID = extensionID
         self.hostVersion = hostVersion
@@ -79,20 +88,24 @@ final class NativExtensionHostBroker:
             return
         }
 
-        Task { @MainActor in
+        let replyHandler = NativExtensionHostReply(body: reply)
+        Task { @MainActor [self, replyHandler] in
             do {
                 let responsePayload = try await handle(request)
                 let response = NativExtensionHostResponse(
                     requestID: request.requestID,
                     payload: responsePayload
                 )
-                reply(try JSONEncoder().encode(response), nil)
+                replyHandler(try JSONEncoder().encode(response), nil)
             } catch {
                 let response = NativExtensionHostResponse(
                     requestID: request.requestID,
                     errorMessage: error.localizedDescription
                 )
-                reply(try? JSONEncoder().encode(response), error.localizedDescription)
+                replyHandler(
+                    try? JSONEncoder().encode(response),
+                    error.localizedDescription
+                )
             }
         }
     }

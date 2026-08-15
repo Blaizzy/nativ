@@ -45,7 +45,7 @@ enum VoiceTranscriptInserter {
             NSRunningApplication(processIdentifier: $0.processIdentifier)
         }
         if let targetApplication, !targetApplication.isActive {
-            targetApplication.activate(options: [.activateIgnoringOtherApps])
+            targetApplication.activate()
         }
 
         do {

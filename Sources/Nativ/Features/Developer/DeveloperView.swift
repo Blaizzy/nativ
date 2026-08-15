@@ -2043,7 +2043,11 @@ private enum SystemRuntimeInfo {
         let usedPages = UInt64(statistics.active_count)
             + UInt64(statistics.wire_count)
             + UInt64(statistics.compressor_page_count)
-        let usedBytes = usedPages * UInt64(vm_kernel_page_size)
+        var kernelPageSize: vm_size_t = 0
+        guard host_page_size(mach_host_self(), &kernelPageSize) == KERN_SUCCESS else {
+            return 0
+        }
+        let usedBytes = usedPages * UInt64(kernelPageSize)
         return min(usedBytes, ProcessInfo.processInfo.physicalMemory)
     }
 
@@ -2116,7 +2120,8 @@ private enum SystemRuntimeInfo {
         guard sysctlbyname(name, &value, &size, nil, 0) == 0 else {
             return nil
         }
-        return String(cString: value)
+        let bytes = value.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 }
 
@@ -2195,6 +2200,7 @@ private struct LogTextView: NSViewRepresentable {
     }
 }
 
+@MainActor
 private enum LogTextStyler {
     private static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 

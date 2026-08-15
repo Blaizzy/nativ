@@ -588,7 +588,7 @@ public enum NativMetricsError: Error, LocalizedError, CustomStringConvertible {
     }
 }
 
-public final class NativMetricsClient {
+public final class NativMetricsClient: @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let timeout: TimeInterval
@@ -647,7 +647,7 @@ public final class NativMetricsClient {
     }
 }
 
-public final class NativProcessController {
+public final class NativProcessController: @unchecked Sendable {
     public typealias OutputHandler = @Sendable (String) -> Void
     public typealias TerminationHandler = @Sendable (Int32) -> Void
 
@@ -655,9 +655,18 @@ public final class NativProcessController {
     private var process: Process?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private var outputHandler: OutputHandler?
+    private var terminationHandler: TerminationHandler?
 
-    public var onOutput: OutputHandler?
-    public var onTermination: TerminationHandler?
+    public var onOutput: OutputHandler? {
+        get { lock.withLock { outputHandler } }
+        set { lock.withLock { outputHandler = newValue } }
+    }
+
+    public var onTermination: TerminationHandler? {
+        get { lock.withLock { terminationHandler } }
+        set { lock.withLock { terminationHandler = newValue } }
+    }
 
     public init() {}
 

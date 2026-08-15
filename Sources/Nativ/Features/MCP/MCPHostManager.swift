@@ -249,28 +249,32 @@ final class MCPHostManager: ObservableObject {
             return
         }
 
+        let showDeviceAuthorization: @MainActor @Sendable (
+            GitHubOAuthDeviceAuthorization
+        ) -> Void = { [weak self] authorization in
+            guard let self, generation == self.reloadGeneration else {
+                return
+            }
+            self.states[config.id] = .authorizingGitHub(
+                code: authorization.userCode,
+                verificationURL: authorization.verificationURL
+            )
+        }
+        let showInstallationRequired: @MainActor @Sendable (URL) -> Void = {
+            [weak self] installationURL in
+            guard let self, generation == self.reloadGeneration else {
+                return
+            }
+            self.states[config.id] = .installingGitHub(installationURL)
+        }
+
         do {
             let token = try await githubOAuth.accessToken(
-                onDeviceAuthorization: { [weak self] authorization in
-                    await MainActor.run {
-                        guard let self, generation == self.reloadGeneration else {
-                            return
-                        }
-                        self.states[config.id] = .authorizingGitHub(
-                            code: authorization.userCode,
-                            verificationURL: authorization.verificationURL
-                        )
-                    }
+                onDeviceAuthorization: { authorization in
+                    await showDeviceAuthorization(authorization)
                 },
-                onInstallationRequired: { [weak self] installationURL in
-                    await MainActor.run {
-                        guard let self, generation == self.reloadGeneration else {
-                            return
-                        }
-                        self.states[config.id] = .installingGitHub(
-                            installationURL
-                        )
-                    }
+                onInstallationRequired: { installationURL in
+                    await showInstallationRequired(installationURL)
                 }
             )
             guard generation == reloadGeneration else { return }

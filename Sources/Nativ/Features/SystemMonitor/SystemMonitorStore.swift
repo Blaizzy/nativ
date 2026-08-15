@@ -600,7 +600,11 @@ private actor SystemMetricsCollector {
             return SystemMemoryMetrics(totalBytes: ProcessInfo.processInfo.physicalMemory)
         }
 
-        let pageSize = UInt64(vm_kernel_page_size)
+        var kernelPageSize: vm_size_t = 0
+        guard host_page_size(mach_host_self(), &kernelPageSize) == KERN_SUCCESS else {
+            return SystemMemoryMetrics(totalBytes: ProcessInfo.processInfo.physicalMemory)
+        }
+        let pageSize = UInt64(kernelPageSize)
         let total = ProcessInfo.processInfo.physicalMemory
         let active = UInt64(statistics.active_count) * pageSize
         let wired = UInt64(statistics.wire_count) * pageSize
@@ -889,7 +893,8 @@ private actor SystemMetricsCollector {
         guard sysctlbyname(name, &value, &size, nil, 0) == 0 else {
             return nil
         }
-        return String(cString: value)
+        let bytes = value.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func sysctlInteger(_ name: String) -> Int? {

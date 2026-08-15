@@ -466,7 +466,7 @@ final class ChatWebSearchToolTests: XCTestCase {
         viewModel.select(.exa)
         viewModel.draftAPIKey = "new-key"
 
-        await viewModel.testAndConnect()
+        _ = await viewModel.testAndConnect()
 
         XCTAssertEqual(credentials.storedKey(for: .exa), "new-key")
         XCTAssertEqual(preferences.searchProvider, .exa)
@@ -493,7 +493,7 @@ final class ChatWebSearchToolTests: XCTestCase {
         viewModel.select(.exa)
         viewModel.draftAPIKey = "exa-key"
 
-        await viewModel.testAndConnect()
+        _ = await viewModel.testAndConnect()
 
         XCTAssertEqual(preferences.searchProvider, .brave)
         XCTAssertEqual(preferences.pageReaderProvider, .exa)
@@ -516,7 +516,7 @@ final class ChatWebSearchToolTests: XCTestCase {
         )
         viewModel.draftAPIKey = "bad-replacement"
 
-        await viewModel.testAndConnect()
+        _ = await viewModel.testAndConnect()
 
         XCTAssertEqual(credentials.storedKey(for: .brave), "working-key")
         XCTAssertEqual(viewModel.selectedConnectionState, .connected)

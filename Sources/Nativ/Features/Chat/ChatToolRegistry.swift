@@ -5,7 +5,7 @@ typealias ChatImageModelSelectionHandler = @MainActor @Sendable (
     ChatImageModelSelectionRequest
 ) async throws -> String
 
-struct ChatToolExecutionContext {
+struct ChatToolExecutionContext: Sendable {
     let imageGenerationModelID: String?
     let baseURL: URL
     let apiKey: String?
@@ -19,7 +19,7 @@ struct ChatToolExecutionContext {
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
 
-struct ChatToolExecutionOutcome {
+struct ChatToolExecutionOutcome: Sendable {
     let content: String
     let attachments: [ChatImageAttachment]
 }
@@ -96,22 +96,43 @@ enum ChatToolRegistry {
 }
 
 enum ChatToolDispatcher {
-    private typealias Handler = (MLXChatToolCall, ChatToolExecutionContext) async throws -> ChatToolExecutionOutcome
-    private typealias FailureHandler = (String, Error) -> String
+    private typealias Handler = @Sendable (
+        MLXChatToolCall,
+        ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome
+    private typealias FailureHandler = @Sendable (String, Error) -> String
 
     private static let handlers: [String: Handler] = [
-        ChatImageToolRegistry.generateToolName: executeImageTool,
-        ChatImageToolRegistry.editToolName: executeImageTool,
-        ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
-        ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
-        ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
-        ChatWebSearchToolRegistry.toolName: executeWebSearchTool,
-        ChatWebReadToolRegistry.toolName: executeWebReadTool,
+        ChatImageToolRegistry.generateToolName: { call, context in
+            try await executeImageTool(call: call, context: context)
+        },
+        ChatImageToolRegistry.editToolName: { call, context in
+            try await executeImageTool(call: call, context: context)
+        },
+        ChatSystemMonitorToolRegistry.toolName: { call, context in
+            try await executeSystemMonitorTool(call: call, context: context)
+        },
+        ChatModelLibraryToolRegistry.toolName: { call, context in
+            try await executeModelLibraryTool(call: call, context: context)
+        },
+        ChatServerStatsToolRegistry.toolName: { call, context in
+            try await executeServerStatsTool(call: call, context: context)
+        },
+        ChatWebSearchToolRegistry.toolName: { call, context in
+            try await executeWebSearchTool(call: call, context: context)
+        },
+        ChatWebReadToolRegistry.toolName: { call, context in
+            try await executeWebReadTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
-        ChatImageToolRegistry.generateToolName: failurePayloadForImageTool,
-        ChatImageToolRegistry.editToolName: failurePayloadForImageTool,
+        ChatImageToolRegistry.generateToolName: { name, error in
+            failurePayloadForImageTool(name: name, error: error)
+        },
+        ChatImageToolRegistry.editToolName: { name, error in
+            failurePayloadForImageTool(name: name, error: error)
+        },
         ChatSystemMonitorToolRegistry.toolName: { name, error in
             ChatSystemMonitorToolExecutor().failurePayload(operation: name, error: error)
         },
@@ -263,16 +284,19 @@ final class ChatToolConsentGate {
     }
 
     func awaitDecision(for id: UUID) async -> Bool {
-        await withTaskCancellationHandler {
+        let denyRequest: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.deny(id)
+        }
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 pending[id] = continuation
                 if Task.isCancelled {
                     pending.removeValue(forKey: id)?.resume(returning: false)
                 }
             }
-        } onCancel: { [weak self] in
+        } onCancel: {
             Task { @MainActor in
-                self?.pending.removeValue(forKey: id)?.resume(returning: false)
+                denyRequest()
             }
         }
     }

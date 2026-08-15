@@ -392,7 +392,7 @@ actor GitHubOAuthManager: GitHubOAuthAuthorizing {
         configuration: GitHubOAuthConfiguration,
         credentials: any GitHubOAuthCredentialStoring = KeychainGitHubOAuthCredentialStore(),
         transport: any GitHubOAuthTransporting = GitHubOAuthURLSessionTransport(),
-        now: @escaping @Sendable () -> Date = Date.init,
+        now: @escaping @Sendable () -> Date = { Date() },
         sleep: @escaping Sleeper = { seconds in
             try await Task.sleep(for: .seconds(seconds))
         }

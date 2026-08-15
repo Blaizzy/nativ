@@ -1820,6 +1820,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         context.coordinator.requestFocus(ifNeeded: focusToken)
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: String
         var onSubmit: () -> Void
