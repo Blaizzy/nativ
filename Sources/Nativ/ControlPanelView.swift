@@ -1477,7 +1477,7 @@ struct ControlPanelView: View {
     @discardableResult
     private func loadDropString(
         _ providers: [NSItemProvider],
-        _ handler: @escaping (String) -> Void
+        _ handler: @escaping @MainActor @Sendable (String) -> Void
     ) -> Bool {
         guard let provider = providers.first else {
             return false
@@ -2810,6 +2810,7 @@ private struct ArtifactsPageHost: View {
         let baseURL = URL(string: "http://127.0.0.1:\(settings.serverPort)")
             ?? URL(string: "http://127.0.0.1:8080")!
         let modelID = Self.embeddingModelID
+        let modelSearchPath = settings.modelSearchPath
         let insufficientReason = downloads.capacityBlocker(
             sizeBytes: Self.embeddingModelSize,
             cachePath: settings.modelSearchPath
@@ -2823,9 +2824,18 @@ private struct ArtifactsPageHost: View {
             downloadProgress: downloads.progress(for: modelID),
             canInstall: insufficientReason == nil,
             insufficientReason: insufficientReason,
-            onEnable: enableSemanticSearch,
-            onRemove: removeSemanticSearchModel,
-            prepareModel: prepareSemanticSearchModel
+            onEnable: {
+                enableSemanticSearch()
+            },
+            onRemove: {
+                removeSemanticSearchModel()
+            },
+            prepareModel: {
+                EmbeddingModelPreparer.prepare(
+                    repoID: modelID,
+                    searchPath: modelSearchPath
+                )
+            }
         )
     }
 
@@ -2870,12 +2880,6 @@ private struct ArtifactsPageHost: View {
         }
     }
 
-    private func prepareSemanticSearchModel() {
-        EmbeddingModelPreparer.prepare(
-            repoID: Self.embeddingModelID,
-            searchPath: settings.modelSearchPath
-        )
-    }
 }
 
 private struct ChatWorkspaceView: View {
@@ -2995,7 +2999,11 @@ private struct ControlPanelSurfaceReader: NSViewRepresentable {
     }
 }
 
-private var controlPanelBackdropCornerRadiusObservationContext = 0
+nonisolated(unsafe) private var controlPanelBackdropCornerRadiusObservationContext = 0
+
+private struct ControlPanelObservedObject: @unchecked Sendable {
+    let value: Any?
+}
 
 @MainActor
 private final class ControlPanelSurfaceReaderView: NSView {
@@ -3018,7 +3026,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
     private var localMouseEventMonitor: Any?
     private var isFullScreen = false
 
-    deinit {
+    isolated deinit {
         cornerCorrectionTimer?.invalidate()
         liveResizeCornerCorrectionTimer?.invalidate()
         liveResizeStopWorkItem?.cancel()
@@ -3222,11 +3230,13 @@ private final class ControlPanelSurfaceReaderView: NSView {
                 \.cornerRadius,
                 options: [.new]
             ) { surface, _ in
-                guard surface.cornerRadius != 0 else { return }
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0
-                    context.allowsImplicitAnimation = false
-                    surface.cornerRadius = 0
+                MainActor.assumeIsolated {
+                    guard surface.cornerRadius != 0 else { return }
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = 0
+                        context.allowsImplicitAnimation = false
+                        surface.cornerRadius = 0
+                    }
                 }
             }
             glassFrameObservation = glassSurface.observe(
@@ -3390,8 +3400,7 @@ private final class ControlPanelSurfaceReaderView: NSView {
         change: [NSKeyValueChangeKey: Any]?,
         context: UnsafeMutableRawPointer?
     ) {
-        guard context == &controlPanelBackdropCornerRadiusObservationContext,
-              let backdropView = object as? NSView else {
+        guard context == &controlPanelBackdropCornerRadiusObservationContext else {
             super.observeValue(
                 forKeyPath: keyPath,
                 of: object,
@@ -3401,14 +3410,20 @@ private final class ControlPanelSurfaceReaderView: NSView {
             return
         }
 
-        let cornerRadius =
-            (backdropView.value(forKey: "punchOutCornerRadius") as? NSNumber)?
-            .doubleValue ?? 0
-        if cornerRadius != 0 {
-            setBackdropCornerRadiusToZero(
-                on: backdropView,
-                key: "punchOutCornerRadius"
-            )
+        let observedObject = ControlPanelObservedObject(value: object)
+        MainActor.assumeIsolated {
+            guard let backdropView = observedObject.value as? NSView else {
+                return
+            }
+            let cornerRadius =
+                (backdropView.value(forKey: "punchOutCornerRadius") as? NSNumber)?
+                .doubleValue ?? 0
+            if cornerRadius != 0 {
+                setBackdropCornerRadiusToZero(
+                    on: backdropView,
+                    key: "punchOutCornerRadius"
+                )
+            }
         }
     }
 
@@ -3647,7 +3662,7 @@ private final class ControlPanelCollapseButtonsView: NSView {
     private weak var actionWindow: NSWindow?
     private var localMouseEventMonitor: Any?
 
-    deinit {
+    isolated deinit {
         if let localMouseEventMonitor {
             NSEvent.removeMonitor(localMouseEventMonitor)
         }
@@ -3953,7 +3968,7 @@ private final class ControlPanelWindowControlsOverlayView: NSView {
         nil
     }
 
-    deinit {
+    isolated deinit {
         NotificationCenter.default.removeObserver(self)
         if let localMouseEventMonitor {
             NSEvent.removeMonitor(localMouseEventMonitor)

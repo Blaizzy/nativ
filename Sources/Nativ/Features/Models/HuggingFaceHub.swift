@@ -953,7 +953,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private var progressUpdateTimes: [String: Date] = [:]
     private var freeDiskCache: [String: (timestamp: Date, bytes: Int64?)] = [:]
 
-    deinit {
+    isolated deinit {
         contexts.values.forEach {
             $0.operation?.cancel()
             $0.task?.cancel()
@@ -1521,6 +1521,31 @@ private enum HuggingFaceDownloadAttemptError: Error {
     case stalled
 }
 
+private final class HuggingFaceCapturedOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximumBytes: Int
+    private var data = Data()
+
+    init(maximumBytes: Int) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func append(_ newData: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(newData)
+        if data.count > maximumBytes {
+            data = Data(data.suffix(maximumBytes / 2))
+        }
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
 private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private static let stallTimeout: TimeInterval = 60
     private static let finalizationStallTimeout: TimeInterval = 10 * 60
@@ -1691,22 +1716,18 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         process.standardError = pipe
 
         let outputGroup = DispatchGroup()
-        let outputLock = NSLock()
-        var output = Data()
+        let output = HuggingFaceCapturedOutput(
+            maximumBytes: Self.maximumCapturedOutputBytes
+        )
         outputGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            [activity, phase, progress, transferSpeed] in
+            [activity, phase, progress] in
             var lineBuffer = ""
             while true {
                 let data = pipe.fileHandleForReading.availableData
                 guard !data.isEmpty else { break }
 
-                outputLock.lock()
                 output.append(data)
-                if output.count > Self.maximumCapturedOutputBytes {
-                    output = Data(output.suffix(Self.maximumCapturedOutputBytes / 2))
-                }
-                outputLock.unlock()
 
                 lineBuffer += String(decoding: data, as: UTF8.self)
                     .replacingOccurrences(of: "\r", with: "\n")
@@ -1804,9 +1825,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceDownloadAttemptError.stalled
         }
         guard process.terminationStatus == 0 else {
-            outputLock.lock()
-            let message = String(decoding: output, as: UTF8.self)
-            outputLock.unlock()
+            let message = String(decoding: output.snapshot(), as: UTF8.self)
             let usefulMessage = message
                 .split(whereSeparator: { $0.isNewline || $0 == "\r" })
                 .suffix(4)

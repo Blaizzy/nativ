@@ -784,7 +784,7 @@ final class VoiceCaptureSoundPlayer {
                 cueName: "finish"
             )
         case .minimalPlay:
-            playBundled(
+            _ = playBundled(
                 data: minimalEndSoundData,
                 volume: 0.68,
                 cueName: "minimal finish"

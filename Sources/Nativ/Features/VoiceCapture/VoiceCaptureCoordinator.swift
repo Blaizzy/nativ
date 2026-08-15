@@ -1,7 +1,7 @@
 import AppKit
 import NativServerKit
 
-struct VoiceTranscriptionConfiguration {
+struct VoiceTranscriptionConfiguration: Sendable {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
     let selectedModelID: String?
@@ -14,7 +14,8 @@ struct VoiceTranscriptionConfiguration {
 
 @MainActor
 final class VoiceCaptureCoordinator {
-    var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
+    var transcriptionConfigurationProvider:
+        (@MainActor @Sendable () -> VoiceTranscriptionConfiguration?)?
     var onOpenSpeechModels: (() -> Void)?
 
     private let shortcutMonitor = FnControlShortcutMonitor()

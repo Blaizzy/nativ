@@ -66,8 +66,8 @@ final class AudioAnalyticsStoreTests: XCTestCase {
     private var temporaryDirectory: URL!
     private var store: AudioAnalyticsStore!
 
-    override func setUpWithError() throws {
-        try super.setUpWithError()
+    override func setUp() async throws {
+        try await super.setUp()
         temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -79,11 +79,11 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         )
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         store = nil
         try FileManager.default.removeItem(at: temporaryDirectory)
         temporaryDirectory = nil
-        try super.tearDownWithError()
+        try await super.tearDown()
     }
 
     func testCalculatesWordsSpeedAndEstimatedTimeSaved() {

@@ -1351,14 +1351,18 @@ final class ChatViewModel: ObservableObject {
                 throw NativChatError.invalidResponse
             }
 
-            let completion = try await client.streamChat(request, onEvent: { [weak self] event in
-                await MainActor.run {
-                    self?.append(
-                        event: event,
-                        to: assistantMessageID,
-                        in: queuedRequest.sessionID
-                    )
-                }
+            let streamingMessageID = assistantMessageID
+            let streamingSessionID = queuedRequest.sessionID
+            let appendEvent: @MainActor @Sendable (MLXChatStreamDelta) -> Void = {
+                [weak self] event in
+                self?.append(
+                    event: event,
+                    to: streamingMessageID,
+                    in: streamingSessionID
+                )
+            }
+            let completion = try await client.streamChat(request, onEvent: { event in
+                await appendEvent(event)
             })
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
@@ -2359,7 +2363,7 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-private struct ChatMessageRow: View, Equatable {
+private struct ChatMessageRow: View, @MainActor Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
@@ -2804,9 +2808,9 @@ private struct ChatAgentStepCell: View {
 
     private var consentDescription: Text {
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
-            return Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept.")
+            return Text(
+                "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
