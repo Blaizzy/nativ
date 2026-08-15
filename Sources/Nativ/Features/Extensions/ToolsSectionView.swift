@@ -9,8 +9,6 @@ struct ToolsSectionView: View {
     @State private var editingTool: CustomTool?
     @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
-    @State private var webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
-    @State private var pendingWebSearchActivation = false
 
     var body: some View {
         HubSectionScaffold(
@@ -31,7 +29,7 @@ struct ToolsSectionView: View {
                     toolGroup(title: "Custom", tools: customTools)
                 }
 
-                ForEach(enabledServers) { server in
+                ForEach(configuredServers) { server in
                     let tools = mcpTools(for: server)
                     if !tools.isEmpty {
                         toolGroup(title: server.name, tools: tools)
@@ -39,12 +37,19 @@ struct ToolsSectionView: View {
                 }
             }
         }
-        .sheet(item: $inspecting, onDismiss: cancelPendingWebSearchActivation) { tool in
+        .sheet(item: $inspecting) { tool in
             switch tool.configuration {
             case .webSearch:
-                WebSearchToolConfigurationView(
+                BrowsingToolConfigurationView(
                     toolName: tool.title,
-                    onConfigurationChanged: updateWebSearchConfiguration
+                    capability: .search,
+                    onConfigurationChanged: { _ in }
+                )
+            case .webRead:
+                BrowsingToolConfigurationView(
+                    toolName: tool.title,
+                    capability: .read,
+                    onConfigurationChanged: { _ in }
                 )
             case nil:
                 ToolInspectorView(tool: tool, host: host)
@@ -90,8 +95,10 @@ struct ToolsSectionView: View {
         }
     }
 
-    private var enabledServers: [MCPServerConfig] {
-        model.settings.mcpServers.filter(\.isEnabled)
+    private var configuredServers: [MCPServerConfig] {
+        model.settings.mcpServers.filter {
+            !$0.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     @ViewBuilder
@@ -105,56 +112,12 @@ struct ToolsSectionView: View {
                 if index > 0 { Divider() }
                 ToolRow(
                     tool: tool,
-                    isOn: binding(for: tool),
                     onInspect: { inspecting = tool },
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool)
                 )
             }
         }
-    }
-
-    private func binding(for tool: ToolItem) -> Binding<Bool> {
-        Binding(
-            get: {
-                !model.settings.disabledToolNames.contains(tool.name)
-                    && (tool.configuration != .webSearch || webSearchIsConfigured)
-            },
-            set: { enabled in
-                if enabled, tool.configuration == .webSearch, !webSearchIsConfigured {
-                    setTool(tool.name, enabled: false)
-                    pendingWebSearchActivation = true
-                    inspecting = tool
-                } else {
-                    setTool(tool.name, enabled: enabled)
-                }
-            }
-        )
-    }
-
-    private func setTool(_ name: String, enabled: Bool) {
-        if enabled {
-            model.settings.disabledToolNames.removeAll { $0 == name }
-        } else if !model.settings.disabledToolNames.contains(name) {
-            model.settings.disabledToolNames.append(name)
-        }
-    }
-
-    private func updateWebSearchConfiguration(_ configured: Bool) {
-        webSearchIsConfigured = configured
-        if configured, pendingWebSearchActivation {
-            pendingWebSearchActivation = false
-            setTool(ChatWebSearchToolRegistry.toolName, enabled: true)
-            inspecting = nil
-        } else if !configured {
-            setTool(ChatWebSearchToolRegistry.toolName, enabled: false)
-        }
-    }
-
-    private func cancelPendingWebSearchActivation() {
-        guard pendingWebSearchActivation else { return }
-        pendingWebSearchActivation = false
-        setTool(ChatWebSearchToolRegistry.toolName, enabled: false)
     }
 
     private var nativeTools: [ToolItem] {
@@ -249,7 +212,6 @@ struct ToolItem: Identifiable {
 
 private struct ToolRow: View {
     let tool: ToolItem
-    @Binding var isOn: Bool
     let onInspect: () -> Void
     var onEdit: (() -> Void)?
     var onRemove: (() -> Void)?
@@ -294,10 +256,6 @@ private struct ToolRow: View {
                 .frame(width: 18)
                 .help("Manage tool")
             }
-            Toggle("", isOn: $isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
         }
         .padding(.vertical, 9)
         .contentShape(.rect)
@@ -306,8 +264,9 @@ private struct ToolRow: View {
     }
 }
 
-private struct WebSearchToolConfigurationView: View {
+private struct BrowsingToolConfigurationView: View {
     let toolName: String
+    let capability: WebBrowsingCapability
     let onConfigurationChanged: (Bool) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -317,7 +276,11 @@ private struct WebSearchToolConfigurationView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(toolName)
                         .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                    Text("Choose the provider Nativ uses when a model searches the web.")
+                    Text(
+                        capability == .search
+                            ? "Choose the provider used for web search."
+                            : "Choose the provider used to read source pages."
+                    )
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -330,12 +293,13 @@ private struct WebSearchToolConfigurationView: View {
                 .foregroundStyle(.secondary)
             }
 
-            WebSearchSettingsView(
+            WebBrowsingSettingsView(
+                initialCapability: capability,
                 onConfigurationChanged: onConfigurationChanged
             )
         }
         .padding(20)
-        .frame(width: 660)
+        .frame(width: 720)
     }
 }
 

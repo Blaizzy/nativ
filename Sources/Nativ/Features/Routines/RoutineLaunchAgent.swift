@@ -101,45 +101,44 @@ enum RoutineLaunchAgent {
     }
 }
 
+@MainActor
 enum RoutineHeadlessRun {
     private static var retainedRunner: RoutineRunner?
     private static var retainedModel: NativModel?
 
     static func execute(routineID: String) {
-        MainActor.assumeIsolated {
-            if anotherInstanceRunning() {
-                exit(EXIT_SUCCESS)
-            }
-            guard RoutineScheduler.hasSufficientBattery(),
-                  let routine = RoutineStore.shared.routine(id: routineID)
-            else {
-                exit(EXIT_SUCCESS)
-            }
-            let model = NativModel()
-            let runner = RoutineRunner(
-                model: model,
-                store: RoutineStore.shared,
-                sessionStore: ChatSessionStore()
-            )
-            retainedModel = model
-            retainedRunner = runner
-            runner.onRunCompleted = { routine, run in
-                Task { @MainActor in
-                    if routine.notifyOnFinish {
-                        await NativNotificationService.shared.deliver(
-                            .scheduledTaskCompletion(routine: routine, run: run)
-                        )
-                    }
-                    model.stopServer()
-                    exit(EXIT_SUCCESS)
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
-                MainActor.assumeIsolated { retainedModel?.stopServer() }
-                exit(EXIT_SUCCESS)
-            }
-            runner.run(routine, source: .scheduled)
+        if anotherInstanceRunning() {
+            exit(EXIT_SUCCESS)
         }
+        guard RoutineScheduler.hasSufficientBattery(),
+              let routine = RoutineStore.shared.routine(id: routineID)
+        else {
+            exit(EXIT_SUCCESS)
+        }
+        let model = NativModel()
+        let runner = RoutineRunner(
+            model: model,
+            store: RoutineStore.shared,
+            sessionStore: ChatSessionStore()
+        )
+        retainedModel = model
+        retainedRunner = runner
+        runner.onRunCompleted = { routine, run in
+            Task { @MainActor in
+                if routine.notifyOnFinish {
+                    await NativNotificationService.shared.deliver(
+                        .scheduledTaskCompletion(routine: routine, run: run)
+                    )
+                }
+                model.stopServer()
+                exit(EXIT_SUCCESS)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
+            retainedModel?.stopServer()
+            exit(EXIT_SUCCESS)
+        }
+        runner.run(routine, source: .scheduled)
         RunLoop.main.run()
     }
 

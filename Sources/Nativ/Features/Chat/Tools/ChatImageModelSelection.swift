@@ -387,9 +387,12 @@ final class ChatImageModelSelectionGate {
 
     func awaitSelection(
         for requestID: UUID,
-        onReady: () -> Void
+        onReady: @MainActor @Sendable () -> Void
     ) async -> String? {
-        await withTaskCancellationHandler {
+        let cancelSelection: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.cancel(requestID)
+        }
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 pending.removeValue(forKey: requestID)?.resume(returning: nil)
                 pending[requestID] = continuation
@@ -398,9 +401,9 @@ final class ChatImageModelSelectionGate {
                     pending.removeValue(forKey: requestID)?.resume(returning: nil)
                 }
             }
-        } onCancel: { [weak self] in
+        } onCancel: {
             Task { @MainActor in
-                self?.pending.removeValue(forKey: requestID)?.resume(returning: nil)
+                cancelSelection()
             }
         }
     }

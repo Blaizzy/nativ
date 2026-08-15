@@ -25,6 +25,7 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
@@ -40,6 +41,7 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
+                extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction,
@@ -60,7 +62,11 @@ struct ChatView: View {
         .background(Color.nativMainContentBackground)
         .onAppear {
             chat.mcpHost = mcpHost
+            mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
+        }
+        .onChange(of: model.settings.mcpServers) { _, servers in
+            mcpHost.reload(servers: servers)
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -95,20 +101,26 @@ struct ChatView: View {
     }
 }
 
+private enum ChatTranscriptLayout {
+    static let conversationMaxWidth: CGFloat = 680
+    static let horizontalPadding: CGFloat = 32
+    static let messageHorizontalInset: CGFloat = 32
+    static let composerClearance: CGFloat = 48
+    static let composerFadeExtension: CGFloat = 40
+}
+
 private struct ChatTranscriptView: View {
-    private enum Layout {
-        static let conversationMaxWidth: CGFloat = 680
-        static let horizontalPadding: CGFloat = 32
-    }
 
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
+    @State private var composerBackdropHeight: CGFloat = 0
     @State private var followsLatestMessage = true
     @State private var isUserScrollingTranscript = false
 
@@ -152,31 +164,50 @@ private struct ChatTranscriptView: View {
                     }
                 }
             }
-            .frame(maxWidth: Layout.conversationMaxWidth - conversationWidthReduction)
+            .frame(
+                maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                    - conversationWidthReduction
+                    - (ChatTranscriptLayout.messageHorizontalInset * 2)
+            )
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, Layout.horizontalPadding)
+            .padding(
+                .horizontal,
+                ChatTranscriptLayout.horizontalPadding
+                    + ChatTranscriptLayout.messageHorizontalInset
+            )
             .padding(.top, 18)
-            .padding(.bottom, max(18, composerHeight))
+            .padding(
+                .bottom,
+                max(18, composerHeight + ChatTranscriptLayout.composerClearance)
+            )
         }
         .scrollPosition($transcriptScrollPosition)
         .overlay(alignment: .bottom) {
-            ChatComposerContainer(
-                model: model,
-                chat: chat,
-                workspaceMode: workspaceMode,
-                onSelectWorkspaceMode: onSelectWorkspaceMode,
-                conversationWidthReduction: conversationWidthReduction,
-                onHeightChange: { height in
-                    let isInitialMeasurement = composerHeight == 0
-                    composerHeight = height
-                    if isInitialMeasurement {
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(50))
-                            transcriptScrollPosition.scrollTo(edge: .bottom)
+            ZStack(alignment: .bottom) {
+                composerBackdrop
+
+                ChatComposerContainer(
+                    model: model,
+                    chat: chat,
+                    extensionManager: extensionManager,
+                    workspaceMode: workspaceMode,
+                    onSelectWorkspaceMode: onSelectWorkspaceMode,
+                    conversationWidthReduction: conversationWidthReduction,
+                    onHeightChange: { height in
+                        let isInitialMeasurement = composerHeight == 0
+                        composerHeight = height
+                        if isInitialMeasurement {
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(50))
+                                transcriptScrollPosition.scrollTo(edge: .bottom)
+                            }
                         }
+                    },
+                    onBackdropHeightChange: { height in
+                        composerBackdropHeight = height
                     }
-                }
-            )
+                )
+            }
         }
         .onScrollPhaseChange { _, newPhase, context in
             switch newPhase {
@@ -222,6 +253,26 @@ private struct ChatTranscriptView: View {
         geometry.visibleRect.maxY >= geometry.contentSize.height - 8
     }
 
+    private var composerBackdrop: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [
+                    Color.nativMainContentBackground.opacity(0),
+                    Color.nativMainContentBackground.opacity(0.84),
+                    Color.nativMainContentBackground,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: ChatTranscriptLayout.composerFadeExtension)
+
+            Color.nativMainContentBackground
+                .frame(height: max(72, composerBackdropHeight))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private func userPromptEditingUnavailableReason(
         for message: ChatTranscriptMessage
     ) -> String? {
@@ -250,10 +301,12 @@ private struct ChatTranscriptView: View {
 private struct ChatComposerContainer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
     let onHeightChange: (CGFloat) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -263,11 +316,11 @@ private struct ChatComposerContainer: View {
         ChatComposer(
             model: model,
             viewModel: chat,
+            extensionManager: extensionManager,
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
                 ?? model.settings.structuredOutputValidationError,
-            canCompose: model.isRunning
-                && !model.isModelLoading
+            canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
                 && model.settings.structuredOutputValidationError == nil,
             canSend: !model.isModelLoading
@@ -280,11 +333,15 @@ private struct ChatComposerContainer: View {
                     using: model,
                     languageModelSupportsTools: languageModelSupportsTools
                 )
-            }
+            },
+            onBackdropHeightChange: onBackdropHeightChange
         )
-        .frame(maxWidth: 680 - conversationWidthReduction)
+        .frame(
+            maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                - conversationWidthReduction
+        )
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 32)
+        .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
@@ -737,8 +794,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     func deleteSession(_ sessionID: UUID) {
-        guard !isSessionBusy(sessionID) else {
-            return
+        // A busy session used to be undeletable, so a chat whose stream never
+        // finished could not be removed at all. Cancel its work and delete it.
+        if isSessionBusy(sessionID) {
+            cancelRequests(for: sessionID)
         }
 
         storedSessions.removeAll { $0.id == sessionID }
@@ -1025,6 +1084,49 @@ final class ChatViewModel: ObservableObject {
 
     func cancel() {
         activeTask?.cancel()
+        // Do not wait for the task to unwind: a stalled stream may stay parked in
+        // URLSession until its idle timeout fires, and the composer must become
+        // usable the moment the user asks to stop.
+        if let sessionID = activeRequestSessionID {
+            finishActiveAssistantAsCancelled(in: sessionID)
+        }
+        releaseActiveRequestSlot(matching: nil)
+        startNextRequestIfNeeded()
+    }
+
+    /// Cancels in-flight and queued work for one session, leaving other sessions
+    /// untouched.
+    private func cancelRequests(for sessionID: UUID) {
+        requestQueue.removeAll { $0.sessionID == sessionID }
+        guard activeRequestSessionID == sessionID else {
+            return
+        }
+        activeTask?.cancel()
+        finishActiveAssistantAsCancelled(in: sessionID)
+        releaseActiveRequestSlot(matching: nil)
+        startNextRequestIfNeeded()
+    }
+
+    /// Frees the single in-flight request slot.
+    ///
+    /// Pass the owning request's id to release it only if that request still owns
+    /// the slot, or `nil` to force-release whatever is active (user-driven
+    /// recovery). `activeTask` is always cleared together with the rest of the
+    /// slot so `startNextRequestIfNeeded()` can never be blocked by a handle that
+    /// outlived its request.
+    private func releaseActiveRequestSlot(matching requestID: UUID?) {
+        if let requestID, activeRequestID != requestID {
+            return
+        }
+        activeRequestID = nil
+        activeAssistantMessageID = nil
+        activeRequestSessionID = nil
+        sendingStartedAt = nil
+        activeTask = nil
+    }
+
+    private func ownsActiveRequest(_ requestID: UUID) -> Bool {
+        activeRequestID == requestID
     }
 
     func prioritizeQueuedRequest(_ requestID: UUID) {
@@ -1179,14 +1281,36 @@ final class ChatViewModel: ObservableObject {
                     return
                 }
 
+                // Release the in-flight slot on every exit path. Clearing it only
+                // after the request returned normally meant a stalled stream left
+                // the session marked busy forever, which is what made a frozen
+                // chat impossible to delete, stop, or switch away from.
+                defer {
+                    let ownedRequest = ownsActiveRequest(queuedRequest.id)
+                    releaseActiveRequestSlot(matching: queuedRequest.id)
+                    if ownedRequest {
+                        if currentSessionID == queuedRequest.sessionID {
+                            bumpScroll()
+                        }
+                        startNextRequestIfNeeded()
+                    }
+                }
+
                 do {
                     try await runChatLoop(queuedRequest)
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    if ownsActiveRequest(queuedRequest.id) {
+                        finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    }
                 } catch let error as URLError where error.code == .cancelled {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    if ownsActiveRequest(queuedRequest.id) {
+                        finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
+                    }
                 } catch {
+                    guard ownsActiveRequest(queuedRequest.id) else {
+                        return
+                    }
                     appModel?.reportModelLoadFailure(
                         modelID: queuedRequest.settings.languageModelID,
                         error: error
@@ -1200,19 +1324,6 @@ final class ChatViewModel: ObservableObject {
                     }
                     appModel?.refreshMetricsIfRunning(force: true)
                 }
-
-                guard activeRequestID == queuedRequest.id else {
-                    return
-                }
-                activeRequestID = nil
-                activeAssistantMessageID = nil
-                activeRequestSessionID = nil
-                sendingStartedAt = nil
-                activeTask = nil
-                if currentSessionID == queuedRequest.sessionID {
-                    bumpScroll()
-                }
-                startNextRequestIfNeeded()
             }
             return
         }
@@ -1240,14 +1351,18 @@ final class ChatViewModel: ObservableObject {
                 throw NativChatError.invalidResponse
             }
 
-            let completion = try await client.streamChat(request, onEvent: { [weak self] event in
-                await MainActor.run {
-                    self?.append(
-                        event: event,
-                        to: assistantMessageID,
-                        in: queuedRequest.sessionID
-                    )
-                }
+            let streamingMessageID = assistantMessageID
+            let streamingSessionID = queuedRequest.sessionID
+            let appendEvent: @MainActor @Sendable (MLXChatStreamDelta) -> Void = {
+                [weak self] event in
+                self?.append(
+                    event: event,
+                    to: streamingMessageID,
+                    in: streamingSessionID
+                )
+            }
+            let completion = try await client.streamChat(request, onEvent: { event in
+                await appendEvent(event)
             })
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
@@ -1517,6 +1632,9 @@ final class ChatViewModel: ObservableObject {
             }
 
             toolRounds += 1
+            guard ownsActiveRequest(queuedRequest.id) else {
+                throw CancellationError()
+            }
             assistantMessageID = UUID()
             activeAssistantMessageID = assistantMessageID
             guard insertAssistantMessage(
@@ -1556,10 +1674,13 @@ final class ChatViewModel: ObservableObject {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+            let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
             toolDefinitions.removeAll {
                 settings.disabledToolNames.contains($0.function.name)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
+                    || ($0.function.name == ChatWebReadToolRegistry.toolName
+                        && !webReadIsConfigured)
             }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
@@ -2242,7 +2363,7 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-private struct ChatMessageRow: View, Equatable {
+private struct ChatMessageRow: View, @MainActor Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
@@ -2300,6 +2421,7 @@ private struct ChatMessageRow: View, Equatable {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
                         isThinking: message.isStreaming && message.content.isEmpty,
+                        isStreaming: message.isStreaming,
                         thinkingDuration: message.thinkingDuration
                     )
                 }
@@ -2686,9 +2808,9 @@ private struct ChatAgentStepCell: View {
 
     private var consentDescription: Text {
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
-            return Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept.")
+            return Text(
+                "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
@@ -3061,8 +3183,11 @@ private struct ChatMessageActionButton: View {
 }
 
 private struct ChatThinkingBubble: View {
+    private static let collapsedPreviewCharacterLimit = 1_000
+
     let content: String
     let isThinking: Bool
+    let isStreaming: Bool
     let thinkingDuration: TimeInterval?
     @State private var isExpanded = false
 
@@ -3103,8 +3228,8 @@ private struct ChatThinkingBubble: View {
                     if isExpanded {
                         ChatMessageText(
                             content: content,
-                            rendersMarkdown: !isThinking,
-                            isStreaming: isThinking
+                            rendersMarkdown: true,
+                            isStreaming: isStreaming
                         )
                         .font(.callout)
                         .lineSpacing(2)
@@ -3113,7 +3238,7 @@ private struct ChatThinkingBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(12)
                     } else {
-                        Text(content)
+                        Text(collapsedPreviewContent)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineSpacing(2)
@@ -3145,6 +3270,10 @@ private struct ChatThinkingBubble: View {
             return "Worked"
         }
         return "Worked for \(NativFormatting.elapsedDuration(thinkingDuration))"
+    }
+
+    private var collapsedPreviewContent: String {
+        String(content.suffix(Self.collapsedPreviewCharacterLimit))
     }
 }
 
@@ -3434,7 +3563,12 @@ private struct ChatMessageText: View {
                 content: content,
                 fontScale: chatFontScale
             )
-        } else if rendersMarkdown && !isStreaming {
+        } else if rendersMarkdown && isStreaming {
+            ChatStreamingMarkdownText(
+                content: content,
+                fontScale: chatFontScale
+            )
+        } else if rendersMarkdown {
             StructuredText(
                 markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
@@ -3460,6 +3594,54 @@ private struct ChatMessageText: View {
         }
 
         return Text(attributed)
+    }
+}
+
+private struct ChatStreamingMarkdownText: View {
+    private static let chunkSpacing: CGFloat = 16
+
+    let document: NativStreamingMarkdownDocument
+    let fontScale: Double
+
+    init(content: String, fontScale: Double) {
+        document = NativMarkdownFormatting.streamingDocument(in: content)
+        self.fontScale = fontScale
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Self.chunkSpacing) {
+            ForEach(document.completedChunks) { chunk in
+                ChatStreamingMarkdownChunk(chunk: chunk)
+                    .equatable()
+            }
+
+            if !document.tail.isEmpty {
+                InlineText(
+                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                        in: document.tail
+                    ),
+                    syntaxExtensions: [.math]
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .textual.structuredTextStyle(.gitHub)
+        .textual.textSelection(.enabled)
+        .font(ChatFontMetrics.bodyFont(scale: fontScale))
+    }
+}
+
+private struct ChatStreamingMarkdownChunk: View, Equatable {
+    let chunk: NativStreamingMarkdownDocument.Chunk
+
+    var body: some View {
+        StructuredText(
+            markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                in: chunk.markdown
+            ),
+            syntaxExtensions: [.math]
+        )
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -3533,7 +3715,7 @@ private struct ChatSelectablePromptText: NSViewRepresentable {
 private extension Color {
     static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark ? NSColor.black : NSColor(white: 0.86, alpha: 1)
+        return isDark ? NSColor(white: 0.5, alpha: 1) : NSColor(white: 0.25, alpha: 1)
     })
 }
 
@@ -3600,6 +3782,7 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        extensionManager: NativExtensionManager(builtInExtensions: []),
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),

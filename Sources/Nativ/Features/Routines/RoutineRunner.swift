@@ -83,15 +83,12 @@ final class RoutineRunner {
             return
         }
 
-        let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
-
         do {
             let result = try await complete(
                 routine: routine,
                 settings: settings,
                 capabilities: capabilities,
-                baseURL: baseURL,
-                client: client
+                baseURL: baseURL
             )
             let sessionID = appendRun(routine: routine, messages: result.transcript)
             NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
@@ -120,9 +117,9 @@ final class RoutineRunner {
         routine: Routine,
         settings: NativSettings,
         capabilities: ResolvedCapabilities,
-        baseURL: URL,
-        client: NativChatClient
+        baseURL: URL
     ) async throws -> ScheduledExecutionResult {
+        let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
         var requestMessages: [MLXChatMessage] = []
         let systemPrompt = Self.systemPrompt(for: capabilities)
         if !systemPrompt.isEmpty {

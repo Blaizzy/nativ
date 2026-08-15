@@ -74,10 +74,10 @@ enum AudioCaptureLibraryError: LocalizedError {
 }
 
 private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
-    var onFinish: ((AVAudioPlayer) -> Void)?
+    var onFinish: (@Sendable (ObjectIdentifier) -> Void)?
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        onFinish?(player)
+        onFinish?(ObjectIdentifier(player))
     }
 }
 
@@ -90,17 +90,18 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
-    @Published private(set) var shouldOfferScreenCaptureSettings = false
+    @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
     @Published private(set) var isPlaybackPaused = false
 
-    var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
+    var transcriptionConfigurationProvider:
+        (@MainActor @Sendable () -> VoiceTranscriptionConfiguration?)?
 
     private var audioPlayer: AVAudioPlayer?
     private lazy var playbackDelegate: AudioPlaybackDelegate = {
         let delegate = AudioPlaybackDelegate()
-        delegate.onFinish = { [weak self] player in
-            Task { @MainActor in self?.playbackDidFinish(player) }
+        delegate.onFinish = { [weak self] playerID in
+            Task { @MainActor in self?.playbackDidFinish(playerID) }
         }
         return delegate
     }()
@@ -217,7 +218,7 @@ final class AudioCaptureLibrary: ObservableObject {
         meterState.update(0)
         lastMeterPublishAt = .distantPast
 
-        guard Self.hasMicrophoneAccess() else {
+        guard await NativSystemPermissionController.requestMicrophone() else {
             fail(AudioCaptureLibraryError.microphonePermissionRequired)
             return
         }
@@ -279,7 +280,15 @@ final class AudioCaptureLibrary: ObservableObject {
 
     func clearLastError() {
         lastErrorMessage = nil
-        shouldOfferScreenCaptureSettings = false
+        permissionRequiringSettings = nil
+    }
+
+    func openPermissionSettings() {
+        guard let permissionRequiringSettings else {
+            return
+        }
+        clearLastError()
+        NativSystemPermissionController.openSettings(for: permissionRequiringSettings)
     }
 
     func stop() async {
@@ -481,8 +490,8 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
-    private func playbackDidFinish(_ player: AVAudioPlayer) {
-        guard audioPlayer === player else {
+    private func playbackDidFinish(_ playerID: ObjectIdentifier) {
+        guard let audioPlayer, ObjectIdentifier(audioPlayer) == playerID else {
             return
         }
         stopPlayback()
@@ -638,7 +647,7 @@ final class AudioCaptureLibrary: ObservableObject {
         let client = NativChatClient(
             baseURL: configuration.serverBaseURL,
             apiKey: configuration.serverAPIKey,
-            timeout: 1_800
+            resourceTimeout: 1_800
         )
         let chunks = Self.transcriptChunks(transcript, maximumCharacters: 14_000)
         var partialSummaries: [String] = []
@@ -712,12 +721,16 @@ final class AudioCaptureLibrary: ObservableObject {
 
     private func fail(_ error: Error) {
         lastErrorMessage = error.localizedDescription
-        if let captureError = error as? AudioCaptureLibraryError,
-           case .screenCapturePermissionRequired = captureError
-        {
-            shouldOfferScreenCaptureSettings = true
-        } else {
-            shouldOfferScreenCaptureSettings = false
+        permissionRequiringSettings = nil
+        if let captureError = error as? AudioCaptureLibraryError {
+            switch captureError {
+            case .microphonePermissionRequired:
+                permissionRequiringSettings = .microphone
+            case .screenCapturePermissionRequired:
+                permissionRequiringSettings = .screenRecording
+            default:
+                break
+            }
         }
         resetCaptureState()
     }
@@ -810,10 +823,6 @@ final class AudioCaptureLibrary: ObservableObject {
         meterState.update(level)
         self.elapsed = elapsed
         updateRecordingOverlay(level: level, elapsed: elapsed)
-    }
-
-    private static func hasMicrophoneAccess() -> Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     private static func makeOutputURL(

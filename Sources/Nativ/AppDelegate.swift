@@ -152,6 +152,9 @@ private final class ModelMenuRowView: NSView {
             case .embeddings:
                 symbolName = "circle.grid.3x3.fill"
                 description = capability.displayName
+            case .reranking:
+                symbolName = "arrow.up.arrow.down.circle.fill"
+                description = capability.displayName
             case .reasoning:
                 symbolName = "brain.fill"
                 description = capability.displayName
@@ -340,8 +343,7 @@ private final class ModelMenuSectionHeaderView: NSView {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
-    @preconcurrency UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainActor UNUserNotificationCenterDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()
@@ -374,6 +376,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     private var modelScanError: String?
     private var lastScannedModelPath: String?
     private weak var highlightedMenuItem: NSMenuItem?
+    private var downloadShutdownTask: Task<Void, Never>?
+    private var didFinishDownloadShutdown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
@@ -439,6 +443,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !didFinishDownloadShutdown else { return .terminateNow }
+        guard HuggingFaceDownloadManager.shared.activeCount > 0 else { return .terminateNow }
+
+        if downloadShutdownTask == nil {
+            downloadShutdownTask = Task { [weak self, weak sender] in
+                await HuggingFaceDownloadManager.shared.shutdownForTermination()
+                guard let self, let sender else { return }
+                didFinishDownloadShutdown = true
+                downloadShutdownTask = nil
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
     }
 
     func applicationShouldHandleReopen(
