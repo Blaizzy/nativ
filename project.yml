@@ -185,6 +185,11 @@ targets:
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentValidation.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift
+      - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift
+      - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift

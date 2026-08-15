@@ -46,7 +46,7 @@ struct ChatView: View {
                 onExploreImageModels: onExploreImageModels
             )
             .dropDestination(for: URL.self) { urls, _ in
-                chat.attachImages(fromURLs: urls)
+                chat.attachFiles(fromURLs: urls)
             } isTargeted: { isDropTargeted = $0 }
             .overlay {
                 if isDropTargeted {
@@ -318,10 +318,11 @@ private struct ChatComposerContainer: View {
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
-            onSend: { languageModelSupportsTools in
+            onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,
-                    languageModelSupportsTools: languageModelSupportsTools
+                    languageModelSupportsTools: languageModelSupportsTools,
+                    languageModelSupportsVision: languageModelSupportsVision
                 )
             },
             onBackdropHeightChange: onBackdropHeightChange
@@ -355,6 +356,7 @@ final class ChatViewModel: ObservableObject {
         let settings: NativSettings
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
+        let languageModelSupportsVision: Bool
     }
 
     private struct ComposerSnapshot {
@@ -372,7 +374,16 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
-    @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
+    @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = [] {
+        didSet {
+            if pendingImageAttachments.isEmpty {
+                attachmentImportError = nil
+            }
+            synchronizeAttachmentValidations()
+        }
+    }
+    @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
+    @Published private(set) var attachmentImportError: String?
     @Published var draft = ""
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
@@ -386,6 +397,8 @@ final class ChatViewModel: ObservableObject {
     ] = [:]
 
     private let sessionStore = ChatSessionStore()
+    private let documentContextBuilder: ChatDocumentContextBuilder
+    private let attachmentValidator: ChatAttachmentValidator
     private var sessionLoadTask: Task<Void, Never>?
     private var activeTask: Task<Void, Never>?
     private var activeRequestID: UUID?
@@ -406,8 +419,16 @@ final class ChatViewModel: ObservableObject {
     private var imageModelPreparationContexts: [UUID: ImageModelPreparationContext] = [:]
     private var imageModelRefreshTask: Task<Void, Never>?
     private var composerSnapshot: ComposerSnapshot?
+    private var attachmentValidationTasks: [UUID: Task<Void, Never>] = [:]
 
     init() {
+        let documentExtractionCache = ChatDocumentExtractionCache()
+        documentContextBuilder = ChatDocumentContextBuilder(
+            extractionCache: documentExtractionCache
+        )
+        attachmentValidator = ChatAttachmentValidator(
+            extractionCache: documentExtractionCache
+        )
         folders = sessionStore.loadFolders()
         let now = Date()
         applyCurrentSession(
@@ -433,6 +454,7 @@ final class ChatViewModel: ObservableObject {
     deinit {
         activeTask?.cancel()
         sessionLoadTask?.cancel()
+        attachmentValidationTasks.values.forEach { $0.cancel() }
     }
 
     var isCurrentSessionSending: Bool {
@@ -485,8 +507,36 @@ final class ChatViewModel: ObservableObject {
     func canSend(isRunning: Bool, selectedModelID: String?) -> Bool {
         isRunning
             && selectedModelID?.isEmpty == false
+            && !hasBlockingAttachmentValidation
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !pendingImageAttachments.isEmpty)
+    }
+
+    var hasPendingImageAttachments: Bool {
+        pendingImageAttachments.contains { $0.chatAttachmentKind == .image }
+    }
+
+    var hasImageAttachmentsInCurrentSession: Bool {
+        messages.contains { message in
+            message.imageAttachments.contains { $0.chatAttachmentKind == .image }
+        }
+    }
+
+    var pendingPDFCharacterCount: Int {
+        pendingImageAttachments.reduce(into: 0) { total, attachment in
+            guard attachment.chatAttachmentKind == .pdf else {
+                return
+            }
+            total += attachmentValidations[attachment.id]?.extractedCharacterCount ?? 0
+        }
+    }
+
+    func attachmentValidation(for attachmentID: UUID) -> ChatAttachmentValidation? {
+        attachmentValidations[attachmentID]
+    }
+
+    func clearAttachmentImportError() {
+        attachmentImportError = nil
     }
 
     func canEditUserMessage(_ messageID: UUID) -> Bool {
@@ -860,9 +910,14 @@ final class ChatViewModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    func send(using appModel: NativModel, languageModelSupportsTools: Bool) {
+    func send(
+        using appModel: NativModel,
+        languageModelSupportsTools: Bool,
+        languageModelSupportsVision: Bool
+    ) {
         let settings = appModel.settings.normalized()
         guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
+              languageModelSupportsVision || !hasPendingImageAttachments,
               let modelID = settings.languageModelID,
               let currentSession
         else {
@@ -893,6 +948,7 @@ final class ChatViewModel: ObservableObject {
                 in: currentSession.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
+                languageModelSupportsVision: languageModelSupportsVision,
                 appModel: appModel
             )
             return
@@ -914,6 +970,7 @@ final class ChatViewModel: ObservableObject {
             in: currentSession.id,
             settings: settings,
             languageModelSupportsTools: languageModelSupportsTools,
+            languageModelSupportsVision: languageModelSupportsVision,
             appModel: appModel
         )
     }
@@ -923,6 +980,7 @@ final class ChatViewModel: ObservableObject {
         in sessionID: UUID,
         settings: NativSettings,
         languageModelSupportsTools: Bool,
+        languageModelSupportsVision: Bool,
         appModel: NativModel
     ) {
         if let modelID = settings.languageModelID {
@@ -937,7 +995,8 @@ final class ChatViewModel: ObservableObject {
             settings: settings,
             imageGenerationModelID: imageGenerationModelID(for: sessionID)
                 ?? settings.imageGenerationModelID,
-            languageModelSupportsTools: languageModelSupportsTools
+            languageModelSupportsTools: languageModelSupportsTools,
+            languageModelSupportsVision: languageModelSupportsVision
         ))
         bumpScroll()
         startNextRequestIfNeeded()
@@ -1147,7 +1206,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func chooseImageAttachments() {
+    func chooseAttachments() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -1158,9 +1217,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        let attachments = panel.urls.compactMap { url in
-            try? ChatImageAttachment(contentsOf: url)
-        }
+        let attachments = importAttachments(from: panel.urls)
         guard !attachments.isEmpty else {
             return
         }
@@ -1176,15 +1233,17 @@ final class ChatViewModel: ObservableObject {
     func attachImages(from pasteboard: NSPasteboard) -> Bool {
         let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
         guard !attachments.isEmpty else {
+            attachmentImportError = "The clipboard image couldn’t be read."
             return false
         }
+        attachmentImportError = nil
         pendingImageAttachments.append(contentsOf: attachments)
         return true
     }
 
     @discardableResult
-    func attachImages(fromURLs urls: [URL]) -> Bool {
-        let attachments = urls.compactMap { try? ChatImageAttachment(contentsOf: $0) }
+    func attachFiles(fromURLs urls: [URL]) -> Bool {
+        let attachments = importAttachments(from: urls)
         guard !attachments.isEmpty else {
             return false
         }
@@ -1202,16 +1261,103 @@ final class ChatViewModel: ObservableObject {
 
         Task { [weak self] in
             let captured = await ChatScreenCapture.captureInteractive(to: fileURL)
-            guard captured, let attachment = try? ChatImageAttachment(contentsOf: fileURL) else {
+            guard captured else {
+                self?.attachmentImportError = "The screenshot couldn’t be captured. "
+                    + "Check Screen Recording permission."
                 return
             }
-            self?.pendingImageAttachments.append(attachment)
-            try? FileManager.default.removeItem(at: fileURL)
+            defer {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+            do {
+                let attachment = try ChatImageAttachment(contentsOf: fileURL)
+                self?.attachmentImportError = nil
+                self?.pendingImageAttachments.append(attachment)
+            } catch {
+                self?.attachmentImportError = "The screenshot was captured but couldn’t be read."
+            }
         }
     }
 
     func removePendingImageAttachment(_ id: UUID) {
         pendingImageAttachments.removeAll { $0.id == id }
+    }
+
+    private func importAttachments(from urls: [URL]) -> [ChatImageAttachment] {
+        var attachments: [ChatImageAttachment] = []
+        var failedFilenames: [String] = []
+
+        for url in urls {
+            do {
+                attachments.append(try ChatImageAttachment(contentsOf: url))
+            } catch {
+                failedFilenames.append(url.lastPathComponent)
+            }
+        }
+
+        switch failedFilenames.count {
+        case 0:
+            attachmentImportError = nil
+        case 1:
+            attachmentImportError = "“\(failedFilenames[0])” couldn’t be read. "
+                + "Check that the file still exists and that you have permission to open it."
+        default:
+            attachmentImportError = "\(failedFilenames.count) files couldn’t be read. "
+                + "Check that they still exist and that you have permission to open them."
+        }
+        return attachments
+    }
+
+    private var hasBlockingAttachmentValidation: Bool {
+        pendingImageAttachments.contains { attachment in
+            attachmentValidations[attachment.id]?.preventsSending ?? true
+        }
+    }
+
+    private func synchronizeAttachmentValidations() {
+        let liveIDs = Set(pendingImageAttachments.map(\.id))
+
+        let staleTaskIDs = attachmentValidationTasks.keys.filter { !liveIDs.contains($0) }
+        for id in staleTaskIDs {
+            attachmentValidationTasks.removeValue(forKey: id)?.cancel()
+        }
+        attachmentValidations = attachmentValidations.filter { liveIDs.contains($0.key) }
+
+        for attachment in pendingImageAttachments
+        where attachmentValidations[attachment.id] == nil {
+            if let validation = ChatAttachmentValidator.immediateValidation(for: attachment) {
+                attachmentValidations[attachment.id] = validation
+                continue
+            }
+
+            attachmentValidations[attachment.id] = .processing(
+                message: "Reading “\(attachment.filename)”…"
+            )
+            let attachmentID = attachment.id
+            attachmentValidationTasks[attachmentID] = Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                do {
+                    let validation = try await attachmentValidator.validatePDF(attachment)
+                    try Task.checkCancellation()
+                    guard pendingImageAttachments.contains(where: { $0.id == attachmentID }) else {
+                        return
+                    }
+                    attachmentValidations[attachmentID] = validation
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard pendingImageAttachments.contains(where: { $0.id == attachmentID }) else {
+                        return
+                    }
+                    attachmentValidations[attachmentID] = .blocked(
+                        message: "“\(attachment.filename)” couldn’t be processed: \(error.localizedDescription)"
+                    )
+                }
+                attachmentValidationTasks[attachmentID] = nil
+            }
+        }
     }
 
     func clear() {
@@ -1328,6 +1474,16 @@ final class ChatViewModel: ObservableObject {
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
+        guard let initialMessages = sessionMessages(for: queuedRequest.sessionID),
+              let initialAssistantIndex = initialMessages.firstIndex(where: {
+                  $0.id == queuedRequest.assistantMessageID
+              })
+        else {
+            throw NativChatError.invalidResponse
+        }
+        let documentContexts = try await documentContextBuilder.contexts(
+            for: Array(initialMessages[..<initialAssistantIndex])
+        )
 
         while true {
             try Task.checkCancellation()
@@ -1336,7 +1492,8 @@ final class ChatViewModel: ObservableObject {
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
-                settings: activeSettings
+                settings: activeSettings,
+                documentContexts: documentContexts
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -1638,7 +1795,8 @@ final class ChatViewModel: ObservableObject {
         for queuedRequest: QueuedChatRequest,
         before assistantMessageID: UUID,
         advertisesTools: Bool,
-        settings: NativSettings
+        settings: NativSettings,
+        documentContexts: [UUID: String]
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
@@ -1648,12 +1806,19 @@ final class ChatViewModel: ObservableObject {
         }
 
         let precedingMessages = sessionMessages[..<assistantIndex]
-        var requestMessages = precedingMessages.compactMap(\.apiMessage)
+        var requestMessages = precedingMessages.compactMap { message in
+            message.apiMessage(
+                documentContext: documentContexts[message.id],
+                includesImages: queuedRequest.languageModelSupportsVision
+            )
+        }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
         var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
             ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
+                canEditImage: precedingMessages.contains { message in
+                    message.imageAttachments.contains { $0.chatAttachmentKind == .image }
+                }
             )
             : []
         if advertisesToolsForModel {
@@ -1808,10 +1973,15 @@ final class ChatViewModel: ObservableObject {
         else {
             return []
         }
-        return sessionMessages[...messageIndex]
-            .reversed()
-            .first(where: { !$0.imageAttachments.isEmpty })?
-            .imageAttachments ?? []
+        for message in sessionMessages[...messageIndex].reversed() {
+            let images = message.imageAttachments.filter {
+                $0.chatAttachmentKind == .image
+            }
+            if !images.isEmpty {
+                return images
+            }
+        }
+        return []
     }
 
     private func updateToolMessage(

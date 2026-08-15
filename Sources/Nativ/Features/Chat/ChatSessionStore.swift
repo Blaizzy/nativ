@@ -65,7 +65,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
                 if firstUserMessage.imageAttachments.count == 1 {
                     return firstUserMessage.imageAttachments[0].filename
                 }
-                return "\(firstUserMessage.imageAttachments.count) images"
+                return "\(firstUserMessage.imageAttachments.count) attachments"
             }
         }
 
@@ -284,21 +284,31 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     }
 
     var apiMessage: MLXChatMessage? {
+        apiMessage(documentContext: nil)
+    }
+
+    func apiMessage(
+        documentContext: String?,
+        includesImages: Bool = true
+    ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let imageParts = imageAttachments.filter {
-                ArtifactKind.resolve(mimeType: $0.mimeType, filename: $0.filename) == .image
-            }
+            let requestContent = [content, documentContext ?? ""]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            let imageParts = includesImages
+                ? imageAttachments.filter { $0.chatAttachmentKind == .image }
+                : []
             if !imageParts.isEmpty {
                 var parts: [MLXChatContentPart] = []
-                if !content.isEmpty {
-                    parts.append(MLXChatContentPart(text: content))
+                if !requestContent.isEmpty {
+                    parts.append(MLXChatContentPart(text: requestContent))
                 }
                 parts.append(contentsOf: imageParts.map { MLXChatContentPart(imageURL: $0.dataURL) })
                 return MLXChatMessage(role: "user", content: .parts(parts))
             }
 
-            return MLXChatMessage(role: "user", content: content)
+            return MLXChatMessage(role: "user", content: requestContent)
         case .assistant:
             guard !content.isEmpty || !reasoningContent.isEmpty || !toolCalls.isEmpty else {
                 return nil
