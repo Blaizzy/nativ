@@ -1,19 +1,43 @@
+import Combine
 import Foundation
 
 @MainActor
 final class RoutineStore: ObservableObject {
+    struct Persistence {
+        let directory: URL
+
+        init(directory: URL = RoutineStore.defaultDirectory) {
+            self.directory = directory
+            try? FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+
+        var routinesURL: URL {
+            directory.appendingPathComponent("routines.json")
+        }
+
+        var runsURL: URL {
+            directory.appendingPathComponent("runs.json")
+        }
+    }
+
     static let shared = RoutineStore()
 
     @Published private(set) var routines: [Routine] = []
     @Published private(set) var runs: [RoutineRun] = []
 
     var onRoutinesChanged: (() -> Void)?
+    var onRoutineDeleted: ((String) -> Void)?
 
     private static let maxRunsPerRoutine = 50
+    private let persistence: Persistence
 
-    init() {
-        routines = Self.loadRoutines()
-        runs = Self.loadRuns()
+    init(persistence: Persistence = Persistence()) {
+        self.persistence = persistence
+        routines = Self.loadRoutines(from: persistence.routinesURL)
+        runs = Self.loadRuns(from: persistence.runsURL)
     }
 
     func routine(id: String) -> Routine? {
@@ -39,6 +63,11 @@ final class RoutineStore: ObservableObject {
     }
 
     func upsert(_ routine: Routine) {
+        guard let sourceSessionID = routine.sourceSessionID,
+              !sourceSessionID.uuidString.isEmpty
+        else {
+            return
+        }
         if let index = routines.firstIndex(where: { $0.id == routine.id }) {
             routines[index] = routine
         } else {
@@ -49,11 +78,45 @@ final class RoutineStore: ObservableObject {
     }
 
     func delete(id: String) {
+        guard routines.contains(where: { $0.id == id }) else {
+            return
+        }
+        onRoutineDeleted?(id)
         routines.removeAll { $0.id == id }
         runs.removeAll { $0.routineID == id }
         persistRoutines()
         persistRuns()
         onRoutinesChanged?()
+    }
+
+    /// Removes persisted routines whose source chat no longer exists.
+    ///
+    /// This repairs older installations where a chat was deleted through a path
+    /// that did not also delete its routine. A routine without a source session
+    /// cannot safely append its result anywhere, so it is orphaned as well.
+    @discardableResult
+    func reconcile(sourceSessionIDs: Set<UUID>) -> [String] {
+        let orphanedIDs = routines.compactMap { routine in
+            guard let sourceSessionID = routine.sourceSessionID,
+                  sourceSessionIDs.contains(sourceSessionID)
+            else {
+                return routine.id
+            }
+            return nil
+        }
+        guard !orphanedIDs.isEmpty else {
+            return []
+        }
+        for id in orphanedIDs {
+            onRoutineDeleted?(id)
+        }
+        let orphaned = Set(orphanedIDs)
+        routines.removeAll { orphaned.contains($0.id) }
+        runs.removeAll { orphaned.contains($0.routineID) }
+        persistRoutines()
+        persistRuns()
+        onRoutinesChanged?()
+        return orphanedIDs
     }
 
     func setEnabled(_ enabled: Bool, id: String) {
@@ -74,6 +137,11 @@ final class RoutineStore: ObservableObject {
     }
 
     func recordRun(_ run: RoutineRun) {
+        // A runner may finish after its routine was deleted. Do not resurrect
+        // run history for a routine that is no longer part of the store.
+        guard routines.contains(where: { $0.id == run.routineID }) else {
+            return
+        }
         if let index = runs.firstIndex(where: { $0.id == run.id }) {
             runs[index] = run
         } else {
@@ -84,8 +152,8 @@ final class RoutineStore: ObservableObject {
     }
 
     func reload() {
-        routines = Self.loadRoutines()
-        runs = Self.loadRuns()
+        routines = Self.loadRoutines(from: persistence.routinesURL)
+        runs = Self.loadRuns(from: persistence.runsURL)
     }
 
     private func pruneRuns(forRoutine id: String) {
@@ -100,25 +168,19 @@ final class RoutineStore: ObservableObject {
     }
 
     private func persistRoutines() {
-        Self.write(routines, to: Self.routinesURL)
+        Self.write(routines, to: persistence.routinesURL)
     }
 
     private func persistRuns() {
-        Self.write(runs, to: Self.runsURL)
+        Self.write(runs, to: persistence.runsURL)
     }
 
     static func loadRoutines() -> [Routine] {
-        guard let data = try? Data(contentsOf: routinesURL) else {
-            return []
-        }
-        return (try? JSONDecoder().decode([Routine].self, from: data)) ?? []
+        loadRoutines(from: Persistence().routinesURL)
     }
 
     static func loadRuns() -> [RoutineRun] {
-        guard let data = try? Data(contentsOf: runsURL) else {
-            return []
-        }
-        return (try? JSONDecoder().decode([RoutineRun].self, from: data)) ?? []
+        loadRuns(from: Persistence().runsURL)
     }
 
     static func appendRun(_ run: RoutineRun) {
@@ -128,7 +190,21 @@ final class RoutineStore: ObservableObject {
         } else {
             current.append(run)
         }
-        write(current, to: runsURL)
+        write(current, to: Persistence().runsURL)
+    }
+
+    private static func loadRoutines(from url: URL) -> [Routine] {
+        guard let data = try? Data(contentsOf: url) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([Routine].self, from: data)) ?? []
+    }
+
+    private static func loadRuns(from url: URL) -> [RoutineRun] {
+        guard let data = try? Data(contentsOf: url) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([RoutineRun].self, from: data)) ?? []
     }
 
     private static func write<T: Encodable>(_ value: T, to url: URL) {
@@ -138,28 +214,15 @@ final class RoutineStore: ObservableObject {
         try? data.write(to: url, options: .atomic)
     }
 
-    private static var directory: URL {
+    nonisolated fileprivate static var defaultDirectory: URL {
         let base = (try? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )) ?? FileManager.default.homeDirectoryForCurrentUser
-        let directory = base
+        return base
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("Routines", isDirectory: true)
-        try? FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        return directory
-    }
-
-    private static var routinesURL: URL {
-        directory.appendingPathComponent("routines.json")
-    }
-
-    private static var runsURL: URL {
-        directory.appendingPathComponent("runs.json")
     }
 }

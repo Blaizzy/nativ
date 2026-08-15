@@ -9,7 +9,14 @@ final class RoutineRunner {
 
     var onRunCompleted: ((Routine, RoutineRun) -> Void)?
 
-    private var queue: [(Routine, RoutineRunSource)] = []
+    private struct QueuedRun {
+        let routineID: String
+        let source: RoutineRunSource
+    }
+
+    private var queue: [QueuedRun] = []
+    private var activeTask: Task<Void, Never>?
+    private var activeRoutineID: String?
     private var isExecuting = false
 
     init(model: NativModel, store: RoutineStore, sessionStore: ChatSessionStore) {
@@ -19,24 +26,55 @@ final class RoutineRunner {
     }
 
     func run(_ routine: Routine, source: RoutineRunSource) {
-        queue.append((routine, source))
+        guard store.routine(id: routine.id) != nil else {
+            return
+        }
+        queue.append(QueuedRun(routineID: routine.id, source: source))
         drain()
+    }
+
+    func cancel(routineID: String) {
+        queue.removeAll { $0.routineID == routineID }
+        guard activeRoutineID == routineID else {
+            return
+        }
+        activeTask?.cancel()
     }
 
     private func drain() {
         guard !isExecuting, !queue.isEmpty else {
             return
         }
-        isExecuting = true
-        let (routine, source) = queue.removeFirst()
-        Task { @MainActor in
-            await execute(routine, source: source)
-            isExecuting = false
+        let queuedRun = queue.removeFirst()
+        guard let routine = store.routine(id: queuedRun.routineID) else {
             drain()
+            return
         }
+        isExecuting = true
+        activeRoutineID = routine.id
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await execute(routine, source: queuedRun.source)
+            guard self.activeRoutineID == routine.id else {
+                return
+            }
+            self.activeTask = nil
+            self.activeRoutineID = nil
+            self.isExecuting = false
+            self.drain()
+        }
+        activeTask = task
     }
 
     private func execute(_ routine: Routine, source: RoutineRunSource) async {
+        guard !Task.isCancelled,
+              store.routine(id: routine.id) != nil
+        else {
+            return
+        }
+
         var run = RoutineRun(routineID: routine.id, source: source, status: .running)
         store.recordRun(run)
 
@@ -44,6 +82,11 @@ final class RoutineRunner {
             model.startServer()
         }
         await waitForServer()
+        guard !Task.isCancelled,
+              store.routine(id: routine.id) != nil
+        else {
+            return
+        }
 
         guard let baseURL = model.activeServerBaseURL else {
             finish(&run, routine: routine, status: .failed, summary: "The Nativ server isn’t running.")
@@ -70,16 +113,33 @@ final class RoutineRunner {
 
         do {
             let completion = try await client.completeChat(request)
-            let sessionID = appendRun(routine: routine, completion: completion)
+            guard !Task.isCancelled,
+                  store.routine(id: routine.id) != nil
+            else {
+                return
+            }
+            guard let sessionID = appendRun(routine: routine, completion: completion) else {
+                finish(
+                    &run,
+                    routine: routine,
+                    status: .failed,
+                    summary: "The routine source chat no longer exists."
+                )
+                return
+            }
             NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
             run.sessionID = sessionID
             finish(&run, routine: routine, status: .succeeded, summary: Self.summarize(completion.content))
+        } catch is CancellationError {
+            finish(&run, routine: routine, status: .cancelled, summary: "Routine run cancelled.")
+        } catch let error as URLError where error.code == .cancelled {
+            finish(&run, routine: routine, status: .cancelled, summary: "Routine run cancelled.")
         } catch {
             finish(&run, routine: routine, status: .failed, summary: error.localizedDescription)
         }
     }
 
-    private func appendRun(routine: Routine, completion: MLXChatCompletion) -> UUID {
+    private func appendRun(routine: Routine, completion: MLXChatCompletion) -> UUID? {
         let userMessage = ChatTranscriptMessage(
             role: .user,
             content: routine.instructions
@@ -90,17 +150,16 @@ final class RoutineRunner {
             reasoningContent: completion.reasoningContent ?? "",
             modelID: routine.modelID
         )
-        if let sessionID = routine.sourceSessionID,
-           var session = sessionStore.loadSession(id: sessionID) {
-            session.messages.append(userMessage)
-            session.messages.append(assistantMessage)
-            session.updatedAt = Date()
-            sessionStore.saveSession(session)
-            return sessionID
+        guard let sessionID = routine.sourceSessionID,
+              var session = sessionStore.loadSession(id: sessionID)
+        else {
+            return nil
         }
-        let session = makeSession(routine: routine, completion: completion)
+        session.messages.append(userMessage)
+        session.messages.append(assistantMessage)
+        session.updatedAt = Date()
         sessionStore.saveSession(session)
-        return session.id
+        return sessionID
     }
 
     private func finish(
@@ -155,32 +214,6 @@ final class RoutineRunner {
             .map(\.instructions)
             .filter { !$0.isEmpty }
         return instructions.isEmpty ? nil : instructions.joined(separator: "\n\n")
-    }
-
-    private func makeSession(routine: Routine, completion: MLXChatCompletion) -> ChatSession {
-        let userMessage = ChatTranscriptMessage(
-            role: .user,
-            content: routine.instructions
-        )
-        let assistantMessage = ChatTranscriptMessage(
-            role: .assistant,
-            content: completion.content,
-            reasoningContent: completion.reasoningContent ?? "",
-            modelID: routine.modelID
-        )
-        let now = Date()
-        return ChatSession(
-            id: UUID(),
-            title: routine.name.isEmpty ? "Routine" : routine.name,
-            customTitle: nil,
-            createdAt: now,
-            updatedAt: now,
-            messages: [userMessage, assistantMessage],
-            pinned: nil,
-            pinnedOrder: nil,
-            sessionOrder: nil,
-            folderID: nil
-        )
     }
 
     private static func summarize(_ content: String) -> String {

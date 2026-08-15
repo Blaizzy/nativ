@@ -2221,6 +2221,7 @@ struct ControlPanelView: View {
             for recent in targets {
                 switch recent.selection {
                 case .chat(let sessionID):
+                    routineStore.deleteRoutine(forSession: sessionID)
                     chat.deleteSession(sessionID)
                 case .imageGeneration(let sessionID):
                     imageGeneration.deleteSession(sessionID)

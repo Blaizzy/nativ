@@ -610,9 +610,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]
         ) { _, _ in }
+        routineStore.onRoutineDeleted = { [weak self] routineID in
+            self?.routineRunner.cancel(routineID: routineID)
+        }
         routineStore.onRoutinesChanged = { [weak self] in
             self?.refreshRoutineAgents()
         }
+
+        let sourceSessionIDs = Set(ChatSessionStore().loadSessions().map(\.id))
+        routineStore.reconcile(sourceSessionIDs: sourceSessionIDs)
         refreshRoutineAgents()
         routineScheduler.start()
     }
@@ -622,7 +628,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
     }
 
     private func postRoutineNotification(routine: Routine, run: RoutineRun) {
-        guard routine.notifyOnFinish else {
+        guard run.status != .cancelled,
+              routine.notifyOnFinish else {
             return
         }
         let content = UNMutableNotificationContent()

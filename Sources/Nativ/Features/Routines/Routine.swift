@@ -121,6 +121,7 @@ enum RoutineRunStatus: String, Codable, Equatable, Sendable {
     case running
     case succeeded
     case failed
+    case cancelled
 }
 
 struct RoutineRun: Codable, Identifiable, Equatable, Sendable {
