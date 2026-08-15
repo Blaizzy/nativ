@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class WebSearchSettingsViewModel: ObservableObject {
+final class WebBrowsingSettingsViewModel: ObservableObject {
     enum ConnectionState: Equatable {
         case disconnected
         case connected
@@ -15,26 +15,34 @@ final class WebSearchSettingsViewModel: ObservableObject {
     }
 
     @Published var selectedProvider: WebSearchProvider
+    @Published private(set) var selectedCapability: WebBrowsingCapability
+    @Published private(set) var searchProvider: WebSearchProvider
+    @Published private(set) var pageReaderProvider: WebSearchProvider?
     @Published var draftAPIKey = ""
     @Published var revealsKey = false
     @Published private(set) var isTesting = false
     @Published private(set) var status: Status?
     @Published private(set) var connectionStates: [WebSearchProvider: ConnectionState] = [:]
 
-    private let preferences: WebSearchPreferences
+    private let preferences: WebBrowsingPreferences
     private let credentials: any WebSearchCredentialStoring
     private let service: WebSearchService
 
     init(
-        preferences: WebSearchPreferences = WebSearchPreferences(),
+        initialCapability: WebBrowsingCapability = .search,
+        preferences: WebBrowsingPreferences = WebBrowsingPreferences(),
         credentials: any WebSearchCredentialStoring = KeychainWebSearchCredentialStore(),
         service: WebSearchService = WebSearchService()
     ) {
         self.preferences = preferences
         self.credentials = credentials
         self.service = service
-        selectedProvider = preferences.activeProvider
-        loadConnectionStates()
+        selectedCapability = initialCapability
+        selectedProvider = preferences.searchProvider
+        searchProvider = preferences.searchProvider
+        pageReaderProvider = preferences.pageReaderProvider
+        refreshConnectionStates()
+        select(initialCapability)
     }
 
     var selectedConnectionState: ConnectionState {
@@ -51,15 +59,67 @@ final class WebSearchSettingsViewModel: ObservableObject {
         draftAPIKey = ""
         revealsKey = false
         status = nil
-        if connectionStates[provider] == .connected {
-            preferences.activeProvider = provider
+    }
+
+    func select(_ capability: WebBrowsingCapability) {
+        guard !isTesting else { return }
+        selectedCapability = capability
+        switch capability {
+        case .search:
+            select(searchProvider)
+        case .read:
+            select(
+                resolvedPageReaderProvider
+                    ?? WebSearchProvider.pageReaders.first { hasCredential(for: $0) }
+                    ?? .exa
+            )
         }
+    }
+
+    private var initialPageReaderProvider: WebSearchProvider {
+        // Prefer the actually-configured page reader, then the saved choice,
+        // so opening or switching to "Page reading" doesn't reset to Exa and
+        // route a newly entered key to the wrong provider.
+        resolvedPageReaderProvider
+            ?? pageReaderProvider
+            ?? WebSearchProvider.pageReaders.first
+            ?? .exa
+    }
+    var availableProviders: [WebSearchProvider] {
+        switch selectedCapability {
+        case .search:
+            WebSearchProvider.allCases
+        case .read:
+            WebSearchProvider.pageReaders
+        }
+    }
+
+    func setSearchProvider(_ provider: WebSearchProvider) {
+        guard !isTesting else { return }
+        searchProvider = provider
+        preferences.searchProvider = provider
+        select(provider)
+        notifyConfigurationChanged()
+    }
+
+    func setPageReaderProvider(_ provider: WebSearchProvider?) {
+        guard !isTesting, provider?.supports(.read) != false else { return }
+        pageReaderProvider = provider
+        preferences.pageReaderProvider = provider
+        if let provider {
+            select(provider)
+        }
+        notifyConfigurationChanged()
     }
 
     func testAndConnect() async -> Bool {
         let apiKey = draftAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !apiKey.isEmpty, !isTesting else { return false }
         let provider = selectedProvider
+        let hadConfiguredSearch = hasCredential(for: searchProvider)
+        let hadConfiguredReader = resolvedPageReaderProvider.map {
+            hasCredential(for: $0)
+        } ?? false
         isTesting = true
         status = nil
 
@@ -67,20 +127,55 @@ final class WebSearchSettingsViewModel: ObservableObject {
         do {
             try await service.validateCredential(provider: provider, apiKey: apiKey)
             try credentials.save(apiKey, for: provider)
-            preferences.activeProvider = provider
             preferences.setCredentialIssue(nil, for: provider)
             connectionStates[provider] = .connected
+            switch selectedCapability {
+            case .search where !hadConfiguredSearch:
+                searchProvider = provider
+                preferences.searchProvider = provider
+            case .read where !hadConfiguredReader:
+                pageReaderProvider = provider
+                preferences.pageReaderProvider = provider
+            default:
+                break
+            }
             if selectedProvider == provider {
                 draftAPIKey = ""
                 revealsKey = false
                 status = .connected("Connected to \(provider.metadata.displayName).")
             }
+            notifyConfigurationChanged()
             return true
         } catch {
             if selectedProvider == provider {
                 status = .failure(error.localizedDescription)
             }
             return false
+        }
+    }
+
+    var resolvedPageReaderProvider: WebSearchProvider? {
+        preferences.provider(for: .read)
+    }
+
+    var pageReaderStatus: String? {
+        guard resolvedPageReaderProvider == selectedProvider else {
+            switch selectedConnectionState {
+            case .disconnected:
+                return "Connect \(selectedProvider.metadata.displayName) to enable page reading."
+            case .connected:
+                return "Use \(selectedProvider.metadata.displayName) for page reading."
+            case .issue:
+                return "\(selectedProvider.metadata.displayName) needs attention before it can read pages."
+            }
+        }
+        switch selectedConnectionState {
+        case .connected:
+            return nil
+        case .disconnected:
+            return "Connect \(selectedProvider.metadata.displayName) to enable page reading."
+        case .issue:
+            return "\(selectedProvider.metadata.displayName) needs attention before it can read pages."
         }
     }
 
@@ -93,6 +188,7 @@ final class WebSearchSettingsViewModel: ObservableObject {
             draftAPIKey = ""
             revealsKey = false
             status = nil
+            notifyConfigurationChanged()
             return true
         } catch {
             status = .failure(error.localizedDescription)
@@ -100,7 +196,8 @@ final class WebSearchSettingsViewModel: ObservableObject {
         }
     }
 
-    private func loadConnectionStates() {
+    func refreshConnectionStates() {
+        connectionStates.removeAll(keepingCapacity: true)
         for provider in WebSearchProvider.allCases {
             do {
                 guard try credentials.load(for: provider) != nil else {
@@ -120,35 +217,80 @@ final class WebSearchSettingsViewModel: ObservableObject {
             }
         }
     }
+
+    private func hasCredential(for provider: WebSearchProvider) -> Bool {
+        switch connectionStates[provider] ?? .disconnected {
+        case .connected, .issue:
+            true
+        case .disconnected:
+            false
+        }
+    }
+
+    private func notifyConfigurationChanged() {
+        NotificationCenter.default.post(name: .webBrowsingConfigurationDidChange, object: nil)
+    }
 }
 
 @MainActor
-struct WebSearchSettingsView: View {
-    @StateObject private var viewModel: WebSearchSettingsViewModel
+struct WebBrowsingSettingsView: View {
+    @StateObject private var viewModel: WebBrowsingSettingsViewModel
+    private let showsCapabilityPicker: Bool
     private let onConfigurationChanged: (Bool) -> Void
 
     init(
+        initialCapability: WebBrowsingCapability = .search,
+        showsCapabilityPicker: Bool = false,
         onConfigurationChanged: @escaping (Bool) -> Void = { _ in }
     ) {
-        _viewModel = StateObject(wrappedValue: WebSearchSettingsViewModel())
+        _viewModel = StateObject(
+            wrappedValue: WebBrowsingSettingsViewModel(initialCapability: initialCapability)
+        )
+        self.showsCapabilityPicker = showsCapabilityPicker
         self.onConfigurationChanged = onConfigurationChanged
     }
 
     init(
-        viewModel: WebSearchSettingsViewModel,
+        viewModel: WebBrowsingSettingsViewModel,
+        showsCapabilityPicker: Bool = false,
         onConfigurationChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        self.showsCapabilityPicker = showsCapabilityPicker
         self.onConfigurationChanged = onConfigurationChanged
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            providerPicker
-                .frame(width: 250)
-            keySetup
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 14) {
+            if showsCapabilityPicker {
+                capabilityPicker
+            }
+            HStack(alignment: .top, spacing: 16) {
+                providerPicker
+                    .frame(width: 270)
+                keySetup
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .webBrowsingConfigurationDidChange)) { _ in
+            viewModel.refreshConnectionStates()
+        }
+    }
+
+    private var capabilityPicker: some View {
+        Picker(
+            "Browsing capability",
+            selection: Binding(
+                get: { viewModel.selectedCapability },
+                set: { viewModel.select($0) }
+            )
+        ) {
+            Text("Search").tag(WebBrowsingCapability.search)
+            Text("Page reading").tag(WebBrowsingCapability.read)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 240)
     }
 
     private var providerPicker: some View {
@@ -156,7 +298,7 @@ struct WebSearchSettingsView: View {
             Text("Providers")
                 .font(.system(size: 13, weight: .semibold))
 
-            ForEach(WebSearchProvider.allCases) { provider in
+            ForEach(viewModel.availableProviders) { provider in
                 providerRow(provider)
             }
         }
@@ -180,6 +322,7 @@ struct WebSearchSettingsView: View {
                             weight: provider == viewModel.selectedProvider ? .semibold : .regular
                         ))
                     Spacer(minLength: 0)
+                    routeIndicators(for: provider)
                     connectionIndicator(for: provider)
                 }
                 .padding(.leading, 10)
@@ -208,6 +351,29 @@ struct WebSearchSettingsView: View {
     }
 
     @ViewBuilder
+    private func routeIndicators(for provider: WebSearchProvider) -> some View {
+        switch viewModel.selectedCapability {
+        case .search:
+            if viewModel.searchProvider == provider {
+                routeBadge("Active")
+            }
+        case .read:
+            if viewModel.resolvedPageReaderProvider == provider {
+                routeBadge("Active")
+            }
+        }
+    }
+
+    private func routeBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.1), in: Capsule())
+    }
+
+    @ViewBuilder
     private func connectionIndicator(for provider: WebSearchProvider) -> some View {
         switch viewModel.connectionStates[provider] ?? .disconnected {
         case .disconnected:
@@ -229,6 +395,8 @@ struct WebSearchSettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(viewModel.selectedProvider.metadata.displayName)
                 .font(.system(size: 13, weight: .semibold))
+
+            routingActions
 
             HStack(spacing: 8) {
                 keyField
@@ -263,13 +431,59 @@ struct WebSearchSettingsView: View {
 
             statusView
 
-            Text("Search queries are sent to the selected third-party provider. API keys stay in macOS Keychain.")
+            if viewModel.selectedCapability == .read,
+               let status = viewModel.pageReaderStatus {
+                Label(status, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+            }
+
+            Text("Browsing requests are sent to the selected third-party providers. API keys stay in macOS Keychain.")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var routingActions: some View {
+        HStack(spacing: 8) {
+            switch viewModel.selectedCapability {
+            case .search:
+                if viewModel.searchProvider == viewModel.selectedProvider {
+                    Label("Search", systemImage: "checkmark")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("Use for search") {
+                        viewModel.setSearchProvider(viewModel.selectedProvider)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            case .read:
+                if viewModel.resolvedPageReaderProvider == viewModel.selectedProvider {
+                    Label("Page reading", systemImage: "checkmark")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("Use for page reading") {
+                        let provider = viewModel.selectedProvider
+                        viewModel.setPageReaderProvider(
+                            provider == viewModel.searchProvider ? nil : provider
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .disabled(
+            viewModel.isTesting
+                || viewModel.selectedConnectionState == .disconnected
+        )
     }
 
     @ViewBuilder
@@ -284,6 +498,31 @@ struct WebSearchSettingsView: View {
         }
     }
 
+    private var keyFieldPrompt: String {
+        let provider = viewModel.selectedProvider.metadata.displayName
+        switch viewModel.selectedConnectionState {
+        case .disconnected:
+            return "Enter \(provider) API key"
+        case .connected:
+            return "Enter a new key to replace the saved \(provider) key"
+        case .issue:
+            return "Enter a new \(provider) API key"
+        }
+    }
+
+    private var connectionActionTitle: String {
+        if viewModel.isTesting {
+            return "Testing…"
+        }
+        switch viewModel.selectedConnectionState {
+        case .disconnected:
+            return "Test & connect"
+        case .connected:
+            return "Test & replace"
+        case .issue:
+            return "Test & reconnect"
+        }
+    }
     @ViewBuilder
     private var statusView: some View {
         if let status = viewModel.status {
@@ -323,8 +562,12 @@ private struct ProviderLogo: View {
             if let image {
                 Image(nsImage: image)
                     .resizable()
+                    .renderingMode(
+                        provider.metadata.rendersLogoAsTemplate ? .template : .original
+                    )
                     .interpolation(.high)
                     .scaledToFit()
+                    .foregroundStyle(.primary)
                     .accessibilityHidden(true)
             } else {
                 Image(systemName: "globe")

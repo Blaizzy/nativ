@@ -588,7 +588,7 @@ public enum NativMetricsError: Error, LocalizedError, CustomStringConvertible {
     }
 }
 
-public final class NativMetricsClient {
+public final class NativMetricsClient: @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let timeout: TimeInterval
@@ -647,7 +647,7 @@ public final class NativMetricsClient {
     }
 }
 
-public final class NativProcessController {
+public final class NativProcessController: @unchecked Sendable {
     public typealias OutputHandler = @Sendable (String) -> Void
     public typealias TerminationHandler = @Sendable (Int32) -> Void
 
@@ -655,9 +655,18 @@ public final class NativProcessController {
     private var process: Process?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private var outputHandler: OutputHandler?
+    private var terminationHandler: TerminationHandler?
 
-    public var onOutput: OutputHandler?
-    public var onTermination: TerminationHandler?
+    public var onOutput: OutputHandler? {
+        get { lock.withLock { outputHandler } }
+        set { lock.withLock { outputHandler = newValue } }
+    }
+
+    public var onTermination: TerminationHandler? {
+        get { lock.withLock { terminationHandler } }
+        set { lock.withLock { terminationHandler = newValue } }
+    }
 
     public init() {}
 
@@ -719,13 +728,29 @@ public final class NativProcessController {
             return process
         }
 
+        // uvicorn treats SIGTERM and SIGINT as graceful shutdowns and waits for
+        // in-flight requests, so a wedged generation survives both and the app is
+        // left reporting a server it cannot stop. Escalate to SIGKILL rather than
+        // giving up, while keeping the overall wait inside `timeout` so this does
+        // not block its caller for any longer than before.
         process.terminate()
+        waitForExit(process, timeout: timeout * 0.6)
+
+        if process.isRunning {
+            process.interrupt()
+            waitForExit(process, timeout: timeout * 0.2)
+        }
+
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            waitForExit(process, timeout: timeout * 0.2)
+        }
+    }
+
+    private func waitForExit(_ process: Process, timeout: TimeInterval) {
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-        if process.isRunning {
-            process.interrupt()
         }
     }
 

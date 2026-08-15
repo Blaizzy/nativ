@@ -1,115 +1,193 @@
-import Foundation
 import XCTest
 
-final class MarkdownStreamingTests: XCTestCase {
-    private func streaming(_ markdown: String) -> String {
-        NativMarkdownFormatting.streamingMarkdown(of: markdown)
-    }
-
-    private func openFenceCount(in markdown: String) -> Int {
-        var open = 0
-        var marker: Character?
-        var length = 0
-        for line in markdown.components(separatedBy: "\n") {
-            let trimmed = line.drop(while: { $0 == " " })
-            guard let first = trimmed.first, first == "`" || first == "~" else { continue }
-            let run = trimmed.prefix(while: { $0 == first }).count
-            guard run >= 3 else { continue }
-            if let active = marker {
-                guard first == active, run >= length else { continue }
-                guard trimmed.dropFirst(run).allSatisfy({ $0 == " " || $0 == "\t" }) else {
-                    continue
-                }
-                marker = nil
-                open -= 1
-            } else {
-                marker = first
-                length = run
-                open += 1
-            }
-        }
-        return open
-    }
-
-    func testEmptyInputIsUnchanged() {
-        XCTAssertEqual(streaming(""), "")
-    }
-
-    func testTextWithoutFencesIsUnchanged() {
-        let source = "# Title\n\nA partially written paragr"
-        XCTAssertEqual(streaming(source), source)
-    }
-
-    func testBalancedFencesAreUnchanged() {
-        let source = "Intro\n\n```swift\nlet a = 1\n```\n\nOutro"
-        XCTAssertEqual(streaming(source), source)
-    }
-
-    func testOpenFenceIsClosedSoCodeRendersWhileStreaming() {
-        XCTAssertEqual(
-            streaming("Here:\n\n```swift\nlet a = 1\nlet b = 2"),
-            "Here:\n\n```swift\nlet a = 1\nlet b = 2\n```"
+final class MarkdownFormattingTests: XCTestCase {
+    func testStreamingDocumentWaitsForFollowingBlockBeforeFreezingBoundary() {
+        let awaitingNextBlock = NativMarkdownFormatting.streamingDocument(
+            in: "First paragraph.\n\n",
+            minimumChunkLength: 1
         )
-    }
 
-    func testFenceOpenerWithoutBodyIsWithheld() {
-        XCTAssertEqual(streaming("Intro\n\n```swift"), "Intro\n")
-        XCTAssertEqual(streaming("Intro\n\n```swift\n"), "Intro\n")
-        XCTAssertEqual(streaming("```"), "")
-    }
+        XCTAssertTrue(awaitingNextBlock.completedChunks.isEmpty)
+        XCTAssertEqual(awaitingNextBlock.tail, "First paragraph.\n\n")
 
-    func testClosingFenceMatchesTheOpeningMarkerAndLength() {
-        XCTAssertEqual(streaming("~~~\nx = 1"), "~~~\nx = 1\n~~~")
-        XCTAssertEqual(streaming("````\nnested ``` here"), "````\nnested ``` here\n````")
-    }
-
-    func testOnlyTheLastUnclosedFenceIsClosed() {
-        XCTAssertEqual(
-            streaming("```\nfirst\n```\n\n```py\nsecond"),
-            "```\nfirst\n```\n\n```py\nsecond\n```"
+        let nextBlockStarted = NativMarkdownFormatting.streamingDocument(
+            in: "First paragraph.\n\nSecond",
+            minimumChunkLength: 1
         )
+
+        XCTAssertEqual(
+            nextBlockStarted.completedChunks.map(\.markdown),
+            ["First paragraph.\n\n"]
+        )
+        XCTAssertEqual(nextBlockStarted.tail, "Second")
     }
 
-    func testBlankLinesInsideAFenceStayInsideIt() {
-        XCTAssertEqual(streaming("```\nfirst\n\nsecond"), "```\nfirst\n\nsecond\n```")
+    func testStreamingDocumentKeepsCompletedChunkIdentityStableAsContentAppends() throws {
+        let prefix = "First paragraph is long enough.\n\nSecond"
+        let initial = NativMarkdownFormatting.streamingDocument(
+            in: prefix,
+            minimumChunkLength: 12
+        )
+        let initialChunk = try XCTUnwrap(initial.completedChunks.first)
+
+        let appended = NativMarkdownFormatting.streamingDocument(
+            in: prefix + " paragraph.\n\nThird",
+            minimumChunkLength: 12
+        )
+
+        XCTAssertEqual(appended.completedChunks.first, initialChunk)
+        XCTAssertEqual(reconstructedMarkdown(from: appended), prefix + " paragraph.\n\nThird")
     }
 
-    func testEveryStreamPrefixRendersWithBalancedFences() {
-        let corpus = [
-            "# Report\n\nIntro line.\n\n```swift\nlet x = 1\n```\n\n- one\n- two\n\nDone.",
-            "no fences at all, just prose",
-            "~~~\nraw\n~~~\n\nmore text\n\n> a quote",
-            "````\nouter\n```\ninner\n```\n````\ntail",
-            "text\n\n   ```js\n   indented()\n   ```\n\nend"
-        ]
-        for text in corpus {
-            for length in 1...text.count {
-                let source = String(text.prefix(length))
-                XCTAssertEqual(
-                    openFenceCount(in: streaming(source)),
-                    0,
-                    "unbalanced fence at length \(length) of \(text.debugDescription)"
-                )
-            }
-        }
+    func testStreamingDocumentGroupsSmallBlocksUntilTargetLength() {
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: "One.\n\nTwo.\n\nThree.",
+            minimumChunkLength: 10
+        )
+
+        XCTAssertEqual(document.completedChunks.map(\.markdown), ["One.\n\nTwo.\n\n"])
+        XCTAssertEqual(document.tail, "Three.")
     }
 
-    func testEveryStreamPrefixOnlyAddsAClosingFenceOrTrimsAnEmptyOpener() {
-        let text = "Intro\n\n```swift\nlet x = 1\n```\n\nOutro\n\n~~~\ntail"
-        for length in 1...text.count {
-            let source = String(text.prefix(length))
-            let result = streaming(source)
-            let addedClosing = result.hasPrefix(source)
-            let trimmedOpener = source.hasPrefix(result)
-            XCTAssertTrue(
-                addedClosing || trimmedOpener,
-                "result diverged from the source at length \(length)"
-            )
-        }
+    func testStreamingDocumentDoesNotSplitInsideFencedCodeBlock() {
+        let markdown = """
+        ```swift
+        let first = 1
+
+        let second = 2
+        ```
+
+        Following paragraph
+        """
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertEqual(document.completedChunks.count, 1)
+        XCTAssertTrue(document.completedChunks[0].markdown.hasSuffix("```\n\n"))
+        XCTAssertEqual(document.tail, "Following paragraph")
+        XCTAssertEqual(reconstructedMarkdown(from: document), markdown)
     }
 
-    func testCompletedMarkdownIsNeverAltered() {
-        let text = "# Report\n\nIntro line.\n\n```swift\nlet x = 1\n```\n\n- one\n- two\n"
-        XCTAssertEqual(streaming(text), text)
+    func testStreamingDocumentKeepsUnclosedFenceInMutableTail() {
+        let markdown = """
+        ```swift
+        let first = 1
+
+        let second = 2
+        """
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertTrue(document.completedChunks.isEmpty)
+        XCTAssertEqual(document.tail, markdown)
+    }
+
+    func testStreamingDocumentDoesNotSplitLooseListItems() {
+        let markdown = """
+        - First item
+
+        - Second item
+
+        Following paragraph
+        """
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertEqual(document.completedChunks.count, 1)
+        XCTAssertEqual(
+            document.completedChunks[0].markdown,
+            "- First item\n\n- Second item\n\n"
+        )
+        XCTAssertEqual(document.tail, "Following paragraph")
+    }
+
+    func testStreamingDocumentFreezesWholeTable() {
+        let markdown = """
+        | Name | Value |
+        | --- | ---: |
+        | Alpha | 1 |
+        | Beta | 2 |
+
+        Following paragraph
+        """
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertEqual(document.completedChunks.count, 1)
+        XCTAssertTrue(document.completedChunks[0].markdown.contains("| Beta | 2 |"))
+        XCTAssertEqual(document.tail, "Following paragraph")
+        XCTAssertEqual(reconstructedMarkdown(from: document), markdown)
+    }
+
+    func testStreamingDocumentDoesNotSplitInsideDollarMathBlock() {
+        let markdown = """
+        $$
+        a + b
+
+        = c
+        $$
+
+        Following paragraph
+        """
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertEqual(document.completedChunks.count, 1)
+        XCTAssertTrue(document.completedChunks[0].markdown.hasSuffix("$$\n\n"))
+        XCTAssertEqual(document.tail, "Following paragraph")
+    }
+
+    func testStreamingDocumentDoesNotSplitInsideMultilineDollarMathBlock() {
+        let markdown = """
+        $$a + b
+
+        = c$$
+
+        Following paragraph
+        """
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertEqual(document.completedChunks.count, 1)
+        XCTAssertTrue(document.completedChunks[0].markdown.hasSuffix("= c$$\n\n"))
+        XCTAssertEqual(document.tail, "Following paragraph")
+    }
+
+    func testStreamingDocumentDoesNotSplitInsideBracketMathBlock() {
+        let markdown = #"""
+        \[
+        a + b
+
+        = c
+        \]
+
+        Following paragraph
+        """#
+        let document = NativMarkdownFormatting.streamingDocument(
+            in: markdown,
+            minimumChunkLength: 1
+        )
+
+        XCTAssertEqual(document.completedChunks.count, 1)
+        XCTAssertTrue(document.completedChunks[0].markdown.hasSuffix("\\]\n\n"))
+        XCTAssertEqual(document.tail, "Following paragraph")
+    }
+
+    private func reconstructedMarkdown(
+        from document: NativStreamingMarkdownDocument
+    ) -> String {
+        document.completedChunks.map(\.markdown).joined() + document.tail
     }
 }

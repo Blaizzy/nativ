@@ -184,6 +184,10 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             HuggingFaceCapabilityFilter.pipelineTag(for: [.embeddings]),
             "feature-extraction"
         )
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.reranking]),
+            "text-ranking"
+        )
     }
 
     func testFeatureTagCanBeCombinedWithPipelineTask() {
@@ -218,12 +222,15 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             try capabilities(for: "sentence-similarity"),
             [.embeddings]
         )
+        XCTAssertEqual(
+            try capabilities(for: "text-ranking"),
+            [.reranking]
+        )
     }
 
     func testUnsupportedWorkflowTagsAreNotTreatedAsRunnableModels() throws {
         XCTAssertTrue(try capabilities(for: "any-to-any").isEmpty)
         XCTAssertTrue(try capabilities(for: "translation").isEmpty)
-        XCTAssertTrue(try capabilities(for: "text-ranking").isEmpty)
     }
 
     func testDrafterAliasesResolveToDrafterCapability() throws {

@@ -2,6 +2,27 @@ import Foundation
 import NativServerKit
 
 struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
+    struct LegacyLaunchConfiguration: Decodable, Equatable, Sendable {
+        let command: String
+        let arguments: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case command
+            case arguments = "args"
+        }
+
+        init(command: String, arguments: [String] = []) {
+            self.command = command
+            self.arguments = arguments
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            command = try container.decode(String.self, forKey: .command)
+            arguments = try container.decodeIfPresent([String].self, forKey: .arguments) ?? []
+        }
+    }
+
     let id: String
     let name: String
     let summary: String
@@ -10,6 +31,8 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
     let symbol: String
     let tintName: String
     let requiredEnvironment: [String]
+    let excludedEnvironment: [String]
+    let legacyLaunchConfigurations: [LegacyLaunchConfiguration]
     let sourceURL: String?
 
     var logoAssetName: String { "MCPLogo-\(name)" }
@@ -19,6 +42,8 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         case arguments = "args"
         case tintName = "tint"
         case requiredEnvironment = "requiredEnv"
+        case excludedEnvironment = "excludedEnv"
+        case legacyLaunchConfigurations
     }
 
     init(
@@ -30,6 +55,8 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         symbol: String = "server.rack",
         tintName: String = "accent",
         requiredEnvironment: [String] = [],
+        excludedEnvironment: [String] = [],
+        legacyLaunchConfigurations: [LegacyLaunchConfiguration] = [],
         sourceURL: String? = nil
     ) {
         self.id = id
@@ -40,6 +67,8 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         self.symbol = symbol
         self.tintName = tintName
         self.requiredEnvironment = requiredEnvironment
+        self.excludedEnvironment = excludedEnvironment
+        self.legacyLaunchConfigurations = legacyLaunchConfigurations
         self.sourceURL = sourceURL
     }
 
@@ -55,6 +84,14 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         requiredEnvironment = try container.decodeIfPresent(
             [String].self,
             forKey: .requiredEnvironment
+        ) ?? []
+        excludedEnvironment = try container.decodeIfPresent(
+            [String].self,
+            forKey: .excludedEnvironment
+        ) ?? []
+        legacyLaunchConfigurations = try container.decodeIfPresent(
+            [LegacyLaunchConfiguration].self,
+            forKey: .legacyLaunchConfigurations
         ) ?? []
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
     }
@@ -82,7 +119,10 @@ enum MCPServerCatalogError: Error, Equatable {
 /// introduced.
 struct MCPServerCatalog: Sendable {
     static let bundled: MCPServerCatalog = {
-        guard let url = Bundle.main.url(forResource: "MCPCatalog", withExtension: "json") else {
+        let resourceBundles = [Bundle.main, Bundle(for: BundleLocator.self)]
+        guard let url = resourceBundles.lazy.compactMap({
+            $0.url(forResource: "MCPCatalog", withExtension: "json")
+        }).first else {
             assertionFailure("MCPCatalog.json is missing from the application bundle")
             return .empty
         }
@@ -119,12 +159,17 @@ struct MCPServerCatalog: Sendable {
                 throw MCPServerCatalogError.duplicateIdentifier(entry.id)
             }
 
-            let launchConfiguration = LaunchConfiguration(entry: entry)
-            guard entryIDsByLaunchConfiguration.updateValue(
-                entry.id,
-                forKey: launchConfiguration
-            ) == nil else {
-                throw MCPServerCatalogError.duplicateLaunchConfiguration(entry.command)
+            let launchConfigurations = [LaunchConfiguration(entry: entry)]
+                + entry.legacyLaunchConfigurations.map(LaunchConfiguration.init)
+            for launchConfiguration in launchConfigurations {
+                guard entryIDsByLaunchConfiguration.updateValue(
+                    entry.id,
+                    forKey: launchConfiguration
+                ) == nil else {
+                    throw MCPServerCatalogError.duplicateLaunchConfiguration(
+                        launchConfiguration.command
+                    )
+                }
             }
         }
 
@@ -171,11 +216,26 @@ struct MCPServerCatalog: Sendable {
         in servers: inout [MCPServerConfig]
     ) {
         if let index = configurationIndex(for: entry, in: servers) {
-            servers[index].catalogID = entry.id
+            synchronizeConfiguration(at: index, with: entry, in: &servers)
             servers[index].isEnabled = enabled
         } else if enabled {
             servers.append(entry.makeConfiguration())
         }
+    }
+
+    /// Refreshes built-in settings to their current catalog launch configuration.
+    /// This lets catalog entries move to a new server without changing their
+    /// durable identity or the user's enabled state.
+    @discardableResult
+    func migrateConfigurations(in servers: inout [MCPServerConfig]) -> Bool {
+        var changed = false
+        for entry in entries {
+            guard let index = configurationIndex(for: entry, in: servers) else { continue }
+            let original = servers[index]
+            synchronizeConfiguration(at: index, with: entry, in: &servers)
+            changed = changed || servers[index] != original
+        }
+        return changed
     }
 
     func customServers(in servers: [MCPServerConfig]) -> [MCPServerConfig] {
@@ -202,8 +262,26 @@ struct MCPServerCatalog: Sendable {
 
         let expectedLaunchConfiguration = LaunchConfiguration(entry: entry)
         return servers.firstIndex {
-            $0.catalogID == nil
-                && LaunchConfiguration(server: $0) == expectedLaunchConfiguration
+            guard $0.catalogID == nil else { return false }
+            let launchConfiguration = LaunchConfiguration(server: $0)
+            return launchConfiguration == expectedLaunchConfiguration
+                || entry.legacyLaunchConfigurations.contains {
+                    LaunchConfiguration($0) == launchConfiguration
+                }
+        }
+    }
+
+    private func synchronizeConfiguration(
+        at index: Int,
+        with entry: MCPCatalogEntry,
+        in servers: inout [MCPServerConfig]
+    ) {
+        servers[index].catalogID = entry.id
+        servers[index].name = entry.name
+        servers[index].command = entry.command
+        servers[index].arguments = entry.arguments
+        for name in entry.excludedEnvironment {
+            servers[index].environment[name] = nil
         }
     }
 
@@ -220,5 +298,12 @@ struct MCPServerCatalog: Sendable {
             command = server.command
             arguments = server.arguments
         }
+
+        init(_ legacy: MCPCatalogEntry.LegacyLaunchConfiguration) {
+            command = legacy.command
+            arguments = legacy.arguments
+        }
     }
+
+    private final class BundleLocator {}
 }

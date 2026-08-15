@@ -366,7 +366,11 @@ struct ArtifactsView: View {
         }.value
     }
 
-    private static func chunkedText(_ text: String, maxChunks: Int, chunkSize: Int) -> [String] {
+    nonisolated private static func chunkedText(
+        _ text: String,
+        maxChunks: Int,
+        chunkSize: Int
+    ) -> [String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return []

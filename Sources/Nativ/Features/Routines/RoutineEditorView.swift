@@ -58,7 +58,7 @@ struct RoutineEditor: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if let onDelete {
+                if onDelete != nil {
                     Button("Delete", role: .destructive) {
                         isConfirmingDelete = true
                     }

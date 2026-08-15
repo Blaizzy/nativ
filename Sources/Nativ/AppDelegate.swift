@@ -152,6 +152,9 @@ private final class ModelMenuRowView: NSView {
             case .embeddings:
                 symbolName = "circle.grid.3x3.fill"
                 description = capability.displayName
+            case .reranking:
+                symbolName = "arrow.up.arrow.down.circle.fill"
+                description = capability.displayName
             case .reasoning:
                 symbolName = "brain.fill"
                 description = capability.displayName
@@ -340,7 +343,7 @@ private final class ModelMenuSectionHeaderView: NSView {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainActor UNUserNotificationCenterDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()

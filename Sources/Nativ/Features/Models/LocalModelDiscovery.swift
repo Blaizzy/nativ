@@ -35,6 +35,7 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case speechToText
     case textToSpeech
     case embeddings
+    case reranking
     case reasoning
     case tools
     case drafter
@@ -59,6 +60,8 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
             "Text to Speech"
         case .embeddings:
             "Embeddings"
+        case .reranking:
+            "Reranking"
         case .reasoning:
             "Reasoning"
         case .tools:
@@ -113,7 +116,7 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     var isEligibleForLanguageModelPicker: Bool {
         // Any text-generative model qualifies (chat + omni), even if it also carries an
         // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
-        guard !capabilities.contains(.drafter) else {
+        guard !capabilities.contains(.drafter), !capabilities.contains(.reranking) else {
             return false
         }
         return capabilities.contains(.text)
@@ -1303,6 +1306,12 @@ enum LocalModelDiscovery {
             if isEmbeddingModel && !capabilities.contains(.vision) {
                 capabilities.insert(.embeddings)
             }
+        }
+
+        if model.localizedCaseInsensitiveContains("rerank")
+            || descriptors.contains("reranker")
+            || descriptors.contains("reranking") {
+            capabilities.insert(.reranking)
         }
 
         if capabilities.contains(.text)

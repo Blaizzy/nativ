@@ -24,6 +24,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
     case image = "Image"
     case speech = "Speech"
     case embeddings = "Embeddings"
+    case reranking = "Reranking"
 
     var id: String { rawValue }
 
@@ -32,13 +33,15 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
         case .all:
             true
         case .language:
-            capabilities.contains(.text)
+            capabilities.contains(.text) && !capabilities.contains(.reranking)
         case .image:
             !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing])
         case .speech:
             !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
         case .embeddings:
             capabilities.contains(.embeddings)
+        case .reranking:
+            capabilities.contains(.reranking)
         }
     }
 
@@ -154,7 +157,7 @@ private final class ModelsNativState: ObservableObject {
 /// Stops unrelated `NativModel` publications in the parent control panel from
 /// walking the Models subtree. Relevant model changes arrive through
 /// `ModelsNativState` instead.
-struct ModelsViewHost: View, Equatable {
+struct ModelsViewHost: View, @MainActor Equatable {
     let model: NativModel
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
@@ -334,6 +337,8 @@ struct ModelsView: View {
         section = .discover
         typeFilter = .image
         hubQuery = ""
+        hubSort = .downloads
+        hubSortDirection = .descending
         hubCapabilityFilters = [imageModelDiscoveryCapability]
         hubAccessFilter = .all
     }
@@ -796,7 +801,8 @@ struct ModelsView: View {
 
     private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
         var slots: [ModelPreloadSlot] = []
-        if localModel.capabilities.contains(.text) {
+        if localModel.capabilities.contains(.text)
+            && !localModel.capabilities.contains(.reranking) {
             slots.append(.language)
         }
         if localModel.capabilities.contains(.imageGeneration) {
@@ -829,6 +835,8 @@ struct ModelsView: View {
                 nil
             case .embeddings:
                 .embeddings
+            case .reranking:
+                nil
             }
         if let preferredSlot, slots.contains(preferredSlot) {
             return preferredSlot
@@ -1271,6 +1279,7 @@ private struct DebouncedModelsSearchField: NSViewRepresentable {
         coordinator.cancelPendingCommit()
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var text: Binding<String>
         var identity: ModelsPageSection
@@ -1440,7 +1449,7 @@ private struct ModelReadmePanel: View {
     }
 }
 
-private struct InstalledModelRow: View, Equatable {
+private struct InstalledModelRow: View, @MainActor Equatable {
     let localModel: LocalModel
     let preloadSlots: [ModelPreloadSlot]
     let selectedPreloadSlots: Set<ModelPreloadSlot>
@@ -1874,7 +1883,7 @@ private struct HubModelMemoryFitWarning: Equatable {
     }
 }
 
-private struct HubModelRow: View, Equatable {
+private struct HubModelRow: View, @MainActor Equatable {
     let model: HuggingFaceModel
     let downloadSizeBytes: Int64?
     let isInstalled: Bool
@@ -2164,7 +2173,7 @@ private struct HubPaginationButton: View {
 
 /// Keeps download progress observation local to the affected row. The parent
 /// Discover view remains stable while a download reports progress.
-private struct HubModelRowContainer: View, Equatable {
+private struct HubModelRowContainer: View, @MainActor Equatable {
     private let downloadManager = HuggingFaceDownloadManager.shared
     @State private var downloadSnapshot: HuggingFaceDownloadManager.RowSnapshot
 
@@ -2572,6 +2581,7 @@ extension LocalModelCapability {
         .speechToText,
         .textToSpeech,
         .embeddings,
+        .reranking,
     ]
 
     fileprivate static let discoverFeatureFilters: [Self] = [
@@ -2600,6 +2610,8 @@ extension LocalModelCapability {
             URLQueryItem(name: "pipeline_tag", value: "text-to-speech")
         case .embeddings:
             URLQueryItem(name: "pipeline_tag", value: "feature-extraction")
+        case .reranking:
+            URLQueryItem(name: "pipeline_tag", value: "text-ranking")
         case .reasoning:
             URLQueryItem(name: "other", value: "reasoning")
         case .tools:
@@ -2620,6 +2632,7 @@ extension LocalModelCapability {
         case .speechToText: "captions.bubble"
         case .textToSpeech: "speaker.wave.2"
         case .embeddings: "circle.grid.3x3"
+        case .reranking: "arrow.up.arrow.down.circle"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
         case .drafter: "hare"
