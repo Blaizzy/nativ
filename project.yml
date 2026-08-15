@@ -109,6 +109,13 @@ targets:
         product: Sparkle
       - package: textual
         product: Textual
+    postBuildScripts:
+      - name: Install GitHub OAuth MCP server
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          "$SRCROOT/scripts/install_github_mcp_server.sh" \
+            "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/MCPServers"
     settings:
       base:
         ARCHS: arm64
@@ -171,6 +178,9 @@ targets:
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
       - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift
+      - path: Sources/Nativ/Features/MCP/GitHubOAuth.swift
+      - path: Sources/Nativ/Resources/MCPCatalog.json
+        buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
@@ -180,7 +190,22 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatServerStatsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingError.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingProviderClient.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingRuntime.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingTransport.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/BraveBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/ExaBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/FirecrawlBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/NimbleBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/PerplexityBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/TavilyBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/ParallelBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/WebReadContentSelector.swift
+      - path: Sources/Nativ/Features/Browsing/WebReadService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchProvider.swift
+      - path: Sources/Nativ/Features/Browsing/WebSearchService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchSettingsView.swift
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift

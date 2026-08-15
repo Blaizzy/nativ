@@ -657,6 +657,7 @@ struct ControlPanelView: View {
     private var isExtensionsBadgeDismissed = false
     @State private var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State private var selectedTab: ControlPanelTab = .chat
+    @State private var selectedExtensionsHubSection: ExtensionsHubView.HubSection = .kits
     @State private var chatWorkspaceMode: ChatWorkspaceMode = .chat
     @State private var speechModelDiscoveryRequest: Int
     @State private var imageModelDiscoveryRequest: Int
@@ -771,6 +772,13 @@ struct ControlPanelView: View {
         .toolbarVisibility(.hidden, for: .windowToolbar)
         .ignoresSafeArea(.container, edges: .top)
         .frame(minWidth: 1040, minHeight: 600)
+        .environment(\.openExtensionsHubSection) { section in
+            selectedExtensionsHubSection = section
+            Task { @MainActor in
+                await Task.yield()
+                applySidebarSelection(.tab(.extensions))
+            }
+        }
         .overlay(alignment: .top) {
             Group {
                 if selectedTab != .models, let failure = chromeState.modelLoadFailure {
@@ -2296,6 +2304,7 @@ struct ControlPanelView: View {
                 model: model,
                 chat: chat,
                 mcpHost: mcpHost,
+                extensionManager: extensionManager,
                 imageGeneration: imageGeneration,
                 showsConfiguration: $isModelConfigurationVisible,
                 conversationWidthReduction: isFullScreen
@@ -2361,7 +2370,8 @@ struct ControlPanelView: View {
             ExtensionsHubView(
                 manager: extensionManager,
                 host: mcpHost,
-                model: model
+                model: model,
+                section: $selectedExtensionsHubSection
             )
         case .dev:
             DevHubView(
@@ -2874,6 +2884,7 @@ private struct ChatWorkspaceView: View {
     let model: NativModel
     let chat: ChatViewModel
     let mcpHost: MCPHostManager
+    let extensionManager: NativExtensionManager
     let imageGeneration: ImageGenerationViewModel
     @Binding var showsConfiguration: Bool
     let conversationWidthReduction: CGFloat
@@ -2887,6 +2898,7 @@ private struct ChatWorkspaceView: View {
                     model: model,
                     chat: chat,
                     mcpHost: mcpHost,
+                    extensionManager: extensionManager,
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
