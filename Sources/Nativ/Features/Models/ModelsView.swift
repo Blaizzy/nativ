@@ -1711,98 +1711,166 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     }
 }
 
-private struct ActiveDownloadBannerRow: View {
-    let download: HuggingFaceDownloadManager.ActiveDownload
-    let onPauseResume: () -> Void
-    let onCancel: () -> Void
-    @State private var isConfirmingCancellation = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(NativFormatting.truncateModelName(
-                    download.modelID.split(separator: "/").last.map(String.init) ?? download.modelID,
-                    maxLength: 44
-                ))
-                .font(.callout.weight(.semibold))
-                .lineLimit(1)
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Spacer(minLength: 12)
-            Button(download.state == .paused ? "Resume" : "Pause", action: onPauseResume)
-            Button("Cancel", role: .destructive) {
-                isConfirmingCancellation = true
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(Color.accentColor.opacity(0.08))
-        .alert("Remove download?", isPresented: $isConfirmingCancellation) {
-            Button("Remove Download", role: .destructive, action: onCancel)
-                .keyboardShortcut(.defaultAction)
-            Button("Keep Download", role: .cancel) {}
-        } message: {
-            Text("The partial download for \(download.modelID) will be removed from the local cache.")
-        }
-    }
-
-    private var statusText: String {
-        if download.state == .paused {
-            "Download paused"
-        } else if ModelDownloadProgressPresentation.isFinalizing(download.progress) {
-            "Finalizing download…"
-        } else {
-            switch download.phase {
-            case .preparing:
-                "Preparing download…"
-            case .downloading:
-                downloadingStatusText
-            case .finalizing:
-                "Finalizing download…"
-            case .retrying:
-                "Connection stalled. Retrying…"
-            }
-        }
-    }
-
-    private var downloadingStatusText: String {
-        var details: [String] = []
-        if download.progress > 0 {
-            details.append("\(ModelDownloadProgressPresentation.activePercentage(download.progress))%")
-        }
-        if let speed = ModelDownloadProgressPresentation.formattedSpeed(download.bytesPerSecond) {
-            details.append(speed)
-        }
-        return details.isEmpty ? "Starting download…" : "Downloading… \(details.joined(separator: " · "))"
-    }
-}
-
 private struct ActiveDownloadBannerView: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
 
-    @ViewBuilder
     var body: some View {
         if !downloadManager.downloads.isEmpty {
             VStack(spacing: 0) {
                 ForEach(downloadManager.downloads) { download in
                     ActiveDownloadBannerRow(
                         download: download,
-                        onPauseResume: {
-                            if download.state == .paused {
-                                downloadManager.resumeDownload(download.modelID)
-                            } else {
-                                downloadManager.pauseDownload(download.modelID)
-                            }
-                        },
-                        onCancel: { downloadManager.removeDownload(download.modelID) }
+                        onPauseResume: { toggleDownload(download) },
+                        onRemove: { downloadManager.removeDownload(download.modelID) }
                     )
                 }
             }
+            .background(.regularMaterial)
+
             Divider()
         }
+    }
+
+    private func toggleDownload(_ download: HuggingFaceDownloadManager.ActiveDownload) {
+        if download.state == .paused {
+            downloadManager.resumeDownload(download.modelID)
+        } else {
+            downloadManager.pauseDownload(download.modelID)
+        }
+    }
+}
+
+private struct ActiveDownloadBannerRow: View {
+    let download: HuggingFaceDownloadManager.ActiveDownload
+    let onPauseResume: () -> Void
+    let onRemove: () -> Void
+
+    @State private var isConfirmingRemoval = false
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(modelName)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    HStack(spacing: 4) {
+                        Text(statusText)
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("\(percentage)%")
+                            .bold()
+                            .monospacedDigit()
+                    }
+                    .font(.subheadline)
+                }
+
+                Spacer()
+
+                HStack(spacing: 10) {
+                    Button(pauseResumeTitle, systemImage: pauseResumeSymbol, action: onPauseResume)
+                        .help(pauseResumeTitle)
+
+                    Button(
+                        "Remove download",
+                        systemImage: "xmark",
+                        role: .destructive,
+                        action: confirmRemoval
+                    )
+                    .help("Remove download")
+                    .confirmationDialog(
+                        "Remove download?",
+                        isPresented: $isConfirmingRemoval
+                    ) {
+                        Button("Remove Download", role: .destructive, action: onRemove)
+                            .keyboardShortcut(.defaultAction)
+                        Button("Keep Download", role: .cancel) {}
+                    } message: {
+                        Text("The partial download for \(download.modelID) will be removed from the local cache.")
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .controlSize(.large)
+            }
+
+            ProgressView(value: displayedProgress)
+                .progressViewStyle(.linear)
+                .tint(download.state == .paused ? .secondary : .accentColor)
+                .accessibilityLabel("Download progress")
+                .accessibilityValue("\(percentage) percent")
+
+            HStack(spacing: 6) {
+                Text(byteProgress ?? "Calculating download size…")
+                    .monospacedDigit()
+
+                if let speed {
+                    Text("·")
+                        .accessibilityHidden(true)
+                    Text(speed)
+                        .monospacedDigit()
+                }
+
+                Spacer()
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .padding()
+    }
+
+    private var modelName: String {
+        NativFormatting.truncateModelName(
+            download.modelID.split(separator: "/").last.map(String.init) ?? download.modelID,
+            maxLength: 44
+        )
+    }
+
+    private var percentage: Int {
+        ModelDownloadProgressPresentation.activePercentage(download.progress)
+    }
+
+    private var displayedProgress: Double {
+        min(max(download.progress, 0), 0.99)
+    }
+
+    private var pauseResumeTitle: String {
+        download.state == .paused ? "Resume download" : "Pause download"
+    }
+
+    private var pauseResumeSymbol: String {
+        download.state == .paused ? "play.fill" : "pause.fill"
+    }
+
+    private var byteProgress: String? {
+        ModelDownloadProgressPresentation.formattedByteProgress(download.metrics)
+    }
+
+    private var speed: String? {
+        guard download.state == .downloading, download.phase == .downloading else { return nil }
+        return ModelDownloadProgressPresentation.formattedSpeed(download.bytesPerSecond)
+    }
+
+    private var statusText: String {
+        if download.state == .paused {
+            return "Paused"
+        }
+        if ModelDownloadProgressPresentation.isFinalizing(download.progress) {
+            return "Finalizing"
+        }
+        switch download.phase {
+        case .preparing: return "Preparing"
+        case .downloading: return "Downloading"
+        case .finalizing: return "Finalizing"
+        case .retrying: return "Retrying"
+        }
+    }
+
+    private func confirmRemoval() {
+        isConfirmingRemoval = true
     }
 }
 
