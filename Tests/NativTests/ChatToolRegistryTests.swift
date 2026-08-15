@@ -69,11 +69,40 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
-    func testDefinitionsAlwaysAdvertiseWebSearch() {
+    func testBuiltInToolsUseThePresentationOrder() {
+        let names = ChatToolRegistry.definitions(canEditImage: false)
+            .map(\.function.name)
+
+        XCTAssertEqual(names, [
+            ChatImageToolRegistry.generateToolName,
+            ChatModelLibraryToolRegistry.toolName,
+            ChatSwitchModelToolRegistry.toolName,
+            ChatSystemMonitorToolRegistry.toolName,
+            ChatServerStatsToolRegistry.toolName,
+            ChatWebSearchToolRegistry.toolName,
+            ChatWebReadToolRegistry.toolName,
+        ])
+    }
+
+    func testImageToolHasSeparateUserAndModelDescriptions() throws {
+        let descriptor = try XCTUnwrap(
+            ChatToolRegistry.descriptors(canEditImage: false).first
+        )
+
+        XCTAssertEqual(descriptor.displayDescription, "Create an image from a written description.")
+        XCTAssertTrue(descriptor.definition.function.description.contains("do not ask"))
+        XCTAssertNotEqual(
+            descriptor.displayDescription,
+            descriptor.definition.function.description
+        )
+    }
+
+    func testDefinitionsAdvertiseBrowsingTools() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
 
         XCTAssertTrue(names.contains(ChatWebSearchToolRegistry.toolName))
+        XCTAssertTrue(names.contains(ChatWebReadToolRegistry.toolName))
     }
 
     func testWebSearchCarriesConfigurationMetadata() {
@@ -83,6 +112,15 @@ final class ChatToolRegistryTests: XCTestCase {
 
         XCTAssertEqual(descriptor?.configuration, .webSearch)
         XCTAssertEqual(descriptor?.configuration?.displayName, "Web Search")
+    }
+
+    func testWebReadCarriesConfigurationMetadata() {
+        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
+            $0.definition.function.name == ChatWebReadToolRegistry.toolName
+        }
+
+        XCTAssertEqual(descriptor?.configuration, .webRead)
+        XCTAssertEqual(descriptor?.configuration?.displayName, "Web Read")
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
@@ -1094,6 +1132,19 @@ final class ChatSystemMonitorToolExecutorTests: XCTestCase {
         let object = try decode(content)
 
         XCTAssertNil(object["gpu_usage_percent"], "no GPU reading must omit the field, not report 0")
+    }
+
+    func testDiskUsageOmittedWhenCapacityIsUnavailable() async throws {
+        let snapshot = SystemMonitorSnapshot()
+
+        let content = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(content)
+
+        XCTAssertNil(object["disk_used_gb"], "no disk reading must omit the field, not report 0")
+        XCTAssertNil(object["disk_total_gb"], "no disk reading must omit the field, not report 0")
     }
 
     private func decode(_ json: String) throws -> [String: Any] {

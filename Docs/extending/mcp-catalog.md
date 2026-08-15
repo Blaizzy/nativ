@@ -1,7 +1,7 @@
 # Contributing an MCP server to the catalog
 
-The **Browse catalog** grid in Nativ's MCP section is the list of community MCP
-servers we've reviewed and shipped. Every server in it is one entry in
+The **Built in** section on Nativ's MCP page lists the community MCP servers
+we've reviewed and shipped. Every server in it is one entry in
 [`Sources/Nativ/Resources/MCPCatalog.json`](../../Sources/Nativ/Resources/MCPCatalog.json),
 and every entry has to pass CI before it can merge — the
 [`Verify MCP Catalog`](../../.github/workflows/verify-mcp-catalog.yml) workflow

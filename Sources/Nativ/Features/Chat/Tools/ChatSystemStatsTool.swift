@@ -59,8 +59,8 @@ struct ChatSystemMonitorToolExecutor {
             gpuUsagePercent: snapshot.gpu.deviceUsage.flatMap(percent),
             memoryUsedGB: gigabytes(snapshot.memory.usedBytes),
             memoryTotalGB: gigabytes(snapshot.memory.totalBytes),
-            diskUsedGB: gigabytes(snapshot.disk.usedBytes),
-            diskTotalGB: gigabytes(snapshot.disk.totalBytes),
+            diskUsedGB: snapshot.disk.usedBytes.map(gigabytes),
+            diskTotalGB: snapshot.disk.totalBytes.map(gigabytes),
             uptimeSeconds: Int(snapshot.uptime),
             error: nil
         )

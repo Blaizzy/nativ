@@ -704,6 +704,10 @@ struct NativSettings: Codable, Equatable {
             settings.serverAPIKey = legacyToken
         }
 
+        if MCPServerCatalog.bundled.migrateConfigurations(in: &settings.mcpServers) {
+            try? settings.writePropertyList(to: url)
+        }
+
         return settings
     }
 
@@ -802,6 +806,17 @@ struct NativSettings: Codable, Equatable {
     var speculativeDecodingActive: Bool {
         speculativeDecodingEnabled
             && !draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func isToolEnabled(_ toolName: String) -> Bool {
+        !disabledToolNames.contains(toolName)
+    }
+
+    mutating func setToolEnabled(_ enabled: Bool, toolName: String) {
+        disabledToolNames.removeAll { $0 == toolName }
+        if !enabled {
+            disabledToolNames.append(toolName)
+        }
     }
 
     func hasSameLaunchConfiguration(as other: Self) -> Bool {
@@ -1003,22 +1018,18 @@ struct NativSettings: Codable, Equatable {
         NSString(string: modelSearchPath).expandingTildeInPath
     }
 
+    var localModelSearchPaths: LocalModelSearchPaths {
+        LocalModelSearchPaths(
+            primary: modelSearchPath,
+            additional: additionalModelSearchPaths
+        )
+    }
+
     /// All directories to search for a locally-available model: the primary model
     /// folder, any user-added folders, and the Hugging Face hub cache. Consolidated
     /// here so callers don't each re-derive the roots (and each miss custom folders).
     var modelSearchRoots: [String] {
-        var roots: [String] = []
-        let primary = expandedModelSearchPath.trimmingCharacters(in: .whitespaces)
-        if !primary.isEmpty {
-            roots.append(primary)
-        }
-        for path in additionalModelSearchPaths {
-            let expanded = NSString(string: path).expandingTildeInPath
-                .trimmingCharacters(in: .whitespaces)
-            if !expanded.isEmpty {
-                roots.append(expanded)
-            }
-        }
+        var roots = localModelSearchPaths.all
         if let hubCache = ProcessInfo.processInfo.environment["HF_HUB_CACHE"], !hubCache.isEmpty {
             roots.append(hubCache)
         }

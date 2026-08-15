@@ -83,8 +83,7 @@ struct StatsView: View {
 
 private struct DashboardModelState: Equatable {
     let isRunning: Bool
-    let modelSearchPath: String
-    let additionalModelSearchPaths: [String]
+    let modelSearchPaths: LocalModelSearchPaths
     let analyticsDatabaseURL: URL
     let loadedModelID: String?
     let historicalMetricsRevision: DashboardMetricsRevision?
@@ -92,8 +91,7 @@ private struct DashboardModelState: Equatable {
     @MainActor
     init(model: NativModel) {
         isRunning = model.isRunning
-        modelSearchPath = model.settings.modelSearchPath
-        additionalModelSearchPaths = model.settings.normalized().additionalModelSearchPaths
+        modelSearchPaths = model.settings.localModelSearchPaths
         analyticsDatabaseURL = model.analyticsDatabaseURL
         loadedModelID = model.metrics?.server.loadedModel
         historicalMetricsRevision = model.metrics.map {
@@ -105,7 +103,7 @@ private struct DashboardModelState: Equatable {
     }
 }
 
-private struct DashboardContentView: View, Equatable {
+private struct DashboardContentView: View, @MainActor Equatable {
     let modelState: DashboardModelState
     @ObservedObject var dashboard: DashboardViewModel
     let titleLeadingInset: CGFloat
@@ -158,7 +156,7 @@ private struct DashboardContentView: View, Equatable {
         .onAppear {
             syncDashboardState(scanModels: true, reloadHistory: true)
         }
-        .onChange(of: modelState.modelSearchPath) { _, _ in
+        .onChange(of: modelState.modelSearchPaths) { _, _ in
             syncDashboardState(scanModels: true, reloadHistory: false)
         }
         .onChange(of: modelState.analyticsDatabaseURL) { _, _ in
@@ -445,10 +443,7 @@ private struct DashboardContentView: View, Equatable {
         dashboard.updateAnalyticsDatabaseURL(modelState.analyticsDatabaseURL)
         dashboard.updatePreferredModelID(modelState.loadedModelID)
         if scanModels {
-            dashboard.scanModels(
-                at: modelState.modelSearchPath,
-                additionalPaths: modelState.additionalModelSearchPaths
-            )
+            dashboard.scanModels(searchPaths: modelState.modelSearchPaths)
         }
         if reloadHistory {
             dashboard.reloadHistorical()
@@ -3610,7 +3605,7 @@ private struct TokenUsagePanelHeightReader: View {
 }
 
 private struct TokenUsagePanelHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())

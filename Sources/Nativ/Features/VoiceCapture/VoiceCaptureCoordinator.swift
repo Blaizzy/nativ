@@ -1,8 +1,7 @@
 import AppKit
-import AVFoundation
 import NativServerKit
 
-struct VoiceTranscriptionConfiguration {
+struct VoiceTranscriptionConfiguration: Sendable {
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
     let selectedModelID: String?
@@ -15,7 +14,8 @@ struct VoiceTranscriptionConfiguration {
 
 @MainActor
 final class VoiceCaptureCoordinator {
-    var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
+    var transcriptionConfigurationProvider:
+        (@MainActor @Sendable () -> VoiceTranscriptionConfiguration?)?
     var onOpenSpeechModels: (() -> Void)?
 
     private let shortcutMonitor = FnControlShortcutMonitor()
@@ -121,24 +121,13 @@ final class VoiceCaptureCoordinator {
             guard let self else {
                 return
             }
-            let status = AVCaptureDevice.authorizationStatus(for: .audio)
-            let granted: Bool
-            switch status {
-            case .authorized:
-                granted = true
-            case .notDetermined:
-                granted = await AVCaptureDevice.requestAccess(for: .audio)
-            default:
-                granted = false
-            }
+            let granted = await NativSystemPermissionController.requestMicrophone()
             guard !Task.isCancelled, self.isShortcutHeld else {
                 return
             }
             guard granted else {
                 self.overlay.showFailure()
-                if status == .denied || status == .restricted {
-                    self.presentMicrophonePermissionAlert()
-                }
+                self.presentMicrophonePermissionAlert()
                 return
             }
 
@@ -274,8 +263,10 @@ final class VoiceCaptureCoordinator {
             let installedModels: [LocalModel]
             do {
                 installedModels = try await LocalModelDiscovery.scan(
-                    path: configuration.modelSearchPath,
-                    additionalPaths: configuration.additionalModelSearchPaths
+                    searchPaths: LocalModelSearchPaths(
+                        primary: configuration.modelSearchPath,
+                        additional: configuration.additionalModelSearchPaths
+                    )
                 )
             } catch {
                 guard !Task.isCancelled else {

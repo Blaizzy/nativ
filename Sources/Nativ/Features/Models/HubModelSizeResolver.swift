@@ -47,7 +47,10 @@ final class HubModelSizeResolver {
             return nil
         }
         let total = payload.siblings?.reduce(Int64(0)) { partial, sibling in
-            partial + (sibling.lfs?.size ?? sibling.size ?? 0)
+            guard !HuggingFaceDownloadFilePolicy.shouldIgnore(path: sibling.rfilename) else {
+                return partial
+            }
+            return partial + (sibling.lfs?.size ?? sibling.size ?? 0)
         } ?? 0
         return total > 0 ? total : nil
     }
@@ -57,6 +60,7 @@ final class HubModelSizeResolver {
             struct LFS: Decodable {
                 let size: Int64?
             }
+            let rfilename: String
             let size: Int64?
             let lfs: LFS?
         }

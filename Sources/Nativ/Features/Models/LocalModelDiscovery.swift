@@ -4,6 +4,27 @@ extension Notification.Name {
     static let localModelLibraryDidChange = Notification.Name("LocalModelLibraryDidChange")
 }
 
+struct LocalModelSearchPaths: Hashable, Sendable {
+    let primary: String
+    let additional: [String]
+
+    init(primary: String, additional: [String] = []) {
+        let expandedPrimary = LocalModelDiscovery.expandedPath(primary)
+        self.primary = expandedPrimary
+
+        var seen = Set([expandedPrimary])
+        self.additional = additional
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map(LocalModelDiscovery.expandedPath)
+            .filter { seen.insert($0).inserted }
+    }
+
+    var all: [String] { [primary] + additional }
+
+    var cacheKey: String { all.joined(separator: "\u{0}") }
+}
+
 enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case text
     case vision
@@ -14,6 +35,7 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case speechToText
     case textToSpeech
     case embeddings
+    case reranking
     case reasoning
     case tools
     case drafter
@@ -38,6 +60,8 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
             "Text to Speech"
         case .embeddings:
             "Embeddings"
+        case .reranking:
+            "Reranking"
         case .reasoning:
             "Reasoning"
         case .tools:
@@ -92,7 +116,7 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     var isEligibleForLanguageModelPicker: Bool {
         // Any text-generative model qualifies (chat + omni), even if it also carries an
         // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
-        guard !capabilities.contains(.drafter) else {
+        guard !capabilities.contains(.drafter), !capabilities.contains(.reranking) else {
             return false
         }
         return capabilities.contains(.text)
@@ -303,11 +327,12 @@ enum LocalModelDiscovery {
 
     private static let scanCache = ScanCache()
 
-    static func scan(path: String, additionalPaths: [String] = []) async throws -> [LocalModel] {
-        let expandedPath = Self.expandedPath(path)
-        let expandedAdditionalPaths = additionalPaths.map(Self.expandedPath)
+    static func scan(searchPaths: LocalModelSearchPaths) async throws -> [LocalModel] {
         return try await scanCache.scan(
-            key: ScanCache.Key(path: expandedPath, additionalPaths: expandedAdditionalPaths)
+            key: ScanCache.Key(
+                path: searchPaths.primary,
+                additionalPaths: searchPaths.additional
+            )
         )
     }
 
@@ -1283,6 +1308,12 @@ enum LocalModelDiscovery {
             }
         }
 
+        if model.localizedCaseInsensitiveContains("rerank")
+            || descriptors.contains("reranker")
+            || descriptors.contains("reranking") {
+            capabilities.insert(.reranking)
+        }
+
         if capabilities.contains(.text)
             && (descriptors.contains("reasoning")
                 || descriptors.contains("thinking")
@@ -1608,14 +1639,14 @@ final class LocalModelLibrary: ObservableObject {
         scanTask?.cancel()
     }
 
-    func scan(path: String, additionalPaths: [String] = []) {
+    func scan(searchPaths: LocalModelSearchPaths) {
         scanTask?.cancel()
         isScanning = true
         error = nil
 
         scanTask = Task { [weak self] in
             do {
-                let models = try await LocalModelDiscovery.scan(path: path, additionalPaths: additionalPaths)
+                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
                 guard !Task.isCancelled else {
                     return
                 }

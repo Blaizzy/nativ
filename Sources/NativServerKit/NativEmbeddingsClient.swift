@@ -6,7 +6,7 @@ public enum NativEmbeddingsError: Error {
     case emptyResponse
 }
 
-public struct NativEmbeddingsClient {
+public struct NativEmbeddingsClient: Sendable {
     private let baseURL: URL
     private let apiKey: String?
     private let session: URLSession

@@ -80,9 +80,35 @@ private enum ChatReasoningLevel: String, CaseIterable, Identifiable {
 
 }
 
+private struct ChatBrowsingAvailability: Sendable {
+    let isSearchAvailable: Bool
+    let isReadAvailable: Bool
+    let searchProviderLabel: String?
+    let readProviderLabel: String?
+
+    static func load() -> Self {
+        let preferences = WebBrowsingPreferences()
+        let isSearchAvailable = ChatWebSearchToolRegistry.isConfigured()
+        let isReadAvailable = ChatWebReadToolRegistry.isConfigured()
+
+        return Self(
+            isSearchAvailable: isSearchAvailable,
+            isReadAvailable: isReadAvailable,
+            searchProviderLabel: isSearchAvailable
+                ? preferences.searchProvider.metadata.displayName
+                : nil,
+            readProviderLabel: isReadAvailable
+                ? preferences.provider(for: .read)?.metadata.displayName
+                : nil
+        )
+    }
+}
+
 struct ChatComposer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var viewModel: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
+    @Environment(\.openExtensionsHubSection) private var openExtensionsHubSection
     @StateObject private var localLibrary = LocalModelLibrary()
     let unavailableReason: String?
     let canCompose: Bool
@@ -90,11 +116,22 @@ struct ChatComposer: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onSend: (Bool) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
-    private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
+    @State private var showsKits = false
+    @State private var showsCapabilities = false
+    @State private var showsAddPanel = false
+    @State private var isWebSearchAvailable = false
+    @State private var isWebReadAvailable = false
+    @State private var webSearchProviderLabel: String?
+    @State private var webReadProviderLabel: String?
+    @State private var browsingConfigurationRevision = 0
+    @State private var composerWidth: CGFloat = 410
+    private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
     private let editorMaximumHeight: CGFloat = 120
+    private let composerVerticalPadding: CGFloat = 18
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -109,15 +146,17 @@ struct ChatComposer: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = context.date.timeIntervalSince(sendingStartedAt)
                     Text(workingStatus(elapsed: elapsed))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
+                .padding(.leading, textInset.leading + 4)
             } else if let unavailableReason {
                 Text(unavailableReason)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .padding(.leading, textInset.leading + 4)
             }
 
             if !viewModel.currentSessionQueuedPrompts.isEmpty {
@@ -186,15 +225,12 @@ struct ChatComposer: View {
                 }
 
                 HStack(spacing: 8) {
-                    ChatComposerActionMenu(
+                    ChatComposerAddButton(
                         isEnabled: canCompose,
-                        canPasteImage: viewModel.canPasteImage,
-                        onAttachImages: viewModel.chooseImageAttachments,
-                        onPasteImage: viewModel.pasteImageFromClipboard,
-                        onCaptureScreenshot: viewModel.captureScreenshot
+                        isPresented: $showsAddPanel
                     )
                     .frame(width: 30, height: 30)
-                    .help("Add attachment")
+                    .help("More message options")
 
                     ChatWorkspacePicker(
                         selection: workspaceMode,
@@ -234,19 +270,34 @@ struct ChatComposer: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                onBackdropHeightChange(height + (composerVerticalPadding * 2))
+            }
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                composerWidth = width
+            }
+            .background {
+                NativArrowlessPopoverPresenter(isPresented: $showsAddPanel) {
+                    addPanel
+                }
+            }
         }
-        .padding(.vertical, 18)
+        .padding(.vertical, composerVerticalPadding)
         .task(id: modelScanKey) {
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
+        }
+        .task(id: browsingConfigurationRevision) {
+            await refreshBrowsingAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .webBrowsingConfigurationDidChange)) { _ in
+            browsingConfigurationRevision &+= 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
+            localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .onChange(of: localLibrary.models) { _, models in
             disableThinkingIfUnsupported(modelID: selectedModelID, models: models)
@@ -264,12 +315,99 @@ struct ChatComposer: View {
         .onDisappear {
             localLibrary.cancel()
         }
+        .sheet(isPresented: $showsKits) {
+            ChatKitsPickerSheet(
+                model: model,
+                manager: extensionManager
+            )
+        }
+        .sheet(isPresented: $showsCapabilities) {
+            ChatCapabilitiesSheet(model: model)
+        }
+    }
+
+    private var addPanel: some View {
+        ChatComposerActionPanel(
+            canPasteImage: viewModel.canPasteImage,
+            showsGlobalTools: true,
+            isWebSearchEnabled: globalToolIsEnabled(
+                ChatWebSearchToolRegistry.toolName,
+                isAvailable: isWebSearchAvailable
+            ),
+            isWebSearchAvailable: isWebSearchAvailable,
+            webSearchProviderLabel: webSearchProviderLabel,
+            isWebReadEnabled: globalToolIsEnabled(
+                ChatWebReadToolRegistry.toolName,
+                isAvailable: isWebReadAvailable
+            ),
+            isWebReadAvailable: isWebReadAvailable,
+            webReadProviderLabel: webReadProviderLabel,
+            onAttachImages: { dismissAddPanelAndPerform(viewModel.chooseImageAttachments) },
+            onPasteImage: { dismissAddPanelAndPerform(viewModel.pasteImageFromClipboard) },
+            onCaptureScreenshot: { dismissAddPanelAndPerform(viewModel.captureScreenshot) },
+            onToggleWebSearch: {
+                toggleGlobalBrowsingTool(
+                    ChatWebSearchToolRegistry.toolName,
+                    isAvailable: isWebSearchAvailable
+                )
+            },
+            onToggleWebRead: {
+                toggleGlobalBrowsingTool(
+                    ChatWebReadToolRegistry.toolName,
+                    isAvailable: isWebReadAvailable
+                )
+            },
+            onOpenKits: { dismissAddPanelAndPerform { showsKits = true } },
+            onOpenCapabilities: { dismissAddPanelAndPerform { showsCapabilities = true } }
+        )
+        .frame(width: max(320, composerWidth))
+    }
+
+    private func dismissAddPanelAndPerform(_ action: @escaping () -> Void) {
+        showsAddPanel = false
+        Task { @MainActor in
+            await Task.yield()
+            action()
+        }
+    }
+
+    private func globalToolIsEnabled(_ toolName: String, isAvailable: Bool) -> Bool {
+        isAvailable && model.settings.isToolEnabled(toolName)
+    }
+
+    private func toggleGlobalBrowsingTool(
+        _ toolName: String,
+        isAvailable: Bool
+    ) {
+        guard isAvailable else {
+            let openExtensionsHubSection = openExtensionsHubSection
+            dismissAddPanelAndPerform {
+                openExtensionsHubSection(.tools)
+            }
+            return
+        }
+
+        model.settings.setToolEnabled(
+            !model.settings.isToolEnabled(toolName),
+            toolName: toolName
+        )
+        showsAddPanel = false
+    }
+
+    private func refreshBrowsingAvailability() async {
+        let availability = await Task.detached(priority: .userInitiated) {
+            ChatBrowsingAvailability.load()
+        }.value
+        guard !Task.isCancelled else { return }
+
+        isWebSearchAvailable = availability.isSearchAvailable
+        isWebReadAvailable = availability.isReadAvailable
+        webSearchProviderLabel = availability.searchProviderLabel
+        webReadProviderLabel = availability.readProviderLabel
     }
 
     private var modelScanKey: String {
-        let settings = model.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        model.settings.localModelSearchPaths.cacheKey
     }
 
     private var modelPicker: some View {
@@ -289,6 +427,8 @@ struct ChatComposer: View {
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
             shortcutLabel: "⌃⇧M",
+            emptyStateActionTitle: nil,
+            onEmptyStateAction: nil,
             onSelectModel: select,
             onSwitchModel: { model.switchLanguageModel(to: $0) }
         )
@@ -544,6 +684,7 @@ struct ChatComposer: View {
     }
 
     private func send() {
+        guard canSend else { return }
         onSend(selectedLocalModel?.capabilities.contains(.tools) == true)
     }
 
@@ -614,6 +755,7 @@ struct ComposerModelPickerSecondarySection {
 }
 
 struct ComposerModelPicker: View {
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isPickerHovered = false
     @State private var isMenuOpen = false
 
@@ -630,6 +772,8 @@ struct ComposerModelPicker: View {
     let helpText: String
     let accessibilityValue: String
     let shortcutLabel: String?
+    let emptyStateActionTitle: String?
+    let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
 
@@ -645,7 +789,10 @@ struct ComposerModelPicker: View {
                 selectedModelProvider: selectedModelProvider,
                 secondarySection: secondarySection,
                 isEnabled: !isDisabled,
+                usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
+                emptyStateActionTitle: emptyStateActionTitle,
+                onEmptyStateAction: onEmptyStateAction,
                 onSelectModel: onSelectModel,
                 onSwitchModel: onSwitchModel,
                 onTrackingChanged: { isTracking in
@@ -709,11 +856,9 @@ struct ComposerModelPicker: View {
     }
 
     private var pickerHighlightColor: Color {
-        let background = NSColor.controlBackgroundColor
-        return Color(
-            nsColor: background.blended(withFraction: 0.24, of: NSColor.labelColor)
-                ?? background
-        )
+        colorScheme == .light
+            ? Color.black.opacity(0.08)
+            : Color.white.opacity(0.14)
     }
 
     private var pickerRestingColor: Color {
@@ -729,7 +874,10 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let selectedModelProvider: LocalModelProvider?
     let secondarySection: ComposerModelPickerSecondarySection?
     let isEnabled: Bool
+    let usesSelectModelShortcut: Bool
     let statusLabel: String
+    let emptyStateActionTitle: String?
+    let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
     let onTrackingChanged: (Bool) -> Void
@@ -746,6 +894,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         button.focusRingType = .none
         button.target = context.coordinator
         button.action = #selector(Coordinator.showMenu(_:))
+        configureShortcut(for: button)
         button.setAccessibilityLabel("Model")
         return button
     }
@@ -753,7 +902,15 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.parent = self
         button.isEnabled = isEnabled
+        configureShortcut(for: button)
         context.coordinator.updateActionAvailability(isEnabled)
+    }
+
+    private func configureShortcut(for button: NSButton) {
+        button.keyEquivalent = usesSelectModelShortcut ? "m" : ""
+        button.keyEquivalentModifierMask = usesSelectModelShortcut
+            ? [.control, .shift]
+            : []
     }
 
     @MainActor
@@ -851,9 +1008,26 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                 let item = NSMenuItem(title: parent.statusLabel, action: nil, keyEquivalent: "")
                 item.isEnabled = false
                 menu.addItem(item)
+
+                if let actionTitle = parent.emptyStateActionTitle,
+                   parent.onEmptyStateAction != nil {
+                    menu.addItem(.separator())
+                    let actionItem = NSMenuItem(
+                        title: actionTitle,
+                        action: #selector(performEmptyStateAction),
+                        keyEquivalent: ""
+                    )
+                    actionItem.target = self
+                    actionItem.isEnabled = true
+                    menu.addItem(actionItem)
+                }
             }
 
             return menu
+        }
+
+        @objc private func performEmptyStateAction() {
+            parent.onEmptyStateAction?()
         }
 
         private func makeSecondaryMenu(
@@ -1047,7 +1221,7 @@ private struct ComposerModelPickerLabel: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .font(.caption.weight(.medium))
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(Color.primary)
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -1243,6 +1417,215 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             )
         }
 
+    }
+}
+
+struct ChatComposerAddButton: View {
+    let isEnabled: Bool
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel("More message options")
+    }
+}
+
+struct ChatComposerActionPanel: View {
+    let canPasteImage: Bool
+    var showsGlobalTools = false
+    var isWebSearchEnabled = false
+    var isWebSearchAvailable = false
+    var webSearchProviderLabel: String?
+    var isWebReadEnabled = false
+    var isWebReadAvailable = false
+    var webReadProviderLabel: String?
+    let onAttachImages: () -> Void
+    let onPasteImage: () -> Void
+    let onCaptureScreenshot: () -> Void
+    var onToggleWebSearch: () -> Void = {}
+    var onToggleWebRead: () -> Void = {}
+    var onOpenKits: (() -> Void)? = nil
+    var onOpenCapabilities: (() -> Void)? = nil
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 10) {
+                section("Add") {
+                    ChatComposerActionRow(
+                        title: "Add images",
+                        detail: "Choose images from your Mac",
+                        systemName: "paperclip",
+                        action: onAttachImages
+                    )
+
+                    if canPasteImage {
+                        ChatComposerActionRow(
+                            title: "Paste image",
+                            detail: "Use an image from your clipboard",
+                            systemName: "doc.on.clipboard",
+                            action: onPasteImage
+                        )
+                    }
+
+                    ChatComposerActionRow(
+                        title: "Take a screenshot",
+                        detail: "Capture part of your screen",
+                        systemName: "camera.viewfinder",
+                        action: onCaptureScreenshot
+                    )
+                }
+
+                if showsGlobalTools {
+                    section("Tools") {
+                        ChatComposerActionRow(
+                            title: "Web Search",
+                            detail: capabilityDetail(
+                                provider: webSearchProviderLabel,
+                                isAvailable: isWebSearchAvailable
+                            ),
+                            systemName: "globe",
+                            isSelected: isWebSearchEnabled,
+                            showsDisclosure: !isWebSearchAvailable,
+                            action: onToggleWebSearch
+                        )
+
+                        ChatComposerActionRow(
+                            title: "Web Read",
+                            detail: capabilityDetail(
+                                provider: webReadProviderLabel,
+                                isAvailable: isWebReadAvailable
+                            ),
+                            systemName: "doc.text.magnifyingglass",
+                            isSelected: isWebReadEnabled,
+                            showsDisclosure: !isWebReadAvailable,
+                            action: onToggleWebRead
+                        )
+                    }
+                }
+
+                if onOpenKits != nil || onOpenCapabilities != nil {
+                    section("Capabilities") {
+                        if let onOpenKits {
+                            ChatComposerActionRow(
+                                title: "Kits",
+                                detail: "Enable a bundled set of capabilities",
+                                systemName: "shippingbox",
+                                showsDisclosure: true,
+                                action: onOpenKits
+                            )
+                        }
+
+                        if let onOpenCapabilities {
+                            ChatComposerActionRow(
+                                title: "Directory",
+                                detail: "Manage tools, skills, and connections",
+                                systemName: "square.grid.2x2",
+                                showsDisclosure: true,
+                                action: onOpenCapabilities
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(10)
+        }
+        .frame(maxHeight: 500)
+    }
+
+    private func capabilityDetail(provider: String?, isAvailable: Bool) -> String {
+        isAvailable ? (provider ?? "Ready") : "Needs setup"
+    }
+
+    private func section<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+
+            VStack(spacing: 1) {
+                content()
+            }
+        }
+    }
+}
+
+private struct ChatComposerActionRow: View {
+    let title: String
+    let detail: String
+    let systemName: String
+    var isSelected = false
+    var showsDisclosure = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 11) {
+                Image(systemName: systemName)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 22)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 12)
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.green)
+                        .frame(width: 18, height: 18)
+                } else if showsDisclosure {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 18, height: 18)
+                }
+            }
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(rowBackground)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityValue(isSelected ? "Enabled globally" : "")
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
+
+    private var rowBackground: Color {
+        if isSelected {
+            return Color.green.opacity(isHovering ? 0.16 : 0.10)
+        }
+        return isHovering ? Color.primary.opacity(0.07) : .clear
     }
 }
 
@@ -1448,6 +1831,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         context.coordinator.requestFocus(ifNeeded: focusToken)
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: String
         var onSubmit: () -> Void

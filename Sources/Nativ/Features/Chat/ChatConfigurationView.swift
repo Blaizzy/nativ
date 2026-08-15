@@ -150,22 +150,17 @@ struct ModelConfigurationView: View {
     }
 
     private var draftModelScanKey: String {
-        let normalizedSettings = settings.normalized()
-        return ([
-            String(normalizedSettings.speculativeDecodingEnabled),
-            normalizedSettings.modelSearchPath
-        ] + normalizedSettings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+        [
+            String(settings.speculativeDecodingEnabled),
+            settings.localModelSearchPaths.cacheKey
+        ].joined(separator: "\u{0}")
     }
 
     private func scanDraftModelLibraryIfNeeded() {
         guard settings.speculativeDecodingEnabled else {
             return
         }
-        draftModelLibrary.scan(
-            path: settings.modelSearchPath,
-            additionalPaths: settings.normalized().additionalModelSearchPaths
-        )
+        draftModelLibrary.scan(searchPaths: settings.localModelSearchPaths)
     }
 
     private var header: some View {

@@ -175,9 +175,44 @@ private struct FixedCredentialStore: CustomToolCredentialStoring {
 }
 
 private final class StubURLProtocol: URLProtocol {
-    static var lastRequest: URLRequest?
-    static var lastRequestBody: Data?
-    static var responseData = Data()
+    private final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var request: URLRequest?
+        private var requestBody: Data?
+        private var response = Data()
+
+        var lastRequest: URLRequest? {
+            get { lock.withLock { request } }
+            set { lock.withLock { request = newValue } }
+        }
+
+        var lastRequestBody: Data? {
+            get { lock.withLock { requestBody } }
+            set { lock.withLock { requestBody = newValue } }
+        }
+
+        var responseData: Data {
+            get { lock.withLock { response } }
+            set { lock.withLock { response = newValue } }
+        }
+    }
+
+    private static let state = State()
+
+    static var lastRequest: URLRequest? {
+        get { state.lastRequest }
+        set { state.lastRequest = newValue }
+    }
+
+    static var lastRequestBody: Data? {
+        get { state.lastRequestBody }
+        set { state.lastRequestBody = newValue }
+    }
+
+    static var responseData: Data {
+        get { state.responseData }
+        set { state.responseData = newValue }
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

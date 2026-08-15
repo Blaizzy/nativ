@@ -304,8 +304,10 @@ private struct SystemOverviewPage: View {
                 )
                 SystemOverviewMetric(
                     title: "Disk",
-                    value: SystemMonitorFormat.percent(snapshot.disk.usage),
-                    detail: "\(SystemMonitorFormat.bytes(snapshot.disk.availableBytes)) free",
+                    value: SystemMonitorFormat.optionalPercent(snapshot.disk.usage),
+                    detail: snapshot.disk.availableBytes
+                        .map { "\(SystemMonitorFormat.bytes($0)) available" }
+                        ?? "Capacity unavailable",
                     icon: "internaldrive",
                     tint: SystemMonitorPalette.orange
                 )
@@ -333,7 +335,11 @@ private struct SystemOverviewPage: View {
                     )
                     SystemInfoRow(
                         "Disk",
-                        value: "\(snapshot.identity.disk.volumeName) · \(SystemMonitorFormat.bytes(snapshot.disk.totalBytes))"
+                        value: snapshot.disk.totalBytes
+                            .map {
+                                "\(snapshot.identity.disk.volumeName) · \(SystemMonitorFormat.bytes($0))"
+                            }
+                            ?? "\(snapshot.identity.disk.volumeName) · Unavailable"
                     )
                     SystemInfoRow(
                         "Display",
@@ -612,6 +618,7 @@ private struct SystemDeviceArtwork: View {
     }
 }
 
+@MainActor
 private enum SystemDeviceArtworkProvider {
     private static let coreTypesResourcesURL = URL(
         fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle"
@@ -800,7 +807,8 @@ private struct SystemCPUPage: View {
                 HStack(spacing: 24) {
                     SystemUsageGauge(
                         value: snapshot.cpu.totalUsage,
-                        tint: SystemMonitorPalette.blue
+                        tint: SystemMonitorPalette.blue,
+                        label: "CPU usage"
                     )
 
                     VStack(alignment: .leading, spacing: 14) {
@@ -1092,7 +1100,8 @@ private struct SystemDiskPage: View {
                 HStack(spacing: 24) {
                     SystemUsageGauge(
                         value: snapshot.disk.usage,
-                        tint: diskUsageColor
+                        tint: diskUsageColor,
+                        label: "Disk usage"
                     )
 
                     VStack(alignment: .leading, spacing: 14) {
@@ -1105,23 +1114,32 @@ private struct SystemDiskPage: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(SystemMonitorFormat.bytes(snapshot.disk.totalBytes))
+                            Text(
+                                snapshot.disk.totalBytes
+                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                            )
                                 .font(.callout.weight(.medium))
                                 .foregroundStyle(.secondary)
                         }
 
-                        ProgressView(value: snapshot.disk.usage)
+                        ProgressView(value: snapshot.disk.usage ?? 0)
                             .tint(diskUsageColor)
+                            .accessibilityLabel("Disk usage")
+                            .accessibilityValue(
+                                SystemMonitorFormat.optionalPercent(snapshot.disk.usage)
+                            )
 
                         HStack(spacing: 20) {
                             SystemLegendItem(
                                 title: "Used",
-                                value: SystemMonitorFormat.bytes(snapshot.disk.usedBytes),
+                                value: snapshot.disk.usedBytes
+                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable",
                                 color: diskUsageColor
                             )
                             SystemLegendItem(
-                                title: "Free",
-                                value: SystemMonitorFormat.bytes(snapshot.disk.availableBytes),
+                                title: "Available",
+                                value: snapshot.disk.availableBytes
+                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable",
                                 color: Color.secondary.opacity(0.45)
                             )
                         }
@@ -1234,9 +1252,8 @@ private struct SystemDiskPage: View {
     }
 
     private var diskUsageColor: Color {
-        snapshot.disk.usage >= 0.90
-            ? SystemMonitorPalette.red
-            : SystemMonitorPalette.blue
+        guard let usage = snapshot.disk.usage else { return .secondary }
+        return usage >= 0.90 ? SystemMonitorPalette.red : SystemMonitorPalette.blue
     }
 }
 
@@ -1364,14 +1381,15 @@ private struct SystemInfoRow: View {
 }
 
 private struct SystemUsageGauge: View {
-    let value: Double
+    let value: Double?
     let tint: Color
+    let label: String
 
     var body: some View {
-        Gauge(value: value) {
-            EmptyView()
+        Gauge(value: value ?? 0) {
+            Text(label)
         } currentValueLabel: {
-            Text(SystemMonitorFormat.percent(value))
+            Text(SystemMonitorFormat.optionalPercent(value))
                 .font(.title3.weight(.semibold).monospacedDigit())
         }
         .gaugeStyle(.accessoryCircularCapacity)

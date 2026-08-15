@@ -41,7 +41,7 @@ struct NativPermissionRow: View {
         HStack(spacing: 14) {
             Image(systemName: permission.systemImage)
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(iconTint)
+                .foregroundStyle(.secondary)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -80,16 +80,6 @@ struct NativPermissionRow: View {
         }
     }
 
-    private var iconTint: Color {
-        switch status {
-        case .granted:
-            .green
-        case .notRequested:
-            .secondary
-        case .needsAttention:
-            .orange
-        }
-    }
 }
 
 struct NativPermissionsSummary: View {

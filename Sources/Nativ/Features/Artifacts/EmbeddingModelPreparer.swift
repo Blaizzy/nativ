@@ -13,7 +13,7 @@ enum EmbeddingModelPreparer {
         "qwen3_vl": "qwen3_vl_embedding"
     ]
 
-    static func prepare(repoID: String, searchPath: String) {
+    nonisolated static func prepare(repoID: String, searchPath: String) {
         guard let configURL = configURL(repoID: repoID, searchPath: searchPath),
               let data = try? Data(contentsOf: configURL),
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -32,7 +32,7 @@ enum EmbeddingModelPreparer {
         try? updated.write(to: configURL, options: .atomic)
     }
 
-    private static func configURL(repoID: String, searchPath: String) -> URL? {
+    nonisolated private static func configURL(repoID: String, searchPath: String) -> URL? {
         let root = URL(
             fileURLWithPath: (searchPath as NSString).expandingTildeInPath,
             isDirectory: true
