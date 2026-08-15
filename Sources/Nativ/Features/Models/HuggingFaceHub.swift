@@ -922,6 +922,48 @@ struct ModelDownloadProgress: Equatable, Sendable {
     }
 }
 
+struct ModelDownloadProgressLimiter {
+    static let publishInterval: Duration = .milliseconds(100)
+
+    private var lastPublishedAt: ContinuousClock.Instant?
+    private(set) var pending: ModelDownloadProgress?
+
+    mutating func submit(
+        _ update: ModelDownloadProgress,
+        current: ModelDownloadProgress,
+        at now: ContinuousClock.Instant
+    ) -> ModelDownloadProgress? {
+        var merged = pending ?? current
+        guard merged.merge(update) else { return nil }
+
+        let isComplete = merged.totalBytes.map { merged.completedBytes >= $0 } == true
+        let canPublish = lastPublishedAt.map {
+            now >= $0.advanced(by: Self.publishInterval)
+        } ?? true
+        guard isComplete || canPublish else {
+            pending = merged
+            return nil
+        }
+
+        pending = nil
+        lastPublishedAt = now
+        return merged
+    }
+
+    func pendingPublishDelay(at now: ContinuousClock.Instant) -> Duration? {
+        guard pending != nil, let lastPublishedAt else { return nil }
+        let deadline = lastPublishedAt.advanced(by: Self.publishInterval)
+        return now < deadline ? now.duration(to: deadline) : .zero
+    }
+
+    mutating func flush(at now: ContinuousClock.Instant) -> ModelDownloadProgress? {
+        guard let pending else { return nil }
+        self.pending = nil
+        lastPublishedAt = now
+        return pending
+    }
+}
+
 @MainActor
 final class HuggingFaceDownloadManager: ObservableObject {
     static let shared = HuggingFaceDownloadManager()
@@ -980,9 +1022,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
     let rowUpdates = PassthroughSubject<String?, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
+    private let progressClock = ContinuousClock()
+    private var progressLimiters: [String: ModelDownloadProgressLimiter] = [:]
+    private var progressFlushTasks: [String: Task<Void, Never>] = [:]
     private var freeDiskCache: [String: (timestamp: Date, bytes: Int64?)] = [:]
 
     deinit {
+        progressFlushTasks.values.forEach { $0.cancel() }
         contexts.values.forEach {
             $0.operation?.cancel()
             $0.task?.cancel()
@@ -1153,6 +1199,9 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
 
         contexts.removeAll()
+        progressFlushTasks.values.forEach { $0.cancel() }
+        progressFlushTasks.removeAll()
+        progressLimiters.removeAll()
         downloads.removeAll()
         waiters.forEach { $0.resume(throwing: CancellationError()) }
 
@@ -1263,8 +1312,46 @@ final class HuggingFaceDownloadManager: ObservableObject {
         else {
             return
         }
-        var metrics = downloads[index].metrics
-        guard metrics.merge(progress) else { return }
+        let now = progressClock.now
+        var limiter = progressLimiters[modelID] ?? ModelDownloadProgressLimiter()
+        let metrics = limiter.submit(progress, current: downloads[index].metrics, at: now)
+        let delay = limiter.pendingPublishDelay(at: now)
+        progressLimiters[modelID] = limiter
+
+        if let metrics {
+            progressFlushTasks.removeValue(forKey: modelID)?.cancel()
+            publishProgress(metrics, for: modelID)
+        } else if let delay, progressFlushTasks[modelID] == nil {
+            progressFlushTasks[modelID] = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.flushProgress(for: modelID)
+            }
+        }
+    }
+
+    private func flushProgress(for modelID: String) {
+        progressFlushTasks[modelID] = nil
+        guard contexts[modelID] != nil,
+              var limiter = progressLimiters[modelID],
+              let metrics = limiter.flush(at: progressClock.now)
+        else {
+            return
+        }
+        progressLimiters[modelID] = limiter
+        publishProgress(metrics, for: modelID)
+    }
+
+    private func publishProgress(_ metrics: ModelDownloadProgress, for modelID: String) {
+        guard let index = downloads.firstIndex(where: { $0.modelID == modelID }),
+              downloads[index].metrics != metrics
+        else {
+            return
+        }
         downloads[index].metrics = metrics
         rowUpdates.send(modelID)
     }
@@ -1305,6 +1392,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     private func removeContext(_ modelID: String) {
         contexts.removeValue(forKey: modelID)
+        progressFlushTasks.removeValue(forKey: modelID)?.cancel()
+        progressLimiters.removeValue(forKey: modelID)
         downloads.removeAll { $0.modelID == modelID }
         rowUpdates.send(nil)
     }

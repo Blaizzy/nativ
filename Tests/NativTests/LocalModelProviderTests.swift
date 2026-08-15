@@ -323,6 +323,70 @@ final class ModelDownloadProgressTests: XCTestCase {
     }
 }
 
+final class ModelDownloadProgressLimiterTests: XCTestCase {
+    func testCoalescesUpdatesWithinPublishIntervalAndFlushesLatest() throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let initial = ModelDownloadProgress(totalBytes: 1_000)
+        var limiter = ModelDownloadProgressLimiter()
+
+        let first = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 100, totalBytes: 1_000)
+        )
+        XCTAssertEqual(limiter.submit(first, current: initial, at: start), first)
+
+        let second = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 200, totalBytes: 1_000)
+        )
+        XCTAssertNil(
+            limiter.submit(
+                second,
+                current: first,
+                at: start.advanced(by: .milliseconds(25))
+            )
+        )
+
+        let latest = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 300, totalBytes: 1_000)
+        )
+        XCTAssertNil(
+            limiter.submit(
+                latest,
+                current: first,
+                at: start.advanced(by: .milliseconds(75))
+            )
+        )
+        XCTAssertEqual(
+            limiter.flush(at: start.advanced(by: .milliseconds(100))),
+            latest
+        )
+    }
+
+    func testPublishesCompletionImmediately() throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let initial = ModelDownloadProgress(totalBytes: 1_000)
+        var limiter = ModelDownloadProgressLimiter()
+        let first = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 100, totalBytes: 1_000)
+        )
+        _ = limiter.submit(first, current: initial, at: start)
+
+        let complete = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 1_000, totalBytes: 1_000)
+        )
+        XCTAssertEqual(
+            limiter.submit(
+                complete,
+                current: first,
+                at: start.advanced(by: .milliseconds(10))
+            ),
+            complete
+        )
+        XCTAssertNil(limiter.pending)
+    }
+}
+
 final class HuggingFaceDownloadOutputTests: XCTestCase {
     func testParsesProgress() throws {
         let output = try XCTUnwrap(
