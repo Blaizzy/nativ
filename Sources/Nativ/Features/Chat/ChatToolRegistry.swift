@@ -66,6 +66,7 @@ enum ChatNativeToolConfiguration: Equatable {
 
 struct ChatNativeToolDescriptor {
     let definition: MLXChatToolDefinition
+    let displayDescription: String
     let configuration: ChatNativeToolConfiguration?
 }
 
@@ -75,20 +76,51 @@ enum ChatToolRegistry {
     }
 
     static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
-        var definitions = ChatImageToolRegistry.definitions(canEdit: canEditImage)
-        definitions += ChatSystemMonitorToolRegistry.definitions()
-        definitions += ChatModelLibraryToolRegistry.definitions()
-        definitions += ChatServerStatsToolRegistry.definitions()
-        definitions += ChatSwitchModelToolRegistry.definitions()
-        var tools = definitions.map {
-            ChatNativeToolDescriptor(definition: $0, configuration: nil)
+        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: $0.function.name == ChatImageToolRegistry.editToolName
+                    ? "Edit an attached image by describing the changes."
+                    : "Create an image from a written description.",
+                configuration: nil
+            )
+        }
+        tools += ChatModelLibraryToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "List the models downloaded on this device.",
+                configuration: nil
+            )
+        }
+        tools += ChatSwitchModelToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Change which model this chat uses.",
+                configuration: nil
+            )
+        }
+        tools += ChatSystemMonitorToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Check this device's CPU, GPU, memory, and disk usage.",
+                configuration: nil
+            )
+        }
+        tools += ChatServerStatsToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "See the server’s speed, requests, and token usage.",
+                configuration: nil
+            )
         }
         tools.append(ChatNativeToolDescriptor(
             definition: ChatWebSearchToolRegistry.definition,
+            displayDescription: "Search the web for current information and sources.",
             configuration: .webSearch
         ))
         tools.append(ChatNativeToolDescriptor(
             definition: ChatWebReadToolRegistry.definition,
+            displayDescription: "Read and find relevant information on public web pages.",
             configuration: .webRead
         ))
         return tools

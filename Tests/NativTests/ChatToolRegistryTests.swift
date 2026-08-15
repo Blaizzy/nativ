@@ -69,6 +69,34 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
+    func testBuiltInToolsUseThePresentationOrder() {
+        let names = ChatToolRegistry.definitions(canEditImage: false)
+            .map(\.function.name)
+
+        XCTAssertEqual(names, [
+            ChatImageToolRegistry.generateToolName,
+            ChatModelLibraryToolRegistry.toolName,
+            ChatSwitchModelToolRegistry.toolName,
+            ChatSystemMonitorToolRegistry.toolName,
+            ChatServerStatsToolRegistry.toolName,
+            ChatWebSearchToolRegistry.toolName,
+            ChatWebReadToolRegistry.toolName,
+        ])
+    }
+
+    func testImageToolHasSeparateUserAndModelDescriptions() throws {
+        let descriptor = try XCTUnwrap(
+            ChatToolRegistry.descriptors(canEditImage: false).first
+        )
+
+        XCTAssertEqual(descriptor.displayDescription, "Create an image from a written description.")
+        XCTAssertTrue(descriptor.definition.function.description.contains("do not ask"))
+        XCTAssertNotEqual(
+            descriptor.displayDescription,
+            descriptor.definition.function.description
+        )
+    }
+
     func testDefinitionsAdvertiseBrowsingTools() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)

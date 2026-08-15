@@ -237,7 +237,7 @@ struct ChatCapabilitiesSheet: View {
         guard item.isAvailable else { return false }
         switch item.target {
         case .nativeTool(let toolName), .customTool(let toolName):
-            return !model.settings.disabledToolNames.contains(toolName)
+            return model.settings.isToolEnabled(toolName)
         case .skill(let id):
             return model.settings.skills.first { $0.id == id }?.isEnabled == true
         case .mcpServer(let id):
@@ -248,11 +248,10 @@ struct ChatCapabilitiesSheet: View {
     private func toggle(_ item: GlobalChatCapabilityItem) {
         switch item.target {
         case .nativeTool(let toolName), .customTool(let toolName):
-            if model.settings.disabledToolNames.contains(toolName) {
-                model.settings.disabledToolNames.removeAll { $0 == toolName }
-            } else {
-                model.settings.disabledToolNames.append(toolName)
-            }
+            model.settings.setToolEnabled(
+                !model.settings.isToolEnabled(toolName),
+                toolName: toolName
+            )
         case .skill(let id):
             guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else { return }
             model.settings.skills[index].isEnabled.toggle()

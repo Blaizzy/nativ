@@ -373,7 +373,7 @@ struct ChatComposer: View {
     }
 
     private func globalToolIsEnabled(_ toolName: String, isAvailable: Bool) -> Bool {
-        isAvailable && !model.settings.disabledToolNames.contains(toolName)
+        isAvailable && model.settings.isToolEnabled(toolName)
     }
 
     private func toggleGlobalBrowsingTool(
@@ -388,11 +388,10 @@ struct ChatComposer: View {
             return
         }
 
-        if model.settings.disabledToolNames.contains(toolName) {
-            model.settings.disabledToolNames.removeAll { $0 == toolName }
-        } else {
-            model.settings.disabledToolNames.append(toolName)
-        }
+        model.settings.setToolEnabled(
+            !model.settings.isToolEnabled(toolName),
+            toolName: toolName
+        )
         showsAddPanel = false
     }
 

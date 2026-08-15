@@ -1345,7 +1345,7 @@ final class ChatViewModel: ObservableObject {
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
             toolDefinitions.removeAll {
-                settings.disabledToolNames.contains($0.function.name)
+                !settings.isToolEnabled($0.function.name)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
                     || ($0.function.name == ChatWebReadToolRegistry.toolName

@@ -2,6 +2,35 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
+        var settings = NativSettings()
+
+        XCTAssertTrue(settings.isToolEnabled("get_system_stats"))
+
+        settings.setToolEnabled(false, toolName: "get_system_stats")
+        XCTAssertFalse(settings.isToolEnabled("get_system_stats"))
+        XCTAssertEqual(settings.disabledToolNames, ["get_system_stats"])
+
+        settings = try PropertyListDecoder().decode(
+            NativSettings.self,
+            from: PropertyListEncoder().encode(settings)
+        )
+        XCTAssertFalse(settings.isToolEnabled("get_system_stats"))
+
+        settings.setToolEnabled(true, toolName: "get_system_stats")
+        XCTAssertTrue(settings.isToolEnabled("get_system_stats"))
+        XCTAssertTrue(settings.disabledToolNames.isEmpty)
+    }
+
+    func testDisablingAToolDoesNotCreateDuplicatePreferences() {
+        var settings = NativSettings()
+
+        settings.setToolEnabled(false, toolName: "get_system_stats")
+        settings.setToolEnabled(false, toolName: "get_system_stats")
+
+        XCTAssertEqual(settings.disabledToolNames, ["get_system_stats"])
+    }
+
     func testLocalModelSearchPathsIncludeNormalizedAdditionalFolders() {
         let settings = NativSettings(
             modelSearchPath: "~/managed-models",
