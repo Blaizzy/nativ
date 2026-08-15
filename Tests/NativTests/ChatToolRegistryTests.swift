@@ -1106,6 +1106,19 @@ final class ChatSystemMonitorToolExecutorTests: XCTestCase {
         XCTAssertNil(object["gpu_usage_percent"], "no GPU reading must omit the field, not report 0")
     }
 
+    func testDiskUsageOmittedWhenCapacityIsUnavailable() async throws {
+        let snapshot = SystemMonitorSnapshot()
+
+        let content = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(content)
+
+        XCTAssertNil(object["disk_used_gb"], "no disk reading must omit the field, not report 0")
+        XCTAssertNil(object["disk_total_gb"], "no disk reading must omit the field, not report 0")
+    }
+
     private func decode(_ json: String) throws -> [String: Any] {
         let data = try XCTUnwrap(json.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
