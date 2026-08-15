@@ -1,6 +1,5 @@
 import AppKit
 import AVFoundation
-import PDFKit
 import SwiftUI
 import Vision
 
@@ -67,6 +66,8 @@ struct ArtifactGroup: Identifiable {
 }
 
 struct ArtifactsView: View {
+    private static let pdfTextExtractor: any DocumentTextExtracting = PDFDocumentTextExtractor()
+
     @ObservedObject var store: ArtifactStore
     let semanticSearch: ArtifactSemanticSearchConfig?
     var titleLeadingInset: CGFloat = 0
@@ -331,21 +332,43 @@ struct ArtifactsView: View {
             return []
         case .document:
             let ext = artifact.fileExtension.lowercased()
+            if ext == "pdf" {
+                return await Self.pdfTextChunks(
+                    at: url,
+                    filename: artifact.filename,
+                    mimeType: artifact.mimeType,
+                    extractor: Self.pdfTextExtractor
+                )
+            }
             return await Task.detached(priority: .utility) {
-                let raw: String
-                if ext == "pdf" {
-                    guard let document = PDFDocument(url: url), let string = document.string else {
-                        return []
-                    }
-                    raw = string
-                } else {
-                    guard let string = try? String(contentsOf: url, encoding: .utf8) else {
-                        return []
-                    }
-                    raw = string
+                guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+                    return []
                 }
                 return Self.chunkedText(raw, maxChunks: 8, chunkSize: 1200)
             }.value
+        }
+    }
+
+    private static func pdfTextChunks(
+        at url: URL,
+        filename: String,
+        mimeType: String,
+        extractor: any DocumentTextExtracting
+    ) async -> [String] {
+        do {
+            let data = try await Task.detached(priority: .utility) {
+                try Data(contentsOf: url, options: .mappedIfSafe)
+            }.value
+            let content = try await extractor.extract(
+                data: data,
+                filename: filename,
+                mimeType: mimeType
+            )
+            return await Task.detached(priority: .utility) {
+                Self.chunkedText(content.text, maxChunks: 8, chunkSize: 1200)
+            }.value
+        } catch {
+            return []
         }
     }
 
@@ -366,7 +389,11 @@ struct ArtifactsView: View {
         }.value
     }
 
-    private static func chunkedText(_ text: String, maxChunks: Int, chunkSize: Int) -> [String] {
+    nonisolated private static func chunkedText(
+        _ text: String,
+        maxChunks: Int,
+        chunkSize: Int
+    ) -> [String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return []
