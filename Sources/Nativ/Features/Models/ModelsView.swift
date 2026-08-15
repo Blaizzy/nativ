@@ -337,6 +337,8 @@ struct ModelsView: View {
         section = .discover
         typeFilter = .image
         hubQuery = ""
+        hubSort = .downloads
+        hubSortDirection = .descending
         hubCapabilityFilters = [imageModelDiscoveryCapability]
         hubAccessFilter = .all
     }
