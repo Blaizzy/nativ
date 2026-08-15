@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -268,23 +268,31 @@ final class SystemAudioMeetingRecorder: NSObject {
             throw reader.error ?? SystemAudioMeetingRecorderError.couldNotCreateAudioFile
         }
         writer.startSession(atSourceTime: .zero)
+        let resources = MeetingAudioExportResources(
+            reader: reader,
+            readerOutput: readerOutput,
+            writer: writer,
+            writerInput: writerInput
+        )
 
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             let queue = DispatchQueue(label: "com.nativ.meeting-audio-export")
-            var completed = false
-            writerInput.requestMediaDataWhenReady(on: queue) {
-                guard !completed else {
+            let completionState = MeetingAudioExportCompletionState()
+            resources.writerInput.requestMediaDataWhenReady(on: queue) {
+                guard completionState.isPending else {
                     return
                 }
-                while writerInput.isReadyForMoreMediaData {
-                    if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                        guard writerInput.append(sampleBuffer) else {
-                            completed = true
-                            reader.cancelReading()
-                            writer.cancelWriting()
+                while resources.writerInput.isReadyForMoreMediaData {
+                    if let sampleBuffer = resources.readerOutput.copyNextSampleBuffer() {
+                        guard resources.writerInput.append(sampleBuffer) else {
+                            guard completionState.claim() else {
+                                return
+                            }
+                            resources.reader.cancelReading()
+                            resources.writer.cancelWriting()
                             continuation.resume(
-                                throwing: writer.error
+                                throwing: resources.writer.error
                                     ?? SystemAudioMeetingRecorderError.couldNotCreateAudioFile
                             )
                             return
@@ -292,17 +300,19 @@ final class SystemAudioMeetingRecorder: NSObject {
                         continue
                     }
 
-                    completed = true
-                    writerInput.markAsFinished()
-                    writer.finishWriting {
-                        if writer.status == .completed,
-                           reader.status == .completed
+                    guard completionState.claim() else {
+                        return
+                    }
+                    resources.writerInput.markAsFinished()
+                    resources.writer.finishWriting {
+                        if resources.writer.status == .completed,
+                           resources.reader.status == .completed
                         {
                             continuation.resume()
                         } else {
                             continuation.resume(
-                                throwing: writer.error
-                                    ?? reader.error
+                                throwing: resources.writer.error
+                                    ?? resources.reader.error
                                     ?? SystemAudioMeetingRecorderError.couldNotCreateAudioFile
                             )
                         }
@@ -310,6 +320,44 @@ final class SystemAudioMeetingRecorder: NSObject {
                     return
                 }
             }
+        }
+    }
+}
+
+private final class MeetingAudioExportResources: @unchecked Sendable {
+    let reader: AVAssetReader
+    let readerOutput: AVAssetReaderAudioMixOutput
+    let writer: AVAssetWriter
+    let writerInput: AVAssetWriterInput
+
+    init(
+        reader: AVAssetReader,
+        readerOutput: AVAssetReaderAudioMixOutput,
+        writer: AVAssetWriter,
+        writerInput: AVAssetWriterInput
+    ) {
+        self.reader = reader
+        self.readerOutput = readerOutput
+        self.writer = writer
+        self.writerInput = writerInput
+    }
+}
+
+private final class MeetingAudioExportCompletionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+
+    var isPending: Bool {
+        lock.withLock { !completed }
+    }
+
+    func claim() -> Bool {
+        lock.withLock {
+            guard !completed else {
+                return false
+            }
+            completed = true
+            return true
         }
     }
 }
@@ -537,10 +585,10 @@ private final class MeetingAudioWriter: @unchecked Sendable {
 
                 self.systemInput?.markAsFinished()
                 self.microphoneInput?.markAsFinished()
-                writer.finishWriting {
-                    self.sampleQueue.async {
-                        let error = writer.error
-                        let succeeded = writer.status == .completed
+                writer.finishWriting { [self] in
+                    self.sampleQueue.async { [self] in
+                        let error = self.writer?.error
+                        let succeeded = self.writer?.status == .completed
                         self.resetLocked()
                         if succeeded {
                             continuation.resume()

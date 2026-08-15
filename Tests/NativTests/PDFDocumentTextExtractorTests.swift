@@ -110,6 +110,7 @@ final class PDFDocumentTextExtractorTests: XCTestCase {
 
     func testHonorsTaskCancellation() async throws {
         let data = try makePDF(pages: ["Text"])
+        let extractor = self.extractor
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
             return try await extractor.extract(

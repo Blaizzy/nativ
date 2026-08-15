@@ -1,6 +1,6 @@
 import AppKit
 import AVFoundation
-import ExtensionFoundation
+@preconcurrency import ExtensionFoundation
 import Foundation
 import NativExtensionSDK
 import Observation
@@ -33,7 +33,8 @@ struct NativExtensionPageContext {
 }
 
 struct NativExtensionHostContext {
-    let transcriptionConfiguration: () -> VoiceTranscriptionConfiguration?
+    let transcriptionConfiguration:
+        @MainActor @Sendable () -> VoiceTranscriptionConfiguration?
     let openSpeechModels: () -> Void
     let showMainWindow: () -> Void
 }

@@ -36,6 +36,10 @@
 	<string>Nativ uses ScreenCaptureKit to record system audio when you start an audio capture.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NativGitHubAppClientID</key>
+	<string>$(NATIV_GITHUB_APP_CLIENT_ID)</string>
+	<key>NativGitHubAppSlug</key>
+	<string>$(NATIV_GITHUB_APP_SLUG)</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/Blaizzy/nativ/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>

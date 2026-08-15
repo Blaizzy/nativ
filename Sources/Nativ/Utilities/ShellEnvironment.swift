@@ -1,5 +1,22 @@
 import Foundation
 
+private final class ShellOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
 /// Reads environment variables from the user's login shell.
 ///
 /// GUI apps on macOS inherit their environment from launchd, which knows
@@ -49,14 +66,11 @@ enum ShellEnvironment {
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
 
-        let output = NSMutableData()
-        let outputLock = NSLock()
+        let output = ShellOutputBuffer()
         stdout.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
             guard !chunk.isEmpty else { return }
-            outputLock.lock()
             output.append(chunk)
-            outputLock.unlock()
         }
 
         do {
@@ -79,10 +93,8 @@ enum ShellEnvironment {
         // Drain whatever remains in the pipe after the handler stops.
         stdout.fileHandleForReading.readabilityHandler = nil
         let remainder = stdout.fileHandleForReading.readDataToEndOfFile()
-        outputLock.lock()
         output.append(remainder)
-        let data = output as Data
-        outputLock.unlock()
+        let data = output.snapshot()
 
         return parseEnvironment(String(decoding: data, as: UTF8.self), names: names)
     }

@@ -4,7 +4,8 @@ import NativExtensionSDK
 
 private final class VoiceDictationRuntimeService:
     NSObject,
-    NativExtensionXPCProtocol
+    NativExtensionXPCProtocol,
+    @unchecked Sendable
 {
     private let lock = NSLock()
     private var activationContext: NativExtensionActivationContext?

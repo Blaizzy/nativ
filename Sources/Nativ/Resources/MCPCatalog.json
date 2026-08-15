@@ -23,12 +23,19 @@
     "id": "github",
     "name": "github",
     "summary": "Search and manage GitHub issues, PRs, and code.",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "command": "@bundled/github-mcp-server",
+    "args": ["stdio"],
+    "verificationEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
     "symbol": "chevron.left.forwardslash.chevron.right",
     "tint": "primary",
-    "requiredEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
-    "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/github"
+    "excludedEnv": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+    "legacyLaunchConfigurations": [
+      {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"]
+      }
+    ],
+    "sourceURL": "https://github.com/github/github-mcp-server"
   },
   {
     "id": "fetch",

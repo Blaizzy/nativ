@@ -1,4 +1,177 @@
+import AppKit
 import SwiftUI
+
+struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    var gap: CGFloat = 8
+    @ViewBuilder let content: () -> Content
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        NSView()
+    }
+
+    func updateNSView(_ anchorView: NSView, context: Context) {
+        context.coordinator.update(
+            anchorView: anchorView,
+            isPresented: $isPresented,
+            gap: gap,
+            content: AnyView(content())
+        )
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.dismiss(updateBinding: false)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private let panel: ArrowlessPopoverPanel
+        private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+        private weak var anchorView: NSView?
+        private var isPresented: Binding<Bool>?
+        private var gap: CGFloat = 8
+
+        override init() {
+            panel = ArrowlessPopoverPanel(
+                contentRect: .zero,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: true
+            )
+            super.init()
+
+            panel.isFloatingPanel = true
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = true
+            panel.hidesOnDeactivate = true
+            panel.isReleasedWhenClosed = false
+            panel.animationBehavior = .none
+            panel.contentView = hostingView
+            panel.onDismiss = { [weak self] in
+                guard self?.isPresented?.wrappedValue == true else { return }
+                self?.isPresented?.wrappedValue = false
+            }
+        }
+
+        func update(
+            anchorView: NSView,
+            isPresented: Binding<Bool>,
+            gap: CGFloat,
+            content: AnyView
+        ) {
+            self.anchorView = anchorView
+            self.isPresented = isPresented
+            self.gap = gap
+
+            guard isPresented.wrappedValue else {
+                dismiss(updateBinding: false)
+                return
+            }
+
+            hostingView.rootView = AnyView(ArrowlessPopoverSurface(content: content))
+            showPanel()
+        }
+
+        func dismiss(updateBinding: Bool = true) {
+            if updateBinding, isPresented?.wrappedValue == true {
+                isPresented?.wrappedValue = false
+            }
+            if let parent = panel.parent {
+                parent.removeChildWindow(panel)
+            }
+            panel.orderOut(nil)
+        }
+
+        private func showPanel() {
+            guard let anchorView, let parentWindow = anchorView.window else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.showPanel()
+                }
+                return
+            }
+
+            hostingView.layoutSubtreeIfNeeded()
+            let fittingSize = hostingView.fittingSize
+            guard fittingSize.width > 0, fittingSize.height > 0 else { return }
+
+            let wasVisible = panel.isVisible
+            panel.setContentSize(fittingSize)
+            positionPanel(relativeTo: anchorView, in: parentWindow, size: fittingSize)
+
+            if panel.parent !== parentWindow {
+                if let parent = panel.parent {
+                    parent.removeChildWindow(panel)
+                }
+                parentWindow.addChildWindow(panel, ordered: .above)
+            }
+            guard !wasVisible else { return }
+            panel.alphaValue = 0
+            panel.makeKeyAndOrderFront(nil)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                panel.animator().alphaValue = 1
+            }
+        }
+
+        private func positionPanel(
+            relativeTo anchorView: NSView,
+            in parentWindow: NSWindow,
+            size: NSSize
+        ) {
+            let windowRect = anchorView.convert(anchorView.bounds, to: nil)
+            let screenRect = parentWindow.convertToScreen(windowRect)
+            var origin = NSPoint(
+                x: screenRect.midX - (size.width / 2),
+                y: screenRect.maxY + gap
+            )
+
+            if let visibleFrame = parentWindow.screen?.visibleFrame {
+                origin.x = min(
+                    max(origin.x, visibleFrame.minX + 8),
+                    visibleFrame.maxX - size.width - 8
+                )
+            }
+            panel.setFrameOrigin(origin)
+        }
+    }
+}
+
+private final class ArrowlessPopoverPanel: NSPanel {
+    var onDismiss: (() -> Void)?
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    override func resignKey() {
+        super.resignKey()
+        if isVisible {
+            onDismiss?()
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        onDismiss?()
+    }
+}
+
+private struct ArrowlessPopoverSurface: View {
+    let content: AnyView
+
+    var body: some View {
+        content
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+            }
+    }
+}
 
 extension Color {
     /// Resolves a catalog/kit tint name to a color, defaulting to the accent.

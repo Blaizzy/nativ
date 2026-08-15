@@ -138,9 +138,10 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         let validator = ChatAttachmentValidator(
             extractor: ThrowingDocumentTextExtractor(error: .invalidDocument)
         )
+        let pdf = attachment(filename: "report.pdf")
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await validator.validatePDF(attachment(filename: "report.pdf"))
+            return try await validator.validatePDF(pdf)
         }
 
         do {

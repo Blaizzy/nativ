@@ -157,7 +157,7 @@ private final class ModelsNativState: ObservableObject {
 /// Stops unrelated `NativModel` publications in the parent control panel from
 /// walking the Models subtree. Relevant model changes arrive through
 /// `ModelsNativState` instead.
-struct ModelsViewHost: View, Equatable {
+struct ModelsViewHost: View, @MainActor Equatable {
     let model: NativModel
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
@@ -1277,6 +1277,7 @@ private struct DebouncedModelsSearchField: NSViewRepresentable {
         coordinator.cancelPendingCommit()
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var text: Binding<String>
         var identity: ModelsPageSection
@@ -1446,7 +1447,7 @@ private struct ModelReadmePanel: View {
     }
 }
 
-private struct InstalledModelRow: View, Equatable {
+private struct InstalledModelRow: View, @MainActor Equatable {
     let localModel: LocalModel
     let preloadSlots: [ModelPreloadSlot]
     let selectedPreloadSlots: Set<ModelPreloadSlot>
@@ -1812,7 +1813,7 @@ private struct HubModelMemoryFitWarning: Equatable {
     }
 }
 
-private struct HubModelRow: View, Equatable {
+private struct HubModelRow: View, @MainActor Equatable {
     let model: HuggingFaceModel
     let downloadSizeBytes: Int64?
     let isInstalled: Bool
@@ -2102,7 +2103,7 @@ private struct HubPaginationButton: View {
 
 /// Keeps download progress observation local to the affected row. The parent
 /// Discover view remains stable while a download reports progress.
-private struct HubModelRowContainer: View, Equatable {
+private struct HubModelRowContainer: View, @MainActor Equatable {
     private let downloadManager = HuggingFaceDownloadManager.shared
     @State private var downloadSnapshot: HuggingFaceDownloadManager.RowSnapshot
 

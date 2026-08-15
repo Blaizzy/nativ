@@ -25,6 +25,7 @@ struct ChatView: View {
     @ObservedObject var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
@@ -40,6 +41,7 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
+                extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 conversationWidthReduction: conversationWidthReduction,
@@ -60,7 +62,11 @@ struct ChatView: View {
         .background(Color.nativMainContentBackground)
         .onAppear {
             chat.mcpHost = mcpHost
+            mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
+        }
+        .onChange(of: model.settings.mcpServers) { _, servers in
+            mcpHost.reload(servers: servers)
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -107,6 +113,7 @@ private struct ChatTranscriptView: View {
 
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
@@ -182,6 +189,7 @@ private struct ChatTranscriptView: View {
                 ChatComposerContainer(
                     model: model,
                     chat: chat,
+                    extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
                     conversationWidthReduction: conversationWidthReduction,
@@ -293,6 +301,7 @@ private struct ChatTranscriptView: View {
 private struct ChatComposerContainer: View {
     @ObservedObject var model: NativModel
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let conversationWidthReduction: CGFloat
@@ -307,6 +316,7 @@ private struct ChatComposerContainer: View {
         ChatComposer(
             model: model,
             viewModel: chat,
+            extensionManager: extensionManager,
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
                 ?? model.settings.structuredOutputValidationError,
@@ -1498,14 +1508,18 @@ final class ChatViewModel: ObservableObject {
                 throw NativChatError.invalidResponse
             }
 
-            let completion = try await client.streamChat(request, onEvent: { [weak self] event in
-                await MainActor.run {
-                    self?.append(
-                        event: event,
-                        to: assistantMessageID,
-                        in: queuedRequest.sessionID
-                    )
-                }
+            let streamingMessageID = assistantMessageID
+            let streamingSessionID = queuedRequest.sessionID
+            let appendEvent: @MainActor @Sendable (MLXChatStreamDelta) -> Void = {
+                [weak self] event in
+                self?.append(
+                    event: event,
+                    to: streamingMessageID,
+                    in: streamingSessionID
+                )
+            }
+            let completion = try await client.streamChat(request, onEvent: { event in
+                await appendEvent(event)
             })
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
@@ -1825,10 +1839,13 @@ final class ChatViewModel: ObservableObject {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
+            let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
             toolDefinitions.removeAll {
                 settings.disabledToolNames.contains($0.function.name)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
+                    || ($0.function.name == ChatWebReadToolRegistry.toolName
+                        && !webReadIsConfigured)
             }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
@@ -2516,7 +2533,7 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-private struct ChatMessageRow: View, Equatable {
+private struct ChatMessageRow: View, @MainActor Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
@@ -2961,9 +2978,9 @@ private struct ChatAgentStepCell: View {
 
     private var consentDescription: Text {
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
-            return Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept.")
+            return Text(
+                "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
@@ -3935,6 +3952,7 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        extensionManager: NativExtensionManager(builtInExtensions: []),
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),

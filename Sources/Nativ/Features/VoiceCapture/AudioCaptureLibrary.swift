@@ -74,10 +74,10 @@ enum AudioCaptureLibraryError: LocalizedError {
 }
 
 private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
-    var onFinish: ((AVAudioPlayer) -> Void)?
+    var onFinish: (@Sendable (ObjectIdentifier) -> Void)?
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        onFinish?(player)
+        onFinish?(ObjectIdentifier(player))
     }
 }
 
@@ -94,13 +94,14 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var playingRecordID: String?
     @Published private(set) var isPlaybackPaused = false
 
-    var transcriptionConfigurationProvider: (() -> VoiceTranscriptionConfiguration?)?
+    var transcriptionConfigurationProvider:
+        (@MainActor @Sendable () -> VoiceTranscriptionConfiguration?)?
 
     private var audioPlayer: AVAudioPlayer?
     private lazy var playbackDelegate: AudioPlaybackDelegate = {
         let delegate = AudioPlaybackDelegate()
-        delegate.onFinish = { [weak self] player in
-            Task { @MainActor in self?.playbackDidFinish(player) }
+        delegate.onFinish = { [weak self] playerID in
+            Task { @MainActor in self?.playbackDidFinish(playerID) }
         }
         return delegate
     }()
@@ -489,8 +490,8 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
-    private func playbackDidFinish(_ player: AVAudioPlayer) {
-        guard audioPlayer === player else {
+    private func playbackDidFinish(_ playerID: ObjectIdentifier) {
+        guard let audioPlayer, ObjectIdentifier(audioPlayer) == playerID else {
             return
         }
         stopPlayback()
