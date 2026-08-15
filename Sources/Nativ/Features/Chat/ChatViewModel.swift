@@ -12,7 +12,6 @@ struct ChatQueuedPrompt: Identifiable, Equatable {
 
 struct ChatPromptEditContext: Equatable {
     let messageID: UUID
-    let discardedMessageCount: Int
 }
 
 private struct ChatSessionBootstrap {
@@ -171,20 +170,20 @@ final class ChatViewModel: ObservableObject {
     func canEditUserMessage(_ messageID: UUID) -> Bool {
         guard let currentSessionID,
               !isSessionBusy(currentSessionID),
-              let message = messages.first(where: { $0.id == messageID })
+              latestUserMessageID == messageID
         else {
             return false
         }
-        return message.role == .user
+        return true
+    }
+
+    var latestUserMessageID: UUID? {
+        ChatPromptRevision.latestUserMessageID(in: messages)
     }
 
     func beginEditingUserMessage(_ messageID: UUID) {
         guard canEditUserMessage(messageID),
-              let message = messages.first(where: { $0.id == messageID }),
-              let discardedMessageCount = ChatPromptRevision.discardedMessageCount(
-                after: messageID,
-                in: messages
-              )
+              let message = messages.first(where: { $0.id == messageID })
         else {
             return
         }
@@ -199,10 +198,7 @@ final class ChatViewModel: ObservableObject {
             draft: draft,
             attachments: pendingImageAttachments
         )
-        promptEditContext = ChatPromptEditContext(
-            messageID: messageID,
-            discardedMessageCount: discardedMessageCount
-        )
+        promptEditContext = ChatPromptEditContext(messageID: messageID)
         draft = message.content
         pendingImageAttachments = message.imageAttachments
         composerFocusToken += 1
@@ -218,6 +214,23 @@ final class ChatViewModel: ObservableObject {
         }
         promptEditContext = nil
         composerSnapshot = nil
+    }
+
+    var forkableAssistantResponseIDs: Set<UUID> {
+        ChatConversationBranch.forkableAssistantResponseIDs(in: messages)
+    }
+
+    func forkAssistantResponse(_ messageID: UUID) {
+        guard let sourceSession = currentSessionSnapshot,
+              let branch = ChatConversationBranch.throughAssistantResponse(
+                messageID,
+                in: sourceSession
+              )
+        else {
+            return
+        }
+
+        activateBranch(branch)
     }
 
     func unavailableReason(isRunning: Bool, selectedModelID: String?) -> String? {
@@ -553,23 +566,26 @@ final class ChatViewModel: ObservableObject {
 
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
+                  let sourceSession = currentSessionSnapshot,
                   let revision = ChatPromptRevision.make(
                     messageID: promptEditContext.messageID,
                     content: prompt,
                     attachments: imageAttachments,
                     modelID: modelID,
-                    in: messages
+                    in: sourceSession.messages
                   )
             else {
                 return
             }
 
-            messages = revision.messages
-            restoreComposerAfterPromptEditing()
-            persistCurrentSession(updateTimestamp: true)
+            let branch = ChatConversationBranch.make(
+                from: sourceSession,
+                messages: revision.messages
+            )
+            activateBranch(branch, restoring: composerSnapshot)
             enqueueGeneration(
                 for: promptEditContext.messageID,
-                in: currentSession.id,
+                in: branch.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
                 appModel: appModel
@@ -907,18 +923,6 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
-    }
-
-    private func restoreComposerAfterPromptEditing() {
-        if let composerSnapshot {
-            draft = composerSnapshot.draft
-            pendingImageAttachments = composerSnapshot.attachments
-        } else {
-            draft = ""
-            pendingImageAttachments.removeAll()
-        }
-        promptEditContext = nil
-        composerSnapshot = nil
     }
 
     private func discardPromptEditing() {
@@ -1932,6 +1936,28 @@ final class ChatViewModel: ObservableObject {
         upsertStoredSession(session)
         sessionStore.saveSession(session)
         refreshSessionList()
+    }
+
+    private var currentSessionSnapshot: ChatSession? {
+        guard var session = currentSession else {
+            return nil
+        }
+        session.messages = messages
+        return session
+    }
+
+    private func activateBranch(
+        _ branch: ChatSession,
+        restoring composer: ComposerSnapshot? = nil
+    ) {
+        persistCurrentSession(updateTimestamp: false)
+
+        draft = composer?.draft ?? ""
+        pendingImageAttachments = composer?.attachments ?? []
+        discardPromptEditing()
+        upsertStoredSession(branch)
+        sessionStore.saveSession(branch)
+        applyCurrentSession(branch)
     }
 
     private func persistSession(_ sessionID: UUID, updateTimestamp: Bool) {
