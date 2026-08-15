@@ -193,6 +193,8 @@ targets:
         buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
+      - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
+      - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageModelSelection.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSystemStatsTool.swift
@@ -229,6 +231,9 @@ targets:
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
+      - path: Sources/Nativ/Features/MCP/MCPHostManager.swift
+      - path: Sources/Nativ/Features/Routines/Routine.swift
+      - path: Sources/Nativ/Features/Routines/RoutineStore.swift
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
