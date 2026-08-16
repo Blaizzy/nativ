@@ -32,7 +32,7 @@ final class ChatViewModelTests: XCTestCase {
         let attachment = ChatImageAttachment(
             filename: "reference.png",
             mimeType: "image/png",
-            base64Data: ""
+            base64Data: "AA=="
         )
 
         subject.stageAttachment(attachment)

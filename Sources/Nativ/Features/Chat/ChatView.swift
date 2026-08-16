@@ -32,7 +32,7 @@ struct ChatView: View {
                 onExploreImageModels: onExploreImageModels
             )
             .dropDestination(for: URL.self) { urls, _ in
-                chat.attachImages(fromURLs: urls)
+                chat.attachFiles(fromURLs: urls)
             } isTargeted: { isDropTargeted = $0 }
             .overlay {
                 if isDropTargeted {
@@ -323,10 +323,11 @@ private struct ChatComposerContainer: View {
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
-            onSend: { languageModelSupportsTools in
+            onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,
-                    languageModelSupportsTools: languageModelSupportsTools
+                    languageModelSupportsTools: languageModelSupportsTools,
+                    languageModelSupportsVision: languageModelSupportsVision
                 )
             },
             onBackdropHeightChange: onBackdropHeightChange
