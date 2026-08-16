@@ -113,6 +113,9 @@ private struct ChatTranscriptView: View {
     }
 
     var body: some View {
+        let forkableAssistantResponseIDs = chat.forkableAssistantResponseIDs
+        let latestUserMessageID = chat.latestUserMessageID
+
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
@@ -127,16 +130,24 @@ private struct ChatTranscriptView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
-                        let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
+                        let showsEditUserMessage = message.id == latestUserMessageID
+                        let editUnavailableReason = showsEditUserMessage
+                            ? userPromptEditingUnavailableReason(for: message)
+                            : nil
                         ChatMessageRow(
                             message: message,
                             imageModelSelectionRequest: chat.imageModelSelectionRequest(
                                 for: message.id
                             ),
+                            showsEditUserMessage: showsEditUserMessage,
                             canEditUserMessage: editUnavailableReason == nil,
                             editUserMessageUnavailableReason: editUnavailableReason,
                             isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
+                            canForkAssistantResponse: forkableAssistantResponseIDs.contains(
+                                message.id
+                            ),
                             onEditUserMessage: chat.beginEditingUserMessage,
+                            onForkAssistantResponse: chat.forkAssistantResponse,
                             onConfirmToolConsent: chat.confirmToolConsent,
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
@@ -340,10 +351,13 @@ private struct ChatMessageRow: View, @MainActor Equatable {
 
     let message: ChatTranscriptMessage
     let imageModelSelectionRequest: ChatImageModelSelectionRequest?
+    let showsEditUserMessage: Bool
     let canEditUserMessage: Bool
     let editUserMessageUnavailableReason: String?
     let isEditingUserMessage: Bool
+    let canForkAssistantResponse: Bool
     let onEditUserMessage: (UUID) -> Void
+    let onForkAssistantResponse: (UUID) -> Void
     let onConfirmToolConsent: (UUID) -> Void
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
@@ -355,9 +369,11 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
             && lhs.imageModelSelectionRequest == rhs.imageModelSelectionRequest
+            && lhs.showsEditUserMessage == rhs.showsEditUserMessage
             && lhs.canEditUserMessage == rhs.canEditUserMessage
             && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
             && lhs.isEditingUserMessage == rhs.isEditingUserMessage
+            && lhs.canForkAssistantResponse == rhs.canForkAssistantResponse
     }
 
     var body: some View {
@@ -421,14 +437,25 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                             )
                         }
 
-                        if message.role == .user {
+                        if showsEditUserMessage {
                             ChatMessageActionButton(
-                                systemImage: "square.and.pencil",
+                                icon: .system("square.and.pencil"),
                                 title: editActionTitle,
                                 isActive: isEditingUserMessage,
                                 isEnabled: canEditUserMessage
                             ) {
                                 onEditUserMessage(message.id)
+                            }
+                        }
+
+                        if canForkAssistantResponse {
+                            ChatMessageActionButton(
+                                icon: .asset("ChatForkIcon"),
+                                title: "Fork conversation from this response",
+                                isActive: false,
+                                isEnabled: true
+                            ) {
+                                onForkAssistantResponse(message.id)
                             }
                         }
                     }
@@ -614,7 +641,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 
     private var showsMessageActions: Bool {
-        message.role == .user || canCopyMessage
+        message.role == .user || canCopyMessage || canForkAssistantResponse
     }
 
     private var editActionTitle: String {
@@ -1129,7 +1156,12 @@ private struct ChatCopyMessageButton: View {
 }
 
 private struct ChatMessageActionButton: View {
-    let systemImage: String
+    enum Icon {
+        case system(String)
+        case asset(String)
+    }
+
+    let icon: Icon
     let title: String
     let isActive: Bool
     let isEnabled: Bool
@@ -1138,8 +1170,7 @@ private struct ChatMessageActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
+            iconView
                 .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
                 .frame(width: 30, height: 28)
                 .contentShape(.rect)
@@ -1151,6 +1182,21 @@ private struct ChatMessageActionButton: View {
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: isActive)
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        switch icon {
+        case let .system(name):
+            Image(systemName: name)
+                .font(.system(size: 13, weight: .medium))
+        case let .asset(name):
+            Image(name)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
+                .offset(y: 1)
+        }
     }
 }
 

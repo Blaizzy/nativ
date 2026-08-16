@@ -135,9 +135,8 @@ struct ChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let promptEditContext = viewModel.promptEditContext {
+            if viewModel.promptEditContext != nil {
                 ChatPromptEditBanner(
-                    discardedMessageCount: promptEditContext.discardedMessageCount,
                     onCancel: viewModel.cancelPromptEditing
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -781,7 +780,7 @@ struct ChatComposer: View {
             return blockingNotice.message
         }
         if viewModel.promptEditContext != nil {
-            return "Save prompt and regenerate (Return)"
+            return "Fork and regenerate (Return)"
         }
         return "Send (Return)"
     }
@@ -815,7 +814,6 @@ struct ChatComposer: View {
 }
 
 private struct ChatPromptEditBanner: View {
-    let discardedMessageCount: Int
     let onCancel: () -> Void
     @State private var isCancelHovered = false
 
@@ -827,7 +825,7 @@ private struct ChatPromptEditBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Editing prompt")
                     .fontWeight(.medium)
-                Text(replacementDescription)
+                Text("Sending will create a new conversation branch.")
                     .foregroundStyle(.secondary)
             }
 
@@ -858,17 +856,6 @@ private struct ChatPromptEditBanner: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.accentColor.opacity(0.22), lineWidth: 0.5)
-        }
-    }
-
-    private var replacementDescription: String {
-        switch discardedMessageCount {
-        case 0:
-            "Sending will generate a new response."
-        case 1:
-            "Sending will replace the following response."
-        default:
-            "Sending will replace \(discardedMessageCount) later conversation items."
         }
     }
 }
