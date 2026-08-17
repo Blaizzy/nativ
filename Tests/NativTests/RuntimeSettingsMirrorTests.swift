@@ -115,15 +115,7 @@ final class RuntimeSettingsMirrorTests: XCTestCase {
         )
     }
 
-    func testEveryMirroredKnobRoundTrips() {
-        var settings = baseline()
-        settings.prefixCachingEnabled = true
-        settings.speculativeDecodingEnabled = true
-        settings.draftModelID = "org/draft"
-        for mapping in RuntimeSettingsMirror.mappings {
-            let value = RuntimeSettingsMirror.localValue(of: mapping.knob, in: settings)
-            XCTAssertNotNil(value, "\(mapping.knob) must report a local value")
-        }
+    func testMappingTableHasNoDuplicateKnobs() {
         XCTAssertEqual(
             RuntimeSettingsMirror.mirroredKnobs.count,
             RuntimeSettingsMirror.mappings.count,

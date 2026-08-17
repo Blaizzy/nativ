@@ -143,6 +143,10 @@ struct RuntimeSettingsPanel: View {
                 groupSection(group)
             }
 
+            if let applyError = store.applyError {
+                notice(symbol: "exclamationmark.triangle", tint: .orange, text: applyError)
+            }
+
             if !store.rejections.isEmpty {
                 rejectionNotice
             }

@@ -5,7 +5,6 @@ enum RuntimeSettingsMirror {
     struct Mapping {
         let knob: String
         let apply: (inout NativSettings, RuntimeSettingValue) -> Void
-        let read: (NativSettings) -> RuntimeSettingValue
     }
 
     static var mappings: [Mapping] {
@@ -14,9 +13,6 @@ enum RuntimeSettingsMirror {
             knob: "max_kv_size",
             apply: { settings, value in
                 settings.maxKVSize = value.intValue ?? 0
-            },
-            read: { settings in
-                settings.maxKVSize > 0 ? .int(settings.maxKVSize) : .null
             }
         ),
         Mapping(
@@ -28,9 +24,6 @@ enum RuntimeSettingsMirror {
                 } else {
                     settings.kvQuantizationEnabled = false
                 }
-            },
-            read: { settings in
-                settings.kvQuantizationEnabled ? .int(Int(settings.kvBits)) : .null
             }
         ),
         Mapping(
@@ -38,51 +31,37 @@ enum RuntimeSettingsMirror {
             apply: { settings, value in
                 guard let scheme = value.stringValue else { return }
                 settings.turboQuantEnabled = scheme == "turboquant"
-            },
-            read: { settings in
-                settings.kvQuantizationEnabled
-                    ? .string(settings.turboQuantEnabled ? "turboquant" : "uniform")
-                    : .null
             }
         ),
         Mapping(
             knob: "kv_group_size",
             apply: { settings, value in
                 if let size = value.intValue { settings.kvGroupSize = size }
-            },
-            read: { settings in
-                settings.kvQuantizationEnabled ? .int(settings.kvGroupSize) : .null
             }
         ),
         Mapping(
             knob: "quantized_kv_start",
             apply: { settings, value in
                 if let start = value.intValue { settings.quantizedKVStart = start }
-            },
-            read: { settings in
-                settings.kvQuantizationEnabled ? .int(settings.quantizedKVStart) : .null
             }
         ),
         Mapping(
             knob: "apc_enabled",
             apply: { settings, value in
                 if let enabled = value.boolValue { settings.prefixCachingEnabled = enabled }
-            },
-            read: { settings in .bool(settings.prefixCachingEnabled) }
+            }
         ),
         Mapping(
             knob: "apc_num_blocks",
             apply: { settings, value in
                 if let blocks = value.intValue { settings.prefixCacheBlocks = blocks }
-            },
-            read: { settings in .int(settings.prefixCacheBlocks) }
+            }
         ),
         Mapping(
             knob: "apc_block_size",
             apply: { settings, value in
                 if let size = value.intValue { settings.prefixCacheBlockSize = size }
-            },
-            read: { settings in .int(settings.prefixCacheBlockSize) }
+            }
         ),
         Mapping(
             knob: "spec_draft_model",
@@ -90,20 +69,12 @@ enum RuntimeSettingsMirror {
                 let identifier = value.stringValue ?? ""
                 settings.draftModelID = identifier
                 settings.speculativeDecodingEnabled = !identifier.isEmpty
-            },
-            read: { settings in
-                settings.speculativeDecodingActive ? .string(settings.draftModelID) : .null
             }
         ),
         Mapping(
             knob: "spec_draft_kind",
             apply: { settings, value in
                 settings.draftKind = value.stringValue ?? "auto"
-            },
-            read: { settings in
-                settings.speculativeDecodingActive && settings.draftKind != "auto"
-                    ? .string(settings.draftKind)
-                    : .null
             }
         )
         ]
@@ -115,10 +86,6 @@ enum RuntimeSettingsMirror {
 
     static var mirroredKnobs: Set<String> {
         Set(mappings.map(\.knob))
-    }
-
-    static func mirrors(_ knob: String) -> Bool {
-        table()[knob] != nil
     }
 
     /// Folds server-applied values into a settings snapshot.
@@ -138,11 +105,5 @@ enum RuntimeSettingsMirror {
             changed = true
         }
         return changed
-    }
-
-    /// The value Nativ would send for a knob, used to detect drift between the
-    /// running server and Nativ's own configuration.
-    static func localValue(of knob: String, in settings: NativSettings) -> RuntimeSettingValue? {
-        table()[knob]?.read(settings)
     }
 }

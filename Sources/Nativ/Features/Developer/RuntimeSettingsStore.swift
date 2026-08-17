@@ -117,6 +117,7 @@ final class RuntimeSettingsStore: ObservableObject {
     @Published private(set) var rejections: [RuntimeSettingRejection] = []
     @Published private(set) var lastReloadKinds: [String] = []
     @Published private(set) var isApplying = false
+    @Published private(set) var applyError: String?
 
     private var endpoint: (url: URL, key: String?)?
     private var onAdopt: (([String: RuntimeSettingValue]) -> Void)?
@@ -143,18 +144,9 @@ final class RuntimeSettingsStore: ObservableObject {
         fields.filter { $0.group == group }
     }
 
-    func binding(for name: String) -> RuntimeSettingField? {
-        fields.first { $0.id == name }
-    }
-
     func setValue(_ value: RuntimeSettingValue, for name: String) {
         guard let index = fields.firstIndex(where: { $0.id == name }) else { return }
         fields[index].value = value
-    }
-
-    func revert(_ name: String) {
-        guard let index = fields.firstIndex(where: { $0.id == name }) else { return }
-        fields[index].value = fields[index].serverValue
     }
 
     func resetToDefault(_ name: String) {
@@ -167,6 +159,7 @@ final class RuntimeSettingsStore: ObservableObject {
             fields[index].value = fields[index].serverValue
         }
         rejections = []
+        applyError = nil
     }
 
     func onServerAccepted(_ handler: @escaping ([String: RuntimeSettingValue]) -> Void) {
@@ -206,6 +199,7 @@ final class RuntimeSettingsStore: ObservableObject {
         guard !changes.isEmpty else { return }
         isApplying = true
         rejections = []
+        applyError = nil
         defer { isApplying = false }
 
         var payload: [String: RuntimeSettingValue] = [:]
@@ -221,7 +215,7 @@ final class RuntimeSettingsStore: ObservableObject {
             merge(current: update.current)
             onAdopt?(update.applied)
         } catch {
-            state = .failed(error.localizedDescription)
+            applyError = error.localizedDescription
         }
     }
 
@@ -229,6 +223,7 @@ final class RuntimeSettingsStore: ObservableObject {
         guard let endpoint, !isApplying else { return }
         isApplying = true
         rejections = []
+        applyError = nil
         defer { isApplying = false }
         let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
         do {
@@ -239,7 +234,7 @@ final class RuntimeSettingsStore: ObservableObject {
             merge(current: update.current)
             onAdopt?(update.current)
         } catch {
-            state = .failed(error.localizedDescription)
+            applyError = error.localizedDescription
         }
     }
 
