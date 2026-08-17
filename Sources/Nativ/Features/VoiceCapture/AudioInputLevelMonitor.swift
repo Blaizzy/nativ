@@ -48,16 +48,19 @@ final class AudioInputLevelMonitor: ObservableObject {
                 throw VoiceAudioRecorderError.couldNotStart
             }
 
-            inputNode.installTap(
-                onBus: 0,
-                bufferSize: 1_024,
-                format: format
-            ) { [weak self] buffer, _ in
+            let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = {
+                [weak self] buffer, _ in
                 let level = Self.normalizedLevel(from: buffer)
                 Task { @MainActor [weak self] in
                     self?.update(level: level)
                 }
             }
+            inputNode.installTap(
+                onBus: 0,
+                bufferSize: 1_024,
+                format: format,
+                block: tap
+            )
             engine.prepare()
             try engine.start()
             audioEngine = engine
