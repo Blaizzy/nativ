@@ -8,7 +8,8 @@ enum RuntimeSettingsMirror {
         let read: (NativSettings) -> RuntimeSettingValue
     }
 
-    static let mappings: [Mapping] = [
+    static var mappings: [Mapping] {
+        [
         Mapping(
             knob: "max_kv_size",
             apply: { settings, value in
@@ -105,18 +106,19 @@ enum RuntimeSettingsMirror {
                     : .null
             }
         )
-    ]
+        ]
+    }
 
-    private static let byKnob: [String: Mapping] = Dictionary(
-        uniqueKeysWithValues: mappings.map { ($0.knob, $0) }
-    )
+    private static func table() -> [String: Mapping] {
+        Dictionary(uniqueKeysWithValues: mappings.map { ($0.knob, $0) })
+    }
 
     static var mirroredKnobs: Set<String> {
-        Set(byKnob.keys)
+        Set(mappings.map(\.knob))
     }
 
     static func mirrors(_ knob: String) -> Bool {
-        byKnob[knob] != nil
+        table()[knob] != nil
     }
 
     /// Folds server-applied values into a settings snapshot.
@@ -128,9 +130,10 @@ enum RuntimeSettingsMirror {
         _ applied: [String: RuntimeSettingValue],
         into settings: inout NativSettings
     ) -> Bool {
+        let table = table()
         var changed = false
         for (knob, value) in applied {
-            guard let mapping = byKnob[knob] else { continue }
+            guard let mapping = table[knob] else { continue }
             mapping.apply(&settings, value)
             changed = true
         }
@@ -140,6 +143,6 @@ enum RuntimeSettingsMirror {
     /// The value Nativ would send for a knob, used to detect drift between the
     /// running server and Nativ's own configuration.
     static func localValue(of knob: String, in settings: NativSettings) -> RuntimeSettingValue? {
-        byKnob[knob]?.read(settings)
+        table()[knob]?.read(settings)
     }
 }
