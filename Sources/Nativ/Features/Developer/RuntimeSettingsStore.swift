@@ -118,7 +118,6 @@ final class RuntimeSettingsStore: ObservableObject {
     @Published private(set) var lastReloadKinds: [String] = []
     @Published private(set) var isApplying = false
 
-    private var client: NativRuntimeSettingsClient?
     private var endpoint: (url: URL, key: String?)?
     private var onAdopt: (([String: RuntimeSettingValue]) -> Void)?
 
@@ -180,12 +179,12 @@ final class RuntimeSettingsStore: ObservableObject {
             return
         }
         endpoint = (url, normalizedKey)
-        client = NativRuntimeSettingsClient(baseURL: url, apiKey: normalizedKey)
         Task { await load() }
     }
 
     func load() async {
-        guard let client else { return }
+        guard let endpoint else { return }
+        let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
         if case .loaded = state {} else {
             state = .loading
         }
@@ -202,7 +201,7 @@ final class RuntimeSettingsStore: ObservableObject {
     }
 
     func apply() async {
-        guard let client, !isApplying else { return }
+        guard let endpoint, !isApplying else { return }
         let changes = dirtyFields
         guard !changes.isEmpty else { return }
         isApplying = true
@@ -213,6 +212,7 @@ final class RuntimeSettingsStore: ObservableObject {
         for field in changes {
             payload[field.spec.name] = field.value
         }
+        let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
         do {
             let update = try await client.update(payload)
             rejections = update.rejected
@@ -226,10 +226,11 @@ final class RuntimeSettingsStore: ObservableObject {
     }
 
     func restoreServerDefaults() async {
-        guard let client, !isApplying else { return }
+        guard let endpoint, !isApplying else { return }
         isApplying = true
         rejections = []
         defer { isApplying = false }
+        let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
         do {
             let update = try await client.update([:], resettingUnlistedToDefaults: true)
             rejections = update.rejected
