@@ -120,6 +120,7 @@ final class RuntimeSettingsStore: ObservableObject {
 
     private var client: NativRuntimeSettingsClient?
     private var endpoint: (url: URL, key: String?)?
+    private var onAdopt: (([String: RuntimeSettingValue]) -> Void)?
 
     var isDirty: Bool {
         fields.contains(where: \.isDirty)
@@ -169,6 +170,10 @@ final class RuntimeSettingsStore: ObservableObject {
         rejections = []
     }
 
+    func onServerAccepted(_ handler: @escaping ([String: RuntimeSettingValue]) -> Void) {
+        onAdopt = handler
+    }
+
     func connect(to url: URL, apiKey: String?) {
         let normalizedKey = apiKey?.isEmpty == true ? nil : apiKey
         if let endpoint, endpoint.url == url, endpoint.key == normalizedKey, case .loaded = state {
@@ -214,6 +219,7 @@ final class RuntimeSettingsStore: ObservableObject {
             lastReloadKinds = update.reloadKinds
             fingerprint = update.fingerprint
             merge(current: update.current)
+            onAdopt?(update.applied)
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -230,6 +236,7 @@ final class RuntimeSettingsStore: ObservableObject {
             lastReloadKinds = update.reloadKinds
             fingerprint = update.fingerprint
             merge(current: update.current)
+            onAdopt?(update.current)
         } catch {
             state = .failed(error.localizedDescription)
         }

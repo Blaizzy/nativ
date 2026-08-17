@@ -287,6 +287,24 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         lastMetricsError == nil ? "Waiting for server..." : "Metrics unavailable"
     }
 
+    /// Folds settings the running server has already accepted into Nativ's own
+    /// configuration.
+    ///
+    /// The same values are folded into the snapshot taken at server start, so
+    /// `hasSameLaunchConfiguration` compares two sides that moved together and
+    /// no restart is requested for a change already live. Every other field is
+    /// still compared normally, so this cannot mask a change that does need one.
+    func adoptLiveServerSettings(_ applied: [String: RuntimeSettingValue]) {
+        guard !applied.isEmpty else { return }
+        var updated = settings
+        guard RuntimeSettingsMirror.fold(applied, into: &updated) else { return }
+        settings = updated
+        if var snapshot = settingsAppliedAtServerStart {
+            _ = RuntimeSettingsMirror.fold(applied, into: &snapshot)
+            settingsAppliedAtServerStart = snapshot.normalized()
+        }
+    }
+
     var settingsRequireRestart: Bool {
         guard isRunning, let settingsAppliedAtServerStart else {
             return false

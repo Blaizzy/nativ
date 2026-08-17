@@ -253,6 +253,9 @@ struct DeveloperView: View {
         RuntimeSettingsPanel(store: runtimeSettings)
             .task(id: liveSettingsEndpointID) {
                 guard model.isRunning else { return }
+                runtimeSettings.onServerAccepted { applied in
+                    model.adoptLiveServerSettings(applied)
+                }
                 runtimeSettings.connect(
                     to: model.settings.serverBaseURL,
                     apiKey: model.settings.serverAPIKey
