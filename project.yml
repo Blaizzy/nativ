@@ -163,6 +163,7 @@ targets:
     sources:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
+      - path: Sources/Nativ/Features/Developer/RuntimeSettingsMirror.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
