@@ -462,6 +462,23 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         XCTAssertTrue(state.isFinalizing)
     }
 
+    func testTransferEstimateCeilingUsesFinalizingState() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 3_500)
+        var state = HuggingFaceDownloadProgressState(now: start)
+        let initial = try XCTUnwrap(
+            ModelDownloadProgress(completedBytes: 0, totalBytes: 1_001)
+        )
+
+        _ = state.recordProgress(initial, at: start)
+        let capped = try XCTUnwrap(
+            state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
+        )
+
+        XCTAssertEqual(capped.completedBytes, 996)
+        XCTAssertLessThan(capped.fractionCompleted, 1)
+        XCTAssertTrue(state.isFinalizing)
+    }
+
     func testTransferredBytesProduceSmoothedTransferSpeed() {
         let start = Date(timeIntervalSinceReferenceDate: 4_000)
         var state = HuggingFaceDownloadProgressState(now: start)
