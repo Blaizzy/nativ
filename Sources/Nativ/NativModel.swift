@@ -79,6 +79,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
     private var currentServerOutput = ""
+    private var isAtLogLineStart = true
 
     private let maxLogCharacters = 250_000
     private let maxCurrentServerOutputCharacters = 50_000
@@ -705,6 +706,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     func clearLogs() {
         logText = ""
+        isAtLogLineStart = true
     }
 
     func reportModelLoadFailure(modelID: String?, error: Error) {
@@ -770,8 +772,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     private func configureServerCallbacks() {
         server.onOutput = { [weak self] text in
+            let receivedAt = Date.now
             Task { @MainActor [weak self] in
-                self?.handleServerOutput(text)
+                self?.handleServerOutput(text, receivedAt: receivedAt)
             }
         }
         server.onTermination = { [weak self] status in
@@ -914,14 +917,17 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         }
     }
 
-    private func appendLog(_ text: String) {
-        logText.append(text)
-        if logText.count > maxLogCharacters {
-            logText.removeFirst(logText.count - maxLogCharacters)
-        }
+    private func appendLog(_ text: String, receivedAt: Date = .now) {
+        TimestampedLog.append(
+            text,
+            receivedAt: receivedAt,
+            to: &logText,
+            isAtLineStart: &isAtLogLineStart,
+            maximumCharacterCount: maxLogCharacters
+        )
     }
 
-    private func handleServerOutput(_ text: String) {
+    private func handleServerOutput(_ text: String, receivedAt: Date) {
         let prefix = "__NATIV_MODEL_LOAD_PROGRESS__:"
         var visibleLines: [Substring] = []
 
@@ -948,7 +954,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
         let visibleText = visibleLines.joined(separator: "\n")
         if !visibleText.isEmpty {
-            appendLog(visibleText)
+            appendLog(visibleText, receivedAt: receivedAt)
             currentServerOutput.append(visibleText)
             if currentServerOutput.count > maxCurrentServerOutputCharacters {
                 currentServerOutput.removeFirst(

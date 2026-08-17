@@ -2203,20 +2203,25 @@ private struct LogTextView: NSViewRepresentable {
 @MainActor
 private enum LogTextStyler {
     private static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let timestampFont = NSFont.monospacedDigitSystemFont(
+        ofSize: 11,
+        weight: .medium
+    )
+    private static let timestampColor = NSColor.white.withAlphaComponent(0.5)
+    private static let timestampStyle = Date.FormatStyle(
+        locale: Locale(identifier: "en_GB"),
+        timeZone: .current
+    )
+        .hour(.twoDigits(amPM: .omitted))
+        .minute(.twoDigits)
+        .second(.twoDigits)
 
     static func attributedString(_ text: String, searchQuery: String) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let lines = text.components(separatedBy: "\n")
 
         for (index, line) in lines.enumerated() {
-            let attributedLine = NSMutableAttributedString(
-                string: line,
-                attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.labelColor,
-                ]
-            )
-            styleSeverity(in: attributedLine, line: line)
+            let attributedLine = attributedLine(for: line)
             styleHTTPStatus(in: attributedLine)
             result.append(attributedLine)
             if index < lines.count - 1 {
@@ -2226,6 +2231,38 @@ private enum LogTextStyler {
 
         highlightSearch(in: result, query: searchQuery)
         return result
+    }
+
+    private static func attributedLine(for line: String) -> NSMutableAttributedString {
+        guard let components = TimestampedLog.components(in: line) else {
+            let attributedLine = messageText(line)
+            styleSeverity(in: attributedLine, line: line)
+            return attributedLine
+        }
+
+        let message = messageText(components.message)
+        styleSeverity(in: message, line: components.message)
+
+        let timestamp = NSMutableAttributedString(
+            string: " \(timestampStyle.format(components.date)) ",
+            attributes: [
+                .font: timestampFont,
+                .foregroundColor: timestampColor,
+            ]
+        )
+        timestamp.append(NSAttributedString(string: "  ", attributes: [.font: font]))
+        timestamp.append(message)
+        return timestamp
+    }
+
+    private static func messageText(_ text: String) -> NSMutableAttributedString {
+        NSMutableAttributedString(
+            string: text,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
     }
 
     private static func styleSeverity(in text: NSMutableAttributedString, line: String) {
