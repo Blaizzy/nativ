@@ -2207,7 +2207,7 @@ private enum LogTextStyler {
         ofSize: 11,
         weight: .medium
     )
-    private static let timestampColor = NSColor.white.withAlphaComponent(0.5)
+    private static let timestampColor = NSColor.secondaryLabelColor
     private static let timestampStyle = Date.FormatStyle(
         locale: Locale(identifier: "en_GB"),
         timeZone: .current
