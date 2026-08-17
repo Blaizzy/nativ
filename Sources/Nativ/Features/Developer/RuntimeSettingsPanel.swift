@@ -12,11 +12,13 @@ struct RuntimeSettingsPanel: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
 
-            Divider()
+            if !isCollapsed {
+                Divider()
 
-            content
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                content
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            }
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -51,6 +53,10 @@ struct RuntimeSettingsPanel: View {
                     + "Loaded models reload."
             )
         }
+    }
+
+    private var isCollapsed: Bool {
+        store.state == .unsupported
     }
 
     private var header: some View {
@@ -89,7 +95,7 @@ struct RuntimeSettingsPanel: View {
         case .idle, .loading:
             return "Reading settings…"
         case .unsupported:
-            return "Not available on this server"
+            return "Needs a newer bundled server to change without a restart"
         case .failed:
             return "Unavailable"
         case .loaded:
