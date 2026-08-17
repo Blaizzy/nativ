@@ -195,8 +195,8 @@ struct RuntimeSettingsPanel: View {
                 Text(changeSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if !store.lastReloadKinds.isEmpty {
-                Label("Applied", systemImage: "checkmark.circle.fill")
+            } else if let appliedNotice = store.appliedNotice {
+                Label(appliedNotice, systemImage: "checkmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.green)
             }

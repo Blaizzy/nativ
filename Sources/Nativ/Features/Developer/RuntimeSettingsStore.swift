@@ -115,7 +115,7 @@ final class RuntimeSettingsStore: ObservableObject {
     @Published private(set) var fields: [RuntimeSettingField] = []
     @Published private(set) var fingerprint = ""
     @Published private(set) var rejections: [RuntimeSettingRejection] = []
-    @Published private(set) var lastReloadKinds: [String] = []
+    @Published private(set) var appliedNotice: String?
     @Published private(set) var isApplying = false
     @Published private(set) var applyError: String?
 
@@ -147,11 +147,13 @@ final class RuntimeSettingsStore: ObservableObject {
     func setValue(_ value: RuntimeSettingValue, for name: String) {
         guard let index = fields.firstIndex(where: { $0.id == name }) else { return }
         fields[index].value = value
+        appliedNotice = nil
     }
 
     func resetToDefault(_ name: String) {
         guard let index = fields.firstIndex(where: { $0.id == name }) else { return }
         fields[index].value = fields[index].spec.defaultValue
+        appliedNotice = nil
     }
 
     func discardChanges() {
@@ -160,6 +162,7 @@ final class RuntimeSettingsStore: ObservableObject {
         }
         rejections = []
         applyError = nil
+        appliedNotice = nil
     }
 
     func onServerAccepted(_ handler: @escaping ([String: RuntimeSettingValue]) -> Void) {
@@ -184,6 +187,7 @@ final class RuntimeSettingsStore: ObservableObject {
         do {
             let snapshot = try await client.fetch()
             apply(snapshot: snapshot)
+            appliedNotice = nil
             state = .loaded
         } catch let error as NativRuntimeSettingsError where error.isUnsupported {
             fields = []
@@ -210,10 +214,10 @@ final class RuntimeSettingsStore: ObservableObject {
         do {
             let update = try await client.update(payload)
             rejections = update.rejected
-            lastReloadKinds = update.reloadKinds
             fingerprint = update.fingerprint
             merge(current: update.current)
             onAdopt?(update.applied)
+            appliedNotice = Self.appliedText(count: update.applied.count, kinds: update.reloadKinds)
         } catch {
             applyError = error.localizedDescription
         }
@@ -229,13 +233,22 @@ final class RuntimeSettingsStore: ObservableObject {
         do {
             let update = try await client.update([:], resettingUnlistedToDefaults: true)
             rejections = update.rejected
-            lastReloadKinds = update.reloadKinds
             fingerprint = update.fingerprint
             merge(current: update.current)
             onAdopt?(update.current)
+            appliedNotice = "Restored server defaults"
         } catch {
             applyError = error.localizedDescription
         }
+    }
+
+    private static func appliedText(count: Int, kinds: [String]) -> String {
+        let noun = count == 1 ? "setting" : "settings"
+        guard !kinds.isEmpty else {
+            return "Applied \(count) \(noun)"
+        }
+        let readable = kinds.map { $0.replacingOccurrences(of: "_", with: " ") }
+        return "Applied \(count) \(noun) — reloading \(readable.joined(separator: ", "))"
     }
 
     private func apply(snapshot: RuntimeSettingsSnapshot) {
