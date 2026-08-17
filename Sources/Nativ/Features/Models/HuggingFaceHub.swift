@@ -1456,7 +1456,6 @@ private enum HuggingFaceSnapshotDownloader {
 }
 
 struct HuggingFaceDownloadProgressState: Equatable {
-    private static let activeProgressLimit = 0.994
     private static let speedSampleInterval: TimeInterval = 0.4
     private static let speedStaleInterval: TimeInterval = 2
 
@@ -1563,7 +1562,16 @@ struct HuggingFaceDownloadProgressState: Equatable {
         let transferDelta = bytes - checkpointTransferredBytes
         let estimatedBytes = checkpointDisplayedBytes
             + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
-        let activeLimit = Int64(Double(totalBytes) * Self.activeProgressLimit)
+        // Transfer bytes are only an estimate of reconstructed bytes. Cap the
+        // estimate at the first finalizing byte so it cannot show 100%, but can
+        // still switch the UI and stall watchdog into their finalizing state.
+        let activeLimit = min(
+            Int64(
+                (Double(totalBytes) * ModelDownloadProgressPresentation.finalizingThreshold)
+                    .rounded(.up)
+            ),
+            totalBytes
+        )
         guard let estimate = ModelDownloadProgress(
             completedBytes: min(estimatedBytes, activeLimit),
             totalBytes: totalBytes
@@ -1814,6 +1822,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             _reconstructed_bytes = cached_bytes
             _transferred_bytes = 0
             _last_progress_report = 0.0
+            _last_reported_progress = None
             _last_transfer_report = 0.0
 
             def __init__(self, *args, **kwargs):
@@ -1846,10 +1855,17 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
             @classmethod
             def _emit_progress(cls, now):
-                if cls._total_bytes <= 0 or now - cls._last_progress_report < 0.1:
+                if cls._total_bytes <= 0:
+                    return
+                completed = min(max(cls._reconstructed_bytes, 0), cls._total_bytes)
+                reported_progress = (completed, cls._total_bytes)
+                if reported_progress == cls._last_reported_progress:
+                    return
+                is_complete = completed >= cls._total_bytes
+                if not is_complete and now - cls._last_progress_report < 0.1:
                     return
                 cls._last_progress_report = now
-                completed = min(max(cls._reconstructed_bytes, 0), cls._total_bytes)
+                cls._last_reported_progress = reported_progress
                 print(
                     f"__NATIV_PROGRESS__:{completed}:{cls._total_bytes}",
                     flush=True,
