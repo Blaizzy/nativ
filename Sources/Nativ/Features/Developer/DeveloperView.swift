@@ -25,6 +25,7 @@ struct DeveloperView: View {
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
     @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
     @State private var contentAboveLogHeight: CGFloat?
+    @StateObject private var runtimeSettings = RuntimeSettingsStore()
     @FocusState private var focusedEndpointField: EndpointEditorField?
 
     var body: some View {
@@ -47,6 +48,7 @@ struct DeveloperView: View {
                                 VStack(alignment: .leading, spacing: Self.contentSpacing) {
                                     runtimeGrid
                                     serverEndpointsPanel
+                                    liveSettingsPanel
                                     authenticationPanels
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,6 +247,22 @@ struct DeveloperView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private var liveSettingsPanel: some View {
+        RuntimeSettingsPanel(store: runtimeSettings)
+            .task(id: liveSettingsEndpointID) {
+                guard model.isRunning else { return }
+                runtimeSettings.connect(
+                    to: model.settings.serverBaseURL,
+                    apiKey: model.settings.serverAPIKey
+                )
+            }
+    }
+
+    private var liveSettingsEndpointID: String {
+        let key = model.settings.serverAPIKey ?? ""
+        return "\(model.isRunning)|\(model.settings.serverBaseURL.absoluteString)|\(key.count)"
     }
 
     private var serverEndpointsPanel: some View {
