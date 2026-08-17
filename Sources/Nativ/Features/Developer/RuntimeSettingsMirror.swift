@@ -88,11 +88,6 @@ enum RuntimeSettingsMirror {
         Set(mappings.map(\.knob))
     }
 
-    /// Folds server-applied values into a settings snapshot.
-    ///
-    /// Applied to both the live settings and the snapshot taken at server start,
-    /// so `hasSameLaunchConfiguration` sees an identical delta on both sides and
-    /// no restart is requested for a change the running server already accepted.
     static func fold(
         _ applied: [String: RuntimeSettingValue],
         into settings: inout NativSettings

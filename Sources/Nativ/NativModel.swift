@@ -41,7 +41,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var lastMetricsFetchAt: Date?
     @Published private(set) var allTimeStats = NativAllTimeStats()
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
-    /// How long a model switch may stay unconfirmed before the controls unlock.
     nonisolated static let modelSwitchTimeout: TimeInterval = 180
 
     @Published private(set) var modelSwitchInProgress = false
@@ -93,10 +92,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         migrateCustomHuggingFaceCredentialIfNeeded()
     }
 
-    /// GUI apps inherit launchd's environment, which excludes exports from
-    /// shell startup files. Probe the user's login shell once for any missing
-    /// Hugging Face cache or authentication variables. Environment tokens stay
-    /// in memory; only a token entered in Developer settings is persisted.
     private func resolveHuggingFaceEnvironmentFromLoginShell() {
         let processEnvironment = ProcessInfo.processInfo.environment
         let needsCacheEnvironment = !HuggingFaceCache.isConfigured(in: processEnvironment)
@@ -287,13 +282,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         lastMetricsError == nil ? "Waiting for server..." : "Metrics unavailable"
     }
 
-    /// Folds settings the running server has already accepted into Nativ's own
-    /// configuration.
-    ///
-    /// The same values are folded into the snapshot taken at server start, so
-    /// `hasSameLaunchConfiguration` compares two sides that moved together and
-    /// no restart is requested for a change already live. Every other field is
-    /// still compared normally, so this cannot mask a change that does need one.
     func adoptLiveServerSettings(_ applied: [String: RuntimeSettingValue]) {
         guard !applied.isEmpty else { return }
         var updated = settings
@@ -394,10 +382,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         notifyMenuStateChanged()
     }
 
-    /// Returns true only when the model is present locally and its config's
-    /// architectures are all non-generative (e.g. a BERT/RoBERTa encoder), which
-    /// mlx-vlm cannot load as a chat model. Any uncertainty returns false, so a
-    /// genuine chat model is never skipped.
     private func isKnownNonGenerativeModel(_ repoID: String) -> Bool {
         let cacheName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
         let fileManager = FileManager.default
@@ -1041,17 +1025,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         onMenuStateChanged?()
     }
 
-    /// Unlocks the model controls if a switch never reports back.
-    ///
-    /// `modelSwitchInProgress` normally clears once metrics confirm the newly
-    /// started server. When that server comes up but never serves metrics, the
-    /// flag used to stay set forever, disabling the model picker and the
-    /// start/stop buttons with no way to recover short of relaunching.
-    ///
-    /// Each switch replaces the previous watchdog, so only the newest one can
-    /// fire. Comparing the target alone is not enough: switching away from a
-    /// model and back again would otherwise let the first watchdog time out the
-    /// second switch early.
     private func armModelSwitchWatchdog(
         timeout: TimeInterval = NativModel.modelSwitchTimeout
     ) {
