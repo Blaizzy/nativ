@@ -450,19 +450,19 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
     }
 
-    func testNearCompleteProgressUsesFinalizingState() throws {
+    func testNearCompleteProgressUsesFinishingState() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_000)
         var state = HuggingFaceDownloadProgressState(now: start)
         let progress = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 995, totalBytes: 1_000)
+            ModelDownloadProgress(completedBytes: 950, totalBytes: 1_000)
         )
 
         _ = state.recordProgress(progress, at: start)
 
-        XCTAssertTrue(state.isFinalizing)
+        XCTAssertTrue(state.isFinishing)
     }
 
-    func testTransferEstimateCeilingUsesFinalizingState() throws {
+    func testTransferEstimateCeilingUsesFinishingState() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_500)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
@@ -474,9 +474,9 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
             state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
         )
 
-        XCTAssertEqual(capped.completedBytes, 996)
+        XCTAssertEqual(capped.completedBytes, 951)
         XCTAssertLessThan(capped.fractionCompleted, 1)
-        XCTAssertTrue(state.isFinalizing)
+        XCTAssertTrue(state.isFinishing)
     }
 
     func testTransferredBytesProduceSmoothedTransferSpeed() {
@@ -531,10 +531,10 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(1), 99)
     }
 
-    func testNearCompleteDownloadUsesFinalizingState() {
-        XCTAssertFalse(ModelDownloadProgressPresentation.isFinalizing(0.994))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(0.995))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(1))
+    func testNearCompleteDownloadUsesFinishingState() {
+        XCTAssertFalse(ModelDownloadProgressPresentation.isFinishing(0.949))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(0.95))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(1))
     }
 
     func testActiveProgressRingDoesNotBecomeComplete() {
