@@ -894,7 +894,7 @@ struct AudioView: View {
         case .preparing:
             "Preparing \(captureLibrary.activeKind?.title.lowercased() ?? "recording")…"
         case .recording:
-            "Recording \(captureLibrary.activeKind?.title.lowercased() ?? "audio")"
+            "Recording"
         case .processing:
             "Saving and transcribing…"
         }
