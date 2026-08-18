@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 enum ControlPanelTab: String, CaseIterable, Identifiable {
     case chat = "Chat"
+    case scheduled = "Scheduled"
     case artifacts = "Artifacts"
     case dashboard = "Dashboard"
     case system = "System"
@@ -18,6 +19,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     static var allCases: [ControlPanelTab] {
         [
             .chat,
+            .scheduled,
             .artifacts,
             .dashboard,
             .system,
@@ -33,6 +35,8 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
         switch self {
         case .chat:
             "bubble.left.and.bubble.right"
+        case .scheduled:
+            "clock.badge.checkmark"
         case .artifacts:
             "photo.on.rectangle.angled"
         case .dashboard:
@@ -55,6 +59,7 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
 final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var requestedTab: ControlPanelTab?
     @Published private(set) var requestedExtensionPageID: String?
+    @Published private(set) var requestedChatSessionID: UUID?
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
@@ -67,7 +72,14 @@ final class ControlPanelNavigation: ObservableObject {
 
     func open(_ tab: ControlPanelTab) {
         requestedExtensionPageID = nil
+        requestedChatSessionID = nil
         requestedTab = tab
+    }
+
+    func openChatSession(_ sessionID: UUID) {
+        requestedTab = nil
+        requestedExtensionPageID = nil
+        requestedChatSessionID = sessionID
     }
 
     func openExtensionPage(_ pageID: String) {
@@ -670,7 +682,6 @@ struct ControlPanelView: View {
     @State private var detailTransitionOffset: CGFloat = 0
     @State private var isSidebarTransitioning = false
     @State private var sidebarTransitionGeneration = 0
-    @State private var schedulingRoutineDraft: RoutineDraft?
     @State private var isModelConfigurationVisible = false
     @State private var selectedDevSection: DevHubView.Section = .integrations
     @State private var isFullScreen = false
@@ -840,6 +851,11 @@ struct ControlPanelView: View {
             guard let pageID else { return }
             applySidebarSelection(.extensionPage(pageID))
         }
+        .onReceive(navigation.$requestedChatSessionID) { sessionID in
+            guard let sessionID else { return }
+            chat.reloadPersistedSessions()
+            applySidebarSelection(.chat(sessionID))
+        }
         .onChange(of: contentState.extensionSidebarContributions) { _, contributions in
             guard case .extensionPage(let pageID) = sidebarSelection,
                   !contributions.contains(
@@ -879,6 +895,9 @@ struct ControlPanelView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
+            chat.reloadPersistedSessions()
         }
         .alert(
             "Unable to Update Start at Login",
@@ -989,8 +1008,11 @@ struct ControlPanelView: View {
             }
         } message: { recent in
             if case .chat(let sessionID) = recent.selection,
-               let routine = contentState.routine(forSession: sessionID) {
-                Text("“\(recent.title)” has a routine (\(RoutineFormatting.summary(routine))). Deleting the chat cancels the routine.")
+               contentState.routine(forSession: sessionID) != nil {
+                Text(
+                    "“\(recent.title)” is a scheduled task. Deleting this chat also deletes "
+                        + "the scheduled task and its run history."
+                )
             } else {
                 Text("“\(recent.title)” will be permanently deleted.")
             }
@@ -1024,23 +1046,7 @@ struct ControlPanelView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The selected chats are permanently deleted. Selected folders are removed but their chats are kept.")
-        }
-        .sheet(item: $schedulingRoutineDraft) { draft in
-            RoutineEditorSheetHost(
-                draft: draft,
-                modelLibrary: routineModelLibrary,
-                routineStore: routineStore,
-                onSave: { routine in
-                    saveScheduledRoutine(routine)
-                    schedulingRoutineDraft = nil
-                },
-                onCancel: { schedulingRoutineDraft = nil },
-                onDelete: {
-                    routineStore.delete(id: draft.routine.id)
-                    schedulingRoutineDraft = nil
-                }
-            )
+            Text(bulkDeleteDescription)
         }
     }
 
@@ -1536,18 +1542,9 @@ struct ControlPanelView: View {
             .disabled(recentSessions.isEmpty && sidebarState.recents.folders.isEmpty)
             .help("Select multiple")
 
-            Menu {
-                Button {
-                    withAnimation(.snappy(duration: 0.2)) {
-                        createRecentSession()
-                    }
-                } label: {
-                    Label(newRecentTitle, systemImage: newRecentSystemImage)
-                }
-                Button {
-                    presentNewRoutine()
-                } label: {
-                    Label("New routine", systemImage: "bolt")
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    createRecentSession()
                 }
             } label: {
                 Image(systemName: "plus")
@@ -1555,9 +1552,7 @@ struct ControlPanelView: View {
                     .frame(width: 28, height: 28)
                     .foregroundStyle(isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+            .buttonStyle(.plain)
             .disabled(
                 selectedTab == .chat
                     && chatWorkspaceMode == .images
@@ -1756,7 +1751,7 @@ struct ControlPanelView: View {
             true
         case .dev:
             selectedDevSection == .developer
-        case .artifacts, .dashboard, .system, .extensions, .settings:
+        case .scheduled, .artifacts, .dashboard, .system, .extensions, .settings:
             false
         }
     }
@@ -1889,7 +1884,25 @@ struct ControlPanelView: View {
     }
 
     private var recentSessions: [ControlPanelRecentSession] {
-        sidebarState.recents.recentSessions
+        sidebarState.recents.recentSessions.filter(shouldDisplayRecentSession)
+    }
+
+    private var scheduledTaskChatIDs: Set<UUID> {
+        Set(routineStore.routines.compactMap(\.sourceSessionID))
+    }
+
+    private var scheduledRunChatIDs: Set<UUID> {
+        Set(routineStore.runs.compactMap(\.sessionID))
+    }
+
+    private func shouldDisplayRecentSession(_ recent: ControlPanelRecentSession) -> Bool {
+        guard case .chat(let sessionID) = recent.selection else {
+            return true
+        }
+        if scheduledTaskChatIDs.contains(sessionID) {
+            return true
+        }
+        return recent.scheduledTaskID == nil && !scheduledRunChatIDs.contains(sessionID)
     }
 
     private var pinnedSessions: [ControlPanelRecentSession] {
@@ -1920,7 +1933,6 @@ struct ControlPanelView: View {
     private func recentSessionRow(_ recent: ControlPanelRecentSession) -> some View {
         ControlPanelRecentSessionRow(
             recent: recent,
-            routineStatus: routineStatus(for: recent),
             isSelected: sidebarSelection == recent.selection,
             isCurrent: isCurrentRecent(recent),
             isSelectionDisabled: isRecentSelectionDisabled(recent),
@@ -1955,9 +1967,6 @@ struct ControlPanelView: View {
             onTogglePin: {
                 togglePinRecent(recent)
             },
-            onEditRoutine: {
-                editRoutine(for: recent)
-            },
             folders: sidebarState.recents.folders,
             onMoveToFolder: { folderID in
                 moveRecentToFolder(recent, folderID: folderID)
@@ -1973,55 +1982,6 @@ struct ControlPanelView: View {
             return
         }
         chat.setPinned(sessionID, pinned: !recent.pinned)
-    }
-
-    private func routineStatus(for recent: ControlPanelRecentSession) -> RoutineRowStatus {
-        guard case .chat(let sessionID) = recent.selection,
-              let routine = contentState.routine(forSession: sessionID)
-        else {
-            return .none
-        }
-        if contentState.isRoutineRunning(forSession: sessionID) {
-            return .running
-        }
-        return routine.isEnabled ? .scheduled : .disabled
-    }
-
-    private func editRoutine(for recent: ControlPanelRecentSession) {
-        guard case .chat(let sessionID) = recent.selection else {
-            return
-        }
-        routineModelLibrary.scan(searchPaths: chromeState.artifactSettings.localModelSearchPaths)
-        guard let existing = routineStore.routine(forSession: sessionID) else {
-            return
-        }
-        schedulingRoutineDraft = RoutineDraft(routine: existing)
-    }
-
-    private func presentNewRoutine() {
-        let settings = model.settings.normalized()
-        routineModelLibrary.scan(searchPaths: chromeState.artifactSettings.localModelSearchPaths)
-        schedulingRoutineDraft = RoutineDraft(
-            routine: Routine(modelID: settings.languageModelID ?? "")
-        )
-    }
-
-    private func saveScheduledRoutine(_ routine: Routine) {
-        var routine = routine
-        if routine.sourceSessionID == nil {
-            let now = Date()
-            let session = ChatSession(
-                id: UUID(),
-                title: routine.name.isEmpty ? "Routine" : routine.name,
-                createdAt: now,
-                updatedAt: now,
-                messages: []
-            )
-            ChatSessionStore().saveSession(session)
-            routine.sourceSessionID = session.id
-        }
-        RoutineStore.shared.upsert(routine)
-        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func moveRecentToFolder(_ recent: ControlPanelRecentSession, folderID: UUID?) {
@@ -2133,6 +2093,29 @@ struct ControlPanelView: View {
         recentSessions.filter { $0.isChat && selectedRecentIDs.contains($0.id) }
     }
 
+    private var selectedScheduledTaskCount: Int {
+        selectedChats.reduce(into: 0) { count, recent in
+            guard let sessionID = recent.chatID,
+                  routineStore.routine(forSession: sessionID) != nil
+            else {
+                return
+            }
+            count += 1
+        }
+    }
+
+    private var bulkDeleteDescription: String {
+        let base = "The selected chats are permanently deleted."
+        let folders = "Selected folders are removed but their chats are kept."
+        guard selectedScheduledTaskCount > 0 else {
+            return "\(base) \(folders)"
+        }
+        let scheduledData = selectedScheduledTaskCount == 1
+            ? "1 linked scheduled task and its run history"
+            : "\(selectedScheduledTaskCount) linked scheduled tasks and their run history"
+        return "\(base) This also deletes \(scheduledData). \(folders)"
+    }
+
     private var hasSelectedChats: Bool {
         !selectedChats.isEmpty
     }
@@ -2221,7 +2204,7 @@ struct ControlPanelView: View {
             for recent in targets {
                 switch recent.selection {
                 case .chat(let sessionID):
-                    chat.deleteSession(sessionID)
+                    deleteChatSession(sessionID)
                 case .imageGeneration(let sessionID):
                     imageGeneration.deleteSession(sessionID)
                 case .tab, .extensionPage:
@@ -2311,6 +2294,19 @@ struct ControlPanelView: View {
                     ? 0
                     : ControlPanelLayout.titlebarHeight,
                 onExploreImageModels: navigation.openImageModelDiscovery
+            )
+        case .scheduled:
+            ScheduledTasksView(
+                model: model,
+                mcpHost: mcpHost,
+                extensionManager: extensionManager,
+                titleLeadingInset: detailTitleLeadingInset,
+                onOpenRun: { applySidebarSelection(.chat($0)) },
+                onDeleteSessions: { sessionIDs in
+                    for sessionID in sessionIDs {
+                        chat.deleteSession(sessionID)
+                    }
+                }
             )
         case .artifacts:
             ArtifactsPageHost(
@@ -2473,7 +2469,7 @@ struct ControlPanelView: View {
             return true
         }
         switch selectedTab {
-        case .dashboard, .system, .models, .extensions, .dev:
+        case .scheduled, .dashboard, .system, .models, .extensions, .dev:
             return true
         case .chat, .artifacts, .settings:
             return false
@@ -2609,8 +2605,7 @@ struct ControlPanelView: View {
 
         switch recent.selection {
         case .chat(let sessionID):
-            routineStore.deleteRoutine(forSession: sessionID)
-            chat.deleteSession(sessionID)
+            deleteChatSession(sessionID)
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
         case .tab, .extensionPage:
@@ -2630,6 +2625,22 @@ struct ControlPanelView: View {
             case .chat, .tab, .extensionPage:
                 createChatSession()
             }
+        }
+    }
+
+    private func deleteChatSession(_ sessionID: UUID) {
+        guard let routine = routineStore.routine(forSession: sessionID) else {
+            chat.deleteSession(sessionID)
+            return
+        }
+
+        let sessionIDs = Set(
+            [routine.sourceSessionID].compactMap { $0 }
+                + routineStore.runs(forRoutine: routine.id).compactMap(\.sessionID)
+        )
+        routineStore.delete(id: routine.id)
+        for linkedSessionID in sessionIDs {
+            chat.deleteSession(linkedSessionID)
         }
     }
 
@@ -2755,37 +2766,6 @@ struct ControlPanelView: View {
             ?? .tab(.chat)
     }
 
-}
-
-private struct RoutineEditorSheetHost: View {
-    let draft: RoutineDraft
-    @ObservedObject var modelLibrary: LocalModelLibrary
-    @ObservedObject var routineStore: RoutineStore
-    let onSave: (Routine) -> Void
-    let onCancel: () -> Void
-    let onDelete: () -> Void
-
-    private var availableModelIDs: [String] {
-        let textModelIDs = modelLibrary.models
-            .filter { $0.capabilities.contains(.text) }
-            .map(\.repoID)
-        let snapshotModelID = draft.routine.modelID
-        return (
-            snapshotModelID.isEmpty || textModelIDs.contains(snapshotModelID)
-                ? textModelIDs
-                : textModelIDs + [snapshotModelID]
-        ).sorted()
-    }
-
-    var body: some View {
-        RoutineEditor(
-            draft: draft,
-            availableModelIDs: availableModelIDs,
-            onSave: onSave,
-            onCancel: onCancel,
-            onDelete: routineStore.routine(id: draft.routine.id) == nil ? nil : onDelete
-        )
-    }
 }
 
 private struct ArtifactsPageHost: View {
@@ -4239,6 +4219,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let scheduledTaskID: String?
 
     init(chat session: ChatSessionSummary) {
         id = .chat(session.id)
@@ -4249,6 +4230,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         pinnedOrder = session.pinnedOrder
         sessionOrder = session.sessionOrder
         folderID = session.folderID
+        scheduledTaskID = session.scheduledTaskID
     }
 
     init(imageGeneration session: ImageGenerationSessionSummary) {
@@ -4260,6 +4242,7 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
         pinnedOrder = nil
         sessionOrder = nil
         folderID = nil
+        scheduledTaskID = nil
     }
 
     var chatID: UUID? {
@@ -4292,9 +4275,18 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     var badgeSystemImage: String? {
         switch id {
         case .chat:
-            nil
+            scheduledTaskID == nil ? nil : "clock"
         case .imageGeneration:
             "photo"
+        }
+    }
+
+    var badgeLabel: String? {
+        switch id {
+        case .chat:
+            scheduledTaskID == nil ? nil : "Scheduled task"
+        case .imageGeneration:
+            "Image session"
         }
     }
 
@@ -4332,16 +4324,8 @@ private struct ControlPanelRecentSession: Identifiable, Equatable {
     }
 }
 
-private enum RoutineRowStatus {
-    case none
-    case disabled
-    case scheduled
-    case running
-}
-
 private struct ControlPanelRecentSessionRow: View {
     let recent: ControlPanelRecentSession
-    let routineStatus: RoutineRowStatus
     let isSelected: Bool
     let isCurrent: Bool
     let isSelectionDisabled: Bool
@@ -4358,7 +4342,6 @@ private struct ControlPanelRecentSessionRow: View {
     let onRename: (String) -> Void
     let onNewChat: () -> Void
     let onTogglePin: () -> Void
-    let onEditRoutine: () -> Void
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
@@ -4367,29 +4350,6 @@ private struct ControlPanelRecentSessionRow: View {
     @State private var isRenaming = false
     @State private var renameDraft = ""
     @FocusState private var renameFieldFocused: Bool
-
-    @ViewBuilder
-    private var routineBolt: some View {
-        switch routineStatus {
-        case .none:
-            EmptyView()
-        case .disabled:
-            Image(systemName: "bolt.slash")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .help("Routine paused")
-        case .scheduled:
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .help("Routine scheduled")
-        case .running:
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.green)
-                .help("Routine running now")
-        }
-    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -4444,15 +4404,13 @@ private struct ControlPanelRecentSessionRow: View {
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                                         .fill(Color.secondary.opacity(0.1))
                                 )
-                                .help("Image session")
-                                .accessibilityLabel("Image session")
+                                .help(recent.badgeLabel ?? "Session")
+                                .accessibilityLabel(recent.badgeLabel ?? "Session")
                         }
 
                         Text(recent.title)
                             .lineLimit(1)
                             .truncationMode(.tail)
-
-                        routineBolt
 
                         Spacer(minLength: 0)
                     }
@@ -4545,14 +4503,6 @@ private struct ControlPanelRecentSessionRow: View {
                     recent.pinned ? "Unpin" : "Pin",
                     systemImage: recent.pinned ? "pin.slash" : "pin"
                 )
-            }
-
-            if routineStatus != .none {
-                Button {
-                    onEditRoutine()
-                } label: {
-                    Label("Edit routine", systemImage: "bolt")
-                }
             }
 
             Menu {

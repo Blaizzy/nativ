@@ -1170,6 +1170,22 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.imageGenerationModelID, "org/image")
     }
 
+    func testChatSessionPersistsScheduledTaskOrigin() throws {
+        let session = ChatSession(
+            id: UUID(),
+            title: "Scheduled result",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            messages: [],
+            scheduledTaskID: "task-1"
+        )
+
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
+
+        XCTAssertEqual(decoded.scheduledTaskID, "task-1")
+    }
+
     func testOldChatSessionWithoutImageModelSelectionStillDecodes() throws {
         let oldJSON = #"{"id":"8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B","title":"Old","createdAt":0,"updatedAt":0,"messages":[]}"#
         let session = try JSONDecoder().decode(
@@ -1178,6 +1194,7 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         )
 
         XCTAssertNil(session.imageGenerationModelID)
+        XCTAssertNil(session.scheduledTaskID)
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {

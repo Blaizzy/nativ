@@ -15,6 +15,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var sessionOrder: Int?
     var folderID: UUID?
     var imageGenerationModelID: String?
+    var scheduledTaskID: String?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -26,13 +27,17 @@ struct ChatSession: Identifiable, Equatable, Codable {
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
-            folderID: folderID
+            folderID: folderID,
+            scheduledTaskID: scheduledTaskID
         )
     }
 
     var displayTitle: String {
         if let customTitle, !customTitle.isEmpty {
             return customTitle
+        }
+        if scheduledTaskID != nil, !title.isEmpty {
+            return title
         }
         return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
     }
@@ -110,6 +115,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let scheduledTaskID: String?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {

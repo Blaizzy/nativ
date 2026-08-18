@@ -353,10 +353,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
+    private let routineSessionStore = ChatSessionStore()
     private lazy var routineRunner = RoutineRunner(
         model: model,
         store: routineStore,
-        sessionStore: ChatSessionStore()
+        sessionStore: routineSessionStore
     )
     private lazy var routineScheduler = RoutineScheduler(
         store: routineStore,
@@ -602,14 +603,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
     }
 
     private func setUpRoutines() {
+        restoreScheduledTaskChats()
         RoutineRunCoordinator.shared.configure(runner: routineRunner)
-        routineRunner.onRunCompleted = { [weak self] routine, run in
-            self?.postRoutineNotification(routine: routine, run: run)
+        routineRunner.onRunCompleted = { routine, run in
+            Task { @MainActor in
+                guard routine.notifyOnFinish else { return }
+                await NativNotificationService.shared.deliver(
+                    .scheduledTaskCompletion(routine: routine, run: run)
+                )
+            }
         }
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(
-            options: [.alert, .sound]
-        ) { _, _ in }
         routineStore.onRoutinesChanged = { [weak self] in
             self?.refreshRoutineAgents()
         }
@@ -617,25 +621,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
         routineScheduler.start()
     }
 
-    private func refreshRoutineAgents() {
-        RoutineLaunchAgent.refresh(routines: routineStore.routines)
+    private func restoreScheduledTaskChats() {
+        guard !routineStore.routines.isEmpty else { return }
+
+        for routine in routineStore.routines {
+            let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
+                for: routine,
+                runs: routineStore.runs(forRoutine: routine.id),
+                sessionStore: routineSessionStore
+            )
+            if linkedRoutine != routine {
+                routineStore.upsert(linkedRoutine)
+            }
+        }
+        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
-    private func postRoutineNotification(routine: Routine, run: RoutineRun) {
-        guard routine.notifyOnFinish else {
-            return
-        }
-        let content = UNMutableNotificationContent()
-        content.title = routine.name.isEmpty ? "Routine" : routine.name
-        content.body = run.status == .failed
-            ? "Run failed. \(run.resultSummary)"
-            : (run.resultSummary.isEmpty ? "Run finished." : run.resultSummary)
-        if let sessionID = run.sessionID {
-            content.userInfo = ["sessionID": sessionID.uuidString]
-        }
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: run.id, content: content, trigger: nil)
-        )
+    private func refreshRoutineAgents() {
+        RoutineLaunchAgent.refresh(routines: routineStore.routines)
     }
 
     func userNotificationCenter(
@@ -651,8 +654,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let sessionID = (response.notification.request.content.userInfo["sessionID"] as? String)
+            .flatMap(UUID.init(uuidString:))
         DispatchQueue.main.async { [weak self] in
-            self?.controlPanelNavigation.open(.chat)
+            if let sessionID {
+                self?.controlPanelNavigation.openChatSession(sessionID)
+            } else {
+                self?.controlPanelNavigation.open(.chat)
+            }
             self?.showMainWindow()
         }
         completionHandler()

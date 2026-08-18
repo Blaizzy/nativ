@@ -122,6 +122,7 @@ targets:
     settings:
       base:
         ARCHS: arm64
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ENABLE_HARDENED_RUNTIME: YES
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
@@ -165,6 +166,10 @@ targets:
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
+      - path: Sources/Nativ/Features/Routines/Routine.swift
+      - path: Sources/Nativ/Features/Routines/ScheduledTaskChatLinker.swift
+      - path: Sources/Nativ/Features/Routines/ScheduledTaskNotification.swift
+      - path: Sources/Nativ/Utilities/NativNotificationService.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift

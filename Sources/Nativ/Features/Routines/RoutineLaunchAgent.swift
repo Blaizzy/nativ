@@ -123,9 +123,16 @@ enum RoutineHeadlessRun {
         )
         retainedModel = model
         retainedRunner = runner
-        runner.onRunCompleted = { _, _ in
-            model.stopServer()
-            exit(EXIT_SUCCESS)
+        runner.onRunCompleted = { routine, run in
+            Task { @MainActor in
+                if routine.notifyOnFinish {
+                    await NativNotificationService.shared.deliver(
+                        .scheduledTaskCompletion(routine: routine, run: run)
+                    )
+                }
+                model.stopServer()
+                exit(EXIT_SUCCESS)
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
             retainedModel?.stopServer()

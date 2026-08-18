@@ -27,7 +27,7 @@ Use Nativ as a private chat app, a model manager, a performance dashboard, or an
 
 Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)** — start there for
 [Chat](Docs/features/chat.md), [Models](Docs/features/models.md), [Voice](Docs/features/voice.md),
-[Routines](Docs/features/routines.md), [Integrations](Docs/features/integrations.md), and the
+[Scheduled tasks](Docs/features/routines.md), [Integrations](Docs/features/integrations.md), and the
 [Developer](Docs/features/developer.md) reference, plus guides for
 [extensions](Docs/extending/extensions.md), [kits](Docs/extending/kits.md), and the
 [MCP catalog](Docs/extending/mcp-catalog.md).
@@ -49,7 +49,7 @@ Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)*
 | **Audio extension** | Use private local audio capabilities, including voice dictation in any app with either a pointer-following waveform or a camera-cutout pill with a reactive gradient orb and timer. Review transcript history, track words per minute, total words, time saved, and streaks, choose an installed speech model, and customize the record and retry shortcuts. |
 | **Artifacts** | Browse every image and document produced or uploaded across chats, with filters, sorting, and semantic search over your own artifacts. |
 | **MCP servers** | Connect Model Context Protocol servers and expose their tools to chat, with per-tool consent. |
-| **Routines** | Schedule prompts to run on their own and collect the results. |
+| **Scheduled** | Run saved prompts on a schedule with task-specific kits, MCP servers, tools, and skills. |
 | **Chat tools** | Let the model generate and edit images, list or switch models, and read server and system stats, each behind a consent prompt. |
 | **Advanced inference controls** | Tune sampling, thinking budgets, structured output, KV-cache quantization, prefix caching, and speculative decoding. |
 
