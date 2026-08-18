@@ -808,6 +808,17 @@ struct NativSettings: Codable, Equatable {
             && !draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    func isToolEnabled(_ toolName: String) -> Bool {
+        !disabledToolNames.contains(toolName)
+    }
+
+    mutating func setToolEnabled(_ enabled: Bool, toolName: String) {
+        disabledToolNames.removeAll { $0 == toolName }
+        if !enabled {
+            disabledToolNames.append(toolName)
+        }
+    }
+
     func hasSameLaunchConfiguration(as other: Self) -> Bool {
         let lhs = normalized()
         let rhs = other.normalized()

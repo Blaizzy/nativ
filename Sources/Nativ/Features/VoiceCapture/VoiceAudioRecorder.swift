@@ -193,11 +193,8 @@ final class VoiceAudioRecorder {
             audioFile: audioFile,
             sampleRate: inputFormat.sampleRate
         )
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: 1_024,
-            format: inputFormat
-        ) { [weak self, writer] buffer, _ in
+        let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = {
+            [weak self, writer] buffer, _ in
             let measurement = writer.append(buffer)
             Task { @MainActor [weak self] in
                 self?.updateMeter(
@@ -206,6 +203,12 @@ final class VoiceAudioRecorder {
                 )
             }
         }
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1_024,
+            format: inputFormat,
+            block: tap
+        )
 
         do {
             audioEngine.prepare()

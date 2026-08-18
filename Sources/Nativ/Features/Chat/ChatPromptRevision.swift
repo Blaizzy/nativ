@@ -2,7 +2,10 @@ import Foundation
 
 struct ChatPromptRevision: Equatable {
     let messages: [ChatTranscriptMessage]
-    let discardedMessageCount: Int
+
+    static func latestUserMessageID(in messages: [ChatTranscriptMessage]) -> UUID? {
+        messages.last(where: { $0.role == .user })?.id
+    }
 
     static func make(
         messageID: UUID,
@@ -32,21 +35,6 @@ struct ChatPromptRevision: Equatable {
         var revisedMessages = Array(messages[..<messageIndex])
         revisedMessages.append(revisedMessage)
 
-        return ChatPromptRevision(
-            messages: revisedMessages,
-            discardedMessageCount: messages.count - messageIndex - 1
-        )
-    }
-
-    static func discardedMessageCount(
-        after messageID: UUID,
-        in messages: [ChatTranscriptMessage]
-    ) -> Int? {
-        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
-              messages[messageIndex].role == .user
-        else {
-            return nil
-        }
-        return messages.count - messageIndex - 1
+        return ChatPromptRevision(messages: revisedMessages)
     }
 }

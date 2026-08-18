@@ -115,7 +115,7 @@ struct ChatComposer: View {
     let canSend: Bool
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let onSend: (Bool) -> Void
+    let onSend: (Bool, Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
@@ -135,9 +135,8 @@ struct ChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let promptEditContext = viewModel.promptEditContext {
+            if viewModel.promptEditContext != nil {
                 ChatPromptEditBanner(
-                    discardedMessageCount: promptEditContext.discardedMessageCount,
                     onCancel: viewModel.cancelPromptEditing
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -200,29 +199,27 @@ struct ChatComposer: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(viewModel.pendingImageAttachments) { attachment in
-                                ChatPendingImageAttachmentView(attachment: attachment) {
+                                ChatPendingImageAttachmentView(
+                                    attachment: attachment,
+                                    validation: viewModel.attachmentValidation(for: attachment.id),
+                                    modelRejectsImage: modelLacksVision
+                                        && attachment.chatAttachmentKind == .image
+                                ) {
                                     viewModel.removePendingImageAttachment(attachment.id)
                                 }
                             }
                         }
                         .padding(.vertical, 1)
-                        .opacity(modelLacksVision ? 0.5 : 1)
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                 }
 
-                if !viewModel.pendingImageAttachments.isEmpty, modelLacksVision {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text("The current model can't see images — load a vision model to use them.")
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                    }
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                if !attachmentNotices.isEmpty {
+                    ChatAttachmentNoticesView(
+                        notices: attachmentNotices,
+                        onDismiss: dismissAttachmentNotice
+                    )
                 }
 
                 HStack(spacing: 8) {
@@ -257,7 +254,7 @@ struct ChatComposer: View {
                             .contentShape(.circle)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!showsStopButton && !canSend)
+                    .disabled(!showsStopButton && !effectiveCanSend)
                     .help(actionButtonHelp)
                 }
                 .padding(.leading, 10)
@@ -343,7 +340,7 @@ struct ChatComposer: View {
             ),
             isWebReadAvailable: isWebReadAvailable,
             webReadProviderLabel: webReadProviderLabel,
-            onAttachImages: { dismissAddPanelAndPerform(viewModel.chooseImageAttachments) },
+            onAttachImages: { dismissAddPanelAndPerform(viewModel.chooseAttachments) },
             onPasteImage: { dismissAddPanelAndPerform(viewModel.pasteImageFromClipboard) },
             onCaptureScreenshot: { dismissAddPanelAndPerform(viewModel.captureScreenshot) },
             onToggleWebSearch: {
@@ -373,7 +370,7 @@ struct ChatComposer: View {
     }
 
     private func globalToolIsEnabled(_ toolName: String, isAvailable: Bool) -> Bool {
-        isAvailable && !model.settings.disabledToolNames.contains(toolName)
+        isAvailable && model.settings.isToolEnabled(toolName)
     }
 
     private func toggleGlobalBrowsingTool(
@@ -388,11 +385,10 @@ struct ChatComposer: View {
             return
         }
 
-        if model.settings.disabledToolNames.contains(toolName) {
-            model.settings.disabledToolNames.removeAll { $0 == toolName }
-        } else {
-            model.settings.disabledToolNames.append(toolName)
-        }
+        model.settings.setToolEnabled(
+            !model.settings.isToolEnabled(toolName),
+            toolName: toolName
+        )
         showsAddPanel = false
     }
 
@@ -429,6 +425,8 @@ struct ChatComposer: View {
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
             shortcutLabel: "⌃⇧M",
+            emptyStateActionTitle: nil,
+            onEmptyStateAction: nil,
             onSelectModel: select,
             onSwitchModel: { model.switchLanguageModel(to: $0) }
         )
@@ -462,6 +460,113 @@ struct ChatComposer: View {
     private var modelLacksVision: Bool {
         guard let model = selectedLocalModel else { return false }
         return !model.capabilities.contains(.vision)
+    }
+
+    private var hasVisionRejectedAttachment: Bool {
+        modelLacksVision && viewModel.hasPendingImageAttachments
+    }
+
+    private var effectiveCanSend: Bool {
+        canSend && !hasVisionRejectedAttachment
+    }
+
+    private var attachmentNotices: [ChatAttachmentNotice] {
+        var notices: [ChatAttachmentNotice] = []
+        let rejectedImages = modelLacksVision
+            ? viewModel.pendingImageAttachments.filter { $0.chatAttachmentKind == .image }
+            : []
+
+        if !rejectedImages.isEmpty {
+            notices.append(ChatAttachmentNotice(
+                id: "vision-model-required",
+                severity: .error,
+                title: "This model can’t view images",
+                message: visionModelWarningMessage(for: rejectedImages),
+                systemImage: "eye.slash.fill"
+            ))
+        }
+
+        for attachment in viewModel.pendingImageAttachments {
+            if modelLacksVision, attachment.chatAttachmentKind == .image {
+                continue
+            }
+
+            guard let validation = viewModel.attachmentValidation(for: attachment.id) else {
+                continue
+            }
+            switch validation {
+            case .processing(let message):
+                notices.append(ChatAttachmentNotice(
+                    id: "attachment-\(attachment.id.uuidString)",
+                    severity: .progress,
+                    message: message
+                ))
+            case .warning(let message, _):
+                notices.append(ChatAttachmentNotice(
+                    id: "attachment-\(attachment.id.uuidString)",
+                    severity: .warning,
+                    title: "PDF will be shortened",
+                    message: message
+                ))
+            case .blocked(let message):
+                notices.append(ChatAttachmentNotice(
+                    id: "attachment-\(attachment.id.uuidString)",
+                    severity: .error,
+                    title: "Attachment can’t be used",
+                    message: message
+                ))
+            case .ready:
+                break
+            }
+        }
+
+        let pendingPDFCount = viewModel.pendingImageAttachments.count {
+            $0.chatAttachmentKind == .pdf
+        }
+        if pendingPDFCount > 1,
+           viewModel.pendingPDFCharacterCount
+            > ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest {
+            notices.append(ChatAttachmentNotice(
+                id: "pdf-request-limit",
+                severity: .warning,
+                title: "PDF context limit reached",
+                message: "These PDFs exceed the "
+                    + "\(ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest.formatted())"
+                    + "-character request limit. Newer documents will be prioritized."
+            ))
+        }
+
+        if modelLacksVision,
+           !viewModel.hasPendingImageAttachments,
+           viewModel.hasImageAttachmentsInCurrentSession {
+            notices.append(ChatAttachmentNotice(
+                id: "historical-images-unavailable",
+                severity: .warning,
+                title: "Earlier images are unavailable",
+                message: "The selected model can’t access images from earlier messages in this chat.",
+                systemImage: "eye.slash.fill"
+            ))
+        }
+
+        if let attachmentImportError = viewModel.attachmentImportError {
+            notices.append(ChatAttachmentNotice(
+                id: "attachment-import-error",
+                severity: .warning,
+                title: "Some files weren’t added",
+                message: attachmentImportError,
+                isDismissible: true
+            ))
+        }
+        return notices
+    }
+
+    private func visionModelWarningMessage(
+        for attachments: [ChatImageAttachment]
+    ) -> String {
+        if attachments.count == 1, let filename = attachments.first?.filename {
+            return "Remove “\(filename)” or choose a vision-capable model to continue."
+        }
+        return "Remove these \(attachments.count) images or choose a vision-capable model to continue."
     }
 
     private var selectedLocalModel: LocalModel? {
@@ -652,7 +757,7 @@ struct ChatComposer: View {
     }
 
     private var actionButtonColor: Color {
-        if showsStopButton || canSend {
+        if showsStopButton || effectiveCanSend {
             return .accentColor
         }
         return Color(nsColor: .tertiaryLabelColor)
@@ -669,8 +774,13 @@ struct ChatComposer: View {
         if showsStopButton {
             return "Stop response"
         }
+        if let blockingNotice = attachmentNotices.first(where: {
+            $0.severity == .error || $0.severity == .progress
+        }) {
+            return blockingNotice.message
+        }
         if viewModel.promptEditContext != nil {
-            return "Save prompt and regenerate (Return)"
+            return "Fork and regenerate (Return)"
         }
         return "Send (Return)"
     }
@@ -684,8 +794,18 @@ struct ChatComposer: View {
     }
 
     private func send() {
-        guard canSend else { return }
-        onSend(selectedLocalModel?.capabilities.contains(.tools) == true)
+        guard effectiveCanSend else { return }
+        onSend(
+            selectedLocalModel?.capabilities.contains(.tools) == true,
+            !modelLacksVision
+        )
+    }
+
+    private func dismissAttachmentNotice(_ noticeID: String) {
+        guard noticeID == "attachment-import-error" else {
+            return
+        }
+        viewModel.clearAttachmentImportError()
     }
 
     private var editorHeight: CGFloat {
@@ -694,7 +814,6 @@ struct ChatComposer: View {
 }
 
 private struct ChatPromptEditBanner: View {
-    let discardedMessageCount: Int
     let onCancel: () -> Void
     @State private var isCancelHovered = false
 
@@ -706,7 +825,7 @@ private struct ChatPromptEditBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Editing prompt")
                     .fontWeight(.medium)
-                Text(replacementDescription)
+                Text("Sending will create a new conversation branch.")
                     .foregroundStyle(.secondary)
             }
 
@@ -737,17 +856,6 @@ private struct ChatPromptEditBanner: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.accentColor.opacity(0.22), lineWidth: 0.5)
-        }
-    }
-
-    private var replacementDescription: String {
-        switch discardedMessageCount {
-        case 0:
-            "Sending will generate a new response."
-        case 1:
-            "Sending will replace the following response."
-        default:
-            "Sending will replace \(discardedMessageCount) later conversation items."
         }
     }
 }
@@ -784,6 +892,8 @@ struct ComposerModelPicker: View {
     let helpText: String
     let accessibilityValue: String
     let shortcutLabel: String?
+    let emptyStateActionTitle: String?
+    let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
 
@@ -801,6 +911,8 @@ struct ComposerModelPicker: View {
                 isEnabled: !isDisabled,
                 usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
+                emptyStateActionTitle: emptyStateActionTitle,
+                onEmptyStateAction: onEmptyStateAction,
                 onSelectModel: onSelectModel,
                 onSwitchModel: onSwitchModel,
                 onTrackingChanged: { isTracking in
@@ -884,6 +996,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let isEnabled: Bool
     let usesSelectModelShortcut: Bool
     let statusLabel: String
+    let emptyStateActionTitle: String?
+    let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
     let onTrackingChanged: (Bool) -> Void
@@ -1014,9 +1128,26 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                 let item = NSMenuItem(title: parent.statusLabel, action: nil, keyEquivalent: "")
                 item.isEnabled = false
                 menu.addItem(item)
+
+                if let actionTitle = parent.emptyStateActionTitle,
+                   parent.onEmptyStateAction != nil {
+                    menu.addItem(.separator())
+                    let actionItem = NSMenuItem(
+                        title: actionTitle,
+                        action: #selector(performEmptyStateAction),
+                        keyEquivalent: ""
+                    )
+                    actionItem.target = self
+                    actionItem.isEnabled = true
+                    menu.addItem(actionItem)
+                }
             }
 
             return menu
+        }
+
+        @objc private func performEmptyStateAction() {
+            parent.onEmptyStateAction?()
         }
 
         private func makeSecondaryMenu(
@@ -1296,6 +1427,8 @@ private struct ChatComposerModelIcon: View {
 struct ChatComposerActionMenu: NSViewRepresentable {
     let isEnabled: Bool
     let canPasteImage: Bool
+    var uploadMenuTitle = "Upload Image…"
+    var uploadMenuSystemImage = "photo.badge.plus"
     let onAttachImages: () -> Void
     let onPasteImage: () -> Void
     let onCaptureScreenshot: () -> Void
@@ -1352,15 +1485,18 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             menu.autoenablesItems = false
             menu.minimumWidth = 190
 
-            let imageItem = NSMenuItem(
-                title: "Upload Image…",
+            let fileItem = NSMenuItem(
+                title: parent.uploadMenuTitle,
                 action: #selector(attachImages(_:)),
                 keyEquivalent: ""
             )
-            imageItem.target = self
-            imageItem.image = menuImage("photo.badge.plus", description: "Upload Image")
-            imageItem.isEnabled = true
-            menu.addItem(imageItem)
+            fileItem.target = self
+            fileItem.image = menuImage(
+                parent.uploadMenuSystemImage,
+                description: parent.uploadMenuTitle
+            )
+            fileItem.isEnabled = true
+            menu.addItem(fileItem)
 
             let pasteItem = NSMenuItem(
                 title: "Paste Image",
@@ -1450,9 +1586,9 @@ struct ChatComposerActionPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 section("Add") {
                     ChatComposerActionRow(
-                        title: "Add images",
-                        detail: "Choose images from your Mac",
-                        systemName: "paperclip",
+                        title: "Upload file",
+                        detail: "Choose an image or PDF from your Mac",
+                        systemName: "doc.badge.plus",
                         action: onAttachImages
                     )
 
@@ -1737,8 +1873,8 @@ private struct ChatQueuedPromptRow: View {
 
     private var attachmentLabel: String {
         prompt.attachmentCount == 1
-            ? "1 image"
-            : "\(prompt.attachmentCount) images"
+            ? "1 attachment"
+            : "\(prompt.attachmentCount) attachments"
     }
 }
 
@@ -1992,6 +2128,8 @@ private enum ComposerReturnBehavior {
 
 struct ChatPendingImageAttachmentView: View {
     let attachment: ChatImageAttachment
+    var validation: ChatAttachmentValidation? = nil
+    var modelRejectsImage = false
     let onRemove: () -> Void
 
     var body: some View {
@@ -2009,24 +2147,83 @@ struct ChatPendingImageAttachmentView: View {
                 .truncationMode(.middle)
                 .frame(maxWidth: 180)
 
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
-                    .frame(width: 14, height: 14)
-            }
-            .buttonStyle(.plain)
-            .help("Remove image")
+            statusIndicator
+
+            Button("Remove attachment", systemImage: "xmark", action: onRemove)
+                .labelStyle(.iconOnly)
+                .font(.caption.weight(.semibold))
+                .frame(width: 14, height: 14)
+                .buttonStyle(.plain)
+                .help("Remove \(attachment.filename)")
         }
         .padding(.leading, 5)
         .padding(.trailing, 7)
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 7)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(attachmentBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .stroke(attachmentBorder, lineWidth: hasIssue ? 0.75 : 0.5)
         )
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        if modelRejectsImage {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.orange)
+                .help("Requires a vision-capable model")
+                .accessibilityLabel("Unsupported by the selected model")
+        } else if let validation {
+            switch validation {
+            case .processing:
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Reading PDF")
+                    .accessibilityLabel("Reading PDF")
+            case .warning(let message, _):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(message)
+                    .accessibilityLabel("Attachment warning")
+            case .blocked(let message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.orange)
+                    .help(message)
+                    .accessibilityLabel("Attachment cannot be used")
+            case .ready:
+                EmptyView()
+            }
+        }
+    }
+
+    private var hasIssue: Bool {
+        if modelRejectsImage {
+            return true
+        }
+        guard let validation else {
+            return false
+        }
+        switch validation {
+        case .warning, .blocked:
+            return true
+        case .processing, .ready:
+            return false
+        }
+    }
+
+    private var attachmentBackground: Color {
+        hasIssue
+            ? Color.orange.opacity(0.07)
+            : Color(nsColor: .controlBackgroundColor)
+    }
+
+    private var attachmentBorder: Color {
+        hasIssue
+            ? Color.orange.opacity(0.30)
+            : Color(nsColor: .separatorColor)
     }
 }

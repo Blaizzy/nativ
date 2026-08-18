@@ -132,8 +132,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.2
-        CURRENT_PROJECT_VERSION: 7
+        MARKETING_VERSION: 0.3.3
+        CURRENT_PROJECT_VERSION: 8
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -154,8 +154,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.2
-        CURRENT_PROJECT_VERSION: 7
+        MARKETING_VERSION: 0.3.3
+        CURRENT_PROJECT_VERSION: 8
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -194,6 +194,7 @@ targets:
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
+      - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
       - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageModelSelection.swift
@@ -220,7 +221,12 @@ targets:
       - path: Sources/Nativ/Features/Browsing/WebSearchService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchSettingsView.swift
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
+      - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift
+      - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift
+      - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
