@@ -266,6 +266,15 @@ struct RuntimeSettingsPanel: View {
     }
 }
 
+private extension View {
+    func runtimeSettingsFieldOutline() -> some View {
+        overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+    }
+}
+
 private struct RuntimeSettingRow: View {
     let field: RuntimeSettingField
     @ObservedObject var store: RuntimeSettingsStore
@@ -372,6 +381,7 @@ private struct RuntimeSettingRow: View {
     private func numberField(isInteger: Bool) -> some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.roundedBorder)
+            .runtimeSettingsFieldOutline()
             .multilineTextAlignment(.trailing)
             .font(.footnote.monospacedDigit())
             .controlSize(.small)
@@ -393,6 +403,7 @@ private struct RuntimeSettingRow: View {
     private var textField: some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.roundedBorder)
+            .runtimeSettingsFieldOutline()
             .font(.footnote)
             .controlSize(.small)
             .focused($isFocused)
