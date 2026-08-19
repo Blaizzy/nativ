@@ -622,6 +622,51 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertNil(object["cpu_usage_percent"])
     }
 
+    @MainActor
+    func testSystemMonitorReportsThermalAndPower() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.thermal.dieTemperatureCelsius = 62.37
+        snapshot.thermal.hottestSensorName = "PMU tdie1"
+        snapshot.thermal.fanSpeedsRPM = [1200, 2400]
+        snapshot.thermal.thermalPressure = .fair
+        snapshot.power.cpuWatts = 3.44
+        snapshot.power.gpuWatts = 8.06
+        snapshot.power.socWatts = 14.92
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["die_temperature_c"] as? Double, 62.4)
+        XCTAssertEqual(object["hottest_sensor"] as? String, "PMU tdie1")
+        XCTAssertEqual(object["fan_rpm"] as? Int, 2400, "should report the fastest fan")
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Fair")
+        XCTAssertEqual(object["cpu_watts"] as? Double, 3.4)
+        XCTAssertEqual(object["gpu_watts"] as? Double, 8.1)
+        XCTAssertEqual(object["package_watts"] as? Double, 14.9)
+    }
+
+    @MainActor
+    func testSystemMonitorOmitsUnavailableSensors() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.power.systemInputWatts = 21.5
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertNil(object["die_temperature_c"], "machines without a die sensor report null")
+        XCTAssertNil(object["fan_rpm"], "fanless machines report null")
+        XCTAssertEqual(
+            object["package_watts"] as? Double,
+            21.5,
+            "falls back to battery-controller input power when SoC rails are absent"
+        )
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Nominal")
+    }
+
     func testModelLibraryFailurePayloadShape() throws {
         let payload = ChatModelLibraryToolExecutor().failurePayload(operation: "x", error: FakeToolError())
         let object = try decode(payload)
