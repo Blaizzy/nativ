@@ -5,11 +5,14 @@ enum AudioRecordKind: String, Codable, CaseIterable, Sendable {
     case dictation
     case voiceNote
     case meeting
+    case imported
 
     var title: String {
         switch self {
         case .dictation:
             "Dictation"
+        case .imported:
+            "Imported"
         case .voiceNote, .meeting:
             "Recording"
         }
@@ -19,6 +22,8 @@ enum AudioRecordKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .dictation:
             "text.cursor"
+        case .imported:
+            "square.and.arrow.down"
         case .voiceNote, .meeting:
             "waveform.badge.mic"
         }

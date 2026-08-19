@@ -92,6 +92,7 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published var lastErrorMessage: String?
     @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
+    @Published private(set) var importProgress: AudioImportProgress?
     @Published private(set) var isPlaybackPaused = false
 
     var transcriptionConfigurationProvider:
@@ -258,7 +259,7 @@ final class AudioCaptureLibrary: ObservableObject {
                     )
                     activeBackend = .microphone
                 }
-            case .dictation:
+            case .dictation, .imported:
                 return
             }
             captureStartedAt = Date()
@@ -372,6 +373,58 @@ final class AudioCaptureLibrary: ObservableObject {
             return
         }
         await discardCurrentCapture(hideOverlay: true)
+    }
+
+    func importFile(from source: URL) {
+        guard importProgress == nil else { return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runImport(from: source)
+        }
+        importProgress = AudioImportProgress(
+            title: source.deletingPathExtension().lastPathComponent,
+            task: task
+        )
+    }
+
+    func cancelImport() {
+        importProgress?.task.cancel()
+        importProgress = nil
+    }
+
+    private func runImport(from source: URL) async {
+        let imported = await importAudio(from: source)
+        importProgress = nil
+        guard let imported else {
+            return
+        }
+
+        analytics.addCapture(
+            recordingURL: imported.url,
+            kind: .imported,
+            title: imported.title,
+            durationSeconds: imported.duration
+        )
+        processingRecordIDs.insert(imported.url.deletingPathExtension().lastPathComponent)
+        await processRecording(
+            imported.url,
+            kind: .imported,
+            title: imported.title,
+            duration: imported.duration,
+            automaticallySummarize: true
+        )
+    }
+
+    private func importAudio(from source: URL) async -> ImportedAudioFile? {
+        do {
+            let directory = try Self.recordingsDirectory
+            return try await AudioFileImporter().importFile(from: source, into: directory)
+        } catch is CancellationError {
+            return nil
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return nil
+        }
     }
 
     func summarize(_ record: AudioTranscriptionRecord) {

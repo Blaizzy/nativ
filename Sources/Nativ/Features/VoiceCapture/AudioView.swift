@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import Charts
 import SwiftUI
 import Textual
+import UniformTypeIdentifiers
 
 private enum AudioDestination: String, CaseIterable, Identifiable {
     case overview
@@ -64,6 +65,7 @@ struct AudioView: View {
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
     @State private var destination: AudioDestination = .record
+    @State private var isPresentingAudioImporter = false
     @State private var pendingDeleteDictation: AudioTranscriptionRecord?
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
@@ -1923,6 +1925,30 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if let progress = captureLibrary.importProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Importing \(progress.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 160, alignment: .trailing)
+                    Button("Cancel") {
+                        captureLibrary.cancelImport()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Button {
+                        isPresentingAudioImporter = true
+                    } label: {
+                        Label("Import file", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Transcribe and summarize an existing audio file")
+                }
                 Button {
                     destination = .record
                 } label: {
@@ -1936,12 +1962,16 @@ struct AudioView: View {
                 ContentUnavailableView {
                     Label("No saved recordings", systemImage: "waveform.badge.plus")
                 } description: {
-                    Text("Start a recording to create your local audio library.")
+                    Text("Record audio or import a file to create your local audio library.")
                 } actions: {
                     Button("Record audio") {
                         destination = .record
                     }
                     .buttonStyle(.borderedProminent)
+                    Button("Import a file") {
+                        isPresentingAudioImporter = true
+                    }
+                    .disabled(captureLibrary.importProgress != nil)
                 }
                 .frame(maxWidth: .infinity, minHeight: 170)
             } else {
@@ -1969,6 +1999,17 @@ struct AudioView: View {
         }
         .padding(18)
         .audioPanelStyle()
+        .fileImporter(
+            isPresented: $isPresentingAudioImporter,
+            allowedContentTypes: AudioFileImporter.supportedContentTypes
+        ) { result in
+            switch result {
+            case .success(let url):
+                captureLibrary.importFile(from: url)
+            case .failure(let error):
+                captureLibrary.lastErrorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func shortcutRow(
