@@ -867,13 +867,7 @@ final class ChatViewModel: ObservableObject {
             CustomToolProvider(tools: settings.customTools)
         ]
         if let host = mcpHost {
-            providers.append(
-                HostedMCPToolProvider(
-                    listDefinitions: { host.toolDefinitions() },
-                    handlesTool: { host.handlesTool(named: $0) },
-                    invoke: { try await host.callTool(named: $0, argumentsJSON: $1) }
-                )
-            )
+            providers.append(HostedMCPToolProvider(host: host))
         }
         return NativToolRouter(providers: providers, fallback: NativeToolProvider())
     }
