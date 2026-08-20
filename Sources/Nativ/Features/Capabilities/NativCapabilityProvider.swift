@@ -22,7 +22,7 @@ struct NativeToolProvider: NativCapabilityProvider {
     }
 
     func requiresConsent(_ name: String) async -> Bool {
-        name == ChatSwitchModelToolRegistry.toolName
+        false
     }
 
     func call(
