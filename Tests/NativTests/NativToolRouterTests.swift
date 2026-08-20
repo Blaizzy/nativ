@@ -2,16 +2,21 @@ import NativServerKit
 import XCTest
 
 private struct StubProvider: NativCapabilityProvider {
-    let namespace: String
     let names: [String]
     let response: String
+    var needsConsent = false
+    var ran = Ran()
+
+    final class Ran: @unchecked Sendable {
+        var count = 0
+    }
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
         names.map { name in
             MLXChatToolDefinition(
                 function: MLXChatFunctionDefinition(
                     name: name,
-                    description: namespace,
+                    description: "",
                     parameters: .object([:])
                 )
             )
@@ -22,12 +27,26 @@ private struct StubProvider: NativCapabilityProvider {
         names.contains(name)
     }
 
+    func requiresConsent(_ name: String) async -> Bool {
+        needsConsent
+    }
+
     func call(
         _ name: String,
         argumentsJSON: String?,
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        ChatToolExecutionOutcome(content: response, attachments: [])
+        ran.count += 1
+        return ChatToolExecutionOutcome(content: response, attachments: [])
+    }
+}
+
+private struct StubAsker: NativInteraction {
+    let outcome: ChatToolConsentOutcome
+
+    @MainActor
+    func requestConsent(for toolName: String, requestID: UUID) async -> ChatToolConsentOutcome {
+        outcome
     }
 }
 
@@ -58,13 +77,19 @@ final class NativToolRouterTests: XCTestCase {
 
     func testProvidersShadowTheFallbackForSharedToolNames() async throws {
         let router = NativToolRouter(
-            providers: [StubProvider(namespace: "custom", names: ["shared"], response: "custom")],
-            fallback: StubProvider(namespace: "native", names: ["shared"], response: "native")
+            providers: [StubProvider(names: ["shared"], response: "custom")],
+            fallback: StubProvider(names: ["shared"], response: "native")
         )
 
-        let outcome = try await router.call("shared", argumentsJSON: nil, context: makeContext())
+        let result = try await router.call(
+            "shared",
+            argumentsJSON: nil,
+            context: makeContext(),
+            requestID: UUID(),
+            asking: StubAsker(outcome: .approved)
+        )
         XCTAssertEqual(
-            outcome.content,
+            content(of: result),
             "custom",
             "a custom tool must shadow a built-in of the same name, as the chat turn did"
         )
@@ -73,10 +98,10 @@ final class NativToolRouterTests: XCTestCase {
     func testBuiltInToolsAreAdvertisedFirst() async {
         let router = NativToolRouter(
             providers: [
-                StubProvider(namespace: "custom", names: ["b"], response: ""),
-                StubProvider(namespace: "mcp", names: ["c"], response: ""),
+                StubProvider(names: ["b"], response: ""),
+                StubProvider(names: ["c"], response: ""),
             ],
-            fallback: StubProvider(namespace: "native", names: ["a"], response: "")
+            fallback: StubProvider(names: ["a"], response: "")
         )
 
         let names = await router.definitions(options()).map(\.function.name)
@@ -85,12 +110,18 @@ final class NativToolRouterTests: XCTestCase {
 
     func testUnknownToolsReachTheFallbackWhichReportsThem() async {
         let router = NativToolRouter(
-            providers: [StubProvider(namespace: "custom", names: ["known"], response: "")],
+            providers: [StubProvider(names: ["known"], response: "")],
             fallback: NativeToolProvider()
         )
 
         do {
-            _ = try await router.call("missing", argumentsJSON: nil, context: makeContext())
+            _ = try await router.call(
+                "missing",
+                argumentsJSON: nil,
+                context: makeContext(),
+                requestID: UUID(),
+                asking: StubAsker(outcome: .approved)
+            )
             XCTFail("expected an unsupported tool error")
         } catch ChatImageToolError.unsupportedTool(let name) {
             XCTAssertEqual(name, "missing")
@@ -102,7 +133,7 @@ final class NativToolRouterTests: XCTestCase {
     func testDisabledToolsAreNotAdvertised() async {
         let router = NativToolRouter(
             providers: [],
-            fallback: StubProvider(namespace: "native", names: ["kept", "dropped"], response: "")
+            fallback: StubProvider(names: ["kept", "dropped"], response: "")
         )
 
         let names = await router.definitions(options(disabled: ["dropped"])).map(\.function.name)
@@ -113,7 +144,6 @@ final class NativToolRouterTests: XCTestCase {
         let router = NativToolRouter(
             providers: [],
             fallback: StubProvider(
-                namespace: "native",
                 names: [ChatWebSearchToolRegistry.toolName, ChatWebReadToolRegistry.toolName],
                 response: ""
             )
@@ -136,4 +166,46 @@ final class NativToolRouterTests: XCTestCase {
         XCTAssertTrue(await provider.handles(ChatModelLibraryToolRegistry.toolName))
         XCTAssertFalse(await provider.handles("definitely_not_a_tool"))
     }
+    func testADeclinedToolDoesNotRun() async throws {
+        let provider = StubProvider(names: ["risky"], response: "ran", needsConsent: true)
+        let router = NativToolRouter(providers: [provider], fallback: NativeToolProvider())
+
+        let result = try await router.call(
+            "risky",
+            argumentsJSON: nil,
+            context: makeContext(),
+            requestID: UUID(),
+            asking: StubAsker(outcome: .declined)
+        )
+
+        guard case .declined = result else {
+            XCTFail("expected the call to be reported as declined")
+            return
+        }
+        XCTAssertEqual(provider.ran.count, 0, "a declined tool must never execute")
+    }
+
+    func testAnApprovedToolRuns() async throws {
+        let provider = StubProvider(names: ["risky"], response: "ran", needsConsent: true)
+        let router = NativToolRouter(providers: [provider], fallback: NativeToolProvider())
+
+        let result = try await router.call(
+            "risky",
+            argumentsJSON: nil,
+            context: makeContext(),
+            requestID: UUID(),
+            asking: StubAsker(outcome: .approved)
+        )
+
+        XCTAssertEqual(content(of: result), "ran")
+        XCTAssertEqual(provider.ran.count, 1)
+    }
+
+    private func content(of result: NativToolCallResult) -> String? {
+        guard case .completed(let outcome) = result else {
+            return nil
+        }
+        return outcome.content
+    }
+
 }

@@ -831,6 +831,31 @@ final class ChatViewModel: ObservableObject {
         return NativToolRouter(providers: providers, fallback: NativeToolProvider())
     }
 
+    func answerToolConsent(requestID: UUID, in sessionID: UUID) async -> ChatToolConsentOutcome {
+        updateToolMessage(
+            requestID,
+            in: sessionID,
+            status: .awaitingConsent,
+            content: "",
+            attachments: []
+        )
+        let approved = await awaitToolConsent(for: requestID)
+        let outcome = ChatToolConsentRouter.outcome(
+            approved: approved,
+            isCancelled: Task.isCancelled
+        )
+        if outcome == .approved {
+            updateToolMessage(
+                requestID,
+                in: sessionID,
+                status: .running,
+                content: "",
+                attachments: []
+            )
+        }
+        return outcome
+    }
+
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
         await toolConsentGate.awaitDecision(for: toolMessageID)
     }
@@ -1242,45 +1267,6 @@ final class ChatViewModel: ObservableObject {
                 let customTool = toolCall.function?.name.flatMap { toolName in
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
-                if customTool?.kind == .script {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
-                    }
-                }
-
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
@@ -1416,11 +1402,36 @@ final class ChatViewModel: ObservableObject {
                             )
                         }
                     )
-                    let outcome = try await toolRouter(for: queuedRequest.settings).call(
+                    let result = try await toolRouter(for: queuedRequest.settings).call(
                         toolCall.function?.name ?? "",
                         argumentsJSON: toolCall.function?.arguments,
-                        context: context
+                        context: context,
+                        requestID: toolMessageID,
+                        asking: ChatConsentAsker(chat: self, sessionID: queuedRequest.sessionID)
                     )
+                    let outcome: ChatToolExecutionOutcome
+                    switch result {
+                    case .completed(let completed):
+                        outcome = completed
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
+                            attachments: []
+                        )
+                        continue
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    }
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,

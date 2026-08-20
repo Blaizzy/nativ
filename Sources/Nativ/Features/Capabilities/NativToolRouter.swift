@@ -8,6 +8,12 @@ struct NativToolCatalogOptions: Sendable {
     let webReadIsConfigured: Bool
 }
 
+enum NativToolCallResult: Sendable {
+    case completed(ChatToolExecutionOutcome)
+    case declined
+    case cancelled
+}
+
 struct NativToolRouter: Sendable {
     private let providers: [any NativCapabilityProvider]
     private let fallback: any NativCapabilityProvider
@@ -29,12 +35,31 @@ struct NativToolRouter: Sendable {
     func call(
         _ name: String,
         argumentsJSON: String?,
-        context: ChatToolExecutionContext
-    ) async throws -> ChatToolExecutionOutcome {
-        for provider in providers where await provider.handles(name) {
-            return try await provider.call(name, argumentsJSON: argumentsJSON, context: context)
+        context: ChatToolExecutionContext,
+        requestID: UUID,
+        asking asker: any NativInteraction
+    ) async throws -> NativToolCallResult {
+        let provider = await responsibleProvider(for: name)
+        if await provider.requiresConsent(name) {
+            switch await asker.requestConsent(for: name, requestID: requestID) {
+            case .cancelled:
+                return .cancelled
+            case .declined:
+                return .declined
+            case .approved:
+                break
+            }
         }
-        return try await fallback.call(name, argumentsJSON: argumentsJSON, context: context)
+        return .completed(
+            try await provider.call(name, argumentsJSON: argumentsJSON, context: context)
+        )
+    }
+
+    private func responsibleProvider(for name: String) async -> any NativCapabilityProvider {
+        for provider in providers where await provider.handles(name) {
+            return provider
+        }
+        return fallback
     }
 
     private func isHidden(_ name: String, _ options: NativToolCatalogOptions) -> Bool {
