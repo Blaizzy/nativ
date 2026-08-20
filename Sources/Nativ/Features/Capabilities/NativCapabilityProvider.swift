@@ -4,6 +4,7 @@ import NativServerKit
 protocol NativCapabilityProvider: Sendable {
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition]
     func handles(_ name: String) async -> Bool
+    func requiresConsent(_ name: String) async -> Bool
     func call(
         _ name: String,
         argumentsJSON: String?,
@@ -12,13 +13,16 @@ protocol NativCapabilityProvider: Sendable {
 }
 
 struct NativeToolProvider: NativCapabilityProvider {
-
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
         ChatToolRegistry.definitions(canEditImage: options.canEditImage)
     }
 
     func handles(_ name: String) async -> Bool {
         ChatToolDispatcher.handles(name)
+    }
+
+    func requiresConsent(_ name: String) async -> Bool {
+        name == ChatSwitchModelToolRegistry.toolName
     }
 
     func call(
@@ -47,6 +51,10 @@ struct CustomToolProvider: NativCapabilityProvider {
         tools.contains { $0.toolName == name }
     }
 
+    func requiresConsent(_ name: String) async -> Bool {
+        tools.first { $0.toolName == name }?.kind == .script
+    }
+
     func call(
         _ name: String,
         argumentsJSON: String?,
@@ -69,6 +77,10 @@ struct HostedMCPToolProvider: NativCapabilityProvider {
 
     func handles(_ name: String) async -> Bool {
         await host.handlesTool(named: name)
+    }
+
+    func requiresConsent(_ name: String) async -> Bool {
+        false
     }
 
     func call(
