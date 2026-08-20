@@ -13,7 +13,7 @@ enum NativMCPScope: String, Codable, CaseIterable, Sendable {
     var title: String {
         switch self {
         case .full:
-            "Everything"
+            "Full access"
         case .readOnly:
             "Read only"
         }
@@ -37,7 +37,14 @@ struct NativMCPKey: Equatable, Sendable {
     let secret: String
 
     static func newSecret() -> String {
-        UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        "nk_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    }
+
+    static func masked(_ secret: String) -> String {
+        guard secret.count > 7 else {
+            return "•••"
+        }
+        return secret.prefix(3) + String(repeating: "•", count: 10) + secret.suffix(3)
     }
 }
 
