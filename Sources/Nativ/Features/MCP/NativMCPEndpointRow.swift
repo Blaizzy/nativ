@@ -46,88 +46,97 @@ struct NativMCPEndpointRow: View {
 
     private var statusText: String {
         guard preferences.isEnabled else {
-            return "Off. Coding agents on this Mac cannot reach Nativ."
+            return "Off. Coding agents cannot reach Nativ."
         }
-        if preferences.outsideIsEnabled {
-            return "Listening on port \(preferences.localPort), and on \(preferences.outsidePort) for agents outside this Mac"
-        }
-        return "Listening on port \(preferences.localPort) for agents on this Mac"
+        let count = preferences.keys.count
+        let keys = count == 1 ? "1 key" : "\(count) keys"
+        return "Listening on port \(preferences.port) · \(keys)"
     }
 }
 
 struct NativMCPEndpointDetails: View {
     @ObservedObject var preferences: NativMCPPreferences
     @Environment(\.dismiss) private var dismiss
+    @State private var newKeyName = ""
+    @State private var newKeyScope: NativMCPScope = .readOnly
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Agent Access")
                 .font(.headline)
 
-            Text("Coding agents can list and run Nativ's tools without opening a chat.")
+            Text("Coding agents can list and run Nativ's tools without opening a chat. Nativ only ever listens on this Mac; a cloud agent needs you to forward a public address to this port.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            Divider()
-
             LabeledContent("Port") {
-                TextField("", value: $preferences.localPort, format: .number)
+                TextField("", value: $preferences.port, format: .number)
                     .frame(width: 90)
             }
 
-            LabeledContent("Key") {
-                HStack(spacing: 6) {
-                    Text(preferences.localSecret.prefix(8) + "…")
-                        .font(.callout.monospaced())
-                    Button("Copy") {
-                        copy(preferences.localSecret)
-                    }
-                    .controlSize(.small)
-                }
+            LabeledContent("Public address") {
+                TextField("optional", text: $preferences.publicHost)
+                    .frame(width: 260)
             }
-
-            Button("Copy Client Configuration") {
-                copy(clientConfiguration)
-            }
-            .controlSize(.small)
 
             Divider()
 
-            Toggle("Allow agents outside this Mac", isOn: $preferences.outsideIsEnabled)
+            Text("Keys")
+                .font(.callout.weight(.medium))
 
-            if preferences.outsideIsEnabled {
-                Text("Nativ still only listens on this Mac. To let a cloud agent in, forward a public address to port \(preferences.outsidePort) yourself, then paste that address here.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            ForEach(preferences.keys) { key in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(key.name)
+                            .font(.callout)
+                        Text(key.scope.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
-                LabeledContent("Outside port") {
-                    TextField("", value: $preferences.outsidePort, format: .number)
-                        .frame(width: 90)
-                }
+                    Spacer()
 
-                LabeledContent("Public address") {
-                    TextField("name.tail-scale.ts.net", text: $preferences.publicHost)
-                        .frame(width: 260)
-                }
-
-                LabeledContent("Outside key") {
-                    Button("Copy") {
-                        copy(preferences.outsideSecret)
+                    Button("Copy Config") {
+                        copy(configuration(for: key))
                     }
                     .controlSize(.small)
+
+                    Button("Replace") {
+                        preferences.replaceSecret(for: key.id)
+                    }
+                    .controlSize(.small)
+
+                    Button("Remove") {
+                        preferences.removeKey(key.id)
+                    }
+                    .controlSize(.small)
+                    .disabled(preferences.keys.count == 1)
                 }
+            }
+
+            HStack(spacing: 8) {
+                TextField("New agent", text: $newKeyName)
+                    .frame(width: 160)
+
+                Picker("", selection: $newKeyScope) {
+                    ForEach(NativMCPScope.allCases, id: \.self) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+
+                Button("Add") {
+                    preferences.addKey(name: newKeyName, scope: newKeyScope)
+                    newKeyName = ""
+                }
+                .controlSize(.small)
             }
 
             Divider()
 
             HStack {
-                Button("Replace Keys") {
-                    preferences.regenerateSecrets()
-                }
-                .controlSize(.small)
-
                 Spacer()
-
                 Button("Done") {
                     dismiss()
                 }
@@ -135,16 +144,20 @@ struct NativMCPEndpointDetails: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 520)
     }
 
-    private var clientConfiguration: String {
-        """
+    private func configuration(for key: NativMCPKey) -> String {
+        let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
+        let url = host.isEmpty
+            ? "http://127.0.0.1:\(preferences.port)/mcp"
+            : "https://\(host)/mcp"
+        return """
         {
           "mcpServers": {
             "nativ": {
-              "url": "http://127.0.0.1:\(preferences.localPort)/mcp",
-              "headers": { "Authorization": "Bearer \(preferences.localSecret)" }
+              "url": "\(url)",
+              "headers": { "Authorization": "Bearer \(key.secret)" }
             }
           }
         }

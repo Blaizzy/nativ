@@ -6,12 +6,9 @@ final class NativMCPPreferences: ObservableObject {
 
     private enum Key {
         static let enabled = "mcpEndpoint.enabled"
-        static let localPort = "mcpEndpoint.localPort"
-        static let outsideEnabled = "mcpEndpoint.outsideEnabled"
-        static let outsidePort = "mcpEndpoint.outsidePort"
+        static let port = "mcpEndpoint.port"
         static let publicHost = "mcpEndpoint.publicHost"
-        static let localSecret = "mcpEndpoint.localSecret"
-        static let outsideSecret = "mcpEndpoint.outsideSecret"
+        static let keys = "mcpEndpoint.keys"
     }
 
     private let defaults: UserDefaults
@@ -20,63 +17,62 @@ final class NativMCPPreferences: ObservableObject {
         didSet { defaults.set(isEnabled, forKey: Key.enabled) }
     }
 
-    @Published var localPort: Int {
-        didSet { defaults.set(localPort, forKey: Key.localPort) }
-    }
-
-    @Published var outsideIsEnabled: Bool {
-        didSet { defaults.set(outsideIsEnabled, forKey: Key.outsideEnabled) }
-    }
-
-    @Published var outsidePort: Int {
-        didSet { defaults.set(outsidePort, forKey: Key.outsidePort) }
+    @Published var port: Int {
+        didSet { defaults.set(port, forKey: Key.port) }
     }
 
     @Published var publicHost: String {
         didSet { defaults.set(publicHost, forKey: Key.publicHost) }
     }
 
-    @Published private(set) var keyGeneration = 0
+    @Published private(set) var keys: [NativMCPKey] {
+        didSet { save(keys) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         isEnabled = defaults.bool(forKey: Key.enabled)
-        localPort = defaults.object(forKey: Key.localPort) as? Int ?? 8765
-        outsideIsEnabled = defaults.bool(forKey: Key.outsideEnabled)
-        outsidePort = defaults.object(forKey: Key.outsidePort) as? Int ?? 8766
+        port = defaults.object(forKey: Key.port) as? Int ?? 8765
         publicHost = defaults.string(forKey: Key.publicHost) ?? ""
-    }
-
-    var localSecret: String {
-        secret(forKey: Key.localSecret)
-    }
-
-    var outsideSecret: String {
-        secret(forKey: Key.outsideSecret)
-    }
-
-    func regenerateSecrets() {
-        defaults.removeObject(forKey: Key.localSecret)
-        defaults.removeObject(forKey: Key.outsideSecret)
-        keyGeneration += 1
+        if let data = defaults.data(forKey: Key.keys),
+           let stored = try? JSONDecoder().decode([NativMCPKey].self, from: data),
+           !stored.isEmpty {
+            keys = stored
+        } else {
+            keys = [NativMCPKey(name: "This Mac", scope: .full)]
+        }
     }
 
     var access: NativMCPAccess {
-        NativMCPAccess(
-            localPort: localPort,
-            outsidePort: outsideIsEnabled ? outsidePort : nil,
-            localSecret: localSecret,
-            outsideSecret: outsideIsEnabled ? outsideSecret : nil,
-            outsideAllowedTools: NativMCPAccess.defaultOutsideAllowedTools
-        )
+        NativMCPAccess(keys: keys, readOnlyTools: NativMCPAccess.defaultReadOnlyTools)
     }
 
-    private func secret(forKey key: String) -> String {
-        if let existing = defaults.string(forKey: key), !existing.isEmpty {
-            return existing
+    var configurationFingerprint: String {
+        ([isEnabled ? "on" : "off", String(port), publicHost]
+            + keys.map { "\($0.id)\($0.scope.rawValue)\($0.secret.prefix(6))" })
+            .joined(separator: "|")
+    }
+
+    func addKey(name: String, scope: NativMCPScope) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        keys.append(NativMCPKey(name: trimmed.isEmpty ? "Agent" : trimmed, scope: scope))
+    }
+
+    func removeKey(_ id: UUID) {
+        keys.removeAll { $0.id == id }
+    }
+
+    func replaceSecret(for id: UUID) {
+        guard let index = keys.firstIndex(where: { $0.id == id }) else {
+            return
         }
-        let generated = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        defaults.set(generated, forKey: key)
-        return generated
+        keys[index].secret = NativMCPKey.newSecret()
+    }
+
+    private func save(_ keys: [NativMCPKey]) {
+        guard let data = try? JSONEncoder().encode(keys) else {
+            return
+        }
+        defaults.set(data, forKey: Key.keys)
     }
 }

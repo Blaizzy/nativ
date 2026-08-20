@@ -1,45 +1,60 @@
 import Foundation
 
-enum NativMCPCaller: String, Sendable {
-    case local
-    case outside
+enum NativMCPScope: String, Codable, CaseIterable, Sendable {
+    case full
+    case readOnly
+
+    var title: String {
+        switch self {
+        case .full:
+            "Everything"
+        case .readOnly:
+            "Read only"
+        }
+    }
+}
+
+struct NativMCPKey: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    var name: String
+    var secret: String
+    var scope: NativMCPScope
+
+    init(id: UUID = UUID(), name: String, scope: NativMCPScope, secret: String = NativMCPKey.newSecret()) {
+        self.id = id
+        self.name = name
+        self.secret = secret
+        self.scope = scope
+    }
+
+    static func newSecret() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    }
 }
 
 struct NativMCPAccess: Sendable {
-    let localPort: Int
-    let outsidePort: Int?
-    let localSecret: String
-    let outsideSecret: String?
-    let outsideAllowedTools: Set<String>
+    let keys: [NativMCPKey]
+    let readOnlyTools: Set<String>
 
-    static let defaultOutsideAllowedTools: Set<String> = [
+    static let defaultReadOnlyTools: Set<String> = [
         ChatModelLibraryToolRegistry.toolName,
         ChatSystemMonitorToolRegistry.toolName,
         ChatServerStatsToolRegistry.toolName,
     ]
 
-    func caller(arrivingOn port: Int, secret: String?) -> NativMCPCaller? {
+    func scope(forSecret secret: String?) -> NativMCPScope? {
         guard let secret, !secret.isEmpty else {
             return nil
         }
-        if port == localPort {
-            return matches(secret, localSecret) ? .local : nil
-        }
-        if let outsidePort, port == outsidePort {
-            guard let outsideSecret else {
-                return nil
-            }
-            return matches(secret, outsideSecret) ? .outside : nil
-        }
-        return nil
+        return keys.first { matches(secret, $0.secret) }?.scope
     }
 
-    func permits(_ toolName: String, for caller: NativMCPCaller) -> Bool {
-        switch caller {
-        case .local:
+    func permits(_ toolName: String, in scope: NativMCPScope) -> Bool {
+        switch scope {
+        case .full:
             return true
-        case .outside:
-            return outsideAllowedTools.contains(toolName)
+        case .readOnly:
+            return readOnlyTools.contains(toolName)
         }
     }
 
