@@ -220,10 +220,12 @@ struct NativMCPEndpointDetails: View {
     }
 
     private func configuration(for agent: NativMCPAgent) -> String {
-        let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
-        let url = agent.scope == .readOnly && !host.isEmpty
-            ? "https://\(host)/mcp"
-            : "http://127.0.0.1:\(preferences.port)/mcp"
+        let url: String
+        if agent.scope == .readOnly, funnel.isServing, let host = funnel.publicHost {
+            url = "https://\(host)/mcp"
+        } else {
+            url = "http://127.0.0.1:\(preferences.port)/mcp"
+        }
         return """
         {
           "mcpServers": {
