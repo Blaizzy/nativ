@@ -2,6 +2,14 @@ import Foundation
 import MCP
 import Network
 
+enum NativMCPListenerError: LocalizedError {
+    case cancelled
+
+    var errorDescription: String? {
+        "The connection was closed before Nativ could listen."
+    }
+}
+
 actor NativMCPListener {
     private let port: NWEndpoint.Port
     private let access: NativMCPAccess
@@ -14,7 +22,7 @@ actor NativMCPListener {
         self.endpoints = endpoints
     }
 
-    func start() throws {
+    func start() async throws {
         guard listener == nil else {
             return
         }
@@ -25,8 +33,26 @@ actor NativMCPListener {
             connection.start(queue: .global(qos: .userInitiated))
             Task { await self?.serve(connection) }
         }
+
+        let (states, continuation) = AsyncStream<NWListener.State>.makeStream()
+        listener.stateUpdateHandler = { continuation.yield($0) }
         listener.start(queue: .global(qos: .userInitiated))
-        self.listener = listener
+
+        for await state in states {
+            switch state {
+            case .ready:
+                self.listener = listener
+                return
+            case .failed(let error), .waiting(let error):
+                listener.cancel()
+                throw error
+            case .cancelled:
+                throw NativMCPListenerError.cancelled
+            default:
+                continue
+            }
+        }
+        throw NativMCPListenerError.cancelled
     }
 
     func stop() {
