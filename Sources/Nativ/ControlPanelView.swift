@@ -148,8 +148,6 @@ final class ControlPanelDependencies: ObservableObject {
     lazy var embeddingLibrary = LocalModelLibrary()
     lazy var routineStore = RoutineStore.shared
     lazy var routineModelLibrary = LocalModelLibrary()
-    lazy var mcpPreferences = NativMCPPreferences.shared
-    lazy var mcpService = NativMCPService(preferences: mcpPreferences, host: mcpHost)
 }
 
 /// Filters `NativModel` down to values that can change control-panel chrome.
@@ -664,7 +662,6 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
 
     private let dependencies: ControlPanelDependencies
-    @ObservedObject private var mcpPreferences = NativMCPPreferences.shared
     @StateObject private var chromeState: ControlPanelChromeState
     @StateObject private var sidebarState: ChatSidebarState
     @StateObject private var contentState: ControlPanelContentState
@@ -705,11 +702,6 @@ struct ControlPanelView: View {
     private var chat: ChatViewModel { dependencies.chat }
     private var mcpHost: MCPHostManager { dependencies.mcpHost }
 
-    private var mcpService: NativMCPService { dependencies.mcpService }
-
-    private var mcpEndpointConfiguration: String {
-        mcpPreferences.configurationFingerprint
-    }
     private var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
     private var artifacts: ArtifactStore { dependencies.artifacts }
     private var dashboard: DashboardViewModel { dependencies.dashboard }
@@ -830,9 +822,6 @@ struct ControlPanelView: View {
                 )
             }
             .frame(width: 0, height: 0)
-        }
-        .task(id: mcpEndpointConfiguration) {
-            await mcpService.restart(model: model)
         }
         .onAppear {
             applySidebarSelection(navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
