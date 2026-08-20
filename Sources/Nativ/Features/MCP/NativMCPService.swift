@@ -190,7 +190,6 @@ final class NativMCPService {
     private func router(for settings: NativSettings, model: NativModel) -> NativToolRouter {
         NativToolRouter(
             providers: [
-                NativStatusToolProvider(model: model),
                 NativActionToolProvider(model: model),
                 CustomToolProvider(tools: settings.customTools),
             ],

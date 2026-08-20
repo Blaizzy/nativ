@@ -20,6 +20,7 @@ enum NativActionToolError: LocalizedError {
 
 struct NativActionToolProvider: NativCapabilityProvider {
     enum Action: String, CaseIterable {
+        case status = "get_nativ_status"
         case runPrompt = "run_prompt"
         case generateImage = "generate_image"
         case transcribeAudio = "transcribe_audio"
@@ -53,6 +54,8 @@ struct NativActionToolProvider: NativCapabilityProvider {
         let arguments = Self.arguments(from: argumentsJSON)
         let payload: Result
         switch action {
+        case .status:
+            payload = await status()
         case .runPrompt:
             payload = try await runPrompt(arguments)
         case .generateImage:
@@ -79,6 +82,9 @@ struct NativActionToolProvider: NativCapabilityProvider {
         var text: String?
         var serverIsRunning: Bool?
         var paths: [String]?
+        var baseURL: String?
+        var imageModel: String?
+        var speechModel: String?
         var error: String?
 
         enum CodingKeys: String, CodingKey {
@@ -87,8 +93,22 @@ struct NativActionToolProvider: NativCapabilityProvider {
             case text
             case serverIsRunning = "server_is_running"
             case paths
+            case baseURL = "base_url"
+            case imageModel = "image_model"
+            case speechModel = "speech_to_text_model"
             case error
         }
+    }
+
+    private func status() async -> Result {
+        let settings = await model.settings.normalized()
+        return await Result(
+            model: settings.languageModelID,
+            serverIsRunning: model.isRunning,
+            baseURL: model.activeServerBaseURL?.absoluteString,
+            imageModel: settings.imageGenerationModelID,
+            speechModel: settings.speechToTextModelID
+        )
     }
 
     private func runPrompt(_ arguments: [String: Any]) async throws -> Result {
@@ -252,6 +272,13 @@ struct NativActionToolProvider: NativCapabilityProvider {
 
     private static func definition(for action: Action) -> MLXChatToolDefinition {
         switch action {
+        case .status:
+            return definition(
+                action,
+                "Report whether Nativ's server is running, which models are chosen, and the base URL for OpenAI-compatible requests.",
+                properties: [:],
+                required: []
+            )
         case .runPrompt:
             return definition(
                 action,
