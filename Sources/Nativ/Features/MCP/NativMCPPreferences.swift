@@ -7,7 +7,6 @@ final class NativMCPPreferences: ObservableObject {
     private enum Key {
         static let enabled = "mcpEndpoint.enabled"
         static let port = "mcpEndpoint.port"
-        static let publicHost = "mcpEndpoint.publicHost"
         static let agents = "mcpEndpoint.agents"
     }
 
@@ -20,17 +19,6 @@ final class NativMCPPreferences: ObservableObject {
 
     @Published var port: Int {
         didSet { defaults.set(port, forKey: Key.port) }
-    }
-
-    @Published var publicHost: String {
-        didSet {
-            let normalized = Self.normalizedHost(publicHost)
-            if normalized != publicHost {
-                publicHost = normalized
-                return
-            }
-            defaults.set(publicHost, forKey: Key.publicHost)
-        }
     }
 
     @Published private(set) var agents: [NativMCPAgent] {
@@ -47,7 +35,6 @@ final class NativMCPPreferences: ObservableObject {
         self.secrets = secrets
         isEnabled = defaults.bool(forKey: Key.enabled)
         port = defaults.object(forKey: Key.port) as? Int ?? 8765
-        publicHost = defaults.string(forKey: Key.publicHost) ?? ""
         if let data = defaults.data(forKey: Key.agents),
            let stored = try? JSONDecoder().decode([NativMCPAgent].self, from: data),
            !stored.isEmpty {
@@ -91,17 +78,6 @@ final class NativMCPPreferences: ObservableObject {
         }
         try? secrets.save(nil, for: id)
         agents.removeAll { $0.id == id }
-    }
-
-    static func normalizedHost(_ host: String) -> String {
-        var value = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        for scheme in ["https://", "http://"] where value.lowercased().hasPrefix(scheme) {
-            value = String(value.dropFirst(scheme.count))
-        }
-        while value.hasSuffix("/") {
-            value = String(value.dropLast())
-        }
-        return value
     }
 
     private func save(_ agents: [NativMCPAgent]) {
