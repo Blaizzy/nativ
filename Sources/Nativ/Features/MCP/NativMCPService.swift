@@ -18,18 +18,18 @@ enum NativMCPServiceError: LocalizedError {
 @MainActor
 final class NativMCPService {
     private let preferences: NativMCPPreferences
-    private let model: NativModel
     private let host: MCPHostManager
+    private var model: NativModel?
     private var listeners: [NativMCPListener] = []
     private(set) var lastError: String?
 
-    init(preferences: NativMCPPreferences, model: NativModel, host: MCPHostManager) {
+    init(preferences: NativMCPPreferences, host: MCPHostManager) {
         self.preferences = preferences
-        self.model = model
         self.host = host
     }
 
-    func restart() async {
+    func restart(model: NativModel) async {
+        self.model = model
         await stop()
         guard preferences.isEnabled else {
             return
@@ -98,6 +98,9 @@ final class NativMCPService {
         for caller: NativMCPCaller,
         access: NativMCPAccess
     ) async -> [MLXChatToolDefinition] {
+        guard let model else {
+            return []
+        }
         let settings = model.settings.normalized()
         let definitions = await router(for: settings).definitions(
             NativToolCatalogOptions(
@@ -116,14 +119,14 @@ final class NativMCPService {
         caller: NativMCPCaller,
         access: NativMCPAccess
     ) async throws -> String {
-        guard access.permits(name, for: caller) else {
+        guard access.permits(name, for: caller), let model else {
             throw NativMCPServiceError.notPermitted(name)
         }
         let settings = model.settings.normalized()
         let result = try await router(for: settings).call(
             name,
             argumentsJSON: argumentsJSON,
-            context: context(for: settings),
+            context: context(for: settings, model: model),
             requestID: UUID(),
             asking: NativMCPDeclinedAsker()
         )
@@ -145,7 +148,7 @@ final class NativMCPService {
         )
     }
 
-    private func context(for settings: NativSettings) -> ChatToolExecutionContext {
+    private func context(for settings: NativSettings, model: NativModel) -> ChatToolExecutionContext {
         ChatToolExecutionContext(
             imageGenerationModelID: settings.imageGenerationModelID,
             baseURL: settings.serverBaseURL,

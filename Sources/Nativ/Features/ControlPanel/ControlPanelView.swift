@@ -50,6 +50,19 @@ struct ControlPanelView: View {
 
     var chat: ChatViewModel { dependencies.chat }
     var mcpHost: MCPHostManager { dependencies.mcpHost }
+    var mcpService: NativMCPService { dependencies.mcpService }
+
+    var mcpEndpointConfiguration: String {
+        let preferences = dependencies.mcpPreferences
+        return [
+            preferences.isEnabled ? "on" : "off",
+            String(preferences.localPort),
+            preferences.outsideIsEnabled ? "outside" : "local",
+            String(preferences.outsidePort),
+            preferences.publicHost,
+        ].joined(separator: "|")
+    }
+
     var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
     var artifacts: ArtifactStore { dependencies.artifacts }
     var dashboard: DashboardViewModel { dependencies.dashboard }
@@ -160,6 +173,9 @@ struct ControlPanelView: View {
         .background {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
+        }
+        .task(id: mcpEndpointConfiguration) {
+            await mcpService.restart(model: model)
         }
         .onAppear {
             applySidebarSelection(
