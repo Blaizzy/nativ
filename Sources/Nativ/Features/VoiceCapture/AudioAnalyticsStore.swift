@@ -203,9 +203,10 @@ final class AudioAnalyticsStore: ObservableObject {
         }
     }
 
-    func modelUsage() -> [AudioModelUsage] {
-        let transcribedRecords = records.filter {
-            !$0.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    func modelUsage(since startDate: Date? = nil) -> [AudioModelUsage] {
+        let transcribedRecords = records.filter { record in
+            !record.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (startDate.map { record.recordedAt >= $0 } ?? true)
         }
         let grouped = Dictionary(grouping: transcribedRecords) { record in
             record.modelID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

@@ -43,6 +43,94 @@ private enum AudioAnimationPurpose {
     case recording
 }
 
+private enum AudioModelUsageFilter: String, CaseIterable, Identifiable {
+    case all
+    case dictations
+    case recordings
+    case timedAudio
+    case legacy
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: "All models"
+        case .dictations: "Dictations"
+        case .recordings: "Recordings"
+        case .timedAudio: "Timed audio"
+        case .legacy: "Legacy"
+        }
+    }
+}
+
+private enum AudioModelUsageSort: String, CaseIterable, Identifiable {
+    case transcriptions
+    case words
+    case audio
+    case recent
+    case name
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .transcriptions: "Transcriptions"
+        case .words: "Words"
+        case .audio: "Audio duration"
+        case .recent: "Recently used"
+        case .name: "Model name"
+        }
+    }
+}
+
+private enum AudioModelUsagePeriod: String, CaseIterable, Identifiable {
+    case day
+    case week
+    case month
+    case year
+    case allTime
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .day: "Day"
+        case .week: "Week"
+        case .month: "Month"
+        case .year: "Year"
+        case .allTime: "All time"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .day: "Compare today's speech-to-text activity across models"
+        case .week: "Compare this week's speech-to-text activity across models"
+        case .month: "Compare this month's speech-to-text activity across models"
+        case .year: "Compare this year's speech-to-text activity across models"
+        case .allTime: "Compare all-time speech-to-text activity across models"
+        }
+    }
+
+    func startDate(
+        relativeTo date: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Date? {
+        switch self {
+        case .day:
+            calendar.startOfDay(for: date)
+        case .week:
+            calendar.dateInterval(of: .weekOfYear, for: date)?.start
+        case .month:
+            calendar.dateInterval(of: .month, for: date)?.start
+        case .year:
+            calendar.dateInterval(of: .year, for: date)?.start
+        case .allTime:
+            nil
+        }
+    }
+}
+
 @MainActor
 struct AudioView: View {
     @ObservedObject var model: NativModel
@@ -69,6 +157,14 @@ struct AudioView: View {
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
     @State private var isConfirmingClearAllDictations = false
+    @State private var modelUsageSearchText = ""
+    @State private var modelUsageFilter: AudioModelUsageFilter = .all
+    @State private var modelUsageSort: AudioModelUsageSort = .transcriptions
+    @State private var modelUsageSortAscending = false
+    @State private var modelUsagePeriod: AudioModelUsagePeriod = .allTime
+    @State private var modelUsagePage = 0
+
+    private static let modelUsagePageSize = 10
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -479,87 +575,309 @@ struct AudioView: View {
     }
 
     private var modelUsagePanel: some View {
-        let usages = analytics.modelUsage()
+        let usages = analytics.modelUsage(since: modelUsagePeriod.startDate())
+        let visibleUsages = visibleModelUsages(from: usages)
         let totalTranscriptions = usages.reduce(0) { $0 + $1.transcriptions }
+        let pageCount = max(
+            1,
+            (visibleUsages.count + Self.modelUsagePageSize - 1) / Self.modelUsagePageSize
+        )
+        let currentPage = min(modelUsagePage, pageCount - 1)
+        let pagedUsages = Array(
+            visibleUsages
+                .dropFirst(currentPage * Self.modelUsagePageSize)
+                .prefix(Self.modelUsagePageSize)
+        )
 
         return VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Transcription models")
-                        .font(.headline)
-                    Text("All-time speech-to-text usage by model")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    modelUsageTitle
+                    Spacer(minLength: 0)
+                    modelUsagePeriodPicker
+                        .frame(width: 360)
                 }
-                Spacer()
-                Text("\(totalTranscriptions.formatted()) transcriptions")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    modelUsageTitle
+                    modelUsagePeriodPicker
+                }
             }
 
             if usages.isEmpty {
                 ContentUnavailableView {
-                    Label("No model usage yet", systemImage: "cpu")
+                    Label("No model usage", systemImage: "cpu")
                 } description: {
-                    Text("Model statistics appear after the first successful transcription.")
+                    Text("No successful transcriptions were recorded in this period.")
+                } actions: {
+                    if modelUsagePeriod != .allTime {
+                        Button("Show all time") {
+                            modelUsagePeriod = .allTime
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, minHeight: 150)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(usages) { usage in
-                        modelUsageRow(
-                            usage,
-                            share: Double(usage.transcriptions) / Double(totalTranscriptions)
-                        )
+                modelUsageToolbar(
+                    visibleCount: visibleUsages.count,
+                    totalCount: usages.count
+                )
 
-                        if usage.id != usages.last?.id {
-                            Divider()
+                if visibleUsages.isEmpty {
+                    ContentUnavailableView {
+                        Label("No matching models", systemImage: "magnifyingglass")
+                    } description: {
+                        Text("Try another search or broaden the model filter.")
+                    } actions: {
+                        Button("Clear search and filters") {
+                            modelUsageSearchText = ""
+                            modelUsageFilter = .all
+                            modelUsagePage = 0
                         }
                     }
+                    .frame(maxWidth: .infinity, minHeight: 180)
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 360), spacing: 12)],
+                        alignment: .leading,
+                        spacing: 12
+                    ) {
+                        ForEach(pagedUsages) { usage in
+                            modelUsageCard(
+                                usage,
+                                share: Double(usage.transcriptions) / Double(totalTranscriptions)
+                            )
+                        }
+                    }
+
+                    modelUsagePagination(
+                        currentPage: currentPage,
+                        pageCount: pageCount,
+                        totalCount: visibleUsages.count
+                    )
                 }
             }
         }
         .padding(18)
         .audioPanelStyle()
+        .onChange(of: modelUsageSearchText) { _, _ in
+            modelUsagePage = 0
+        }
+        .onChange(of: modelUsagePeriod) { _, _ in
+            modelUsagePage = 0
+        }
     }
 
-    private func modelUsageRow(
+    private var modelUsageTitle: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Transcription models")
+                .font(.headline)
+            Text(modelUsagePeriod.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var modelUsagePeriodPicker: some View {
+        Picker("Usage period", selection: $modelUsagePeriod) {
+            ForEach(AudioModelUsagePeriod.allCases) { period in
+                Text(period.title)
+                    .tag(period)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .help("Choose the model usage period")
+    }
+
+    private func modelUsageToolbar(
+        visibleCount: Int,
+        totalCount: Int
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                modelUsageSearchField
+                    .frame(minWidth: 190, idealWidth: 280, maxWidth: 360)
+                Spacer(minLength: 0)
+                modelUsageResultCount(visibleCount: visibleCount, totalCount: totalCount)
+                modelUsageFilterMenu
+                modelUsageSortMenu
+                modelUsageSortOrderButton
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                modelUsageSearchField
+                HStack(spacing: 10) {
+                    modelUsageResultCount(visibleCount: visibleCount, totalCount: totalCount)
+                    Spacer(minLength: 0)
+                    modelUsageFilterMenu
+                    modelUsageSortMenu
+                    modelUsageSortOrderButton
+                }
+            }
+        }
+    }
+
+    private var modelUsageSearchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("Search models", text: $modelUsageSearchText)
+                .textFieldStyle(.plain)
+
+            if !modelUsageSearchText.isEmpty {
+                Button {
+                    modelUsageSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear model search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        }
+    }
+
+    private func modelUsageResultCount(
+        visibleCount: Int,
+        totalCount: Int
+    ) -> some View {
+        Text(visibleCount == totalCount ? "\(totalCount) shown" : "\(visibleCount) of \(totalCount)")
+            .font(.caption2.weight(.medium).monospacedDigit())
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+    }
+
+    private var modelUsageFilterMenu: some View {
+        Menu {
+            ForEach(AudioModelUsageFilter.allCases) { filter in
+                Button {
+                    modelUsageFilter = filter
+                    modelUsagePage = 0
+                } label: {
+                    if modelUsageFilter == filter {
+                        Label(filter.title, systemImage: "checkmark")
+                    } else {
+                        Text(filter.title)
+                    }
+                }
+            }
+        } label: {
+            Label(modelUsageFilter.title, systemImage: "line.3.horizontal.decrease")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Filter transcription models")
+    }
+
+    private var modelUsageSortMenu: some View {
+        Menu {
+            ForEach(AudioModelUsageSort.allCases) { sort in
+                Button {
+                    modelUsageSort = sort
+                    modelUsageSortAscending = sort == .name
+                    modelUsagePage = 0
+                } label: {
+                    if modelUsageSort == sort {
+                        Label(sort.title, systemImage: "checkmark")
+                    } else {
+                        Text(sort.title)
+                    }
+                }
+            }
+        } label: {
+            Label(modelUsageSort.title, systemImage: "arrow.up.arrow.down")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Sort transcription models")
+    }
+
+    private var modelUsageSortOrderButton: some View {
+        Button {
+            modelUsageSortAscending.toggle()
+            modelUsagePage = 0
+        } label: {
+            Image(systemName: modelUsageSortAscending ? "arrow.up" : "arrow.down")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help(modelUsageSortAscending ? "Sorted ascending" : "Sorted descending")
+    }
+
+    private func modelUsageCard(
         _ usage: AudioModelUsage,
         share: Double
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    AudioTranscriptionModelProviderBadge(modelID: usage.modelID)
+                AudioTranscriptionModelProviderBadge(modelID: usage.modelID)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(
-                            usage.modelID.map(audioTranscriptionModelDisplayName)
-                                ?? "Unknown / legacy"
-                        )
-                        .font(.callout.weight(.medium))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(modelUsageDisplayName(usage))
+                        .font(.callout.weight(.semibold))
                         .lineLimit(1)
 
-                        Text(modelUsageBreakdown(usage))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
+                    Text(usage.modelID ?? "Model metadata was not recorded")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .help(
-                    usage.modelID.map { "Transcription model: \($0)" }
-                        ?? "No transcription model was recorded for these legacy transcripts."
-                )
 
                 Spacer(minLength: 12)
 
-                Text(share.formatted(.percent.precision(.fractionLength(0))))
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(share.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                    Text("of usage")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .help(
+                usage.modelID.map { "Transcription model: \($0)" }
+                    ?? "No transcription model was recorded for these legacy transcripts."
+            )
+
+            HStack(spacing: 6) {
+                if usage.dictations > 0 {
+                    modelUsageKindBadge(
+                        "\(usage.dictations.formatted()) \(usage.dictations == 1 ? "dictation" : "dictations")",
+                        systemImage: "mic.fill"
+                    )
+                }
+                if usage.recordings > 0 {
+                    modelUsageKindBadge(
+                        "\(usage.recordings.formatted()) \(usage.recordings == 1 ? "recording" : "recordings")",
+                        systemImage: "waveform"
+                    )
+                }
+                if usage.modelID == nil {
+                    modelUsageKindBadge(
+                        "Legacy",
+                        systemImage: "archivebox"
+                    )
+                }
+                Spacer(minLength: 0)
             }
 
             ProgressView(value: share)
                 .progressViewStyle(.linear)
+
+            Divider()
 
             LazyVGrid(
                 columns: Array(
@@ -586,7 +904,65 @@ struct AudioView: View {
                 )
             }
         }
-        .padding(.vertical, 12)
+        .padding(14)
+        .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+
+    private func modelUsageKindBadge(
+        _ title: String,
+        systemImage: String
+    ) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.055), in: Capsule())
+    }
+
+    private func modelUsagePagination(
+        currentPage: Int,
+        pageCount: Int,
+        totalCount: Int
+    ) -> some View {
+        let firstVisible = currentPage * Self.modelUsagePageSize + 1
+        let lastVisible = min(firstVisible + Self.modelUsagePageSize - 1, totalCount)
+
+        return HStack(spacing: 10) {
+            Text("Showing \(firstVisible)–\(lastVisible) of \(totalCount)")
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 0)
+
+            Text("Page \(currentPage + 1) of \(pageCount)")
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button {
+                modelUsagePage = max(0, currentPage - 1)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(currentPage == 0)
+            .help("Previous model page")
+
+            Button {
+                modelUsagePage = min(pageCount - 1, currentPage + 1)
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(currentPage >= pageCount - 1)
+            .help("Next model page")
+        }
     }
 
     private func modelUsageMetric(
@@ -607,15 +983,63 @@ struct AudioView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func modelUsageBreakdown(_ usage: AudioModelUsage) -> String {
-        var parts: [String] = []
-        if usage.dictations > 0 {
-            parts.append("\(usage.dictations) \(usage.dictations == 1 ? "dictation" : "dictations")")
+    private func visibleModelUsages(
+        from usages: [AudioModelUsage]
+    ) -> [AudioModelUsage] {
+        let query = modelUsageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return usages
+            .filter { usage in
+                let matchesFilter = switch modelUsageFilter {
+                case .all: true
+                case .dictations: usage.dictations > 0
+                case .recordings: usage.recordings > 0
+                case .timedAudio: usage.timedTranscriptions > 0
+                case .legacy: usage.modelID == nil
+                }
+                guard matchesFilter, !query.isEmpty else {
+                    return matchesFilter
+                }
+                return modelUsageDisplayName(usage).localizedCaseInsensitiveContains(query)
+                    || (usage.modelID?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+            .sorted(by: modelUsagePrecedes)
+    }
+
+    private func modelUsagePrecedes(
+        _ lhs: AudioModelUsage,
+        _ rhs: AudioModelUsage
+    ) -> Bool {
+        let comparison: ComparisonResult = switch modelUsageSort {
+        case .transcriptions:
+            compare(lhs.transcriptions, rhs.transcriptions)
+        case .words:
+            compare(lhs.words, rhs.words)
+        case .audio:
+            compare(lhs.durationSeconds, rhs.durationSeconds)
+        case .recent:
+            compare(lhs.lastUsedAt, rhs.lastUsedAt)
+        case .name:
+            modelUsageDisplayName(lhs).localizedCaseInsensitiveCompare(modelUsageDisplayName(rhs))
         }
-        if usage.recordings > 0 {
-            parts.append("\(usage.recordings) \(usage.recordings == 1 ? "recording" : "recordings")")
-        }
-        return parts.joined(separator: " · ")
+        let resolvedComparison = comparison == .orderedSame
+            ? lhs.id.localizedCaseInsensitiveCompare(rhs.id)
+            : comparison
+        return modelUsageSortAscending
+            ? resolvedComparison == .orderedAscending
+            : resolvedComparison == .orderedDescending
+    }
+
+    private func compare<Value: Comparable>(
+        _ lhs: Value,
+        _ rhs: Value
+    ) -> ComparisonResult {
+        if lhs < rhs { return .orderedAscending }
+        if lhs > rhs { return .orderedDescending }
+        return .orderedSame
+    }
+
+    private func modelUsageDisplayName(_ usage: AudioModelUsage) -> String {
+        usage.modelID.map(audioTranscriptionModelDisplayName) ?? "Unknown / legacy"
     }
 
     private var audioInputPanel: some View {

@@ -173,6 +173,13 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         let unknownUsage = try XCTUnwrap(usages.first { $0.modelID == nil })
         XCTAssertEqual(unknownUsage.transcriptions, 1)
         XCTAssertEqual(unknownUsage.words, 2)
+
+        let recentUsages = store.modelUsage(since: secondDate)
+        XCTAssertEqual(recentUsages.map(\.modelID), [localModelID, appleModelID])
+        XCTAssertEqual(recentUsages[0].transcriptions, 1)
+        XCTAssertEqual(recentUsages[0].dictations, 0)
+        XCTAssertEqual(recentUsages[0].recordings, 1)
+        XCTAssertEqual(recentUsages[0].words, 3)
     }
 
     func testRetryPreservesOriginalDurationAndRecordedDate() {
