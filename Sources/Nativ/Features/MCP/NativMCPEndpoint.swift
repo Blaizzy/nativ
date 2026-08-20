@@ -14,6 +14,12 @@ struct NativMCPEndpoint: Sendable {
         "[::1]:*",
     ]
 
+    private static let loopbackOrigins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
+
     let surface: NativMCPToolSurface
     let publicHosts: [String]
 
@@ -56,7 +62,7 @@ struct NativMCPEndpoint: Sendable {
         StandardValidationPipeline(validators: [
             OriginValidator(
                 allowedHosts: Self.loopbackHosts + publicHosts,
-                allowedOrigins: publicHosts.map { "https://\($0)" }
+                allowedOrigins: Self.loopbackOrigins + publicHosts.map { "https://\($0)" }
             ),
             NativMCPAcceptValidator(),
             ContentTypeValidator(),
