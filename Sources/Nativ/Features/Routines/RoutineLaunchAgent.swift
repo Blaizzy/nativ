@@ -66,11 +66,7 @@ enum RoutineLaunchAgent {
             if fileExists {
                 unload(url)
             }
-            do {
-                try data.write(to: url, options: .atomic)
-            } catch {
-                continue
-            }
+            try? data.write(to: url, options: .atomic)
             load(url)
         }
     }
