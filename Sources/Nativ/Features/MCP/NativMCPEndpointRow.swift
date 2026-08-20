@@ -77,6 +77,7 @@ struct NativMCPEndpointDetails: View {
     @State private var funnelError: String?
     @State private var isChangingFunnel = false
     @State private var isAddingApp = false
+    @State private var portText = ""
     @State private var newAppName = ""
     @State private var newAppScope: NativMCPScope = .readOnly
 
@@ -116,9 +117,12 @@ struct NativMCPEndpointDetails: View {
             Text("Local port")
                 .frame(width: Self.labelWidth, alignment: .leading)
 
-            TextField("", value: $preferences.port, format: .number.grouping(.never))
+            TextField("", text: $portText)
                 .font(.body.monospacedDigit())
                 .frame(width: 90)
+                .onSubmit(commitPort)
+                .onAppear { portText = String(preferences.port) }
+                .onDisappear(perform: commitPort)
 
             switch state {
             case .serving:
@@ -346,6 +350,19 @@ struct NativMCPEndpointDetails: View {
             return nil
         }
         return "https://\(host)/mcp"
+    }
+
+    private func commitPort() {
+        guard let value = Int(portText.trimmingCharacters(in: .whitespaces)),
+              (1024...65535).contains(value)
+        else {
+            portText = String(preferences.port)
+            return
+        }
+        guard value != preferences.port else {
+            return
+        }
+        preferences.port = value
     }
 
     private func changeFunnel(_ change: @escaping () async -> String?) {
