@@ -75,6 +75,8 @@ struct NativMCPEndpointDetails: View {
     @Environment(\.dismiss) private var dismiss
     @State private var newKeyName = ""
     @State private var newKeyScope: NativMCPScope = .readOnly
+    @State private var funnel = NativFunnelStatus()
+    @State private var isChangingFunnel = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -90,10 +92,7 @@ struct NativMCPEndpointDetails: View {
                     .frame(width: 90)
             }
 
-            LabeledContent("Public address") {
-                TextField("optional", text: $preferences.publicHost)
-                    .frame(width: 260)
-            }
+            internetAccess
 
             Divider()
 
@@ -156,6 +155,70 @@ struct NativMCPEndpointDetails: View {
         }
         .padding(20)
         .frame(width: 520)
+    }
+
+    @ViewBuilder
+    private var internetAccess: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Reachable from the internet")
+                    .font(.callout)
+
+                Spacer()
+
+                if funnel.isServing {
+                    Button("Turn Off") {
+                        changeFunnel { await NativFunnelIntegration(port: preferences.port).disable() }
+                    }
+                    .controlSize(.small)
+                    .disabled(isChangingFunnel)
+                } else if funnel.isInstalled {
+                    Button("Turn On") {
+                        changeFunnel { await NativFunnelIntegration(port: preferences.port).enable() }
+                    }
+                    .controlSize(.small)
+                    .disabled(isChangingFunnel)
+                } else {
+                    Link("Install Tailscale", destination: NativFunnelIntegration.downloadURL)
+                        .font(.callout)
+                }
+            }
+
+            Text(internetAccessDetail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .task(id: preferences.port) {
+            await refreshFunnel()
+        }
+    }
+
+    private var internetAccessDetail: String {
+        if funnel.isServing, let host = funnel.publicHost {
+            return "Cloud services can reach Nativ at https://\(host)/mcp. Only keys you mark read only should be given out."
+        }
+        if funnel.isInstalled {
+            return "Off. Agents on this Mac work without it; turn it on only to let a cloud service in through Tailscale."
+        }
+        return "Off. Agents on this Mac work without it. Letting a cloud service in needs Tailscale."
+    }
+
+    private func changeFunnel(_ change: @escaping () async -> Bool) {
+        isChangingFunnel = true
+        Task {
+            _ = await change()
+            await refreshFunnel()
+            isChangingFunnel = false
+        }
+    }
+
+    private func refreshFunnel() async {
+        funnel = await NativFunnelIntegration(port: preferences.port).status()
+        let host = funnel.isServing ? funnel.publicHost ?? "" : ""
+        if preferences.publicHost != host {
+            preferences.publicHost = host
+        }
     }
 
     private func configuration(for agent: NativMCPAgent) -> String {
