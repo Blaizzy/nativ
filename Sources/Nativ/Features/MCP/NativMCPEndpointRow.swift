@@ -7,7 +7,7 @@ struct NativMCPEndpointRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "puzzlepiece.extension.fill")
+            Image(systemName: "server.rack")
                 .foregroundStyle(iconTint)
 
             VStack(alignment: .leading, spacing: 2) {
