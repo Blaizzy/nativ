@@ -54,6 +54,7 @@ final class NativMCPPreferences: ObservableObject {
             agents = stored
         } else {
             agents = [NativMCPAgent(name: "This Mac", scope: .full)]
+            save(agents)
         }
     }
 
