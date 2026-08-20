@@ -68,6 +68,14 @@ struct AudioView: View {
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
     @State private var isConfirmingClearAllDictations = false
+    @State private var isSelectingDictations = false
+    @State private var selectedDictationIDs = Set<String>()
+    @State private var pendingDictationDeletion: [AudioTranscriptionRecord] = []
+    @State private var isConfirmingDictationDeletion = false
+    @State private var isSelectingRecordings = false
+    @State private var selectedRecordingIDs = Set<String>()
+    @State private var pendingRecordingDeletion: [AudioTranscriptionRecord] = []
+    @State private var isConfirmingRecordingDeletion = false
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -217,6 +225,36 @@ struct AudioView: View {
             }
         } message: { record in
             Text("“\(record.displayTitle)” and its saved audio, transcript, and summary will be permanently deleted.")
+        }
+        .alert(
+            "Delete \(pendingDictationDeletion.count) \(pendingDictationDeletion.count == 1 ? "dictation" : "dictations")?",
+            isPresented: $isConfirmingDictationDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                deleteDictations(pendingDictationDeletion)
+                pendingDictationDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDictationDeletion = []
+            }
+        } message: {
+            Text("The selected transcripts and retained audio will be permanently deleted.")
+        }
+        .alert(
+            "Delete \(pendingRecordingDeletion.count) \(pendingRecordingDeletion.count == 1 ? "recording" : "recordings")?",
+            isPresented: $isConfirmingRecordingDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                deleteRecordings(pendingRecordingDeletion)
+                pendingRecordingDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingRecordingDeletion = []
+            }
+        } message: {
+            Text("The selected recordings, transcripts, and summaries will be permanently deleted.")
         }
     }
 
@@ -1865,6 +1903,14 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(isSelectingDictations ? "Done" : "Select") {
+                    isSelectingDictations.toggle()
+                    if !isSelectingDictations {
+                        selectedDictationIDs.removeAll()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 Button("Clear All", role: .destructive) {
                     isConfirmingClearAllDictations = true
                 }
@@ -1877,6 +1923,23 @@ struct AudioView: View {
                 TextField("Search transcripts", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
+            }
+
+            if isSelectingDictations {
+                AudioHistorySelectionBar(
+                    selectedCount: selectedDictations.count,
+                    allSelected: selectedDictationIDs.isSuperset(
+                        of: Set(filteredRecords.map(\.id))
+                    ),
+                    onSelectAll: {
+                        selectedDictationIDs = Set(filteredRecords.map(\.id))
+                    },
+                    onDeselectAll: { selectedDictationIDs.removeAll() },
+                    onDelete: {
+                        pendingDictationDeletion = selectedDictations
+                        isConfirmingDictationDeletion = true
+                    }
+                )
             }
 
             if filteredRecords.isEmpty {
@@ -1899,6 +1962,9 @@ struct AudioView: View {
                         index, record in
                         AudioTranscriptRow(
                             record: record,
+                            isSelecting: isSelectingDictations,
+                            isSelected: selectedDictationIDs.contains(record.id),
+                            onToggleSelection: { toggleDictationSelection(record) },
                             onDelete: { pendingDeleteDictation = record }
                         )
                         if index < min(filteredRecords.count, 30) - 1 {
@@ -1923,6 +1989,14 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(isSelectingRecordings ? "Done" : "Select") {
+                    isSelectingRecordings.toggle()
+                    if !isSelectingRecordings {
+                        selectedRecordingIDs.removeAll()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 Button {
                     destination = .record
                 } label: {
@@ -1930,6 +2004,23 @@ struct AudioView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+
+            if isSelectingRecordings {
+                AudioHistorySelectionBar(
+                    selectedCount: selectedRecordings.count,
+                    allSelected: selectedRecordingIDs.isSuperset(
+                        of: Set(captureRecords.map(\.id))
+                    ),
+                    onSelectAll: {
+                        selectedRecordingIDs = Set(captureRecords.map(\.id))
+                    },
+                    onDeselectAll: { selectedRecordingIDs.removeAll() },
+                    onDelete: {
+                        pendingRecordingDeletion = selectedRecordings
+                        isConfirmingRecordingDeletion = true
+                    }
+                )
             }
 
             if captureRecords.isEmpty {
@@ -1949,6 +2040,9 @@ struct AudioView: View {
                     ForEach(captureRecords) { record in
                         AudioCaptureRecordRow(
                             record: record,
+                            isSelecting: isSelectingRecordings,
+                            isSelected: selectedRecordingIDs.contains(record.id),
+                            onToggleSelection: { toggleRecordingSelection(record) },
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
                             isPlaying: captureLibrary.playingRecordID == record.id
@@ -2081,6 +2175,14 @@ struct AudioView: View {
         analytics.records.filter { $0.resolvedKind != .dictation }
     }
 
+    private var selectedDictations: [AudioTranscriptionRecord] {
+        dictationRecords.filter { selectedDictationIDs.contains($0.id) }
+    }
+
+    private var selectedRecordings: [AudioTranscriptionRecord] {
+        captureRecords.filter { selectedRecordingIDs.contains($0.id) }
+    }
+
     private var speechModels: [LocalModel] {
         localLibrary.models
             .filter { $0.capabilities.contains(.speechToText) }
@@ -2203,6 +2305,34 @@ struct AudioView: View {
             withID: record.id,
             recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
         )
+    }
+
+    private func toggleDictationSelection(_ record: AudioTranscriptionRecord) {
+        if selectedDictationIDs.contains(record.id) {
+            selectedDictationIDs.remove(record.id)
+        } else {
+            selectedDictationIDs.insert(record.id)
+        }
+    }
+
+    private func deleteDictations(_ records: [AudioTranscriptionRecord]) {
+        records.forEach(deleteDictation)
+        selectedDictationIDs.subtract(records.map(\.id))
+        isSelectingDictations = false
+    }
+
+    private func toggleRecordingSelection(_ record: AudioTranscriptionRecord) {
+        if selectedRecordingIDs.contains(record.id) {
+            selectedRecordingIDs.remove(record.id)
+        } else {
+            selectedRecordingIDs.insert(record.id)
+        }
+    }
+
+    private func deleteRecordings(_ records: [AudioTranscriptionRecord]) {
+        records.forEach(captureLibrary.delete)
+        selectedRecordingIDs.subtract(records.map(\.id))
+        isSelectingRecordings = false
     }
 
     private func clearAllDictations() {
@@ -2527,14 +2657,65 @@ private struct InlineEditableAudioTitle: View {
     }
 }
 
+private struct AudioHistorySelectionBar: View {
+    let selectedCount: Int
+    let allSelected: Bool
+    let onSelectAll: () -> Void
+    let onDeselectAll: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(selectedCount) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(allSelected ? "Deselect All" : "Select All") {
+                if allSelected {
+                    onDeselectAll()
+                } else {
+                    onSelectAll()
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(selectedCount == 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+    }
+}
+
 private struct AudioTranscriptRow: View {
     let record: AudioTranscriptionRecord
+    let isSelecting: Bool
+    let isSelected: Bool
+    let onToggleSelection: () -> Void
     let onDelete: () -> Void
     @State private var copied = false
     @State private var isDeleteHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select dictation")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
+
             VStack(alignment: .leading, spacing: 7) {
                 Text(record.transcript)
                     .font(.callout)
@@ -2610,6 +2791,9 @@ private struct AudioTranscriptRow: View {
 
 private struct AudioCaptureRecordRow: View {
     let record: AudioTranscriptionRecord
+    let isSelecting: Bool
+    let isSelected: Bool
+    let onToggleSelection: () -> Void
     let audioIsAvailable: Bool
     let isProcessing: Bool
     let isPlaying: Bool
@@ -2655,6 +2839,17 @@ private struct AudioCaptureRecordRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
+                if isSelecting {
+                    Button(action: onToggleSelection) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Select \(record.displayTitle)")
+                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                }
+
                 Image(systemName: record.resolvedKind.systemImage)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(record.resolvedKind == .dictation ? Color.secondary : Color.blue)
