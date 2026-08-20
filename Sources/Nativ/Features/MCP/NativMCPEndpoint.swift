@@ -7,41 +7,22 @@ struct NativMCPToolSurface: Sendable {
     let call: @Sendable (String, String?) async throws -> String
 }
 
-actor NativMCPEndpoint {
-    private let server: Server
-    private let transport: StatelessHTTPServerTransport
-
-    init(surface: NativMCPToolSurface, publicHosts: [String] = []) {
-        server = Server(
-            name: "nativ",
-            version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
-            capabilities: .init(tools: .init(listChanged: false))
-        )
-        transport = StatelessHTTPServerTransport(
-            validationPipeline: publicHosts.isEmpty
-                ? nil
-                : StandardValidationPipeline(validators: [
-                    OriginValidator(
-                        allowedHosts: Self.loopbackHosts + publicHosts,
-                        allowedOrigins: publicHosts.map { "https://\($0)" }
-                    ),
-                    AcceptHeaderValidator(mode: .jsonOnly),
-                    ContentTypeValidator(),
-                    ProtocolVersionValidator(),
-                ])
-        )
-        self.surface = surface
-    }
-
-    private let surface: NativMCPToolSurface
-
+struct NativMCPEndpoint: Sendable {
     private static let loopbackHosts = [
         "127.0.0.1:*",
         "localhost:*",
         "[::1]:*",
     ]
 
-    func start() async throws {
+    let surface: NativMCPToolSurface
+    let publicHosts: [String]
+
+    func respond(to request: HTTPRequest) async -> HTTPResponse {
+        let server = Server(
+            name: "nativ",
+            version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
+            capabilities: .init(tools: .init(listChanged: false))
+        )
         await server.withMethodHandler(ListTools.self) { [surface] _ in
             ListTools.Result(tools: await surface.list().map(Self.tool(from:)))
         }
@@ -59,15 +40,31 @@ actor NativMCPEndpoint {
                 )
             }
         }
-        try await server.start(transport: transport)
-    }
 
-    func stop() async {
+        let transport = StatelessHTTPServerTransport(validationPipeline: validationPipeline)
+        do {
+            try await server.start(transport: transport)
+        } catch {
+            return .error(statusCode: 500, MCPError.internalError(error.localizedDescription))
+        }
+        let response = await transport.handleRequest(request)
         await server.stop()
+        return response
     }
 
-    func respond(to request: HTTPRequest) async -> HTTPResponse {
-        await transport.handleRequest(request)
+    private var validationPipeline: (any HTTPRequestValidationPipeline)? {
+        guard !publicHosts.isEmpty else {
+            return nil
+        }
+        return StandardValidationPipeline(validators: [
+            OriginValidator(
+                allowedHosts: Self.loopbackHosts + publicHosts,
+                allowedOrigins: publicHosts.map { "https://\($0)" }
+            ),
+            AcceptHeaderValidator(mode: .jsonOnly),
+            ContentTypeValidator(),
+            ProtocolVersionValidator(),
+        ])
     }
 
     private static func tool(from definition: MLXChatToolDefinition) -> Tool {
