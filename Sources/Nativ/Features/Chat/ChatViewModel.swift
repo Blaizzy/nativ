@@ -875,8 +875,7 @@ final class ChatViewModel: ObservableObject {
                 )
             )
         }
-        providers.append(NativeToolProvider())
-        return NativToolRouter(providers: providers)
+        return NativToolRouter(providers: providers, fallback: NativeToolProvider())
     }
 
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
@@ -1665,9 +1664,12 @@ final class ChatViewModel: ObservableObject {
                 message.imageAttachments.contains { $0.chatAttachmentKind == .image }
             }
             toolDefinitions = await toolRouter(for: settings).definitions(
-                NativToolCatalogOptions(canEditImage: canEditImage) { name in
-                    settings.isToolEnabled(name)
-                }
+                NativToolCatalogOptions(
+                    canEditImage: canEditImage,
+                    disabledToolNames: Set(settings.disabledToolNames),
+                    webSearchIsConfigured: ChatWebSearchToolRegistry.isConfigured(),
+                    webReadIsConfigured: ChatWebReadToolRegistry.isConfigured()
+                )
             )
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions

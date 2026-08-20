@@ -1,29 +1,28 @@
 import Foundation
 import NativServerKit
 
-actor NativToolRouter {
-    private let providers: [any NativCapabilityProvider]
-    private var reportedCollisions = false
+struct NativToolCatalogOptions: Sendable {
+    let canEditImage: Bool
+    let disabledToolNames: Set<String>
+    let webSearchIsConfigured: Bool
+    let webReadIsConfigured: Bool
+}
 
-    init(providers: [any NativCapabilityProvider]) {
+struct NativToolRouter: Sendable {
+    private let providers: [any NativCapabilityProvider]
+    private let fallback: any NativCapabilityProvider
+
+    init(providers: [any NativCapabilityProvider], fallback: any NativCapabilityProvider) {
         self.providers = providers
+        self.fallback = fallback
     }
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
-        var definitions: [MLXChatToolDefinition] = []
-        for provider in providers.sorted(by: { $0.catalogRank < $1.catalogRank }) {
+        var definitions = await fallback.definitions(options)
+        for provider in providers {
             definitions += await provider.definitions(options)
         }
-        reportCollisions(in: definitions)
-
-        let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
-        let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
-        definitions.removeAll { definition in
-            let name = definition.function.name
-            return !options.isToolEnabled(name)
-                || (name == ChatWebSearchToolRegistry.toolName && !webSearchIsConfigured)
-                || (name == ChatWebReadToolRegistry.toolName && !webReadIsConfigured)
-        }
+        definitions.removeAll { isHidden($0.function.name, options) }
         return definitions
     }
 
@@ -35,32 +34,19 @@ actor NativToolRouter {
         for provider in providers where await provider.handles(name) {
             return try await provider.call(name, argumentsJSON: argumentsJSON, context: context)
         }
-        throw ChatImageToolError.unsupportedTool(name)
+        return try await fallback.call(name, argumentsJSON: argumentsJSON, context: context)
     }
 
-    static func duplicateToolNames(in definitions: [MLXChatToolDefinition]) -> [String] {
-        var seen = Set<String>()
-        var duplicates = Set<String>()
-        for definition in definitions {
-            if !seen.insert(definition.function.name).inserted {
-                duplicates.insert(definition.function.name)
-            }
+    private func isHidden(_ name: String, _ options: NativToolCatalogOptions) -> Bool {
+        if options.disabledToolNames.contains(name) {
+            return true
         }
-        return duplicates.sorted()
-    }
-
-    private func reportCollisions(in definitions: [MLXChatToolDefinition]) {
-        guard !reportedCollisions else {
-            return
+        if name == ChatWebSearchToolRegistry.toolName, !options.webSearchIsConfigured {
+            return true
         }
-        let duplicates = Self.duplicateToolNames(in: definitions)
-        guard !duplicates.isEmpty else {
-            return
+        if name == ChatWebReadToolRegistry.toolName, !options.webReadIsConfigured {
+            return true
         }
-        reportedCollisions = true
-        NSLog(
-            "Nativ tool names are defined by more than one provider: %@",
-            duplicates.joined(separator: ", ")
-        )
+        return false
     }
 }

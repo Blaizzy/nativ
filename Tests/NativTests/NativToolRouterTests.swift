@@ -3,7 +3,6 @@ import XCTest
 
 private struct StubProvider: NativCapabilityProvider {
     let namespace: String
-    let catalogRank: Int
     let names: [String]
     let response: String
 
@@ -45,40 +44,50 @@ final class NativToolRouterTests: XCTestCase {
     }
 
     private func options(
-        enabled: @escaping @Sendable (String) -> Bool = { _ in true }
+        disabled: Set<String> = [],
+        webSearch: Bool = true,
+        webRead: Bool = true
     ) -> NativToolCatalogOptions {
-        NativToolCatalogOptions(canEditImage: false, isToolEnabled: enabled)
+        NativToolCatalogOptions(
+            canEditImage: false,
+            disabledToolNames: disabled,
+            webSearchIsConfigured: webSearch,
+            webReadIsConfigured: webRead
+        )
     }
 
-    func testEarlierProviderWinsWhenTwoProvidersShareAToolName() async throws {
-        let router = NativToolRouter(providers: [
-            StubProvider(namespace: "custom", catalogRank: 1, names: ["shared"], response: "custom"),
-            StubProvider(namespace: "native", catalogRank: 0, names: ["shared"], response: "native"),
-        ])
+    func testProvidersShadowTheFallbackForSharedToolNames() async throws {
+        let router = NativToolRouter(
+            providers: [StubProvider(namespace: "custom", names: ["shared"], response: "custom")],
+            fallback: StubProvider(namespace: "native", names: ["shared"], response: "native")
+        )
 
         let outcome = try await router.call("shared", argumentsJSON: nil, context: makeContext())
         XCTAssertEqual(
             outcome.content,
             "custom",
-            "dispatch order must stay custom before native, as the chat turn did"
+            "a custom tool must shadow a built-in of the same name, as the chat turn did"
         )
     }
 
-    func testCatalogOrderIsIndependentOfDispatchOrder() async {
-        let router = NativToolRouter(providers: [
-            StubProvider(namespace: "custom", catalogRank: 1, names: ["b"], response: ""),
-            StubProvider(namespace: "mcp", catalogRank: 2, names: ["c"], response: ""),
-            StubProvider(namespace: "native", catalogRank: 0, names: ["a"], response: ""),
-        ])
+    func testBuiltInToolsAreAdvertisedFirst() async {
+        let router = NativToolRouter(
+            providers: [
+                StubProvider(namespace: "custom", names: ["b"], response: ""),
+                StubProvider(namespace: "mcp", names: ["c"], response: ""),
+            ],
+            fallback: StubProvider(namespace: "native", names: ["a"], response: "")
+        )
 
         let names = await router.definitions(options()).map(\.function.name)
         XCTAssertEqual(names, ["a", "b", "c"], "advertised order must stay native, custom, host")
     }
 
-    func testUnknownToolFailsTheSameWayTheDispatcherDid() async {
-        let router = NativToolRouter(providers: [
-            StubProvider(namespace: "native", catalogRank: 0, names: ["known"], response: "")
-        ])
+    func testUnknownToolsReachTheFallbackWhichReportsThem() async {
+        let router = NativToolRouter(
+            providers: [StubProvider(namespace: "custom", names: ["known"], response: "")],
+            fallback: NativeToolProvider()
+        )
 
         do {
             _ = try await router.call("missing", argumentsJSON: nil, context: makeContext())
@@ -91,42 +100,35 @@ final class NativToolRouterTests: XCTestCase {
     }
 
     func testDisabledToolsAreNotAdvertised() async {
-        let router = NativToolRouter(providers: [
-            StubProvider(namespace: "native", catalogRank: 0, names: ["kept", "dropped"], response: "")
-        ])
+        let router = NativToolRouter(
+            providers: [],
+            fallback: StubProvider(namespace: "native", names: ["kept", "dropped"], response: "")
+        )
 
-        let names = await router.definitions(options { $0 != "dropped" }).map(\.function.name)
+        let names = await router.definitions(options(disabled: ["dropped"])).map(\.function.name)
         XCTAssertEqual(names, ["kept"])
     }
 
     func testWebToolsAreAdvertisedOnlyWhenConfigured() async {
-        let router = NativToolRouter(providers: [
-            StubProvider(
+        let router = NativToolRouter(
+            providers: [],
+            fallback: StubProvider(
                 namespace: "native",
-                catalogRank: 0,
                 names: [ChatWebSearchToolRegistry.toolName, ChatWebReadToolRegistry.toolName],
                 response: ""
             )
-        ])
-
-        let names = await router.definitions(options()).map(\.function.name)
-        XCTAssertEqual(
-            names.contains(ChatWebSearchToolRegistry.toolName),
-            ChatWebSearchToolRegistry.isConfigured()
         )
-        XCTAssertEqual(
-            names.contains(ChatWebReadToolRegistry.toolName),
-            ChatWebReadToolRegistry.isConfigured()
-        )
-    }
 
-    func testDuplicateToolNamesAreReported() {
-        let definitions = ["a", "b", "a", "c", "b"].map { name in
-            MLXChatToolDefinition(
-                function: MLXChatFunctionDefinition(name: name, description: "", parameters: .object([:]))
-            )
-        }
-        XCTAssertEqual(NativToolRouter.duplicateToolNames(in: definitions), ["a", "b"])
+        let configured = await router.definitions(options()).map(\.function.name)
+        XCTAssertEqual(
+            configured,
+            [ChatWebSearchToolRegistry.toolName, ChatWebReadToolRegistry.toolName]
+        )
+
+        let unconfigured = await router.definitions(
+            options(webSearch: false, webRead: false)
+        ).map(\.function.name)
+        XCTAssertEqual(unconfigured, [])
     }
 
     func testNativeProviderClaimsOnlyDispatchableTools() async {
