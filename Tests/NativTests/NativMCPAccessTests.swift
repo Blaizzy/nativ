@@ -28,6 +28,12 @@ final class NativMCPAccessTests: XCTestCase {
         )
     }
 
+    func testSecretsOfADifferentLengthAreRejected() {
+        let access = makeAccess()
+        XCTAssertNil(access.caller(arrivingOn: 8765, secret: "local-secret-and-more"))
+        XCTAssertNil(access.caller(arrivingOn: 8765, secret: "local"))
+    }
+
     func testUnknownPortsAreRejected() {
         let access = makeAccess()
         XCTAssertNil(access.caller(arrivingOn: 9999, secret: "local-secret"))
