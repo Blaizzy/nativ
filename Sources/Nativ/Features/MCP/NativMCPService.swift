@@ -99,7 +99,7 @@ final class NativMCPService {
         }
         _ = await NativNotificationService.shared.deliver(
             NativNotification(
-                title: "Agent connected",
+                title: "External plugin connected",
                 body: "\(agent.name) is using Nativ's tools."
             )
         )

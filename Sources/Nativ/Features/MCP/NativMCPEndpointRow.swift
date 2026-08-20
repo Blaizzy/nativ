@@ -7,11 +7,11 @@ struct NativMCPEndpointRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
+            Image(systemName: "puzzlepiece.extension.fill")
                 .foregroundStyle(iconTint)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Agent Access")
+                Text("External Plugin")
                     .font(.callout.weight(.medium))
                 Text(statusText)
                     .font(.caption)
@@ -59,7 +59,7 @@ struct NativMCPEndpointRow: View {
     private var statusText: String {
         switch state {
         case .off:
-            return "Off. Coding agents cannot reach Nativ."
+            return "Off. Other apps cannot reach Nativ's tools."
         case .failed(let message):
             return message
         case .serving(let port):
@@ -78,10 +78,10 @@ struct NativMCPEndpointDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Agent Access")
+            Text("External Plugin")
                 .font(.headline)
 
-            Text("Coding agents can list and run Nativ's tools without opening a chat. Nativ only ever listens on this Mac; a cloud agent needs you to forward a public address to this port.")
+            Text("Other apps can list and run Nativ's tools without opening a chat. Nativ only ever listens on this Mac; a cloud service needs you to forward a public address to this port.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -97,7 +97,7 @@ struct NativMCPEndpointDetails: View {
 
             Divider()
 
-            Text("Keys")
+            Text("Connected apps")
                 .font(.callout.weight(.medium))
 
             ForEach(preferences.agents) { agent in
@@ -126,7 +126,7 @@ struct NativMCPEndpointDetails: View {
             }
 
             HStack(spacing: 8) {
-                TextField("New agent", text: $newKeyName)
+                TextField("New app", text: $newKeyName)
                     .frame(width: 160)
 
                 Picker("", selection: $newKeyScope) {
