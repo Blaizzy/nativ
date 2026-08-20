@@ -1,19 +1,8 @@
 import Foundation
 import NativServerKit
 
-struct NativToolCatalogOptions: Sendable {
-    let canEditImage: Bool
-    let isToolEnabled: @Sendable (String) -> Bool
-
-    init(canEditImage: Bool, isToolEnabled: @escaping @Sendable (String) -> Bool) {
-        self.canEditImage = canEditImage
-        self.isToolEnabled = isToolEnabled
-    }
-}
-
 protocol NativCapabilityProvider: Sendable {
     var namespace: String { get }
-    var catalogRank: Int { get }
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition]
     func handles(_ name: String) async -> Bool
@@ -26,7 +15,6 @@ protocol NativCapabilityProvider: Sendable {
 
 struct NativeToolProvider: NativCapabilityProvider {
     let namespace = "native"
-    let catalogRank = 0
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
         ChatToolRegistry.definitions(canEditImage: options.canEditImage)
@@ -53,7 +41,6 @@ struct NativeToolProvider: NativCapabilityProvider {
 
 struct CustomToolProvider: NativCapabilityProvider {
     let namespace = "custom"
-    let catalogRank = 1
     let tools: [CustomTool]
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
@@ -79,7 +66,6 @@ struct CustomToolProvider: NativCapabilityProvider {
 
 struct HostedMCPToolProvider: NativCapabilityProvider {
     let namespace = "mcp"
-    let catalogRank = 2
     let listDefinitions: @MainActor @Sendable () -> [MLXChatToolDefinition]
     let handlesTool: @MainActor @Sendable (String) -> Bool
     let invoke: @MainActor @Sendable (String, String?) async throws -> String
