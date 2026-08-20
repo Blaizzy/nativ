@@ -169,13 +169,31 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
+    @State private var isSelectingExtensions = false
+    @State private var selectedExtensionIDs = Set<NativExtensionRecord.ID>()
+    @State private var pendingExtensionRemoval: [NativExtensionRecord] = []
+    @State private var isConfirmingExtensionRemoval = false
+
+    private var removableExtensions: [NativExtensionRecord] {
+        manager.records.filter { !$0.isRemoved }
+    }
+
+    private var selectedExtensions: [NativExtensionRecord] {
+        removableExtensions.filter { selectedExtensionIDs.contains($0.id) }
+    }
 
     var body: some View {
         HubSectionScaffold(
             title: "Extensions",
             subtitle: "Packages that add features to Nativ."
         ) {
-            EmptyView()
+            Button(isSelectingExtensions ? "Done" : "Select") {
+                isSelectingExtensions.toggle()
+                if !isSelectingExtensions {
+                    selectedExtensionIDs.removeAll()
+                }
+            }
+            .disabled(removableExtensions.isEmpty)
         } content: {
             if manager.records.isEmpty {
                 HubEmptyHint(
@@ -184,8 +202,21 @@ private struct ExtensionsSectionView: View {
                 )
             } else {
                 VStack(spacing: 12) {
+                    if isSelectingExtensions {
+                        extensionSelectionBar
+                    }
                     ForEach(manager.records) { record in
-                        ExtensionRow(record: record, manager: manager)
+                        ExtensionRow(
+                            record: record,
+                            manager: manager,
+                            isSelecting: isSelectingExtensions && !record.isRemoved,
+                            isSelected: selectedExtensionIDs.contains(record.id),
+                            onToggleSelection: { toggleSelection(record) },
+                            onRemove: {
+                                pendingExtensionRemoval = [record]
+                                isConfirmingExtensionRemoval = true
+                            }
+                        )
                     }
                 }
             }
@@ -193,22 +224,101 @@ private struct ExtensionsSectionView: View {
         .onAppear {
             manager.refreshPermissionStatuses()
         }
+        .alert(
+            "Remove \(pendingExtensionRemoval.count) \(pendingExtensionRemoval.count == 1 ? "extension" : "extensions")?",
+            isPresented: $isConfirmingExtensionRemoval
+        ) {
+            Button("Remove", role: .destructive) {
+                let ids = pendingExtensionRemoval.map(\.id)
+                ids.forEach { manager.remove(extensionID: $0) }
+                selectedExtensionIDs.subtract(ids)
+                pendingExtensionRemoval = []
+                isSelectingExtensions = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingExtensionRemoval = []
+            }
+        } message: {
+            Text("External packages will be deleted from disk. Included and system extensions can be restored later.")
+        }
+    }
+
+    private var extensionSelectionBar: some View {
+        let selections = selectedExtensions
+        return HStack(spacing: 10) {
+            Text("\(selections.count) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(
+                selectedExtensionIDs.count == removableExtensions.count
+                    ? "Deselect All" : "Select All"
+            ) {
+                if selectedExtensionIDs.count == removableExtensions.count {
+                    selectedExtensionIDs.removeAll()
+                } else {
+                    selectedExtensionIDs = Set(removableExtensions.map(\.id))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive) {
+                pendingExtensionRemoval = selections
+                isConfirmingExtensionRemoval = true
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+            .disabled(selections.isEmpty)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+    }
+
+    private func toggleSelection(_ record: NativExtensionRecord) {
+        guard !record.isRemoved else { return }
+        if selectedExtensionIDs.contains(record.id) {
+            selectedExtensionIDs.remove(record.id)
+        } else {
+            selectedExtensionIDs.insert(record.id)
+        }
     }
 }
 
 private struct ExtensionRow: View {
     let record: NativExtensionRecord
     @ObservedObject var manager: NativExtensionManager
+    var isSelecting = false
+    var isSelected = false
+    let onToggleSelection: () -> Void
+    let onRemove: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
+                if isSelecting {
+                    Button(action: onToggleSelection) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Select \(record.manifest.displayName)")
+                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                }
+
                 NativTintedIconTile(symbol: record.manifest.systemImage, size: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(record.manifest.displayName)
                             .font(.system(size: 14, weight: .semibold))
                         if record.isIncluded { includedBadge }
+                        if record.isRemoved { removedBadge }
                     }
                     Text(record.manifest.summary)
                         .font(.system(size: 12))
@@ -220,16 +330,34 @@ private struct ExtensionRow: View {
                         .padding(.top, 1)
                 }
                 Spacer(minLength: 12)
-                Toggle(
-                    "",
-                    isOn: Binding(
-                        get: { record.isEnabled },
-                        set: { manager.setEnabled($0, extensionID: record.id) }
+                if record.isRemoved {
+                    Button("Restore") {
+                        manager.restore(extensionID: record.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { record.isEnabled },
+                            set: { manager.setEnabled($0, extensionID: record.id) }
+                        )
                     )
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                    Menu {
+                        Button("Remove", role: .destructive, action: onRemove)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 18)
+                    .help("Manage extension")
+                }
             }
             if !record.manifest.permissions.isEmpty {
                 Divider()
@@ -256,6 +384,16 @@ private struct ExtensionRow: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(Color.accentColor.opacity(0.12), in: Capsule())
+    }
+
+    private var removedBadge: some View {
+        Text("REMOVED")
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.4)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
     }
 
     private var permissions: some View {
