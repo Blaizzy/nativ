@@ -281,6 +281,7 @@
 		F6BFEEE99336BB34E3194214 /* NativExtensionPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD28C5E1607C8E6025B7240 /* NativExtensionPlatform.swift */; };
 		FC65EA7675E8441D11372F9C /* ChatDocumentContextBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F56569EDB0E77FAF6269F577 /* ChatDocumentContextBuilderTests.swift */; };
 		FD18166B4B3FAEB77E0D8C69 /* CodexCLIProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */; };
+		FEAADABA1D25B153BE25E58F /* StatusMenuController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85179B12862D6319C3F91027 /* StatusMenuController.swift */; };
 		FEB97639F6A1334E409830CF /* ChatWebSearchToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA5142DB692E378ADE8DFA0 /* ChatWebSearchToolTests.swift */; };
 		FF3A7CB3645D73897EE7535A /* ScheduledTaskChatLinkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBC23C0369758C056A8182D /* ScheduledTaskChatLinkerTests.swift */; };
 		FF9252FDCB6E44F672B53452 /* ChatAttachmentValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9483127E124DE562AFFFAC94 /* ChatAttachmentValidator.swift */; };
@@ -462,6 +463,7 @@
 		83A221B9B5CCE60A43CC46AC /* IntegrationServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationServices.swift; sourceTree = "<group>"; };
 		83D56A7BC388C8D6DEAEFA18 /* ChatWebReadToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebReadToolTests.swift; sourceTree = "<group>"; };
 		8513AE482EB6C3113080826A /* PDFDocumentTextExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFDocumentTextExtractorTests.swift; sourceTree = "<group>"; };
+		85179B12862D6319C3F91027 /* StatusMenuController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuController.swift; sourceTree = "<group>"; };
 		8614BD975152DDCEAC4EF777 /* LICENSES.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSES.txt; sourceTree = "<group>"; };
 		86A814B8C04BCBF1C1F869A8 /* MCPSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPSectionView.swift; sourceTree = "<group>"; };
 		879B4B75CA9BE0A82C259451 /* NativTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NativTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -670,6 +672,14 @@
 				E646A2A68BB20D0CD4933E2A /* DevHubView.swift */,
 			);
 			path = Developer;
+			sourceTree = "<group>";
+		};
+		25C7AD3E2D01EE9231FA30DE /* Menu */ = {
+			isa = PBXGroup;
+			children = (
+				85179B12862D6319C3F91027 /* StatusMenuController.swift */,
+			);
+			path = Menu;
 			sourceTree = "<group>";
 		};
 		26C7F2FDD9E38FEB038C7B00 /* Documents */ = {
@@ -886,6 +896,7 @@
 				28D631CB7BF8B65D28E11E43 /* Integrations */,
 				40D3B01A6A8BFAE6E98FDD3C /* IssueReport */,
 				5CE0523415094EB82A398A6A /* MCP */,
+				25C7AD3E2D01EE9231FA30DE /* Menu */,
 				BAC9F35045D83344BC059CB2 /* Models */,
 				0A9385475502902D1AC774D5 /* Routines */,
 				4D59C5326FE266C76E71C52A /* Settings */,
@@ -1257,11 +1268,11 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				465C23BB3ADA415A5004AAD9 /* Nativ */,
 				ED4CB78AB93E015D0BE21F7B /* NativExtensionSDK */,
 				1622B274F4DF5A85C2FDB081 /* NativServerKit */,
-				465C23BB3ADA415A5004AAD9 /* Nativ */,
-				7082E254E8272A5E8D13E6F0 /* VoiceDictationExtensionRuntime */,
 				51AD42FA29E71F2450386688 /* NativTests */,
+				7082E254E8272A5E8D13E6F0 /* VoiceDictationExtensionRuntime */,
 			);
 		};
 /* End PBXProject section */
@@ -1478,6 +1489,7 @@
 				C8B10834D4DF407907FCCF6C /* ShellEnvironment.swift in Sources */,
 				E64F3E5C624F0C949AE70C60 /* SoftwareUpdater.swift in Sources */,
 				8B4DF732A8A6AA5FFBE11982 /* StatsView.swift in Sources */,
+				FEAADABA1D25B153BE25E58F /* StatusMenuController.swift in Sources */,
 				A5E3473F7FA26A19AB9FF7B2 /* SystemAudioMeetingRecorder.swift in Sources */,
 				C5CE4EBDB988CF611FB2D6DA /* SystemMenuBarPreferences.swift in Sources */,
 				E4D299AADEA8470C37256DDE /* SystemMonitorStore.swift in Sources */,
