@@ -42,7 +42,10 @@ final class NativMCPService {
             model.appendAgentAccessLog(message)
             return
         }
-        let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
+        let funnel = await NativFunnelIntegration(port: preferences.port).status()
+        let host = funnel.isServing
+            ? funnel.publicHost ?? ""
+            : preferences.publicHost.trimmingCharacters(in: .whitespaces)
         var started: [NativMCPScope: NativMCPEndpoint] = [:]
         for scope in Set(access.keys.map(\.agent.scope)) {
             let endpoint = NativMCPEndpoint(
