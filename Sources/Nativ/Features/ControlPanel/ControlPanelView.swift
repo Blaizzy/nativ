@@ -16,7 +16,6 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
 
     let dependencies: ControlPanelDependencies
-    @ObservedObject var mcpPreferences = NativMCPPreferences.shared
     @StateObject var chromeState: ControlPanelChromeState
     @StateObject var sidebarState: ChatSidebarState
     @StateObject var contentState: ControlPanelContentState
@@ -51,12 +50,6 @@ struct ControlPanelView: View {
 
     var chat: ChatViewModel { dependencies.chat }
     var mcpHost: MCPHostManager { dependencies.mcpHost }
-    var mcpService: NativMCPService { dependencies.mcpService }
-
-    var mcpEndpointConfiguration: String {
-        mcpPreferences.configurationFingerprint
-    }
-
     var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
     var artifacts: ArtifactStore { dependencies.artifacts }
     var dashboard: DashboardViewModel { dependencies.dashboard }
@@ -167,9 +160,6 @@ struct ControlPanelView: View {
         .background {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
-        }
-        .task(id: mcpEndpointConfiguration) {
-            await mcpService.restart(model: model)
         }
         .onAppear {
             applySidebarSelection(

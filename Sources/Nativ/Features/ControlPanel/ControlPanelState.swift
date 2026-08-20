@@ -18,8 +18,6 @@ final class ControlPanelDependencies: ObservableObject {
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
     lazy var routineModelLibrary = LocalModelLibrary()
-    lazy var mcpPreferences = NativMCPPreferences.shared
-    lazy var mcpService = NativMCPService(preferences: mcpPreferences, host: mcpHost)
 }
 
 /// Filters `NativModel` down to values that can change control-panel chrome.

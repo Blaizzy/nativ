@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import NativServerKit
 import SwiftUI
 import UserNotifications
@@ -11,6 +12,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private lazy var extensionManager = NativExtensionManager(
         builtInExtensions: [voiceDictationExtension]
     )
+    private let agentAccessHost = MCPHostManager()
+    private lazy var agentAccess = NativMCPService(
+        preferences: .shared,
+        host: agentAccessHost
+    )
+    private var agentAccessObserver: AnyCancellable?
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
@@ -40,6 +47,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private var downloadShutdownTask: Task<Void, Never>?
     private var didFinishDownloadShutdown = false
 
+    private func startAgentAccess() {
+        let preferences = NativMCPPreferences.shared
+        agentAccessObserver = preferences.objectWillChange
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.restartAgentAccess()
+            }
+        restartAgentAccess()
+    }
+
+    private func restartAgentAccess() {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await self.agentAccess.restart(model: self.model)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()
@@ -49,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         }
         runtime.start()
         setUpRoutines()
+        startAgentAccess()
         model.onMenuStateChanged = { [weak self] in
             self?.statusMenuController.modelStateDidChange()
         }
