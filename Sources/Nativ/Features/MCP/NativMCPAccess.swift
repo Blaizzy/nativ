@@ -52,8 +52,10 @@ struct NativMCPAccess: Sendable {
     let keys: [NativMCPKey]
     let readOnlyTools: Set<String>
 
+    static let statusToolName = "get_nativ_status"
+
     static let defaultReadOnlyTools: Set<String> = [
-        NativActionToolProvider.Action.status.rawValue,
+        statusToolName,
         ChatModelLibraryToolRegistry.toolName,
         ChatSystemMonitorToolRegistry.toolName,
         ChatServerStatsToolRegistry.toolName,

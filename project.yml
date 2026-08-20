@@ -211,7 +211,6 @@ targets:
       - path: Sources/Nativ/Features/Capabilities/NativToolRouter.swift
       - path: Sources/Nativ/Features/MCP/NativMCPAccess.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceTranscriptionConfiguration.swift
-      - path: Sources/Nativ/Features/MCP/NativActionToolProvider.swift
       - path: Sources/Nativ/Features/Capabilities/NativInteraction.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
       - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
