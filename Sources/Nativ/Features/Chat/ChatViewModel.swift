@@ -821,6 +821,23 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func toolRouter(for settings: NativSettings) -> NativToolRouter {
+        var providers: [any NativCapabilityProvider] = [
+            CustomToolProvider(tools: settings.customTools)
+        ]
+        if let host = mcpHost {
+            providers.append(
+                HostedMCPToolProvider(
+                    listDefinitions: { host.toolDefinitions() },
+                    handlesTool: { host.handlesTool(named: $0) },
+                    invoke: { try await host.callTool(named: $0, argumentsJSON: $1) }
+                )
+            )
+        }
+        providers.append(NativeToolProvider())
+        return NativToolRouter(providers: providers)
+    }
+
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
         await toolConsentGate.awaitDecision(for: toolMessageID)
     }
@@ -1171,7 +1188,7 @@ final class ChatViewModel: ObservableObject {
         while true {
             try Task.checkCancellation()
             let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
-            guard let request = makeCompletionRequest(
+            guard let request = await makeCompletionRequest(
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
@@ -1406,21 +1423,11 @@ final class ChatViewModel: ObservableObject {
                             )
                         }
                     )
-                    let outcome: ChatToolExecutionOutcome
-                    if let customTool {
-                        let result = try await CustomToolExecutor.execute(
-                            customTool,
-                            argumentsJSON: toolCall.function?.arguments
-                        )
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else if let host = mcpHost,
-                              let toolName = toolCall.function?.name,
-                              host.handlesTool(named: toolName) {
-                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else {
-                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
-                    }
+                    let outcome = try await toolRouter(for: queuedRequest.settings).call(
+                        toolCall.function?.name ?? "",
+                        argumentsJSON: toolCall.function?.arguments,
+                        context: context
+                    )
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -1484,7 +1491,7 @@ final class ChatViewModel: ObservableObject {
         advertisesTools: Bool,
         settings: NativSettings,
         documentContexts: [UUID: String]
-    ) -> MLXChatCompletionRequest? {
+    ) async -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
               let assistantIndex = sessionMessages.firstIndex(where: { $0.id == assistantMessageID })
@@ -1501,25 +1508,16 @@ final class ChatViewModel: ObservableObject {
         }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
-            ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { message in
-                    message.imageAttachments.contains { $0.chatAttachmentKind == .image }
+        var toolDefinitions: [MLXChatToolDefinition] = []
+        if advertisesToolsForModel {
+            let canEditImage = precedingMessages.contains { message in
+                message.imageAttachments.contains { $0.chatAttachmentKind == .image }
+            }
+            toolDefinitions = await toolRouter(for: settings).definitions(
+                NativToolCatalogOptions(canEditImage: canEditImage) { name in
+                    settings.isToolEnabled(name)
                 }
             )
-            : []
-        if advertisesToolsForModel {
-            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
-            let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
-            toolDefinitions.removeAll {
-                !settings.isToolEnabled($0.function.name)
-                    || ($0.function.name == ChatWebSearchToolRegistry.toolName
-                        && !webSearchIsConfigured)
-                    || ($0.function.name == ChatWebReadToolRegistry.toolName
-                        && !webReadIsConfigured)
-            }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
