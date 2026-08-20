@@ -176,9 +176,10 @@ struct NativMCPEndpointDetails: View {
                 Spacer()
             }
 
-            if let publicURL {
-                copyField(publicURL, help: "Copy this address")
-            }
+            copyField(
+                publicURL ?? "http://127.0.0.1:\(preferences.port)/mcp",
+                help: "Copy this address"
+            )
 
             if let funnelError {
                 Text(funnelError)
@@ -195,7 +196,7 @@ struct NativMCPEndpointDetails: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Connected apps")
                         .font(.callout.weight(.semibold))
-                    Text("Each app gets its own key. Give cloud services read-only keys.")
+                    Text("Each app gets its own key. Paste the address above and its key into the app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -238,13 +239,13 @@ struct NativMCPEndpointDetails: View {
             badge(agent.scope.title, tint: agent.scope == .full ? .orange : .secondary)
 
             Button {
-                copy(configuration(for: agent))
+                copy(preferences.secret(for: agent.id) ?? "")
             } label: {
                 Image(systemName: "doc.on.doc")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Copy this app's configuration, including its key")
+            .help("Copy this app's key")
 
             Button {
                 preferences.removeAgent(agent.id)
@@ -359,25 +360,6 @@ struct NativMCPEndpointDetails: View {
 
     private func refreshFunnel() async {
         funnel = await NativFunnelIntegration(port: preferences.port).status()
-    }
-
-    private func configuration(for agent: NativMCPAgent) -> String {
-        let url: String
-        if agent.scope == .readOnly, funnel.isServing, let host = funnel.publicHost {
-            url = "https://\(host)/mcp"
-        } else {
-            url = "http://127.0.0.1:\(preferences.port)/mcp"
-        }
-        return """
-        {
-          "mcpServers": {
-            "nativ": {
-              "url": "\(url)",
-              "headers": { "Authorization": "Bearer \(preferences.secret(for: agent.id) ?? "")" }
-            }
-          }
-        }
-        """
     }
 
     private func copy(_ value: String) {
