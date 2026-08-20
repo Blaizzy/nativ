@@ -116,7 +116,8 @@ struct NativActionToolProvider: NativCapabilityProvider {
                 temperature: settings.temperature,
                 topK: settings.topK,
                 topP: settings.topP,
-                minP: settings.minP
+                minP: settings.minP,
+                enableThinking: false
             )
         )
         return Result(model: modelID, text: completion.content)

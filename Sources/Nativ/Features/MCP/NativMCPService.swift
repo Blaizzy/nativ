@@ -152,7 +152,8 @@ final class NativMCPService {
         let registry = router(for: settings, model: model)
         var usable: [MLXChatToolDefinition] = []
         for definition in definitions where access.permits(definition.function.name, in: scope) {
-            guard await registry.requiresConsent(definition.function.name) == false else {
+            let name = definition.function.name
+            guard await registry.canRun(name), await registry.requiresConsent(name) == false else {
                 continue
             }
             usable.append(definition)
