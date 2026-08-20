@@ -39,7 +39,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var metrics: NativMetrics?
     @Published private(set) var lastMetricsError: String?
     @Published private(set) var lastMetricsFetchAt: Date?
-    @Published private(set) var allTimeStats = NativAllTimeStats()
+    @Published private(set) var allTimeStats = NativAllTimeStats.empty
     @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     /// How long a model switch may stay unconfirmed before the controls unlock.
     nonisolated static let modelSwitchTimeout: TimeInterval = 180
@@ -66,6 +66,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     private let server = NativProcessController()
     private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
+    private var allTimeStatsLoadTask: Task<Void, Never>?
     private var metricsTimer: Timer?
     private var metricsStartupGraceUntil: Date?
     private var settingsAppliedAtServerStart: NativSettings?
@@ -86,9 +87,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     init() {
         NativAllTimeStats.removeLegacyStorage()
-        allTimeStats = NativAllTimeStats.load(from: currentAnalyticsDatabaseURL())
         configureServerCallbacks()
         isRunning = server.isRunning
+        refreshAllTimeStats()
         resolveHuggingFaceEnvironmentFromLoginShell()
         migrateCustomHuggingFaceCredentialIfNeeded()
     }
@@ -690,6 +691,8 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func applicationWillTerminate() {
+        allTimeStatsLoadTask?.cancel()
+        allTimeStatsLoadTask = nil
         stopMetricsPolling(clearSession: true)
         if server.isRunning {
             try? server.stop(timeout: 2)
@@ -1006,9 +1009,20 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     private func refreshAllTimeStats(runtimePath: String? = nil) {
-        allTimeStats = NativAllTimeStats.load(
-            from: currentAnalyticsDatabaseURL(runtimePath: runtimePath)
-        )
+        let databaseURL = currentAnalyticsDatabaseURL(runtimePath: runtimePath)
+        allTimeStatsLoadTask?.cancel()
+        allTimeStatsLoadTask = Task { [weak self] in
+            let loadedStats = await Task.detached(priority: .utility) {
+                NativAllTimeStats.load(from: databaseURL)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+
+            allTimeStats = loadedStats
+            allTimeStatsLoadTask = nil
+            if menuIsOpen {
+                notifyMenuStateChanged()
+            }
+        }
     }
 
     private func currentAnalyticsDatabaseURL(runtimePath: String? = nil) -> URL {
