@@ -80,16 +80,17 @@ struct NativMCPEndpointDetails: View {
     @State private var funnelError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 18) {
             Text("External Plugin")
                 .font(.headline)
 
-            Text("Other apps can list and run Nativ's tools without opening a chat. Nativ only ever listens on this Mac; a cloud service needs you to forward a public address to this port.")
+            Text("Other apps can list and run Nativ's tools without opening a chat. Nativ only listens on this Mac.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             LabeledContent("Port") {
-                TextField("", value: $preferences.port, format: .number)
+                TextField("", value: $preferences.port, format: .number.grouping(.never))
                     .frame(width: 90)
             }
 
@@ -154,8 +155,8 @@ struct NativMCPEndpointDetails: View {
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
-        .frame(width: 520)
+        .padding(24)
+        .frame(width: 580)
     }
 
     @ViewBuilder
@@ -185,6 +186,24 @@ struct NativMCPEndpointDetails: View {
                 }
             }
 
+            if let publicURL, funnelError == nil {
+                Button {
+                    copy(publicURL)
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(publicURL)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .help("Copy this address")
+            }
+
             Text(funnelError ?? internetAccessDetail)
                 .font(.caption)
                 .foregroundStyle(funnelError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
@@ -195,14 +214,21 @@ struct NativMCPEndpointDetails: View {
         }
     }
 
+    private var publicURL: String? {
+        guard funnel.isServing, let host = funnel.publicHost else {
+            return nil
+        }
+        return "https://\(host)/mcp"
+    }
+
     private var internetAccessDetail: String {
-        if funnel.isServing, let host = funnel.publicHost {
-            return "Cloud services can reach Nativ at https://\(host)/mcp. Only keys you mark read only should be given out."
+        if publicURL != nil {
+            return "Give a cloud service a read-only key, never a full one."
         }
         if funnel.isInstalled {
-            return "Off. Agents on this Mac work without it; turn it on only to let a cloud service in through Tailscale."
+            return "Off. Apps on this Mac work without it. Turn it on only to let a cloud service in through Tailscale."
         }
-        return "Off. Agents on this Mac work without it. Letting a cloud service in needs Tailscale."
+        return "Off. Apps on this Mac work without it. Letting a cloud service in needs Tailscale."
     }
 
     private func changeFunnel(_ change: @escaping () async -> String?) {
