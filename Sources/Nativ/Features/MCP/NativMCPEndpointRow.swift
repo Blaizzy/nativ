@@ -80,7 +80,7 @@ struct NativMCPEndpointDetails: View {
     @State private var newAppName = ""
     @State private var newAppScope: NativMCPScope = .readOnly
 
-    private static let labelWidth: CGFloat = 130
+    private static let labelWidth: CGFloat = 110
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -146,28 +146,31 @@ struct NativMCPEndpointDetails: View {
                 Text("Internet access")
                     .frame(width: Self.labelWidth, alignment: .leading)
 
-                Toggle("", isOn: Binding(
-                    get: { funnel.isServing },
-                    set: { isOn in
+                if funnel.isInstalled {
+                    Button(funnel.isServing ? "Turn Off" : "Turn On") {
                         changeFunnel {
                             let integration = NativFunnelIntegration(port: preferences.port)
-                            return isOn ? await integration.enable() : await integration.disable()
+                            return funnel.isServing
+                                ? await integration.disable()
+                                : await integration.enable()
                         }
                     }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(isChangingFunnel || !funnel.isInstalled)
-
-                Text(funnel.isServing ? "On" : "Off")
-                    .font(.callout)
-
-                if funnel.isServing {
-                    badge("reachable publicly", tint: .orange)
-                } else if !funnel.isInstalled {
+                    .controlSize(.small)
+                    .disabled(isChangingFunnel)
+                } else {
                     Link("Install Tailscale", destination: NativFunnelIntegration.downloadURL)
                         .font(.callout)
+                }
+
+                if isChangingFunnel {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if funnel.isServing {
+                    badge("reachable publicly", tint: .orange)
+                } else if funnel.isInstalled {
+                    Text("off")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
