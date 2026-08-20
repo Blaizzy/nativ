@@ -3,17 +3,15 @@ import MCP
 import Network
 
 actor NativMCPListener {
-    private let portNumber: Int
     private let port: NWEndpoint.Port
-    private let endpoint: NativMCPEndpoint
     private let access: NativMCPAccess
+    private let endpoints: [NativMCPScope: NativMCPEndpoint]
     private var listener: NWListener?
 
-    init(port: Int, endpoint: NativMCPEndpoint, access: NativMCPAccess) {
-        self.portNumber = port
+    init(port: Int, access: NativMCPAccess, endpoints: [NativMCPScope: NativMCPEndpoint]) {
         self.port = NWEndpoint.Port(rawValue: UInt16(port)) ?? 8765
-        self.endpoint = endpoint
         self.access = access
+        self.endpoints = endpoints
     }
 
     func start() throws {
@@ -41,7 +39,9 @@ actor NativMCPListener {
         guard let request = await Self.readRequest(from: connection) else {
             return
         }
-        guard access.caller(arrivingOn: portNumber, secret: Self.secret(in: request)) != nil else {
+        guard let scope = access.scope(forSecret: Self.secret(in: request)),
+              let endpoint = endpoints[scope]
+        else {
             await Self.write(status: 401, headers: [:], body: Data(), to: connection)
             return
         }

@@ -35,15 +35,31 @@ final class NativMCPService {
             return
         }
         let access = preferences.access
-        await start(port: access.localPort, caller: .local, access: access, publicHosts: [])
-        if let outsidePort = access.outsidePort {
-            let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
-            await start(
-                port: outsidePort,
-                caller: .outside,
-                access: access,
+        let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
+        var endpoints: [NativMCPScope: NativMCPEndpoint] = [:]
+        for scope in NativMCPScope.allCases {
+            let endpoint = NativMCPEndpoint(
+                surface: surface(for: scope, access: access),
                 publicHosts: host.isEmpty ? [] : [host]
             )
+            do {
+                try await endpoint.start()
+                endpoints[scope] = endpoint
+            } catch {
+                lastError = "Could not prepare agent access: \(error.localizedDescription)"
+                return
+            }
+        }
+        let listener = NativMCPListener(
+            port: preferences.port,
+            access: access,
+            endpoints: endpoints
+        )
+        do {
+            try await listener.start()
+            listeners = [listener]
+        } catch {
+            lastError = "Could not listen on port \(preferences.port): \(error.localizedDescription)"
         }
     }
 
@@ -54,28 +70,8 @@ final class NativMCPService {
         listeners = []
     }
 
-    private func start(
-        port: Int,
-        caller: NativMCPCaller,
-        access: NativMCPAccess,
-        publicHosts: [String]
-    ) async {
-        let endpoint = NativMCPEndpoint(
-            surface: surface(for: caller, access: access),
-            publicHosts: publicHosts
-        )
-        do {
-            try await endpoint.start()
-            let listener = NativMCPListener(port: port, endpoint: endpoint, access: access)
-            try await listener.start()
-            listeners.append(listener)
-        } catch {
-            lastError = "Could not serve tools on port \(port): \(error.localizedDescription)"
-        }
-    }
-
     private func surface(
-        for caller: NativMCPCaller,
+        for scope: NativMCPScope,
         access: NativMCPAccess
     ) -> NativMCPToolSurface {
         NativMCPToolSurface(
@@ -83,19 +79,19 @@ final class NativMCPService {
                 guard let self else {
                     return []
                 }
-                return await self.definitions(for: caller, access: access)
+                return await self.definitions(for: scope, access: access)
             },
             call: { [weak self] name, argumentsJSON in
                 guard let self else {
                     throw NativMCPServiceError.notPermitted(name)
                 }
-                return try await self.run(name, argumentsJSON: argumentsJSON, caller: caller, access: access)
+                return try await self.run(name, argumentsJSON: argumentsJSON, scope: scope, access: access)
             }
         )
     }
 
     private func definitions(
-        for caller: NativMCPCaller,
+        for scope: NativMCPScope,
         access: NativMCPAccess
     ) async -> [MLXChatToolDefinition] {
         guard let model else {
@@ -110,16 +106,16 @@ final class NativMCPService {
                 webReadIsConfigured: ChatWebReadToolRegistry.isConfigured()
             )
         )
-        return definitions.filter { access.permits($0.function.name, for: caller) }
+        return definitions.filter { access.permits($0.function.name, in: scope) }
     }
 
     private func run(
         _ name: String,
         argumentsJSON: String?,
-        caller: NativMCPCaller,
+        scope: NativMCPScope,
         access: NativMCPAccess
     ) async throws -> String {
-        guard access.permits(name, for: caller), let model else {
+        guard access.permits(name, in: scope), let model else {
             throw NativMCPServiceError.notPermitted(name)
         }
         let settings = model.settings.normalized()

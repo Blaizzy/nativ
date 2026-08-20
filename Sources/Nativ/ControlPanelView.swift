@@ -708,14 +708,7 @@ struct ControlPanelView: View {
     private var mcpService: NativMCPService { dependencies.mcpService }
 
     private var mcpEndpointConfiguration: String {
-        [
-            mcpPreferences.isEnabled ? "on" : "off",
-            String(mcpPreferences.localPort),
-            mcpPreferences.outsideIsEnabled ? "outside" : "local",
-            String(mcpPreferences.outsidePort),
-            mcpPreferences.publicHost,
-            String(mcpPreferences.keyGeneration),
-        ].joined(separator: "|")
+        mcpPreferences.configurationFingerprint
     }
     private var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
     private var artifacts: ArtifactStore { dependencies.artifacts }
