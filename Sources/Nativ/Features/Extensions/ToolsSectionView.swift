@@ -10,12 +10,24 @@ struct ToolsSectionView: View {
     @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
     @State private var configurationPendingEnablement: String?
+    @State private var isSelectingCustomTools = false
+    @State private var selectedCustomToolIDs = Set<CustomTool.ID>()
+    @State private var pendingCustomToolRemoval: [CustomTool] = []
+    @State private var isConfirmingCustomToolRemoval = false
 
     var body: some View {
         HubSectionScaffold(
             title: "Tools",
             subtitle: "Built-in capabilities, custom tools, and tools from connected servers."
         ) {
+            Button(isSelectingCustomTools ? "Done" : "Select") {
+                isSelectingCustomTools.toggle()
+                if !isSelectingCustomTools {
+                    selectedCustomToolIDs.removeAll()
+                }
+            }
+            .disabled(customTools.isEmpty)
+
             Button {
                 showsAddTool = true
             } label: {
@@ -27,7 +39,7 @@ struct ToolsSectionView: View {
                 toolGroup(title: "Built-in", tools: nativeTools)
 
                 if !customTools.isEmpty {
-                    toolGroup(title: "Custom", tools: customTools)
+                    customToolsGroup
                 }
 
                 ForEach(configuredServers) { server in
@@ -103,6 +115,21 @@ struct ToolsSectionView: View {
                 Text("This removes the tool.")
             }
         }
+        .alert(
+            "Remove \(pendingCustomToolRemoval.count) \(pendingCustomToolRemoval.count == 1 ? "tool" : "tools")?",
+            isPresented: $isConfirmingCustomToolRemoval
+        ) {
+            Button("Remove", role: .destructive) {
+                removeCustomTools(pendingCustomToolRemoval)
+                pendingCustomToolRemoval = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingCustomToolRemoval = []
+            }
+        } message: {
+            Text("The selected custom tools and any saved request credentials will be removed.")
+        }
         .alert("Couldn’t remove tool", isPresented: Binding(
             get: { toolManagementError != nil },
             set: { if !$0 { toolManagementError = nil } }
@@ -137,6 +164,34 @@ struct ToolsSectionView: View {
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool),
                     isEnabled: enabledBinding(for: tool)
+                )
+            }
+        }
+    }
+
+    private var customToolsGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("CUSTOM")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 6)
+
+            if isSelectingCustomTools {
+                customToolSelectionBar
+                    .padding(.bottom, 8)
+            }
+
+            ForEach(Array(customTools.enumerated()), id: \.element.id) { index, tool in
+                if index > 0 { Divider() }
+                ToolRow(
+                    tool: tool,
+                    onInspect: { inspect(tool) },
+                    onEdit: editAction(for: tool),
+                    onRemove: removeAction(for: tool),
+                    isEnabled: nil,
+                    isSelecting: isSelectingCustomTools,
+                    isSelected: tool.customToolID.map(selectedCustomToolIDs.contains) ?? false,
+                    onToggleSelection: { toggleCustomToolSelection(tool) }
                 )
             }
         }
@@ -269,6 +324,79 @@ struct ToolsSectionView: View {
         }
     }
 
+    private var selectedCustomTools: [CustomTool] {
+        model.settings.customTools.filter { selectedCustomToolIDs.contains($0.id) }
+    }
+
+    private var customToolSelectionBar: some View {
+        let selections = selectedCustomTools
+        return HStack(spacing: 10) {
+            Text("\(selections.count) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(
+                selectedCustomToolIDs.count == model.settings.customTools.count
+                    ? "Deselect All" : "Select All"
+            ) {
+                if selectedCustomToolIDs.count == model.settings.customTools.count {
+                    selectedCustomToolIDs.removeAll()
+                } else {
+                    selectedCustomToolIDs = Set(model.settings.customTools.map(\.id))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive) {
+                pendingCustomToolRemoval = selections
+                isConfirmingCustomToolRemoval = true
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+            .disabled(selections.isEmpty)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+    }
+
+    private func toggleCustomToolSelection(_ tool: ToolItem) {
+        guard let id = tool.customToolID else { return }
+        if selectedCustomToolIDs.contains(id) {
+            selectedCustomToolIDs.remove(id)
+        } else {
+            selectedCustomToolIDs.insert(id)
+        }
+    }
+
+    private func removeCustomTools(_ tools: [CustomTool]) {
+        var failures = 0
+        for tool in tools {
+            do {
+                if tool.kind == .endpoint {
+                    try CustomToolKeychain().save(nil, for: tool.id)
+                }
+                model.settings.customTools.removeAll { $0.id == tool.id }
+                model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
+                selectedCustomToolIDs.remove(tool.id)
+            } catch {
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            toolManagementError = failures == 1
+                ? "A saved request credential could not be removed from Keychain."
+                : "Some saved request credentials could not be removed from Keychain."
+        }
+        if selectedCustomToolIDs.isEmpty {
+            isSelectingCustomTools = false
+        }
+    }
+
     private func mcpTools(for server: MCPServerConfig) -> [ToolItem] {
         let defs = host.toolDefinitions()
         return host.tools(forServer: server.id).map { pair in
@@ -303,10 +431,24 @@ private struct ToolRow: View {
     var onEdit: (() -> Void)?
     var onRemove: (() -> Void)?
     var isEnabled: Binding<Bool>?
+    var isSelecting = false
+    var isSelected = false
+    var onToggleSelection: (() -> Void)?
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 12) {
+            if isSelecting, let onToggleSelection {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select \(tool.title)")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(tool.title)
@@ -352,7 +494,10 @@ private struct ToolRow: View {
         .padding(.vertical, 9)
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onInspect)
+        .onTapGesture {
+            guard !isSelecting else { return }
+            onInspect()
+        }
     }
 }
 
