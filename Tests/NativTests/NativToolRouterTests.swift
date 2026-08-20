@@ -163,8 +163,10 @@ final class NativToolRouterTests: XCTestCase {
 
     func testNativeProviderClaimsOnlyDispatchableTools() async {
         let provider = NativeToolProvider()
-        XCTAssertTrue(await provider.handles(ChatModelLibraryToolRegistry.toolName))
-        XCTAssertFalse(await provider.handles("definitely_not_a_tool"))
+        let claimsKnownTool = await provider.handles(ChatModelLibraryToolRegistry.toolName)
+        let claimsUnknownTool = await provider.handles("definitely_not_a_tool")
+        XCTAssertTrue(claimsKnownTool)
+        XCTAssertFalse(claimsUnknownTool)
     }
     func testADeclinedToolDoesNotRun() async throws {
         let provider = StubProvider(names: ["risky"], response: "ran", needsConsent: true)
