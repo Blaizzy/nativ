@@ -224,7 +224,7 @@ enum ChatToolDispatcher {
         let imageModelID: String
         switch ChatImageModelSelection.resolve(
             operation: imageRequest.operation,
-            selectedModelID: imageRequest.requestedModelID ?? context.imageGenerationModelID,
+            selectedModelID: context.imageGenerationModelID,
             availableModels: availableModels
         ) {
         case .selected(let model):

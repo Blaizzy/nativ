@@ -32,10 +32,6 @@ enum ChatImageToolRegistry {
                         "type": .string("string"),
                         "description": .string("A specific visual description or edit instruction.")
                     ]),
-                    "model": .object([
-                        "type": .string("string"),
-                        "description": .string("Image model to use. Defaults to the one chosen in Nativ.")
-                    ]),
                     "width": .object([
                         "type": .string("integer"),
                         "minimum": .number(256),
@@ -63,7 +59,6 @@ enum ChatImageToolRegistry {
 
 struct ChatImageToolArguments: Decodable {
     let prompt: String
-    let model: String?
     let width: Int?
     let height: Int?
     let count: Int?
@@ -82,7 +77,6 @@ struct ChatImageToolArguments: Decodable {
 struct ChatImageToolRequest: Equatable, Sendable {
     let operation: ChatImageOperation
     let prompt: String
-    let requestedModelID: String?
     let width: Int?
     let height: Int?
     let count: Int?
@@ -100,7 +94,6 @@ struct ChatImageToolRequest: Equatable, Sendable {
         }
 
         self.prompt = prompt
-        requestedModelID = arguments.model
         width = arguments.width
         height = arguments.height
         count = arguments.count
