@@ -46,7 +46,7 @@ struct DeveloperView: View {
                             VStack(alignment: .leading, spacing: Self.contentSpacing) {
                                 VStack(alignment: .leading, spacing: Self.contentSpacing) {
                                     runtimeGrid
-                                    NativMCPEndpointRow(preferences: NativMCPPreferences.shared)
+                                    NativMCPEndpointRow(preferences: .shared)
                                     serverEndpointsPanel
                                     authenticationPanels
                                 }

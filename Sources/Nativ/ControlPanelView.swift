@@ -664,6 +664,7 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
 
     private let dependencies: ControlPanelDependencies
+    @ObservedObject private var mcpPreferences = NativMCPPreferences.shared
     @StateObject private var chromeState: ControlPanelChromeState
     @StateObject private var sidebarState: ChatSidebarState
     @StateObject private var contentState: ControlPanelContentState
@@ -707,13 +708,13 @@ struct ControlPanelView: View {
     private var mcpService: NativMCPService { dependencies.mcpService }
 
     private var mcpEndpointConfiguration: String {
-        let preferences = dependencies.mcpPreferences
-        return [
-            preferences.isEnabled ? "on" : "off",
-            String(preferences.localPort),
-            preferences.outsideIsEnabled ? "outside" : "local",
-            String(preferences.outsidePort),
-            preferences.publicHost,
+        [
+            mcpPreferences.isEnabled ? "on" : "off",
+            String(mcpPreferences.localPort),
+            mcpPreferences.outsideIsEnabled ? "outside" : "local",
+            String(mcpPreferences.outsidePort),
+            mcpPreferences.publicHost,
+            String(mcpPreferences.keyGeneration),
         ].joined(separator: "|")
     }
     private var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
