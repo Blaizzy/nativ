@@ -435,17 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
                     guard let self else {
                         return nil
                     }
-                    let settings = self.model.settings.normalized()
-                    return VoiceTranscriptionConfiguration(
-                        modelSearchPath: settings.modelSearchPath,
-                        additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                        selectedModelID: settings.speechToTextModelID,
-                        languageModelID: settings.languageModelID,
-                        maxTokens: settings.maxTokens,
-                        serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
-                        serverAPIKey: settings.serverAPIKey,
-                        serverIsRunning: self.model.isRunning
-                    )
+                    return self.model.voiceTranscriptionConfiguration()
                 },
                 openSpeechModels: { [weak self] in
                     self?.controlPanelNavigation.openSpeechModelDiscovery()

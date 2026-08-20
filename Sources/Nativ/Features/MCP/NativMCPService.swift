@@ -181,6 +181,7 @@ final class NativMCPService {
         NativToolRouter(
             providers: [
                 NativStatusToolProvider(model: model),
+                NativActionToolProvider(model: model),
                 CustomToolProvider(tools: settings.customTools),
             ],
             fallback: NativeToolProvider()

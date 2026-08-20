@@ -1,0 +1,237 @@
+import Foundation
+import NativServerKit
+
+enum NativActionToolError: LocalizedError {
+    case missingArgument(String)
+    case serverNotRunning
+    case timedOut(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingArgument(let name):
+            "This call needs a \(name)."
+        case .serverNotRunning:
+            "Start Nativ's local model server first."
+        case .timedOut(let what):
+            "\(what) did not finish in time."
+        }
+    }
+}
+
+struct NativActionToolProvider: NativCapabilityProvider {
+    enum Action: String, CaseIterable {
+        case runPrompt = "run_prompt"
+        case transcribeAudio = "transcribe_audio"
+        case loadModel = "load_model"
+        case startServer = "start_server"
+        case stopServer = "stop_server"
+    }
+
+    let model: NativModel
+
+    func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
+        Action.allCases.map(Self.definition(for:))
+    }
+
+    func handles(_ name: String) async -> Bool {
+        Action(rawValue: name) != nil
+    }
+
+    func requiresConsent(_ name: String) async -> Bool {
+        false
+    }
+
+    func call(
+        _ name: String,
+        argumentsJSON: String?,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        guard let action = Action(rawValue: name) else {
+            throw ChatImageToolError.unsupportedTool(name)
+        }
+        let arguments = Self.arguments(from: argumentsJSON)
+        let payload: [String: String]
+        switch action {
+        case .runPrompt:
+            payload = try await runPrompt(arguments)
+        case .transcribeAudio:
+            payload = try await transcribeAudio(arguments)
+        case .loadModel:
+            payload = try await loadModel(arguments)
+        case .startServer:
+            payload = try await setServer(running: true)
+        case .stopServer:
+            payload = try await setServer(running: false)
+        }
+        let data = try JSONEncoder().encode(payload)
+        return ChatToolExecutionOutcome(
+            content: String(decoding: data, as: UTF8.self),
+            attachments: []
+        )
+    }
+
+    private func runPrompt(_ arguments: [String: Any]) async throws -> [String: String] {
+        guard let prompt = arguments["prompt"] as? String, !prompt.isEmpty else {
+            throw NativActionToolError.missingArgument("prompt")
+        }
+        let settings = await model.settings.normalized()
+        guard await model.isRunning else {
+            throw NativActionToolError.serverNotRunning
+        }
+        guard let modelID = arguments["model"] as? String ?? settings.languageModelID else {
+            throw NativActionToolError.missingArgument("model")
+        }
+
+        var messages: [MLXChatMessage] = []
+        if let system = arguments["system"] as? String, !system.isEmpty {
+            messages.append(MLXChatMessage(role: "system", content: system))
+        }
+        messages.append(MLXChatMessage(role: "user", content: prompt))
+
+        let completion = try await NativChatClient(
+            baseURL: settings.serverBaseURL,
+            apiKey: settings.serverAPIKey
+        )
+        .completeChat(
+            MLXChatCompletionRequest(
+                model: modelID,
+                messages: messages,
+                maxTokens: arguments["max_tokens"] as? Int ?? settings.maxTokens,
+                temperature: settings.temperature,
+                topK: settings.topK,
+                topP: settings.topP,
+                minP: settings.minP
+            )
+        )
+        return ["ok": "true", "model": modelID, "text": completion.content]
+    }
+
+    private func transcribeAudio(_ arguments: [String: Any]) async throws -> [String: String] {
+        guard let path = arguments["path"] as? String, !path.isEmpty else {
+            throw NativActionToolError.missingArgument("path")
+        }
+        let transcription = try await NativTranscriptionRunner(
+            configuration: await model.voiceTranscriptionConfiguration()
+        )
+        .transcribe(
+            fileURL: URL(filePath: (path as NSString).expandingTildeInPath),
+            requestedModelID: arguments["model"] as? String
+        )
+        return ["ok": "true", "model": transcription.modelID, "text": transcription.text]
+    }
+
+    private func loadModel(_ arguments: [String: Any]) async throws -> [String: String] {
+        guard let modelID = arguments["model"] as? String, !modelID.isEmpty else {
+            throw NativActionToolError.missingArgument("model")
+        }
+        await model.switchLanguageModel(to: modelID)
+        guard await Self.wait(
+            forSeconds: 300,
+            until: { model.isRunning && !model.modelSwitchInProgress }
+        ) else {
+            throw NativActionToolError.timedOut("Loading \(modelID)")
+        }
+        if let failure = await model.modelLoadFailure {
+            return ["ok": "false", "model": modelID, "error": failure.message]
+        }
+        return ["ok": "true", "model": modelID]
+    }
+
+    private func setServer(running: Bool) async throws -> [String: String] {
+        if running {
+            await model.startServer()
+        } else {
+            await model.stopServer()
+        }
+        guard await Self.wait(forSeconds: 180, until: { model.isRunning == running }) else {
+            throw NativActionToolError.timedOut(running ? "Starting the server" : "Stopping the server")
+        }
+        return ["ok": "true", "server_is_running": running ? "true" : "false"]
+    }
+
+    private static func wait(
+        forSeconds seconds: Int,
+        until condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        for _ in 0..<(seconds * 5) {
+            if await condition() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return await condition()
+    }
+
+    private static func arguments(from json: String?) -> [String: Any] {
+        guard let data = json?.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return [:]
+        }
+        return object
+    }
+
+    private static func definition(for action: Action) -> MLXChatToolDefinition {
+        switch action {
+        case .runPrompt:
+            return definition(
+                action,
+                "Send a prompt to a local language model through Nativ and return the reply.",
+                properties: [
+                    "prompt": string("What to send to the model."),
+                    "model": string("Model to use. Defaults to the one Nativ has loaded."),
+                    "system": string("Optional system instructions."),
+                    "max_tokens": integer("Maximum tokens to generate."),
+                ],
+                required: ["prompt"]
+            )
+        case .transcribeAudio:
+            return definition(
+                action,
+                "Transcribe an audio file on this Mac with a local speech-to-text model.",
+                properties: [
+                    "path": string("Path to the audio file."),
+                    "model": string("Model to use. Defaults to the installed speech model."),
+                ],
+                required: ["path"]
+            )
+        case .loadModel:
+            return definition(
+                action,
+                "Make Nativ load a local language model, restarting its server if needed.",
+                properties: ["model": string("Model repository id to load.")],
+                required: ["model"]
+            )
+        case .startServer:
+            return definition(action, "Start Nativ's local model server.", properties: [:], required: [])
+        case .stopServer:
+            return definition(action, "Stop Nativ's local model server.", properties: [:], required: [])
+        }
+    }
+
+    private static func definition(
+        _ action: Action,
+        _ description: String,
+        properties: [String: MLXJSONValue],
+        required: [String]
+    ) -> MLXChatToolDefinition {
+        MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: action.rawValue,
+            description: description,
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object(properties),
+                "required": .array(required.map { .string($0) }),
+            ])
+        ))
+    }
+
+    private static func string(_ description: String) -> MLXJSONValue {
+        .object(["type": .string("string"), "description": .string(description)])
+    }
+
+    private static func integer(_ description: String) -> MLXJSONValue {
+        .object(["type": .string("integer"), "description": .string(description)])
+    }
+}

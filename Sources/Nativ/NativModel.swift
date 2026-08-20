@@ -915,6 +915,20 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         }
     }
 
+    func voiceTranscriptionConfiguration() -> VoiceTranscriptionConfiguration {
+        let settings = settings.normalized()
+        return VoiceTranscriptionConfiguration(
+            modelSearchPath: settings.modelSearchPath,
+            additionalModelSearchPaths: settings.additionalModelSearchPaths,
+            selectedModelID: settings.speechToTextModelID,
+            languageModelID: settings.languageModelID,
+            maxTokens: settings.maxTokens,
+            serverBaseURL: activeServerBaseURL ?? settings.serverBaseURL,
+            serverAPIKey: settings.serverAPIKey,
+            serverIsRunning: isRunning
+        )
+    }
+
     func setAgentAccessState(_ state: NativMCPState) {
         agentAccessState = state
     }
