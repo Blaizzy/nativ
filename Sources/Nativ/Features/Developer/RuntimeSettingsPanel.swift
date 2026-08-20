@@ -6,6 +6,8 @@ struct RuntimeSettingsPanel: View {
     @State private var confirmingReload = false
     @State private var confirmingRestoreDefaults = false
 
+    private static let controlWidth: CGFloat = 150
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -17,9 +19,10 @@ struct RuntimeSettingsPanel: View {
 
                 content
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 12)
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -59,6 +62,8 @@ struct RuntimeSettingsPanel: View {
         store.state == .unsupported
     }
 
+    // MARK: Header
+
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "slider.horizontal.3")
@@ -72,21 +77,74 @@ struct RuntimeSettingsPanel: View {
                     .foregroundStyle(.secondary)
             }
 
-            Spacer()
+            Spacer(minLength: 24)
 
-            if store.isApplying {
-                ProgressView()
-                    .controlSize(.small)
-            }
+            headerActions
+        }
+    }
 
-            Button {
-                Task { await store.load() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
+    @ViewBuilder
+    private var headerActions: some View {
+        if store.isApplying {
+            ProgressView()
+                .controlSize(.small)
+        }
+
+        headerStatus
+
+        if case .loaded = store.state {
+            Button("Discard") {
+                store.discardChanges()
             }
             .buttonStyle(.borderless)
-            .help("Reload settings from the server")
-            .disabled(store.isApplying)
+            .controlSize(.small)
+            .disabled(!store.isDirty || store.isApplying)
+
+            Button("Apply") {
+                if store.reloadWarningKinds.isEmpty {
+                    Task { await store.apply() }
+                } else {
+                    confirmingReload = true
+                }
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .disabled(!store.isDirty || store.isApplying)
+        }
+
+        Menu {
+            Button("Reload from Server") {
+                Task { await store.load() }
+            }
+            if case .loaded = store.state {
+                Divider()
+                Button("Restore Defaults…", role: .destructive) {
+                    confirmingRestoreDefaults = true
+                }
+                .disabled(store.isApplying)
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Reload or restore defaults")
+        .disabled(store.isApplying)
+    }
+
+    @ViewBuilder
+    private var headerStatus: some View {
+        if store.isDirty {
+            Text(changeSummary)
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if let appliedNotice = store.appliedNotice {
+            Label(appliedNotice, systemImage: "checkmark.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+                .foregroundStyle(.green)
         }
     }
 
@@ -99,9 +157,11 @@ struct RuntimeSettingsPanel: View {
         case .failed:
             return "Unavailable"
         case .loaded:
-            return "Changes apply without restarting the server"
+            return "No server restart required"
         }
     }
+
+    // MARK: Content
 
     @ViewBuilder
     private var content: some View {
@@ -150,13 +210,15 @@ struct RuntimeSettingsPanel: View {
             if !store.rejections.isEmpty {
                 rejectionNotice
             }
-
-            footer
         }
     }
 
     private func groupSection(_ group: RuntimeSettingGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let fields = store.fields(in: group)
+        let active = fields.filter { store.isActive($0) }
+        let inactive = fields.filter { !store.isActive($0) }
+
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: group.symbol)
                     .font(.caption)
@@ -166,10 +228,60 @@ struct RuntimeSettingsPanel: View {
                     .foregroundStyle(.secondary)
             }
 
-            ForEach(store.fields(in: group)) { field in
-                RuntimeSettingRow(field: field, store: store)
+            if !active.isEmpty {
+                fieldGrid(active)
+            }
+
+            if !inactive.isEmpty {
+                DisclosureGroup {
+                    fieldGrid(inactive)
+                        .padding(.top, 4)
+                } label: {
+                    Text(disclosureLabel(count: inactive.count, group: group))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
             }
         }
+    }
+
+    private func disclosureLabel(count: Int, group: RuntimeSettingGroup) -> String {
+        let noun = count == 1 ? "option" : "options"
+        if let hint = store.inactiveHint(for: group) {
+            return "\(count) more \(noun) · \(hint)"
+        }
+        return "\(count) more \(noun)"
+    }
+
+    private func fieldGrid(_ fields: [RuntimeSettingField]) -> some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 28, verticalSpacing: 4) {
+            ForEach(fields) { field in
+                GridRow {
+                    label(for: field)
+                    RuntimeSettingControlCell(
+                        field: field,
+                        store: store,
+                        controlWidth: Self.controlWidth
+                    )
+                }
+            }
+        }
+    }
+
+    private func label(for field: RuntimeSettingField) -> some View {
+        let active = store.isActive(field)
+        return HStack(spacing: 7) {
+            Circle()
+                .fill(field.isDirty ? Color.orange : Color.clear)
+                .frame(width: 6, height: 6)
+
+            Text(field.shortTitle)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(active ? .primary : .secondary)
+        }
+        .help(field.spec.help)
+        .gridColumnAlignment(.leading)
     }
 
     private var rejectionNotice: some View {
@@ -189,52 +301,9 @@ struct RuntimeSettingsPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var footer: some View {
-        HStack(spacing: 8) {
-            if store.isDirty {
-                Text(changeSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let appliedNotice = store.appliedNotice {
-                Label(appliedNotice, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-
-            Spacer()
-
-            Button("Restore Defaults") {
-                confirmingRestoreDefaults = true
-            }
-            .controlSize(.small)
-            .disabled(store.isApplying)
-
-            Button("Discard") {
-                store.discardChanges()
-            }
-            .controlSize(.small)
-            .disabled(!store.isDirty || store.isApplying)
-
-            Button("Apply") {
-                if store.reloadWarningKinds.isEmpty {
-                    Task { await store.apply() }
-                } else {
-                    confirmingReload = true
-                }
-            }
-            .keyboardShortcut(.return, modifiers: .command)
-            .controlSize(.small)
-            .disabled(!store.isDirty || store.isApplying)
-        }
-    }
-
     private var changeSummary: String {
         let count = store.dirtyFields.count
-        let noun = count == 1 ? "change" : "changes"
-        guard !store.reloadWarningKinds.isEmpty else {
-            return "\(count) pending \(noun)"
-        }
-        return "\(count) pending \(noun) — reloads \(reloadKindsText)"
+        return count == 1 ? "1 change" : "\(count) changes"
     }
 
     private var reloadWarningMessage: String {
@@ -266,56 +335,36 @@ struct RuntimeSettingsPanel: View {
     }
 }
 
-private extension View {
-    func runtimeSettingsFieldOutline() -> some View {
-        overlay(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-    }
-}
-
-private struct RuntimeSettingRow: View {
+private struct RuntimeSettingControlCell: View {
     let field: RuntimeSettingField
     @ObservedObject var store: RuntimeSettingsStore
+    let controlWidth: CGFloat
+
     @State private var draft = ""
     @FocusState private var isFocused: Bool
 
+    private var isActive: Bool { store.isActive(field) }
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(field.title)
-                        .font(.footnote.weight(.medium))
-
-                    if field.isDirty {
-                        Circle()
-                            .fill(Color.orange)
-                            .frame(width: 5, height: 5)
-                            .help("Changed — not applied yet")
-                    }
-
-                    if field.spec.reloadsModels {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                            .help("Changing this reloads the affected models")
-                    }
-                }
-
-                if !field.spec.help.isEmpty {
-                    Text(field.spec.help)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Spacer(minLength: 12)
-
+        HStack(spacing: 6) {
             control
-                .frame(maxWidth: 190, alignment: .trailing)
+                .frame(width: controlWidth, alignment: .trailing)
 
+            Text(field.unitSuffix ?? "")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+
+            resetButton
+                .frame(width: 16)
+        }
+        .disabled(!isActive)
+        .gridColumnAlignment(.trailing)
+    }
+
+    @ViewBuilder
+    private var resetButton: some View {
+        if !field.isDefault && isActive {
             Button {
                 store.resetToDefault(field.id)
             } label: {
@@ -324,10 +373,9 @@ private struct RuntimeSettingRow: View {
             }
             .buttonStyle(.borderless)
             .help("Reset to \(field.spec.defaultValue.displayText)")
-            .opacity(field.isDefault ? 0.25 : 1)
-            .disabled(field.isDefault)
+        } else {
+            Color.clear.frame(width: 16, height: 1)
         }
-        .padding(.vertical, 3)
     }
 
     @ViewBuilder
@@ -359,7 +407,7 @@ private struct RuntimeSettingRow: View {
                 )
             ) {
                 if field.spec.allowsNull {
-                    Text("Default").tag(defaultChoiceTag)
+                    Text(field.resolvedHint).tag(defaultChoiceTag)
                 }
                 ForEach(options, id: \.self) { option in
                     Text(option).tag(option)
@@ -381,7 +429,6 @@ private struct RuntimeSettingRow: View {
     private func numberField(isInteger: Bool) -> some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.roundedBorder)
-            .runtimeSettingsFieldOutline()
             .multilineTextAlignment(.trailing)
             .font(.footnote.monospacedDigit())
             .controlSize(.small)
@@ -403,7 +450,6 @@ private struct RuntimeSettingRow: View {
     private var textField: some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.roundedBorder)
-            .runtimeSettingsFieldOutline()
             .font(.footnote)
             .controlSize(.small)
             .focused($isFocused)
@@ -422,7 +468,7 @@ private struct RuntimeSettingRow: View {
     }
 
     private var placeholder: String {
-        field.spec.allowsNull ? field.spec.defaultValue.displayText : ""
+        field.value.isNull ? field.resolvedHint : ""
     }
 
     private var editableText: String {

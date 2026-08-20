@@ -69,6 +69,103 @@ struct RuntimeSettingField: Identifiable, Equatable {
         }
         return .requests
     }
+
+    /// Human label with the redundant group prefix removed ("KV Bits" under a
+    /// "KV Cache" header becomes "Bits"). Falls back to a derived title for
+    /// knobs the server adds later.
+    var shortTitle: String {
+        if let override = Self.nameOverrides[spec.name] {
+            return override
+        }
+        var stem = spec.name
+        if let prefix = group.namePrefix, stem.hasPrefix(prefix) {
+            stem.removeFirst(prefix.count)
+        }
+        return Self.titleCase(stem)
+    }
+
+    /// Unit rendered as a trailing suffix on the control rather than baked into
+    /// the label (fixes "Gb" → "GB" and keeps the label clean).
+    var unitSuffix: String? {
+        Self.units[spec.name]
+    }
+
+    /// What the value resolves to when it is left unset, shown muted in place
+    /// of a bare "Default". Only surfaced while the value is null, so the null
+    /// meaning wins over the concrete default (e.g. clearing the queue timeout
+    /// disables it rather than reverting to the default seconds).
+    var resolvedHint: String {
+        if let meaning = Self.nullMeaning[spec.name] {
+            return meaning
+        }
+        if !spec.defaultValue.isNull {
+            return spec.defaultValue.displayText
+        }
+        return "not set"
+    }
+
+    private static func titleCase(_ raw: String) -> String {
+        raw.split(separator: "_")
+            .map { segment -> String in
+                let word = String(segment)
+                switch word {
+                case "kv", "apc", "id", "gb":
+                    return word.uppercased()
+                default:
+                    return word.prefix(1).uppercased() + word.dropFirst()
+                }
+            }
+            .joined(separator: " ")
+    }
+
+    private static let nameOverrides: [String: String] = [
+        "kv_bits": "Bits",
+        "kv_quant_scheme": "Quant Scheme",
+        "kv_group_size": "Group Size",
+        "kv_key_bits": "Key Bits",
+        "kv_value_bits": "Value Bits",
+        "kv_key_scheme": "Key Scheme",
+        "kv_value_scheme": "Value Scheme",
+        "quantized_kv_start": "Quantized Start",
+        "apc_enabled": "Enabled",
+        "apc_disk_path": "Disk Path",
+        "apc_block_size": "Block Size",
+        "apc_num_blocks": "Block Pool",
+        "apc_disk_max_gb": "Disk Cap",
+        "max_kv_size": "Max KV Size",
+        "token_queue_timeout": "Queue Timeout",
+        "spec_draft_model": "Draft Model",
+        "spec_draft_kind": "Draft Kind",
+        "vision_cache_size": "Cache Size",
+    ]
+
+    private static let units: [String: String] = [
+        "apc_disk_max_gb": "GB",
+        "token_queue_timeout": "sec",
+        "apc_block_size": "tok",
+        "apc_num_blocks": "blocks",
+        "max_kv_size": "tok",
+        "vision_cache_size": "images",
+    ]
+
+    // One grammar: a muted lowercase "effective state" phrase for the null
+    // case. The server returns raw null (not the resolved number), so these
+    // describe behavior rather than echo a value you could type back.
+    private static let nullMeaning: [String: String] = [
+        "kv_bits": "unquantized",
+        "kv_group_size": "auto",
+        "kv_key_bits": "inherits Bits",
+        "kv_value_bits": "inherits Bits",
+        "kv_key_scheme": "inherits scheme",
+        "kv_value_scheme": "inherits scheme",
+        "quantized_kv_start": "all layers",
+        "apc_disk_path": "memory only",
+        "apc_disk_max_gb": "uncapped",
+        "max_kv_size": "full context",
+        "token_queue_timeout": "no timeout",
+        "spec_draft_model": "off",
+        "spec_draft_kind": "auto",
+    ]
 }
 
 enum RuntimeSettingGroup: String, CaseIterable, Identifiable {
@@ -97,6 +194,16 @@ enum RuntimeSettingGroup: String, CaseIterable, Identifiable {
         case .prefixCache: return "square.stack.3d.up"
         case .speculativeDecoding: return "hare"
         case .vision: return "eye"
+        }
+    }
+
+    var namePrefix: String? {
+        switch self {
+        case .kvCache: return "kv_"
+        case .prefixCache: return "apc_"
+        case .speculativeDecoding: return "spec_"
+        case .vision: return "vision_"
+        case .requests: return nil
         }
     }
 }
@@ -142,6 +249,44 @@ final class RuntimeSettingsStore: ObservableObject {
 
     func fields(in group: RuntimeSettingGroup) -> [RuntimeSettingField] {
         fields.filter { $0.group == group }
+    }
+
+    /// Whether a field currently has any effect. Mirrors the server's own
+    /// dependencies so we never present a control that silently does nothing:
+    /// the whole KV group is inert until `kv_bits` is set (ar.py builds a plain
+    /// cache otherwise), and the APC group is inert until `apc_enabled` is on
+    /// (RuntimeConfig drops those knobs from the cache key).
+    func isActive(_ field: RuntimeSettingField) -> Bool {
+        switch field.group {
+        case .kvCache:
+            if field.id == "kv_bits" { return true }
+            guard let bits = value(named: "kv_bits") else { return true }
+            return !bits.isNull
+        case .prefixCache:
+            if field.id == "apc_enabled" { return true }
+            return value(named: "apc_enabled")?.boolValue ?? false
+        default:
+            return true
+        }
+    }
+
+    /// A short muted note for a group whose dependent fields are inert, or nil.
+    /// Phrased in parallel across groups.
+    func inactiveHint(for group: RuntimeSettingGroup) -> String? {
+        switch group {
+        case .kvCache:
+            let bits = value(named: "kv_bits")
+            return (bits?.isNull ?? true) ? "set Bits to enable" : nil
+        case .prefixCache:
+            let enabled = value(named: "apc_enabled")?.boolValue ?? false
+            return enabled ? nil : "turn on to enable"
+        default:
+            return nil
+        }
+    }
+
+    private func value(named name: String) -> RuntimeSettingValue? {
+        fields.first { $0.id == name }?.value
     }
 
     func setValue(_ value: RuntimeSettingValue, for name: String) {
