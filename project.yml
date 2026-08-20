@@ -196,6 +196,7 @@ targets:
       - path: Sources/Nativ/Features/Capabilities/NativCapabilityProvider.swift
       - path: Sources/Nativ/Features/Capabilities/NativToolRouter.swift
       - path: Sources/Nativ/Features/MCP/NativMCPAccess.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceTranscriptionConfiguration.swift
       - path: Sources/Nativ/Features/MCP/NativStatusToolProvider.swift
       - path: Sources/Nativ/Features/MCP/NativActionToolProvider.swift
       - path: Sources/Nativ/Features/MCP/NativFunnelIntegration.swift
