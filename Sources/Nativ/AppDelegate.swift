@@ -12,12 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private lazy var extensionManager = NativExtensionManager(
         builtInExtensions: [voiceDictationExtension]
     )
-    private let agentAccessHost = MCPHostManager()
-    private lazy var agentAccess = NativMCPService(
-        preferences: .shared,
-        host: agentAccessHost
-    )
+    private lazy var agentAccess = NativMCPService(preferences: .shared)
     private var agentAccessObserver: AnyCancellable?
+    private var agentAccessTask: Task<Void, Never>?
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
@@ -58,7 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     }
 
     private func restartAgentAccess() {
-        Task { @MainActor [weak self] in
+        let previous = agentAccessTask
+        agentAccessTask = Task { @MainActor [weak self] in
+            await previous?.value
             guard let self else {
                 return
             }
@@ -154,6 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         systemMenuBarPreferences.onChange = nil
         runtime.stop()
         model.applicationWillTerminate()
+        agentAccessObserver = nil
     }
 
     var rootView: some View {

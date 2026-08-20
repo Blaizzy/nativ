@@ -18,43 +18,44 @@ enum NativMCPServiceError: LocalizedError {
 @MainActor
 final class NativMCPService {
     private let preferences: NativMCPPreferences
-    private let host: MCPHostManager
     private var model: NativModel?
     private var listeners: [NativMCPListener] = []
+    private var endpoints: [NativMCPEndpoint] = []
     private var announcedAgents: Set<UUID> = []
-    private(set) var lastError: String?
 
-    init(preferences: NativMCPPreferences, host: MCPHostManager) {
+
+    init(preferences: NativMCPPreferences) {
         self.preferences = preferences
-        self.host = host
     }
 
     func restart(model: NativModel) async {
         self.model = model
         await stop()
         guard preferences.isEnabled else {
+            model.setAgentAccessState(.off)
             return
         }
         let access = preferences.access
         let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
-        var endpoints: [NativMCPScope: NativMCPEndpoint] = [:]
-        for scope in NativMCPScope.allCases {
+        var started: [NativMCPScope: NativMCPEndpoint] = [:]
+        for scope in Set(access.keys.map(\.agent.scope)) {
             let endpoint = NativMCPEndpoint(
                 surface: surface(for: scope, access: access),
                 publicHosts: host.isEmpty ? [] : [host]
             )
             do {
                 try await endpoint.start()
-                endpoints[scope] = endpoint
+                started[scope] = endpoint
+                endpoints.append(endpoint)
             } catch {
-                lastError = "Could not prepare agent access: \(error.localizedDescription)"
+                model.setAgentAccessState(.failed(error.localizedDescription))
                 return
             }
         }
         let listener = NativMCPListener(
             port: preferences.port,
             access: access,
-            endpoints: endpoints,
+            endpoints: started,
             report: { [weak self] agent, status in
                 await self?.report(agent, status: status)
             }
@@ -62,23 +63,28 @@ final class NativMCPService {
         do {
             try await listener.start()
             listeners = [listener]
+            model.setAgentAccessState(.serving(port: preferences.port))
             model.appendAgentAccessLog("listening on port \(preferences.port)")
         } catch {
             let message = "could not listen on port \(preferences.port): \(error.localizedDescription)"
-            lastError = message
+            model.setAgentAccessState(.failed(error.localizedDescription))
             model.appendAgentAccessLog(message)
         }
     }
 
     func stop() async {
-        guard !listeners.isEmpty else {
+        guard !listeners.isEmpty || !endpoints.isEmpty else {
             return
         }
         for listener in listeners {
             await listener.stop()
         }
+        for endpoint in endpoints {
+            await endpoint.stop()
+        }
         listeners = []
-        announcedAgents = []
+        endpoints = []
+        model?.setAgentAccessState(.off)
         model?.appendAgentAccessLog("stopped")
     }
 
@@ -135,7 +141,15 @@ final class NativMCPService {
                 webReadIsConfigured: ChatWebReadToolRegistry.isConfigured()
             )
         )
-        return definitions.filter { access.permits($0.function.name, in: scope) }
+        let registry = router(for: settings)
+        var usable: [MLXChatToolDefinition] = []
+        for definition in definitions where access.permits(definition.function.name, in: scope) {
+            guard await registry.requiresConsent(definition.function.name) == false else {
+                continue
+            }
+            usable.append(definition)
+        }
+        return usable
     }
 
     private func run(
@@ -165,10 +179,7 @@ final class NativMCPService {
 
     private func router(for settings: NativSettings) -> NativToolRouter {
         NativToolRouter(
-            providers: [
-                CustomToolProvider(tools: settings.customTools),
-                HostedMCPToolProvider(host: host),
-            ],
+            providers: [CustomToolProvider(tools: settings.customTools)],
             fallback: NativeToolProvider()
         )
     }

@@ -23,7 +23,14 @@ final class NativMCPPreferences: ObservableObject {
     }
 
     @Published var publicHost: String {
-        didSet { defaults.set(publicHost, forKey: Key.publicHost) }
+        didSet {
+            let normalized = Self.normalizedHost(publicHost)
+            if normalized != publicHost {
+                publicHost = normalized
+                return
+            }
+            defaults.set(publicHost, forKey: Key.publicHost)
+        }
     }
 
     @Published private(set) var agents: [NativMCPAgent] {
@@ -59,18 +66,14 @@ final class NativMCPPreferences: ObservableObject {
         )
     }
 
-    var configurationFingerprint: String {
-        ([isEnabled ? "on" : "off", String(port), publicHost]
-            + access.keys.map { "\($0.agent.id)\($0.agent.scope.rawValue)\($0.secret.prefix(6))" })
-            .joined(separator: "|")
-    }
-
     func secret(for agentID: UUID) -> String? {
         if let existing = (try? secrets.load(for: agentID)) ?? nil, !existing.isEmpty {
             return existing
         }
         let generated = NativMCPKey.newSecret()
-        try? secrets.save(generated, for: agentID)
+        guard (try? secrets.save(generated, for: agentID)) != nil else {
+            return nil
+        }
         return generated
     }
 
@@ -82,13 +85,22 @@ final class NativMCPPreferences: ObservableObject {
     }
 
     func removeAgent(_ id: UUID) {
+        guard agents.count > 1 else {
+            return
+        }
         try? secrets.save(nil, for: id)
         agents.removeAll { $0.id == id }
     }
 
-    func replaceSecret(for id: UUID) {
-        try? secrets.save(NativMCPKey.newSecret(), for: id)
-        objectWillChange.send()
+    static func normalizedHost(_ host: String) -> String {
+        var value = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        for scheme in ["https://", "http://"] where value.lowercased().hasPrefix(scheme) {
+            value = String(value.dropFirst(scheme.count))
+        }
+        while value.hasSuffix("/") {
+            value = String(value.dropLast())
+        }
+        return value
     }
 
     private func save(_ agents: [NativMCPAgent]) {

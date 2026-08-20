@@ -62,6 +62,7 @@ final class ServerLogStore {
 @Observable
 final class NativModel: ChatModelSwitchingSurface {
     private(set) var isRunning = false
+    private(set) var agentAccessState: NativMCPState = .off
     let serverLogs = ServerLogStore()
     private(set) var metrics: NativMetrics?
     private(set) var lastMetricsError: String?
@@ -980,6 +981,10 @@ final class NativModel: ChatModelSwitchingSurface {
         default:
             return false
         }
+    }
+
+    func setAgentAccessState(_ state: NativMCPState) {
+        agentAccessState = state
     }
 
     func appendAgentAccessLog(_ line: String) {

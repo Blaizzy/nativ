@@ -1,5 +1,11 @@
 import Foundation
 
+enum NativMCPState: Equatable, Sendable {
+    case off
+    case serving(port: Int)
+    case failed(String)
+}
+
 enum NativMCPScope: String, Codable, CaseIterable, Sendable {
     case full
     case readOnly

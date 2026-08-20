@@ -21,7 +21,10 @@ actor NativMCPEndpoint {
             validationPipeline: publicHosts.isEmpty
                 ? nil
                 : StandardValidationPipeline(validators: [
-                    OriginValidator(allowedHosts: publicHosts, allowedOrigins: []),
+                    OriginValidator(
+                        allowedHosts: Self.loopbackHosts + publicHosts,
+                        allowedOrigins: publicHosts.map { "https://\($0)" }
+                    ),
                     AcceptHeaderValidator(mode: .jsonOnly),
                     ContentTypeValidator(),
                     ProtocolVersionValidator(),
@@ -31,6 +34,12 @@ actor NativMCPEndpoint {
     }
 
     private let surface: NativMCPToolSurface
+
+    private static let loopbackHosts = [
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+    ]
 
     func start() async throws {
         await server.withMethodHandler(ListTools.self) { [surface] _ in
