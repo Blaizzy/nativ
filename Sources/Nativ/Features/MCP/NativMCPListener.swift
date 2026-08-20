@@ -3,15 +3,17 @@ import MCP
 import Network
 
 actor NativMCPListener {
+    private let portNumber: Int
     private let port: NWEndpoint.Port
     private let endpoint: NativMCPEndpoint
-    private let secret: String
+    private let access: NativMCPAccess
     private var listener: NWListener?
 
-    init(port: Int, endpoint: NativMCPEndpoint, secret: String) {
+    init(port: Int, endpoint: NativMCPEndpoint, access: NativMCPAccess) {
+        self.portNumber = port
         self.port = NWEndpoint.Port(rawValue: UInt16(port)) ?? 8765
         self.endpoint = endpoint
-        self.secret = secret
+        self.access = access
     }
 
     func start() throws {
@@ -39,26 +41,26 @@ actor NativMCPListener {
         guard let request = await Self.readRequest(from: connection) else {
             return
         }
-        guard authorized(request) else {
-            await Self.write(status: 401, body: Data(), to: connection)
+        guard access.caller(arrivingOn: portNumber, secret: Self.secret(in: request)) != nil else {
+            await Self.write(status: 401, headers: [:], body: Data(), to: connection)
             return
         }
         let response = await endpoint.respond(to: request)
         await Self.write(
             status: response.statusCode,
+            headers: response.headers,
             body: response.bodyData ?? Data(),
             to: connection
         )
     }
 
-    private func authorized(_ request: HTTPRequest) -> Bool {
+    private static func secret(in request: HTTPRequest) -> String? {
         guard let header = request.header("Authorization") else {
-            return false
+            return nil
         }
-        let provided = header.hasPrefix("Bearer ")
+        return header.hasPrefix("Bearer ")
             ? String(header.dropFirst("Bearer ".count))
             : header
-        return provided == secret
     }
 
     private static func readRequest(from connection: NWConnection) async -> HTTPRequest? {
@@ -117,9 +119,19 @@ actor NativMCPListener {
         }
     }
 
-    private static func write(status: Int, body: Data, to connection: NWConnection) async {
+    private static func write(
+        status: Int,
+        headers: [String: String],
+        body: Data,
+        to connection: NWConnection
+    ) async {
         var head = "HTTP/1.1 \(status)\r\n"
-        head += "Content-Type: application/json\r\n"
+        for (name, value) in headers where name.lowercased() != "content-length" {
+            head += "\(name): \(value)\r\n"
+        }
+        if headers.keys.contains(where: { $0.lowercased() == "content-type" }) == false {
+            head += "Content-Type: application/json\r\n"
+        }
         head += "Content-Length: \(body.count)\r\n"
         head += "Connection: close\r\n\r\n"
         let payload = Data(head.utf8) + body
