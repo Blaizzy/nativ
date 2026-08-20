@@ -4,6 +4,7 @@ import NativServerKit
 enum NativActionToolError: LocalizedError {
     case missingArgument(String)
     case serverNotRunning
+    case fileNotFound(String)
     case timedOut(String)
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum NativActionToolError: LocalizedError {
             "This call needs a \(name)."
         case .serverNotRunning:
             "Start Nativ's local model server first."
+        case .fileNotFound(let path):
+            "There is no file at \(path)."
         case .timedOut(let what):
             "\(what) did not finish in time."
         }
@@ -102,23 +105,27 @@ struct NativActionToolProvider: NativCapabilityProvider {
 
     private func status() async -> Result {
         let settings = await model.settings.normalized()
-        return await Result(
+        let isRunning = await model.isRunning
+        let baseURL = await model.activeServerBaseURL?.absoluteString
+        return Result(
             model: settings.languageModelID,
-            serverIsRunning: model.isRunning,
-            baseURL: model.activeServerBaseURL?.absoluteString,
+            serverIsRunning: isRunning,
+            baseURL: baseURL,
             imageModel: settings.imageGenerationModelID,
             speechModel: settings.speechToTextModelID
         )
     }
 
-    private func runPrompt(_ arguments: [String: Any]) async throws -> Result {
-        guard let prompt = arguments["prompt"] as? String, !prompt.isEmpty else {
-            throw NativActionToolError.missingArgument("prompt")
-        }
-        let settings = await model.settings.normalized()
+    private func settingsWithServerRunning() async throws -> NativSettings {
         guard await model.isRunning else {
             throw NativActionToolError.serverNotRunning
         }
+        return await model.settings.normalized()
+    }
+
+    private func runPrompt(_ arguments: [String: Any]) async throws -> Result {
+        let prompt = try Self.required("prompt", in: arguments)
+        let settings = try await settingsWithServerRunning()
         guard let modelID = arguments["model"] as? String ?? settings.languageModelID else {
             throw NativActionToolError.missingArgument("model")
         }
@@ -149,13 +156,8 @@ struct NativActionToolProvider: NativCapabilityProvider {
     }
 
     private func generateImage(_ arguments: [String: Any]) async throws -> Result {
-        guard let prompt = arguments["prompt"] as? String, !prompt.isEmpty else {
-            throw NativActionToolError.missingArgument("prompt")
-        }
-        let settings = await model.settings.normalized()
-        guard await model.isRunning else {
-            throw NativActionToolError.serverNotRunning
-        }
+        let prompt = try Self.required("prompt", in: arguments)
+        let settings = try await settingsWithServerRunning()
         guard let modelID = arguments["model"] as? String ?? settings.imageGenerationModelID else {
             throw NativActionToolError.missingArgument("model")
         }
@@ -198,23 +200,22 @@ struct NativActionToolProvider: NativCapabilityProvider {
     }
 
     private func transcribeAudio(_ arguments: [String: Any]) async throws -> Result {
-        guard let path = arguments["path"] as? String, !path.isEmpty else {
-            throw NativActionToolError.missingArgument("path")
+        let path = (try Self.required("path", in: arguments) as NSString).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw NativActionToolError.fileNotFound(path)
         }
         let transcription = try await NativTranscriptionRunner(
             configuration: await model.voiceTranscriptionConfiguration()
         )
         .transcribe(
-            fileURL: URL(filePath: (path as NSString).expandingTildeInPath),
+            fileURL: URL(filePath: path),
             requestedModelID: arguments["model"] as? String
         )
         return Result(model: transcription.modelID, text: transcription.text)
     }
 
     private func loadModel(_ arguments: [String: Any]) async throws -> Result {
-        guard let modelID = arguments["model"] as? String, !modelID.isEmpty else {
-            throw NativActionToolError.missingArgument("model")
-        }
+        let modelID = try Self.required("model", in: arguments)
         let settings = await model.settings.normalized()
         let installed = try await LocalModelDiscovery.scan(searchPaths: settings.localModelSearchPaths)
         guard installed.contains(where: { $0.repoID == modelID && $0.capabilities.contains(.text) })
@@ -259,6 +260,13 @@ struct NativActionToolProvider: NativCapabilityProvider {
             try? await Task.sleep(for: .milliseconds(200))
         }
         return await condition()
+    }
+
+    private static func required(_ name: String, in arguments: [String: Any]) throws -> String {
+        guard let value = arguments[name] as? String, !value.isEmpty else {
+            throw NativActionToolError.missingArgument(name)
+        }
+        return value
     }
 
     private static func arguments(from json: String?) -> [String: Any] {
