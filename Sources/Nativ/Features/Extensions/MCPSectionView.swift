@@ -7,6 +7,10 @@ struct MCPSectionView: View {
     var model: NativModel
     @State private var editing: MCPServerConfig?
     @State private var pendingDelete: MCPServerConfig?
+    @State private var isSelectingCustomServers = false
+    @State private var selectedCustomServerIDs = Set<MCPServerConfig.ID>()
+    @State private var pendingCustomServerDeletion: [MCPServerConfig] = []
+    @State private var isConfirmingCustomServerDeletion = false
 
     private let catalog = MCPServerCatalog.bundled
 
@@ -15,6 +19,14 @@ struct MCPSectionView: View {
             title: "MCP",
             subtitle: "Connect Model Context Protocol servers so tool-capable models can use their tools."
         ) {
+            Button(isSelectingCustomServers ? "Done" : "Select") {
+                isSelectingCustomServers.toggle()
+                if !isSelectingCustomServers {
+                    selectedCustomServerIDs.removeAll()
+                }
+            }
+            .disabled(customServers.isEmpty)
+
             Button {
                 editing = MCPServerConfig(name: "", isEnabled: true)
             } label: {
@@ -44,6 +56,10 @@ struct MCPSectionView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
                         } else {
+                            if isSelectingCustomServers {
+                                customServerSelectionBar
+                                    .padding(.bottom, 8)
+                            }
                             ForEach(Array(customServers.enumerated()), id: \.element.id) { index, server in
                                 if index > 0 { Divider() }
                                 configuredServerRow(server)
@@ -79,6 +95,24 @@ struct MCPSectionView: View {
             }
         } message: { server in
             Text("“\(server.name.isEmpty ? "This server" : server.name)” and its configuration will be removed.")
+        }
+        .alert(
+            "Delete \(pendingCustomServerDeletion.count) MCP \(pendingCustomServerDeletion.count == 1 ? "server" : "servers")?",
+            isPresented: $isConfirmingCustomServerDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                let ids = Set(pendingCustomServerDeletion.map(\.id))
+                model.settings.mcpServers.removeAll { ids.contains($0.id) }
+                selectedCustomServerIDs.subtract(ids)
+                pendingCustomServerDeletion = []
+                isSelectingCustomServers = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingCustomServerDeletion = []
+            }
+        } message: {
+            Text("The selected MCP server configurations will be removed.")
         }
     }
 
@@ -126,8 +160,59 @@ struct MCPSectionView: View {
             onToggle: { toggle(server) },
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
+            isSelecting: isSelectingCustomServers,
+            isSelected: selectedCustomServerIDs.contains(server.id),
+            onToggleSelection: { toggleCustomServerSelection(server) },
             onDelete: { pendingDelete = server }
         )
+    }
+
+    private var selectedCustomServers: [MCPServerConfig] {
+        customServers.filter { selectedCustomServerIDs.contains($0.id) }
+    }
+
+    private var customServerSelectionBar: some View {
+        let selections = selectedCustomServers
+        return HStack(spacing: 10) {
+            Text("\(selections.count) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(
+                selectedCustomServerIDs.count == customServers.count
+                    ? "Deselect All" : "Select All"
+            ) {
+                if selectedCustomServerIDs.count == customServers.count {
+                    selectedCustomServerIDs.removeAll()
+                } else {
+                    selectedCustomServerIDs = Set(customServers.map(\.id))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive) {
+                pendingCustomServerDeletion = selections
+                isConfirmingCustomServerDeletion = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(selections.isEmpty)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+    }
+
+    private func toggleCustomServerSelection(_ server: MCPServerConfig) {
+        if selectedCustomServerIDs.contains(server.id) {
+            selectedCustomServerIDs.remove(server.id)
+        } else {
+            selectedCustomServerIDs.insert(server.id)
+        }
     }
 
     private func toggle(_ entry: MCPCatalogEntry) {
@@ -166,6 +251,9 @@ private struct MCPServerRow: View {
     let onToggle: () -> Void
     let onReconnect: (() -> Void)?
     let onEdit: () -> Void
+    var isSelecting = false
+    var isSelected = false
+    var onToggleSelection: (() -> Void)?
     let onDelete: (() -> Void)?
 
     @State private var copiedAuthorizationCode = false
@@ -173,6 +261,17 @@ private struct MCPServerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
+                if isSelecting, let onToggleSelection {
+                    Button(action: onToggleSelection) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Select \(server.name.isEmpty ? "Untitled server" : server.name)")
+                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                }
+
                 NativStatusDot(tone: statusTone, pulsing: isConnecting)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name.isEmpty ? "Untitled server" : server.name)
