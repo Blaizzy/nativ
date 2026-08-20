@@ -141,11 +141,19 @@ struct NativActionToolProvider: NativCapabilityProvider {
         guard let modelID = arguments["model"] as? String, !modelID.isEmpty else {
             throw NativActionToolError.missingArgument("model")
         }
+        let settings = await model.settings.normalized()
+        let installed = try await LocalModelDiscovery.scan(searchPaths: settings.localModelSearchPaths)
+        guard installed.contains(where: { $0.repoID == modelID && $0.capabilities.contains(.text) })
+        else {
+            return Result(
+                ok: false,
+                model: modelID,
+                error: "That model is not installed as a language model, so nothing changed."
+            )
+        }
+
         await model.switchLanguageModel(to: modelID)
-        guard await Self.wait(
-            forSeconds: 300,
-            until: { model.isRunning && !model.modelSwitchInProgress }
-        ) else {
+        guard await Self.wait(forSeconds: 240, until: { !model.modelSwitchInProgress }) else {
             throw NativActionToolError.timedOut("Loading \(modelID)")
         }
         if let failure = await model.modelLoadFailure {
