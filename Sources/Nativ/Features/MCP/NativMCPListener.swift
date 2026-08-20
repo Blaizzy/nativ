@@ -19,26 +19,16 @@ enum NativMCPListenerError: LocalizedError {
 }
 
 actor NativMCPListener {
-    private static let maximumBodyBytes = 1 << 20
     private static let readTimeoutSeconds = 15
 
     private let requestedPort: Int
-    private let access: NativMCPAccess
-    private let endpoints: [NativMCPScope: NativMCPEndpoint]
-    private let report: @Sendable (NativMCPAgent?, Int) async -> Void
-    private let queue = DispatchQueue(label: "dev.local.Nativ.agent-access", attributes: .concurrent)
+    private let respond: @Sendable (HTTPRequest) async -> HTTPResponse
+    private let queue = DispatchQueue(label: "dev.local.Nativ.mcp-server", attributes: .concurrent)
     private var descriptor: Int32?
 
-    init(
-        port: Int,
-        access: NativMCPAccess,
-        endpoints: [NativMCPScope: NativMCPEndpoint],
-        report: @escaping @Sendable (NativMCPAgent?, Int) async -> Void
-    ) {
+    init(port: Int, respond: @escaping @Sendable (HTTPRequest) async -> HTTPResponse) {
         self.requestedPort = port
-        self.access = access
-        self.endpoints = endpoints
-        self.report = report
+        self.respond = respond
     }
 
     func start() throws {
@@ -110,130 +100,58 @@ actor NativMCPListener {
                     close(connection)
                     return
                 }
-                self.read(connection)
+                self.handle(connection)
             }
         }
     }
 
-    private nonisolated func read(_ connection: Int32) {
+    private nonisolated func handle(_ connection: Int32) {
         queue.async { [weak self] in
-            let outcome = Self.readRequest(from: connection)
-            guard let self else {
-                close(connection)
-                return
+            var buffer = Data()
+            while true {
+                switch NativMCPRequestReader.read(buffer) {
+                case .request(let request):
+                    guard let self else {
+                        close(connection)
+                        return
+                    }
+                    Task { await self.reply(to: request, on: connection) }
+                    return
+                case .tooLarge:
+                    Self.write(status: 413, headers: [:], body: Data(), to: connection)
+                    close(connection)
+                    return
+                case .malformed:
+                    Self.write(status: 400, headers: [:], body: Data(), to: connection)
+                    close(connection)
+                    return
+                case .incomplete:
+                    guard let chunk = Self.receive(from: connection) else {
+                        close(connection)
+                        return
+                    }
+                    buffer += chunk
+                }
             }
-            Task { await self.serve(outcome, on: connection) }
         }
     }
 
-    private func serve(_ outcome: ReadOutcome, on connection: Int32) async {
+    private func reply(to request: HTTPRequest, on connection: Int32) async {
         defer { close(connection) }
-        let request: HTTPRequest
-        switch outcome {
-        case .request(let read):
-            request = read
-        case .tooLarge:
-            Self.write(status: 413, headers: [:], body: Data(), to: connection)
-            return
-        case .closed:
-            return
-        }
-        guard Self.isEndpointPath(request.path) else {
+        guard NativMCPRequestReader.isEndpointPath(request.path) else {
             Self.write(status: 404, headers: [:], body: Data(), to: connection)
             return
         }
-        guard let key = access.key(forSecret: Self.secret(in: request)),
-              let endpoint = endpoints[key.agent.scope]
-        else {
-            Self.write(status: 401, headers: [:], body: Data(), to: connection)
-            await report(nil, 401)
-            return
-        }
-        let response = await endpoint.respond(to: request)
+        let response = await respond(request)
         Self.write(
             status: response.statusCode,
             headers: response.headers,
             body: response.bodyData ?? Data(),
             to: connection
         )
-        await report(key.agent, response.statusCode)
     }
 
-    private static func isEndpointPath(_ path: String?) -> Bool {
-        guard let path = path?.split(separator: "?").first.map(String.init) else {
-            return false
-        }
-        return path == "/mcp" || path == "/mcp/"
-    }
-
-    private static func secret(in request: HTTPRequest) -> String? {
-        guard let header = request.header("Authorization") else {
-            return nil
-        }
-        return header.hasPrefix("Bearer ")
-            ? String(header.dropFirst("Bearer ".count))
-            : header
-    }
-
-    enum ReadOutcome {
-        case request(HTTPRequest)
-        case tooLarge
-        case closed
-    }
-
-    private static func readRequest(from connection: Int32) -> ReadOutcome {
-        var buffer = Data()
-        while true {
-            guard let chunk = read(from: connection) else {
-                return .closed
-            }
-            buffer += chunk
-            guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
-                guard buffer.count <= maximumBodyBytes else {
-                    return .tooLarge
-                }
-                continue
-            }
-            let head = String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self)
-            var lines = head.split(separator: "\r\n", omittingEmptySubsequences: true)
-            guard let requestLine = lines.first else {
-                return .closed
-            }
-            lines.removeFirst()
-            let parts = requestLine.split(separator: " ")
-            var headers: [String: String] = [:]
-            for line in lines {
-                let pair = line.split(separator: ":", maxSplits: 1)
-                guard pair.count == 2 else {
-                    continue
-                }
-                headers[String(pair[0])] = pair[1].trimmingCharacters(in: .whitespaces)
-            }
-            let expected = headers.first { $0.key.lowercased() == "content-length" }
-                .flatMap { Int($0.value) } ?? 0
-            guard expected <= maximumBodyBytes else {
-                return .tooLarge
-            }
-            var body = buffer[headerEnd.upperBound...]
-            while body.count < expected {
-                guard let chunk = read(from: connection) else {
-                    return .closed
-                }
-                buffer += chunk
-                body = buffer[headerEnd.upperBound...]
-            }
-            return .request(
-                HTTPRequest(
-                    method: parts.first.map(String.init) ?? "POST",
-                    headers: headers,
-                    body: Data(body),
-                    path: parts.count > 1 ? String(parts[1]) : "/mcp"
-                )
-            )
-        }
-    }
-
-    private static func read(from connection: Int32) -> Data? {
+    private static func receive(from connection: Int32) -> Data? {
         var bytes = [UInt8](repeating: 0, count: 1 << 16)
         let count = recv(connection, &bytes, bytes.count, 0)
         guard count > 0 else {

@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 import NativServerKit
 
 enum NativMCPServiceError: LocalizedError {
@@ -42,21 +43,21 @@ final class NativMCPService {
         }
         let funnel = await NativFunnelIntegration(port: preferences.port).status()
         let host = funnel.isServing ? funnel.publicHost ?? "" : ""
-        var endpoints: [NativMCPScope: NativMCPEndpoint] = [:]
-        for scope in Set(access.keys.map(\.agent.scope)) {
-            endpoints[scope] = NativMCPEndpoint(
-                surface: surface(for: scope, access: access),
-                publicHosts: host.isEmpty ? [] : [host]
-            )
-        }
-        let listener = NativMCPListener(
-            port: preferences.port,
-            access: access,
-            endpoints: endpoints,
-            report: { [weak self] agent, status in
-                await self?.report(agent, status: status)
+        let endpoints = Dictionary(
+            uniqueKeysWithValues: Set(access.keys.map(\.agent.scope)).map { scope in
+                (
+                    scope,
+                    NativMCPEndpoint(
+                        surface: surface(for: scope, access: access),
+                        publicHosts: host.isEmpty ? [] : [host]
+                    )
+                )
             }
         )
+        let listener = NativMCPListener(port: preferences.port) { [weak self] request in
+            await self?.reply(to: request, access: access, endpoints: endpoints)
+                ?? .error(statusCode: 503, MCPError.internalError("Nativ is not serving tools."))
+        }
         do {
             try await listener.start()
             listeners = [listener]
@@ -81,6 +82,21 @@ final class NativMCPService {
         listeners = []
         model?.setAgentAccessState(.off)
         model?.appendAgentAccessLog("Stopped.")
+    }
+
+    private func reply(
+        to request: HTTPRequest,
+        access: NativMCPAccess,
+        endpoints: [NativMCPScope: NativMCPEndpoint]
+    ) async -> HTTPResponse {
+        let token = NativMCPRequestReader.bearerToken(in: request)
+        guard let key = access.key(forSecret: token), let endpoint = endpoints[key.agent.scope] else {
+            await report(nil, status: 401)
+            return .error(statusCode: 401, MCPError.invalidRequest("Unknown key."))
+        }
+        let response = await endpoint.respond(to: request)
+        await report(key.agent, status: response.statusCode)
+        return response
     }
 
     private func report(_ agent: NativMCPAgent?, status: Int) async {
