@@ -395,12 +395,24 @@ private struct SkillsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: NativSkill?
     @State private var pendingDelete: NativSkill?
+    @State private var isSelectingSkills = false
+    @State private var selectedSkillIDs = Set<NativSkill.ID>()
+    @State private var pendingSkillDeletion: [NativSkill] = []
+    @State private var isConfirmingSkillDeletion = false
 
     var body: some View {
         HubSectionScaffold(
             title: "Skills",
             subtitle: "Reusable instructions the model can apply."
         ) {
+            Button(isSelectingSkills ? "Done" : "Select") {
+                isSelectingSkills.toggle()
+                if !isSelectingSkills {
+                    selectedSkillIDs.removeAll()
+                }
+            }
+            .disabled(model.settings.skills.isEmpty)
+
             Button {
                 editing = NativSkill()
             } label: {
@@ -414,12 +426,19 @@ private struct SkillsSectionView: View {
                         text: "No skills yet. Add reusable instructions the model can apply."
                     )
                 } else {
+                    if isSelectingSkills {
+                        skillSelectionBar
+                            .padding(.bottom, 8)
+                    }
                     ForEach(Array(model.settings.skills.enumerated()), id: \.element.id) { index, skill in
                         if index > 0 { Divider() }
                         SkillRow(
                             skill: skill,
+                            isSelecting: isSelectingSkills,
+                            isSelected: selectedSkillIDs.contains(skill.id),
                             onToggle: { toggle(skill) },
                             onEdit: { editing = skill },
+                            onToggleSelection: { toggleSkillSelection(skill) },
                             onDelete: { pendingDelete = skill }
                         )
                     }
@@ -453,11 +472,77 @@ private struct SkillsSectionView: View {
         } message: { skill in
             Text("“\(skill.name.isEmpty ? "This skill" : skill.name)” will be permanently deleted.")
         }
+        .alert(
+            "Delete \(pendingSkillDeletion.count) \(pendingSkillDeletion.count == 1 ? "skill" : "skills")?",
+            isPresented: $isConfirmingSkillDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                let ids = Set(pendingSkillDeletion.map(\.id))
+                model.settings.skills.removeAll { ids.contains($0.id) }
+                selectedSkillIDs.subtract(ids)
+                pendingSkillDeletion = []
+                isSelectingSkills = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingSkillDeletion = []
+            }
+        } message: {
+            Text("The selected skills will be permanently deleted.")
+        }
+    }
+
+    private var selectedSkills: [NativSkill] {
+        model.settings.skills.filter { selectedSkillIDs.contains($0.id) }
+    }
+
+    private var skillSelectionBar: some View {
+        let selections = selectedSkills
+        return HStack(spacing: 10) {
+            Text("\(selections.count) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(
+                selectedSkillIDs.count == model.settings.skills.count
+                    ? "Deselect All" : "Select All"
+            ) {
+                if selectedSkillIDs.count == model.settings.skills.count {
+                    selectedSkillIDs.removeAll()
+                } else {
+                    selectedSkillIDs = Set(model.settings.skills.map(\.id))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive) {
+                pendingSkillDeletion = selections
+                isConfirmingSkillDeletion = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(selections.isEmpty)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
     }
 
     private func toggle(_ skill: NativSkill) {
         guard let i = model.settings.skills.firstIndex(where: { $0.id == skill.id }) else { return }
         model.settings.skills[i].isEnabled.toggle()
+    }
+
+    private func toggleSkillSelection(_ skill: NativSkill) {
+        if selectedSkillIDs.contains(skill.id) {
+            selectedSkillIDs.remove(skill.id)
+        } else {
+            selectedSkillIDs.insert(skill.id)
+        }
     }
 
     private func delete(_ skill: NativSkill) {
@@ -476,12 +561,26 @@ private struct SkillsSectionView: View {
 private struct SkillRow: View {
     let skill: NativSkill
     var isBuiltIn: Bool = false
+    var isSelecting = false
+    var isSelected = false
     let onToggle: () -> Void
     let onEdit: () -> Void
+    var onToggleSelection: (() -> Void)?
     let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
+            if isSelecting, let onToggleSelection {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select \(skill.name.isEmpty ? "Untitled skill" : skill.name)")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(skill.name.isEmpty ? "Untitled skill" : skill.name)
                     .font(.system(size: 13, weight: .medium))
