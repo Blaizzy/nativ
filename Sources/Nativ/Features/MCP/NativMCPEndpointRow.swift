@@ -2,12 +2,13 @@ import SwiftUI
 
 struct NativMCPEndpointRow: View {
     @ObservedObject var preferences: NativMCPPreferences
+    let state: NativMCPState
     @State private var isShowingDetails = false
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
-                .foregroundStyle(preferences.isEnabled ? Color.accentColor : .secondary)
+                .foregroundStyle(iconTint)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Agent Access")
@@ -44,13 +45,28 @@ struct NativMCPEndpointRow: View {
         }
     }
 
-    private var statusText: String {
-        guard preferences.isEnabled else {
-            return "Off. Coding agents cannot reach Nativ."
+    private var iconTint: Color {
+        switch state {
+        case .off:
+            .secondary
+        case .serving:
+            .accentColor
+        case .failed:
+            .orange
         }
-        let count = preferences.agents.count
-        let keys = count == 1 ? "1 agent" : "\(count) agents"
-        return "Listening on port \(preferences.port) · \(keys)"
+    }
+
+    private var statusText: String {
+        switch state {
+        case .off:
+            return "Off. Coding agents cannot reach Nativ."
+        case .failed(let message):
+            return message
+        case .serving(let port):
+            let count = preferences.agents.count
+            let agents = count == 1 ? "1 agent" : "\(count) agents"
+            return "Listening on port \(port) · \(agents)"
+        }
     }
 }
 
@@ -101,11 +117,6 @@ struct NativMCPEndpointDetails: View {
                     }
                     .controlSize(.small)
 
-                    Button("Replace") {
-                        preferences.replaceSecret(for: agent.id)
-                    }
-                    .controlSize(.small)
-
                     Button("Remove") {
                         preferences.removeAgent(agent.id)
                     }
@@ -149,9 +160,9 @@ struct NativMCPEndpointDetails: View {
 
     private func configuration(for agent: NativMCPAgent) -> String {
         let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
-        let url = host.isEmpty
-            ? "http://127.0.0.1:\(preferences.port)/mcp"
-            : "https://\(host)/mcp"
+        let url = agent.scope == .readOnly && !host.isEmpty
+            ? "https://\(host)/mcp"
+            : "http://127.0.0.1:\(preferences.port)/mcp"
         return """
         {
           "mcpServers": {

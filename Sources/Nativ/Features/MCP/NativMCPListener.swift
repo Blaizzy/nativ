@@ -4,14 +4,21 @@ import Network
 
 enum NativMCPListenerError: LocalizedError {
     case cancelled
+    case portOutOfRange(Int)
 
     var errorDescription: String? {
-        "The connection was closed before Nativ could listen."
+        switch self {
+        case .cancelled:
+            "The connection was closed before Nativ could listen."
+        case .portOutOfRange(let port):
+            "\(port) is not a usable port. Choose a number between 1024 and 65535."
+        }
     }
 }
 
 actor NativMCPListener {
-    private let port: NWEndpoint.Port
+    private static let maximumBodyBytes = 1 << 20
+    private let requestedPort: Int
     private let access: NativMCPAccess
     private let endpoints: [NativMCPScope: NativMCPEndpoint]
     private let report: @Sendable (NativMCPAgent?, Int) async -> Void
@@ -23,7 +30,7 @@ actor NativMCPListener {
         endpoints: [NativMCPScope: NativMCPEndpoint],
         report: @escaping @Sendable (NativMCPAgent?, Int) async -> Void
     ) {
-        self.port = NWEndpoint.Port(rawValue: UInt16(port)) ?? 8765
+        self.requestedPort = port
         self.access = access
         self.endpoints = endpoints
         self.report = report
@@ -32,6 +39,11 @@ actor NativMCPListener {
     func start() async throws {
         guard listener == nil else {
             return
+        }
+        guard let candidate = UInt16(exactly: requestedPort), candidate >= 1024,
+              let port = NWEndpoint.Port(rawValue: candidate)
+        else {
+            throw NativMCPListenerError.portOutOfRange(requestedPort)
         }
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: port)
@@ -48,6 +60,8 @@ actor NativMCPListener {
         for await state in states {
             switch state {
             case .ready:
+                listener.stateUpdateHandler = nil
+                continuation.finish()
                 self.listener = listener
                 return
             case .failed(let error), .waiting(let error):
@@ -68,14 +82,28 @@ actor NativMCPListener {
     }
 
     private func serve(_ connection: NWConnection) async {
-        defer { connection.cancel() }
-        guard let request = await Self.readRequest(from: connection) else {
+        let request: HTTPRequest
+        switch await Self.readRequest(from: connection) {
+        case .request(let read):
+            request = read
+        case .tooLarge:
+            await Self.write(status: 413, headers: [:], body: Data(), to: connection)
+            connection.cancel()
+            return
+        case .closed:
+            connection.cancel()
+            return
+        }
+        guard Self.isEndpointPath(request.path) else {
+            await Self.write(status: 404, headers: [:], body: Data(), to: connection)
+            connection.cancel()
             return
         }
         guard let key = access.key(forSecret: Self.secret(in: request)),
               let endpoint = endpoints[key.agent.scope]
         else {
             await Self.write(status: 401, headers: [:], body: Data(), to: connection)
+            connection.cancel()
             await report(nil, 401)
             return
         }
@@ -86,7 +114,15 @@ actor NativMCPListener {
             body: response.bodyData ?? Data(),
             to: connection
         )
+        connection.cancel()
         await report(key.agent, response.statusCode)
+    }
+
+    private static func isEndpointPath(_ path: String?) -> Bool {
+        guard let path = path?.split(separator: "?").first.map(String.init) else {
+            return false
+        }
+        return path == "/mcp" || path == "/mcp/"
     }
 
     private static func secret(in request: HTTPRequest) -> String? {
@@ -98,20 +134,29 @@ actor NativMCPListener {
             : header
     }
 
-    private static func readRequest(from connection: NWConnection) async -> HTTPRequest? {
+    private enum ReadOutcome {
+        case request(HTTPRequest)
+        case tooLarge
+        case closed
+    }
+
+    private static func readRequest(from connection: NWConnection) async -> ReadOutcome {
         var buffer = Data()
         while true {
             guard let chunk = await receive(from: connection) else {
-                return nil
+                return .closed
             }
             buffer += chunk
             guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
+                guard buffer.count <= maximumBodyBytes else {
+                    return .tooLarge
+                }
                 continue
             }
             let head = String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self)
             var lines = head.split(separator: "\r\n", omittingEmptySubsequences: true)
             guard let requestLine = lines.first else {
-                return nil
+                return .closed
             }
             lines.removeFirst()
             let parts = requestLine.split(separator: " ")
@@ -125,19 +170,24 @@ actor NativMCPListener {
             }
             let expected = headers.first { $0.key.lowercased() == "content-length" }
                 .flatMap { Int($0.value) } ?? 0
+            guard expected <= maximumBodyBytes else {
+                return .tooLarge
+            }
             var body = buffer[headerEnd.upperBound...]
             while body.count < expected {
                 guard let chunk = await receive(from: connection) else {
-                    return nil
+                    return .closed
                 }
                 buffer += chunk
                 body = buffer[headerEnd.upperBound...]
             }
-            return HTTPRequest(
-                method: parts.first.map(String.init) ?? "POST",
-                headers: headers,
-                body: Data(body),
-                path: parts.count > 1 ? String(parts[1]) : "/mcp"
+            return .request(
+                HTTPRequest(
+                    method: parts.first.map(String.init) ?? "POST",
+                    headers: headers,
+                    body: Data(body),
+                    path: parts.count > 1 ? String(parts[1]) : "/mcp"
+                )
             )
         }
     }

@@ -35,6 +35,7 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
 @MainActor
 final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var isRunning = false
+    @Published private(set) var agentAccessState: NativMCPState = .off
     @Published private(set) var logText = ""
     @Published private(set) var metrics: NativMetrics?
     @Published private(set) var lastMetricsError: String?
@@ -912,6 +913,10 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         default:
             return false
         }
+    }
+
+    func setAgentAccessState(_ state: NativMCPState) {
+        agentAccessState = state
     }
 
     func appendAgentAccessLog(_ line: String) {
