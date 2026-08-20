@@ -36,6 +36,8 @@ final class NativMCPPreferences: ObservableObject {
         didSet { defaults.set(publicHost, forKey: Key.publicHost) }
     }
 
+    @Published private(set) var keyGeneration = 0
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         isEnabled = defaults.bool(forKey: Key.enabled)
@@ -56,6 +58,7 @@ final class NativMCPPreferences: ObservableObject {
     func regenerateSecrets() {
         defaults.removeObject(forKey: Key.localSecret)
         defaults.removeObject(forKey: Key.outsideSecret)
+        keyGeneration += 1
     }
 
     var access: NativMCPAccess {
