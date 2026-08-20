@@ -2099,6 +2099,7 @@ struct AudioView: View {
                             record: record,
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
+                            isTranscribing: captureLibrary.transcribingRecordIDs.contains(record.id),
                             isPlaying: captureLibrary.playingRecordID == record.id
                                 && !captureLibrary.isPlaybackPaused,
                             isPaused: captureLibrary.playingRecordID == record.id
@@ -2850,6 +2851,7 @@ private struct AudioCaptureRecordRow: View {
     let record: AudioTranscriptionRecord
     let audioIsAvailable: Bool
     let isProcessing: Bool
+    let isTranscribing: Bool
     let isPlaying: Bool
     let isPaused: Bool
     let onPlay: () -> Void
@@ -2936,7 +2938,7 @@ private struct AudioCaptureRecordRow: View {
                 if isProcessing {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
-                        Text(record.transcript.isEmpty ? "Transcribing" : "Summarizing")
+                        Text(processingLabel)
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2971,6 +2973,11 @@ private struct AudioCaptureRecordRow: View {
 
                 Menu {
                     if !record.transcript.isEmpty {
+                        Button(action: onTranscribe) {
+                            Label("Regenerate transcript", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(!audioIsAvailable || isProcessing)
+                        Divider()
                         Button("Copy transcript", action: copyTranscript)
                         if let summary = record.summary, !summary.isEmpty {
                             Button("Copy summary") {
@@ -3037,6 +3044,13 @@ private struct AudioCaptureRecordRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         }
+    }
+
+    private var processingLabel: String {
+        if isTranscribing {
+            return record.transcript.isEmpty ? "Transcribing" : "Regenerating transcript"
+        }
+        return "Summarizing"
     }
 
     private var detailMenu: some View {

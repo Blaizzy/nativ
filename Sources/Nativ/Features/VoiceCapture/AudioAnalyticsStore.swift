@@ -262,6 +262,7 @@ final class AudioAnalyticsStore: ObservableObject {
         title: String? = nil,
         persistAudioReference: Bool = false,
         summary: String? = nil,
+        preserveExistingSummary: Bool = true,
         recordedAt: Date? = nil,
         updatedAt: Date = Date()
     ) {
@@ -284,7 +285,7 @@ final class AudioAnalyticsStore: ObservableObject {
             audioFileName: persistAudioReference
                 ? recordingURL.lastPathComponent
                 : existing?.audioFileName,
-            summary: summary ?? existing?.summary
+            summary: summary ?? (preserveExistingSummary ? existing?.summary : nil)
         )
         records.removeAll { $0.id == id }
         records.append(record)

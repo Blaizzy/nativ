@@ -202,6 +202,32 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records[0].modelID, "second-model")
     }
 
+    func testRegeneratedTranscriptCanInvalidateExistingSummary() {
+        let recordingURL = temporaryDirectory.appendingPathComponent("recording.wav")
+
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "first transcript",
+            durationSeconds: 4,
+            modelID: "first-model",
+            applicationName: nil,
+            summary: "Summary of the first transcript"
+        )
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "replacement transcript",
+            durationSeconds: 4,
+            modelID: "second-model",
+            applicationName: nil,
+            preserveExistingSummary: false
+        )
+
+        XCTAssertEqual(store.records.count, 1)
+        XCTAssertEqual(store.records[0].transcript, "replacement transcript")
+        XCTAssertEqual(store.records[0].modelID, "second-model")
+        XCTAssertNil(store.records[0].summary)
+    }
+
     func testImportsExistingTranscriptWithoutAudio() throws {
         let transcriptURL = temporaryDirectory.appendingPathComponent("older.txt")
         try "An older local transcript".write(
