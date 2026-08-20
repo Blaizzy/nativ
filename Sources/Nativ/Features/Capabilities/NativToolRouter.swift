@@ -55,6 +55,13 @@ struct NativToolRouter: Sendable {
         )
     }
 
+    func canRun(_ name: String) async -> Bool {
+        for provider in providers where await provider.handles(name) {
+            return true
+        }
+        return await fallback.handles(name)
+    }
+
     func requiresConsent(_ name: String) async -> Bool {
         await responsibleProvider(for: name).requiresConsent(name)
     }
