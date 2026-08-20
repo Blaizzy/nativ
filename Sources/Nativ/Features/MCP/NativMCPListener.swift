@@ -110,15 +110,26 @@ actor NativMCPListener {
                     close(connection)
                     return
                 }
-                Task { await self.serve(connection) }
+                self.read(connection)
             }
         }
     }
 
-    private func serve(_ connection: Int32) async {
+    private nonisolated func read(_ connection: Int32) {
+        queue.async { [weak self] in
+            let outcome = Self.readRequest(from: connection)
+            guard let self else {
+                close(connection)
+                return
+            }
+            Task { await self.serve(outcome, on: connection) }
+        }
+    }
+
+    private func serve(_ outcome: ReadOutcome, on connection: Int32) async {
         defer { close(connection) }
         let request: HTTPRequest
-        switch Self.readRequest(from: connection) {
+        switch outcome {
         case .request(let read):
             request = read
         case .tooLarge:
@@ -164,7 +175,7 @@ actor NativMCPListener {
             : header
     }
 
-    private enum ReadOutcome {
+    enum ReadOutcome {
         case request(HTTPRequest)
         case tooLarge
         case closed
