@@ -52,16 +52,13 @@ struct NativMCPEndpoint: Sendable {
         return response
     }
 
-    private var validationPipeline: (any HTTPRequestValidationPipeline)? {
-        guard !publicHosts.isEmpty else {
-            return nil
-        }
-        return StandardValidationPipeline(validators: [
+    private var validationPipeline: any HTTPRequestValidationPipeline {
+        StandardValidationPipeline(validators: [
             OriginValidator(
                 allowedHosts: Self.loopbackHosts + publicHosts,
                 allowedOrigins: publicHosts.map { "https://\($0)" }
             ),
-            AcceptHeaderValidator(mode: .jsonOnly),
+            NativMCPAcceptValidator(),
             ContentTypeValidator(),
             ProtocolVersionValidator(),
         ])
