@@ -1,65 +1,66 @@
 import XCTest
 
 final class NativMCPAccessTests: XCTestCase {
-    private func makeAccess(outside: Bool = true) -> NativMCPAccess {
+    private let fullKey = NativMCPKey(name: "This Mac", scope: .full, secret: "full-secret")
+    private let readOnlyKey = NativMCPKey(name: "Cloud agent", scope: .readOnly, secret: "read-secret")
+
+    private func makeAccess() -> NativMCPAccess {
         NativMCPAccess(
-            localPort: 8765,
-            outsidePort: outside ? 8766 : nil,
-            localSecret: "local-secret",
-            outsideSecret: outside ? "outside-secret" : nil,
-            outsideAllowedTools: [ChatModelLibraryToolRegistry.toolName]
+            keys: [fullKey, readOnlyKey],
+            readOnlyTools: [ChatModelLibraryToolRegistry.toolName]
         )
     }
 
-    func testTheLocalPortAcceptsOnlyTheLocalSecret() {
+    func testEachKeyResolvesToItsOwnScope() {
         let access = makeAccess()
-        XCTAssertEqual(access.caller(arrivingOn: 8765, secret: "local-secret"), .local)
-        XCTAssertNil(access.caller(arrivingOn: 8765, secret: "outside-secret"))
-        XCTAssertNil(access.caller(arrivingOn: 8765, secret: nil))
-        XCTAssertNil(access.caller(arrivingOn: 8765, secret: ""))
+        XCTAssertEqual(access.scope(forSecret: "full-secret"), .full)
+        XCTAssertEqual(access.scope(forSecret: "read-secret"), .readOnly)
     }
 
-    func testTheOutsidePortAcceptsOnlyTheOutsideSecret() {
+    func testUnknownEmptyAndMissingSecretsAreRejected() {
         let access = makeAccess()
-        XCTAssertEqual(access.caller(arrivingOn: 8766, secret: "outside-secret"), .outside)
-        XCTAssertNil(
-            access.caller(arrivingOn: 8766, secret: "local-secret"),
-            "the local secret must not unlock the wider door"
-        )
+        XCTAssertNil(access.scope(forSecret: "not-a-secret"))
+        XCTAssertNil(access.scope(forSecret: ""))
+        XCTAssertNil(access.scope(forSecret: nil))
     }
 
     func testSecretsOfADifferentLengthAreRejected() {
         let access = makeAccess()
-        XCTAssertNil(access.caller(arrivingOn: 8765, secret: "local-secret-and-more"))
-        XCTAssertNil(access.caller(arrivingOn: 8765, secret: "local"))
+        XCTAssertNil(access.scope(forSecret: "full-secret-and-more"))
+        XCTAssertNil(access.scope(forSecret: "full"))
     }
 
-    func testUnknownPortsAreRejected() {
+    func testRemovingAKeyRevokesOnlyThatAgent() {
+        let access = NativMCPAccess(keys: [fullKey], readOnlyTools: [])
+        XCTAssertEqual(access.scope(forSecret: "full-secret"), .full)
+        XCTAssertNil(
+            access.scope(forSecret: "read-secret"),
+            "revoking one agent must not affect the others"
+        )
+    }
+
+    func testAFullKeyMayUseAnyToolAndAReadOnlyKeyMayNot() {
         let access = makeAccess()
-        XCTAssertNil(access.caller(arrivingOn: 9999, secret: "local-secret"))
+        XCTAssertTrue(access.permits("anything_at_all", in: .full))
+        XCTAssertTrue(access.permits(ChatModelLibraryToolRegistry.toolName, in: .readOnly))
+        XCTAssertFalse(access.permits("anything_at_all", in: .readOnly))
     }
 
-    func testOutsideAccessIsClosedWhenNoOutsidePortIsConfigured() {
-        let access = makeAccess(outside: false)
-        XCTAssertNil(access.caller(arrivingOn: 8766, secret: "outside-secret"))
-        XCTAssertEqual(access.caller(arrivingOn: 8765, secret: "local-secret"), .local)
-    }
-
-    func testLocalCallersMayUseAnyToolAndOutsideCallersMayNot() {
-        let access = makeAccess()
-        XCTAssertTrue(access.permits("anything_at_all", for: .local))
-        XCTAssertTrue(access.permits(ChatModelLibraryToolRegistry.toolName, for: .outside))
-        XCTAssertFalse(access.permits("anything_at_all", for: .outside))
-    }
-
-    func testTheDefaultOutsideListIsReadOnly() {
+    func testTheDefaultReadOnlyListHoldsOnlyReportingTools() {
         XCTAssertEqual(
-            NativMCPAccess.defaultOutsideAllowedTools,
+            NativMCPAccess.defaultReadOnlyTools,
             [
                 ChatModelLibraryToolRegistry.toolName,
                 ChatSystemMonitorToolRegistry.toolName,
                 ChatServerStatsToolRegistry.toolName,
             ]
         )
+    }
+
+    func testANewKeyGetsItsOwnSecret() {
+        let first = NativMCPKey(name: "One", scope: .full)
+        let second = NativMCPKey(name: "Two", scope: .full)
+        XCTAssertNotEqual(first.secret, second.secret)
+        XCTAssertFalse(first.secret.isEmpty)
     }
 }
