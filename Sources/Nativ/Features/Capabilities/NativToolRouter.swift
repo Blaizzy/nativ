@@ -24,12 +24,15 @@ struct NativToolRouter: Sendable {
     }
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
-        var definitions = await fallback.definitions(options)
+        var provided: [MLXChatToolDefinition] = []
         for provider in providers {
-            definitions += await provider.definitions(options)
+            provided += await provider.definitions(options)
         }
-        definitions.removeAll { isHidden($0.function.name, options) }
-        return definitions
+        let providedNames = Set(provided.map(\.function.name))
+        let builtIn = await fallback.definitions(options).filter {
+            !providedNames.contains($0.function.name)
+        }
+        return (builtIn + provided).filter { !isHidden($0.function.name, options) }
     }
 
     func call(

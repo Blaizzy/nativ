@@ -21,6 +21,7 @@ enum NativActionToolError: LocalizedError {
 struct NativActionToolProvider: NativCapabilityProvider {
     enum Action: String, CaseIterable {
         case runPrompt = "run_prompt"
+        case generateImage = "generate_image"
         case transcribeAudio = "transcribe_audio"
         case loadModel = "load_model"
         case startServer = "start_server"
@@ -54,6 +55,8 @@ struct NativActionToolProvider: NativCapabilityProvider {
         switch action {
         case .runPrompt:
             payload = try await runPrompt(arguments)
+        case .generateImage:
+            payload = try await generateImage(arguments)
         case .transcribeAudio:
             payload = try await transcribeAudio(arguments)
         case .loadModel:
@@ -75,6 +78,7 @@ struct NativActionToolProvider: NativCapabilityProvider {
         var model: String?
         var text: String?
         var serverIsRunning: Bool?
+        var paths: [String]?
         var error: String?
 
         enum CodingKeys: String, CodingKey {
@@ -82,6 +86,7 @@ struct NativActionToolProvider: NativCapabilityProvider {
             case model
             case text
             case serverIsRunning = "server_is_running"
+            case paths
             case error
         }
     }
@@ -121,6 +126,55 @@ struct NativActionToolProvider: NativCapabilityProvider {
             )
         )
         return Result(model: modelID, text: completion.content)
+    }
+
+    private func generateImage(_ arguments: [String: Any]) async throws -> Result {
+        guard let prompt = arguments["prompt"] as? String, !prompt.isEmpty else {
+            throw NativActionToolError.missingArgument("prompt")
+        }
+        let settings = await model.settings.normalized()
+        guard await model.isRunning else {
+            throw NativActionToolError.serverNotRunning
+        }
+        guard let modelID = arguments["model"] as? String ?? settings.imageGenerationModelID else {
+            throw NativActionToolError.missingArgument("model")
+        }
+
+        var request = ImageRequestSettings()
+        request.count = arguments["count"] as? Int ?? request.count
+        request.width = arguments["width"] as? Int ?? request.width
+        request.height = arguments["height"] as? Int ?? request.height
+
+        let images = try await ImageGenerationExecutor().run(
+            baseURL: settings.serverBaseURL,
+            apiKey: settings.serverAPIKey,
+            modelID: modelID,
+            prompt: prompt,
+            references: [],
+            settings: request,
+            seed: arguments["seed"] as? Int
+        )
+        return Result(model: modelID, paths: try Self.write(images))
+    }
+
+    private static func write(_ images: [GeneratedImage]) throws -> [String] {
+        let directory = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        .appendingPathComponent("Nativ", isDirectory: true)
+        .appendingPathComponent("Plugin Images", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        return try images.map { image in
+            let url = directory
+                .appendingPathComponent(image.id.uuidString)
+                .appendingPathExtension(image.mimeType == "image/jpeg" ? "jpg" : "png")
+            try image.imageData.write(to: url, options: .atomic)
+            return url.path
+        }
     }
 
     private func transcribeAudio(_ arguments: [String: Any]) async throws -> Result {
@@ -207,6 +261,20 @@ struct NativActionToolProvider: NativCapabilityProvider {
                     "model": string("Model to use. Defaults to the one Nativ has loaded."),
                     "system": string("Optional system instructions."),
                     "max_tokens": integer("Maximum tokens to generate."),
+                ],
+                required: ["prompt"]
+            )
+        case .generateImage:
+            return definition(
+                action,
+                "Generate an image with a local image model and return the file paths.",
+                properties: [
+                    "prompt": string("What to draw."),
+                    "model": string("Image model to use. Defaults to the one chosen in Nativ."),
+                    "width": integer("Pixel width."),
+                    "height": integer("Pixel height."),
+                    "count": integer("How many images to make."),
+                    "seed": integer("Seed for repeatable output."),
                 ],
                 required: ["prompt"]
             )
