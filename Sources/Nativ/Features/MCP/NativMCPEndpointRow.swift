@@ -122,7 +122,7 @@ struct NativMCPEndpointDetails: View {
 
             switch state {
             case .serving:
-                Text("listening")
+                Text("Listening")
                     .font(.callout)
                     .foregroundStyle(.green)
             case .failed(let message):
@@ -131,7 +131,7 @@ struct NativMCPEndpointDetails: View {
                     .foregroundStyle(.orange)
                     .lineLimit(2)
             case .off:
-                Text("off")
+                Text("Off")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -166,9 +166,9 @@ struct NativMCPEndpointDetails: View {
                     ProgressView()
                         .controlSize(.small)
                 } else if funnel.isServing {
-                    badge("reachable publicly", tint: .orange)
+                    badge("Reachable publicly", tint: .orange)
                 } else if funnel.isInstalled {
-                    Text("off")
+                    Text("Off")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

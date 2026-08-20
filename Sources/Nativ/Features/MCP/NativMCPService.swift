@@ -37,7 +37,7 @@ final class NativMCPService {
         }
         let access = preferences.access
         guard !access.keys.isEmpty else {
-            let message = "no usable keys, so every request would be refused"
+            let message = "could not read its keys from the keychain, so no app can connect"
             model.setAgentAccessState(.failed(message))
             model.appendAgentAccessLog(message)
             return
@@ -72,10 +72,10 @@ final class NativMCPService {
             listeners = [listener]
             model.setAgentAccessState(.serving(port: preferences.port))
             model.appendAgentAccessLog(
-                "listening on port \(preferences.port) for \(access.keys.count) app(s)"
+                "Listening on port \(preferences.port) for \(access.keys.count) app(s)."
             )
         } catch {
-            let message = "could not listen on port \(preferences.port): \(error.localizedDescription)"
+            let message = "Could not listen on port \(preferences.port). \(error.localizedDescription)"
             model.setAgentAccessState(.failed(error.localizedDescription))
             model.appendAgentAccessLog(message)
         }
@@ -94,15 +94,15 @@ final class NativMCPService {
         listeners = []
         endpoints = []
         model?.setAgentAccessState(.off)
-        model?.appendAgentAccessLog("stopped")
+        model?.appendAgentAccessLog("Stopped.")
     }
 
     private func report(_ agent: NativMCPAgent?, status: Int) async {
         guard let agent else {
-            model?.appendAgentAccessLog("rejected a caller with an unknown key")
+            model?.appendAgentAccessLog("Refused a caller with an unknown key.")
             return
         }
-        model?.appendAgentAccessLog("\(agent.name) (\(agent.scope.title)) → \(status)")
+        model?.appendAgentAccessLog("\(agent.name) (\(agent.scope.title)) → \(status).")
         guard announcedAgents.insert(agent.id).inserted else {
             return
         }
