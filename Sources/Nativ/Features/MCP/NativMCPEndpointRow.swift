@@ -77,6 +77,7 @@ struct NativMCPEndpointDetails: View {
     @State private var newKeyScope: NativMCPScope = .readOnly
     @State private var funnel = NativFunnelStatus()
     @State private var isChangingFunnel = false
+    @State private var funnelError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -184,9 +185,9 @@ struct NativMCPEndpointDetails: View {
                 }
             }
 
-            Text(internetAccessDetail)
+            Text(funnelError ?? internetAccessDetail)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(funnelError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .task(id: preferences.port) {
@@ -204,10 +205,11 @@ struct NativMCPEndpointDetails: View {
         return "Off. Agents on this Mac work without it. Letting a cloud service in needs Tailscale."
     }
 
-    private func changeFunnel(_ change: @escaping () async -> Bool) {
+    private func changeFunnel(_ change: @escaping () async -> String?) {
         isChangingFunnel = true
+        funnelError = nil
         Task {
-            _ = await change()
+            funnelError = await change()
             await refreshFunnel()
             isChangingFunnel = false
         }

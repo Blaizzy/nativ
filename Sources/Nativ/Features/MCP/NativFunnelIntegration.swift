@@ -22,31 +22,42 @@ struct NativFunnelIntegration: Sendable {
             return NativFunnelStatus()
         }
         var status = NativFunnelStatus(isInstalled: true)
-        if let json = await Self.run(executable, ["status", "--json"]),
-           let data = json.data(using: .utf8),
+        let statusOutput = await Self.run(executable, ["status", "--json"])
+        if statusOutput.succeeded,
+           let data = statusOutput.output.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let self0 = object["Self"] as? [String: Any],
            let name = self0["DNSName"] as? String {
             status.publicHost = name.hasSuffix(".") ? String(name.dropLast()) : name
         }
-        if let served = await Self.run(executable, ["funnel", "status"]) {
-            status.isServing = served.contains("127.0.0.1:\(port)")
-        }
+        let funnelOutput = await Self.run(executable, ["funnel", "status"])
+        status.isServing = funnelOutput.succeeded
+            && funnelOutput.output.contains("127.0.0.1:\(port)")
         return status
     }
 
-    func enable() async -> Bool {
-        guard let executable = Self.executable else {
-            return false
-        }
-        return await Self.run(executable, ["funnel", "--bg", String(port)]) != nil
+    func enable() async -> String? {
+        await change(["funnel", "--bg", String(port)])
     }
 
-    func disable() async -> Bool {
+    func disable() async -> String? {
+        await change(["funnel", "off"])
+    }
+
+    private func change(_ arguments: [String]) async -> String? {
         guard let executable = Self.executable else {
-            return false
+            return "Tailscale is not installed."
         }
-        return await Self.run(executable, ["funnel", "off"]) != nil
+        let result = await Self.run(executable, arguments)
+        return result.succeeded ? nil : Self.firstLine(of: result.output)
+    }
+
+    private static func firstLine(of output: String) -> String {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let line = trimmed.split(separator: "\n").first, !line.isEmpty else {
+            return "Tailscale could not change the setting."
+        }
+        return String(line)
     }
 
     private static var executable: URL? {
@@ -55,25 +66,30 @@ struct NativFunnelIntegration: Sendable {
             .map { URL(filePath: $0) }
     }
 
-    private static func run(_ executable: URL, _ arguments: [String]) async -> String? {
+    private struct Output: Sendable {
+        let succeeded: Bool
+        let output: String
+    }
+
+    private static func run(_ executable: URL, _ arguments: [String]) async -> Output {
         await Task.detached(priority: .utility) {
             let process = Process()
-            let output = Pipe()
+            let pipe = Pipe()
             process.executableURL = executable
             process.arguments = arguments
-            process.standardOutput = output
-            process.standardError = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
             do {
                 try process.run()
             } catch {
-                return nil
+                return Output(succeeded: false, output: error.localizedDescription)
             }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                return nil
-            }
-            return String(decoding: data, as: UTF8.self)
+            return Output(
+                succeeded: process.terminationStatus == 0,
+                output: String(decoding: data, as: UTF8.self)
+            )
         }
         .value
     }
