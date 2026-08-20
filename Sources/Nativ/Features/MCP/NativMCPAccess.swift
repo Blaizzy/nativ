@@ -46,6 +46,7 @@ struct NativMCPAccess: Sendable {
     let readOnlyTools: Set<String>
 
     static let defaultReadOnlyTools: Set<String> = [
+        NativStatusToolProvider.toolName,
         ChatModelLibraryToolRegistry.toolName,
         ChatSystemMonitorToolRegistry.toolName,
         ChatServerStatsToolRegistry.toolName,

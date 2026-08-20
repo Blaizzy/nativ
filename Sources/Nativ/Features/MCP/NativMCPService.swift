@@ -133,7 +133,7 @@ final class NativMCPService {
             return []
         }
         let settings = model.settings.normalized()
-        let definitions = await router(for: settings).definitions(
+        let definitions = await router(for: settings, model: model).definitions(
             NativToolCatalogOptions(
                 canEditImage: false,
                 disabledToolNames: Set(settings.disabledToolNames),
@@ -141,7 +141,7 @@ final class NativMCPService {
                 webReadIsConfigured: ChatWebReadToolRegistry.isConfigured()
             )
         )
-        let registry = router(for: settings)
+        let registry = router(for: settings, model: model)
         var usable: [MLXChatToolDefinition] = []
         for definition in definitions where access.permits(definition.function.name, in: scope) {
             guard await registry.requiresConsent(definition.function.name) == false else {
@@ -162,7 +162,7 @@ final class NativMCPService {
             throw NativMCPServiceError.notPermitted(name)
         }
         let settings = model.settings.normalized()
-        let result = try await router(for: settings).call(
+        let result = try await router(for: settings, model: model).call(
             name,
             argumentsJSON: argumentsJSON,
             context: context(for: settings, model: model),
@@ -177,9 +177,12 @@ final class NativMCPService {
         }
     }
 
-    private func router(for settings: NativSettings) -> NativToolRouter {
+    private func router(for settings: NativSettings, model: NativModel) -> NativToolRouter {
         NativToolRouter(
-            providers: [CustomToolProvider(tools: settings.customTools)],
+            providers: [
+                NativStatusToolProvider(model: model),
+                CustomToolProvider(tools: settings.customTools),
+            ],
             fallback: NativeToolProvider()
         )
     }

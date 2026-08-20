@@ -50,6 +50,7 @@ final class NativMCPAccessTests: XCTestCase {
         XCTAssertEqual(
             NativMCPAccess.defaultReadOnlyTools,
             [
+                NativStatusToolProvider.toolName,
                 ChatModelLibraryToolRegistry.toolName,
                 ChatSystemMonitorToolRegistry.toolName,
                 ChatServerStatsToolRegistry.toolName,

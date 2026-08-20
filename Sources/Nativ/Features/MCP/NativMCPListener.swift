@@ -18,6 +18,7 @@ enum NativMCPListenerError: LocalizedError {
 
 actor NativMCPListener {
     private static let maximumBodyBytes = 1 << 20
+    private static let readTimeoutSeconds = 15.0
     private let requestedPort: Int
     private let access: NativMCPAccess
     private let endpoints: [NativMCPScope: NativMCPEndpoint]
@@ -193,14 +194,25 @@ actor NativMCPListener {
     }
 
     private static func receive(from connection: NWConnection) async -> Data? {
-        await withCheckedContinuation { continuation in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { data, _, complete, _ in
-                if let data, !data.isEmpty {
-                    continuation.resume(returning: data)
-                } else {
-                    continuation.resume(returning: complete ? nil : Data())
+        await withTaskGroup(of: Data?.self) { group in
+            group.addTask {
+                await withCheckedContinuation { continuation in
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { data, _, complete, _ in
+                        if let data, !data.isEmpty {
+                            continuation.resume(returning: data)
+                        } else {
+                            continuation.resume(returning: complete ? nil : Data())
+                        }
+                    }
                 }
             }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(readTimeoutSeconds))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
     }
 
