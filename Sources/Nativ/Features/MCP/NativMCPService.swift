@@ -22,7 +22,6 @@ final class NativMCPService {
     private var listeners: [NativMCPListener] = []
     private var announcedAgents: Set<UUID> = []
 
-
     init(preferences: NativMCPPreferences) {
         self.preferences = preferences
     }
@@ -36,7 +35,7 @@ final class NativMCPService {
         }
         let access = preferences.access
         guard !access.keys.isEmpty else {
-            let message = "could not read its keys from the keychain, so no app can connect"
+            let message = "Nativ could not read its keys from the keychain, so no app can connect."
             model.setAgentAccessState(.failed(message))
             model.appendAgentAccessLog(message)
             return
@@ -67,7 +66,7 @@ final class NativMCPService {
             )
         } catch {
             let message = "Could not listen on port \(preferences.port). \(error.localizedDescription)"
-            model.setAgentAccessState(.failed(error.localizedDescription))
+            model.setAgentAccessState(.failed(message))
             model.appendAgentAccessLog(message)
         }
     }
@@ -95,7 +94,7 @@ final class NativMCPService {
         }
         _ = await NativNotificationService.shared.deliver(
             NativNotification(
-                title: "External plugin connected",
+                title: "App connected",
                 body: "\(agent.name) is using Nativ's tools."
             )
         )
@@ -129,7 +128,8 @@ final class NativMCPService {
             return []
         }
         let settings = model.settings.normalized()
-        let definitions = await router(for: settings, model: model).definitions(
+        let registry = router(for: settings, model: model)
+        let definitions = await registry.definitions(
             NativToolCatalogOptions(
                 canEditImage: false,
                 disabledToolNames: Set(settings.disabledToolNames),
@@ -137,7 +137,6 @@ final class NativMCPService {
                 webReadIsConfigured: ChatWebReadToolRegistry.isConfigured()
             )
         )
-        let registry = router(for: settings, model: model)
         var usable: [MLXChatToolDefinition] = []
         for definition in definitions where access.permits(definition.function.name, in: scope) {
             let name = definition.function.name
