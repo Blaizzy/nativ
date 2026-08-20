@@ -50,7 +50,7 @@ struct NativActionToolProvider: NativCapabilityProvider {
             throw ChatImageToolError.unsupportedTool(name)
         }
         let arguments = Self.arguments(from: argumentsJSON)
-        let payload: [String: String]
+        let payload: Result
         switch action {
         case .runPrompt:
             payload = try await runPrompt(arguments)
@@ -70,7 +70,23 @@ struct NativActionToolProvider: NativCapabilityProvider {
         )
     }
 
-    private func runPrompt(_ arguments: [String: Any]) async throws -> [String: String] {
+    private struct Result: Encodable {
+        var ok = true
+        var model: String?
+        var text: String?
+        var serverIsRunning: Bool?
+        var error: String?
+
+        enum CodingKeys: String, CodingKey {
+            case ok
+            case model
+            case text
+            case serverIsRunning = "server_is_running"
+            case error
+        }
+    }
+
+    private func runPrompt(_ arguments: [String: Any]) async throws -> Result {
         guard let prompt = arguments["prompt"] as? String, !prompt.isEmpty else {
             throw NativActionToolError.missingArgument("prompt")
         }
@@ -103,10 +119,10 @@ struct NativActionToolProvider: NativCapabilityProvider {
                 minP: settings.minP
             )
         )
-        return ["ok": "true", "model": modelID, "text": completion.content]
+        return Result(model: modelID, text: completion.content)
     }
 
-    private func transcribeAudio(_ arguments: [String: Any]) async throws -> [String: String] {
+    private func transcribeAudio(_ arguments: [String: Any]) async throws -> Result {
         guard let path = arguments["path"] as? String, !path.isEmpty else {
             throw NativActionToolError.missingArgument("path")
         }
@@ -117,10 +133,10 @@ struct NativActionToolProvider: NativCapabilityProvider {
             fileURL: URL(filePath: (path as NSString).expandingTildeInPath),
             requestedModelID: arguments["model"] as? String
         )
-        return ["ok": "true", "model": transcription.modelID, "text": transcription.text]
+        return Result(model: transcription.modelID, text: transcription.text)
     }
 
-    private func loadModel(_ arguments: [String: Any]) async throws -> [String: String] {
+    private func loadModel(_ arguments: [String: Any]) async throws -> Result {
         guard let modelID = arguments["model"] as? String, !modelID.isEmpty else {
             throw NativActionToolError.missingArgument("model")
         }
@@ -132,12 +148,12 @@ struct NativActionToolProvider: NativCapabilityProvider {
             throw NativActionToolError.timedOut("Loading \(modelID)")
         }
         if let failure = await model.modelLoadFailure {
-            return ["ok": "false", "model": modelID, "error": failure.message]
+            return Result(ok: false, model: modelID, error: failure.message)
         }
-        return ["ok": "true", "model": modelID]
+        return Result(model: modelID, serverIsRunning: await model.isRunning)
     }
 
-    private func setServer(running: Bool) async throws -> [String: String] {
+    private func setServer(running: Bool) async throws -> Result {
         if running {
             await model.startServer()
         } else {
@@ -146,7 +162,7 @@ struct NativActionToolProvider: NativCapabilityProvider {
         guard await Self.wait(forSeconds: 180, until: { model.isRunning == running }) else {
             throw NativActionToolError.timedOut(running ? "Starting the server" : "Stopping the server")
         }
-        return ["ok": "true", "server_is_running": running ? "true" : "false"]
+        return Result(serverIsRunning: running)
     }
 
     private static func wait(
