@@ -2,8 +2,6 @@ import Foundation
 import NativServerKit
 
 protocol NativCapabilityProvider: Sendable {
-    var namespace: String { get }
-
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition]
     func handles(_ name: String) async -> Bool
     func call(
@@ -14,7 +12,6 @@ protocol NativCapabilityProvider: Sendable {
 }
 
 struct NativeToolProvider: NativCapabilityProvider {
-    let namespace = "native"
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
         ChatToolRegistry.definitions(canEditImage: options.canEditImage)
@@ -40,7 +37,6 @@ struct NativeToolProvider: NativCapabilityProvider {
 }
 
 struct CustomToolProvider: NativCapabilityProvider {
-    let namespace = "custom"
     let tools: [CustomTool]
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
@@ -65,17 +61,14 @@ struct CustomToolProvider: NativCapabilityProvider {
 }
 
 struct HostedMCPToolProvider: NativCapabilityProvider {
-    let namespace = "mcp"
-    let listDefinitions: @MainActor @Sendable () -> [MLXChatToolDefinition]
-    let handlesTool: @MainActor @Sendable (String) -> Bool
-    let invoke: @MainActor @Sendable (String, String?) async throws -> String
+    let host: MCPHostManager
 
     func definitions(_ options: NativToolCatalogOptions) async -> [MLXChatToolDefinition] {
-        await listDefinitions()
+        await host.toolDefinitions()
     }
 
     func handles(_ name: String) async -> Bool {
-        await handlesTool(name)
+        await host.handlesTool(named: name)
     }
 
     func call(
@@ -83,7 +76,7 @@ struct HostedMCPToolProvider: NativCapabilityProvider {
         argumentsJSON: String?,
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        let result = try await invoke(name, argumentsJSON)
+        let result = try await host.callTool(named: name, argumentsJSON: argumentsJSON)
         return ChatToolExecutionOutcome(content: result, attachments: [])
     }
 }
