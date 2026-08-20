@@ -2973,10 +2973,19 @@ private struct AudioCaptureRecordRow: View {
 
                 Menu {
                     if !record.transcript.isEmpty {
-                        Button(action: onTranscribe) {
-                            Label("Regenerate transcript", systemImage: "arrow.clockwise")
+                        Menu {
+                            Button(action: onTranscribe) {
+                                Label("Transcript", systemImage: "text.alignleft")
+                            }
+                            .disabled(!audioIsAvailable || isProcessing)
+
+                            Button(action: onSummarize) {
+                                Label("Summary", systemImage: "sparkles")
+                            }
+                            .disabled(isProcessing)
+                        } label: {
+                            Label("Regenerate", systemImage: "arrow.clockwise")
                         }
-                        .disabled(!audioIsAvailable || isProcessing)
                         Divider()
                         Button("Copy transcript", action: copyTranscript)
                         if let summary = record.summary, !summary.isEmpty {
@@ -2984,13 +2993,6 @@ private struct AudioCaptureRecordRow: View {
                                 copy(summary, detail: .summary)
                             }
                         }
-                        Button(
-                            record.summary?.isEmpty == false
-                                ? "Regenerate summary"
-                                : "Generate summary",
-                            action: onSummarize
-                        )
-                        .disabled(isProcessing)
                     }
                     Divider()
                     Button("Reveal in Finder", action: onReveal)
