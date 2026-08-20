@@ -48,8 +48,8 @@ struct NativMCPEndpointRow: View {
         guard preferences.isEnabled else {
             return "Off. Coding agents cannot reach Nativ."
         }
-        let count = preferences.keys.count
-        let keys = count == 1 ? "1 key" : "\(count) keys"
+        let count = preferences.agents.count
+        let keys = count == 1 ? "1 agent" : "\(count) agents"
         return "Listening on port \(preferences.port) · \(keys)"
     }
 }
@@ -84,12 +84,12 @@ struct NativMCPEndpointDetails: View {
             Text("Keys")
                 .font(.callout.weight(.medium))
 
-            ForEach(preferences.keys) { key in
+            ForEach(preferences.agents) { agent in
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(key.name)
+                        Text(agent.name)
                             .font(.callout)
-                        Text(key.scope.title)
+                        Text(agent.scope.title)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -97,20 +97,20 @@ struct NativMCPEndpointDetails: View {
                     Spacer()
 
                     Button("Copy Config") {
-                        copy(configuration(for: key))
+                        copy(configuration(for: agent))
                     }
                     .controlSize(.small)
 
                     Button("Replace") {
-                        preferences.replaceSecret(for: key.id)
+                        preferences.replaceSecret(for: agent.id)
                     }
                     .controlSize(.small)
 
                     Button("Remove") {
-                        preferences.removeKey(key.id)
+                        preferences.removeAgent(agent.id)
                     }
                     .controlSize(.small)
-                    .disabled(preferences.keys.count == 1)
+                    .disabled(preferences.agents.count == 1)
                 }
             }
 
@@ -127,7 +127,7 @@ struct NativMCPEndpointDetails: View {
                 .frame(width: 140)
 
                 Button("Add") {
-                    preferences.addKey(name: newKeyName, scope: newKeyScope)
+                    preferences.addAgent(name: newKeyName, scope: newKeyScope)
                     newKeyName = ""
                 }
                 .controlSize(.small)
@@ -147,7 +147,7 @@ struct NativMCPEndpointDetails: View {
         .frame(width: 520)
     }
 
-    private func configuration(for key: NativMCPKey) -> String {
+    private func configuration(for agent: NativMCPAgent) -> String {
         let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
         let url = host.isEmpty
             ? "http://127.0.0.1:\(preferences.port)/mcp"
@@ -157,7 +157,7 @@ struct NativMCPEndpointDetails: View {
           "mcpServers": {
             "nativ": {
               "url": "\(url)",
-              "headers": { "Authorization": "Bearer \(key.secret)" }
+              "headers": { "Authorization": "Bearer \(preferences.secret(for: agent.id) ?? "")" }
             }
           }
         }
