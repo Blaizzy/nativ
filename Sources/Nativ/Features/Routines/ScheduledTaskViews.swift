@@ -29,15 +29,30 @@ struct ScheduledTaskCard: View {
     let task: Routine
     let latestRun: RoutineRun?
     let isRunning: Bool
+    let isSelecting: Bool
+    let isSelected: Bool
     let onEdit: () -> Void
     let onRun: () -> Void
     let onToggleEnabled: () -> Void
+    let onToggleSelection: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 16)
+                .accessibilityLabel("Select \(task.name.isEmpty ? "Untitled scheduled task" : task.name)")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
+
             Button(action: onEdit) {
                 HStack(alignment: .top, spacing: 14) {
                     statusIcon
@@ -84,7 +99,7 @@ struct ScheduledTaskCard: View {
 
                     Spacer(minLength: 16)
                 }
-                .padding(.leading, 16)
+                .padding(.leading, isSelecting ? 0 : 16)
                 .padding(.vertical, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)

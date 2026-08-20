@@ -25,6 +25,10 @@ struct ScheduledTasksView: View {
     @State private var draft: RoutineDraft?
     @State private var pendingDeletion: Routine?
     @State private var filter: ScheduledTaskFilter = .all
+    @State private var isSelectingTasks = false
+    @State private var selectedTaskIDs = Set<Routine.ID>()
+    @State private var pendingTaskDeletion: [Routine] = []
+    @State private var isConfirmingTaskDeletion = false
 
     private var orderedTasks: [Routine] {
         store.routines.sorted {
@@ -98,6 +102,23 @@ struct ScheduledTasksView: View {
             let count = linkedSessionIDs(for: task).count
             Text(deletionMessage(linkedChatCount: count))
         }
+        .alert(
+            "Delete \(pendingTaskDeletion.count) scheduled \(pendingTaskDeletion.count == 1 ? "task" : "tasks")?",
+            isPresented: $isConfirmingTaskDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                pendingTaskDeletion.forEach(delete)
+                selectedTaskIDs.subtract(pendingTaskDeletion.map(\.id))
+                pendingTaskDeletion = []
+                isSelectingTasks = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingTaskDeletion = []
+            }
+        } message: {
+            Text("The selected scheduled tasks and their run histories will be permanently deleted.")
+        }
     }
 
     private var taskBrowser: some View {
@@ -149,6 +170,10 @@ struct ScheduledTasksView: View {
             LazyVStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 12) {
                     filterBar
+
+                    if isSelectingTasks {
+                        taskSelectionBar
+                    }
 
                     if filteredTasks.isEmpty {
                         ContentUnavailableView(
@@ -217,7 +242,56 @@ struct ScheduledTasksView: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(filter == option ? .isSelected : [])
             }
+
+            Spacer(minLength: 8)
+
+            Button(isSelectingTasks ? "Done" : "Select") {
+                isSelectingTasks.toggle()
+                if !isSelectingTasks {
+                    selectedTaskIDs.removeAll()
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
+    }
+
+    private var taskSelectionBar: some View {
+        let selections = selectedTasks
+        return HStack(spacing: 10) {
+            Text("\(selections.count) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(
+                selectedTaskIDs.isSuperset(of: Set(filteredTasks.map(\.id)))
+                    ? "Deselect All" : "Select All"
+            ) {
+                let visibleIDs = Set(filteredTasks.map(\.id))
+                if selectedTaskIDs.isSuperset(of: visibleIDs) {
+                    selectedTaskIDs.subtract(visibleIDs)
+                } else {
+                    selectedTaskIDs.formUnion(visibleIDs)
+                }
+            }
+            .disabled(filteredTasks.isEmpty)
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive) {
+                pendingTaskDeletion = selections
+                isConfirmingTaskDeletion = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(selections.isEmpty)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
     }
 
     private func taskCard(_ task: Routine) -> some View {
@@ -226,13 +300,28 @@ struct ScheduledTasksView: View {
             task: task,
             latestRun: runs.first,
             isRunning: runs.contains { $0.status == .running },
+            isSelecting: isSelectingTasks,
+            isSelected: selectedTaskIDs.contains(task.id),
             onEdit: { presentEditor(for: task) },
             onRun: { RoutineRunCoordinator.shared.run(task, source: .manual) },
             onToggleEnabled: {
                 store.setEnabled(!task.isEnabled, id: task.id)
             },
+            onToggleSelection: { toggleTaskSelection(task) },
             onDelete: { pendingDeletion = task }
         )
+    }
+
+    private var selectedTasks: [Routine] {
+        orderedTasks.filter { selectedTaskIDs.contains($0.id) }
+    }
+
+    private func toggleTaskSelection(_ task: Routine) {
+        if selectedTaskIDs.contains(task.id) {
+            selectedTaskIDs.remove(task.id)
+        } else {
+            selectedTaskIDs.insert(task.id)
+        }
     }
 
     private func presentNewTask() {
