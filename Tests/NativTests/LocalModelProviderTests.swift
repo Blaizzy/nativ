@@ -418,6 +418,31 @@ final class HuggingFaceDownloadOutputTests: XCTestCase {
         XCTAssertNil(HuggingFaceDownloadOutput(line: "__NATIV_PROGRESS__:34:0"))
         XCTAssertNil(HuggingFaceDownloadOutput(line: "ordinary log output"))
     }
+
+    func testClassifiesGatedRepositoryFailure() {
+        let failure = HuggingFaceDownloadFailure(processOutput: """
+        huggingface_hub.errors.GatedRepoError: 403 Client Error.
+        Cannot access gated repo for url https://huggingface.co/org/model/resolve/main/config.json.
+        Access to model org/model is restricted and you are not in the authorized list.
+        """)
+
+        XCTAssertEqual(failure, .gatedRepository)
+    }
+
+    func testKeepsUsefulLinesForUnknownDownloadFailure() {
+        let failure = HuggingFaceDownloadFailure(processOutput: """
+        first line
+        second line
+        third line
+        fourth line
+        fifth line
+        """)
+
+        XCTAssertEqual(
+            failure,
+            .message("second line\nthird line\nfourth line\nfifth line")
+        )
+    }
 }
 
 final class HuggingFaceDownloadProgressStateTests: XCTestCase {

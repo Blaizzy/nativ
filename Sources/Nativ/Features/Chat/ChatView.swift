@@ -1013,7 +1013,7 @@ private struct ChatImageModelOptionRow: View {
             }
 
             if let error = downloadManager.errorByModelID[model.modelID] {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

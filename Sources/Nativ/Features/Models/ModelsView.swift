@@ -413,6 +413,7 @@ struct ModelsView: View {
                             onClose: { self.readmeSelection = nil }
                         )
                         .frame(width: geometry.size.width * 0.4)
+                        .frame(maxHeight: .infinity, alignment: .top)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
@@ -1891,7 +1892,7 @@ private struct HubModelRow: View, @MainActor Equatable {
     let isDownloading: Bool
     let downloadProgress: Double
     let isDownloadPaused: Bool
-    let downloadError: String?
+    let downloadError: HuggingFaceDownloadFailure?
     let onShowReadme: () -> Void
     let onDownload: () -> Void
     let onPauseResume: () -> Void
@@ -2034,10 +2035,7 @@ private struct HubModelRow: View, @MainActor Equatable {
             }
 
             if let downloadError {
-                Label(downloadError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
+                downloadErrorView(downloadError)
             }
         }
         .padding(14)
@@ -2048,6 +2046,38 @@ private struct HubModelRow: View, @MainActor Equatable {
         return model.isGated
             ? "Gated models require Hugging Face authentication."
             : "Download to the configured cache"
+    }
+
+    @ViewBuilder
+    private func downloadErrorView(_ error: HuggingFaceDownloadFailure) -> some View {
+        switch error {
+        case .gatedRepository:
+            VStack(alignment: .leading, spacing: 6) {
+                Label(error.localizedDescription, systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text("Request access, then add or update the approved account’s token in Developer and retry.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Link(destination: modelHubURL) {
+                    Label("Request access on Hugging Face", systemImage: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+        case .message:
+            Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var modelHubURL: URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/\(model.id)"
+        return components.url ?? URL(string: "https://huggingface.co/")!
     }
 }
 

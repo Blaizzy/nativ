@@ -461,7 +461,6 @@ enum HuggingFaceHubError: LocalizedError {
     case invalidResponse
     case requestFailed(Int, String)
     case pythonUnavailable
-    case downloadFailed(String)
     case downloadStalled
     case anotherDownloadInProgress(String)
 
@@ -473,12 +472,42 @@ enum HuggingFaceHubError: LocalizedError {
             message.isEmpty ? "Hugging Face request failed (HTTP \(status))." : message
         case .pythonUnavailable:
             "The bundled model downloader is unavailable."
-        case .downloadFailed(let message):
-            message.isEmpty ? "The model download failed." : message
         case .downloadStalled:
             "The model download stopped responding after multiple automatic retries. Check your connection and try again."
         case .anotherDownloadInProgress(let modelID):
             "Wait for \(modelID) to finish downloading before starting another model download."
+        }
+    }
+}
+
+enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
+    case gatedRepository
+    case message(String)
+
+    init(processOutput: String) {
+        let normalizedOutput = processOutput.lowercased()
+        if normalizedOutput.contains("gatedrepoerror")
+            || normalizedOutput.contains("cannot access gated repo")
+            || normalizedOutput.contains("is restricted and you are not in the authorized list") {
+            self = .gatedRepository
+            return
+        }
+
+        let usefulMessage = processOutput
+            .split(whereSeparator: { $0.isNewline || $0 == "\r" })
+            .suffix(4)
+            .joined(separator: "\n")
+        self = .message(
+            usefulMessage.isEmpty ? "The model download failed. Try again." : usefulMessage
+        )
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .gatedRepository:
+            "This gated model requires access approval from its publisher."
+        case .message(let message):
+            message
         }
     }
 }
@@ -992,7 +1021,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let isDownloading: Bool
         let progress: Double
         let isPaused: Bool
-        let error: String?
+        let error: HuggingFaceDownloadFailure?
     }
 
     struct ActiveDownload: Identifiable, Equatable {
@@ -1024,7 +1053,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 
     @Published private(set) var downloads: [ActiveDownload] = []
-    @Published private(set) var errorByModelID: [String: String] = [:]
+    @Published private(set) var errorByModelID: [String: HuggingFaceDownloadFailure] = [:]
     /// Emits the affected model ID for progress/state changes. `nil` denotes
     /// a structural change that can affect capacity for every download row.
     let rowUpdates = PassthroughSubject<String?, Never>()
@@ -1078,7 +1107,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 
     func reportError(_ message: String, for modelID: String) {
-        errorByModelID[modelID] = message
+        errorByModelID[modelID] = .message(message)
     }
 
     func capacityBlocker(sizeBytes: Int64?, cachePath: String) -> String? {
@@ -1101,7 +1130,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     ) {
         guard contexts[repoID] == nil else { return }
         if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-            errorByModelID[repoID] = blocker
+            errorByModelID[repoID] = .message(blocker)
             rowUpdates.send(repoID)
             return
         }
@@ -1114,8 +1143,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 onCompletion: onCompletion
             )
         } catch {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorByModelID[repoID] = downloadFailure(for: error)
             rowUpdates.send(repoID)
         }
     }
@@ -1141,8 +1169,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                     onCompletion: nil
                 )
             } catch {
-                errorByModelID[repoID] =
-                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                errorByModelID[repoID] = downloadFailure(for: error)
                 rowUpdates.send(repoID)
                 throw error
             }
@@ -1300,8 +1327,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let completion = context.onCompletion
         let waiters = Array(context.waiters.values)
         if let error {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorByModelID[repoID] = downloadFailure(for: error)
         }
         removeContext(repoID)
 
@@ -1404,6 +1430,15 @@ final class HuggingFaceDownloadManager: ObservableObject {
         progressLimiters.removeValue(forKey: modelID)
         downloads.removeAll { $0.modelID == modelID }
         rowUpdates.send(nil)
+    }
+
+    private func downloadFailure(for error: Error) -> HuggingFaceDownloadFailure {
+        if let failure = error as? HuggingFaceDownloadFailure {
+            return failure
+        }
+        return .message(
+            (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        )
     }
 
     private func cancelWaiter(_ waiterID: UUID, modelID: String) {
@@ -2040,11 +2075,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
         guard process.terminationStatus == 0 else {
             let message = String(decoding: output.snapshot(), as: UTF8.self)
-            let usefulMessage = message
-                .split(whereSeparator: { $0.isNewline || $0 == "\r" })
-                .suffix(4)
-                .joined(separator: "\n")
-            throw HuggingFaceHubError.downloadFailed(usefulMessage)
+            throw HuggingFaceDownloadFailure(processOutput: message)
         }
     }
 
