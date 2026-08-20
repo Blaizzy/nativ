@@ -298,6 +298,7 @@ struct AudioView: View {
             ) {
                 metricGrid
                 activityPanel
+                modelUsagePanel
             }
         case .history:
             AudioPage(
@@ -475,6 +476,146 @@ struct AudioView: View {
         }
         .padding(18)
         .audioPanelStyle()
+    }
+
+    private var modelUsagePanel: some View {
+        let usages = analytics.modelUsage()
+        let totalTranscriptions = usages.reduce(0) { $0 + $1.transcriptions }
+
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Transcription models")
+                        .font(.headline)
+                    Text("All-time speech-to-text usage by model")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(totalTranscriptions.formatted()) transcriptions")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if usages.isEmpty {
+                ContentUnavailableView {
+                    Label("No model usage yet", systemImage: "cpu")
+                } description: {
+                    Text("Model statistics appear after the first successful transcription.")
+                }
+                .frame(maxWidth: .infinity, minHeight: 150)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(usages) { usage in
+                        modelUsageRow(
+                            usage,
+                            share: Double(usage.transcriptions) / Double(totalTranscriptions)
+                        )
+
+                        if usage.id != usages.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private func modelUsageRow(
+        _ usage: AudioModelUsage,
+        share: Double
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    AudioTranscriptionModelProviderBadge(modelID: usage.modelID)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(
+                            usage.modelID.map(audioTranscriptionModelDisplayName)
+                                ?? "Unknown / legacy"
+                        )
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+
+                        Text(modelUsageBreakdown(usage))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                .help(
+                    usage.modelID.map { "Transcription model: \($0)" }
+                        ?? "No transcription model was recorded for these legacy transcripts."
+                )
+
+                Spacer(minLength: 12)
+
+                Text(share.formatted(.percent.precision(.fractionLength(0))))
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView(value: share)
+                .progressViewStyle(.linear)
+
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(minimum: 64), spacing: 12),
+                    count: 4
+                ),
+                alignment: .leading,
+                spacing: 8
+            ) {
+                modelUsageMetric(
+                    "Transcriptions",
+                    value: usage.transcriptions.formatted()
+                )
+                modelUsageMetric(
+                    "Audio",
+                    value: usage.timedTranscriptions == 0
+                        ? "—"
+                        : NativFormatting.elapsedDuration(usage.durationSeconds)
+                )
+                modelUsageMetric("Words", value: usage.words.formatted())
+                modelUsageMetric(
+                    "Last used",
+                    value: usage.lastUsedAt.formatted(date: .abbreviated, time: .omitted)
+                )
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func modelUsageMetric(
+        _ title: String,
+        value: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            Text(value)
+                .font(.caption.weight(.medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func modelUsageBreakdown(_ usage: AudioModelUsage) -> String {
+        var parts: [String] = []
+        if usage.dictations > 0 {
+            parts.append("\(usage.dictations) \(usage.dictations == 1 ? "dictation" : "dictations")")
+        }
+        if usage.recordings > 0 {
+            parts.append("\(usage.recordings) \(usage.recordings == 1 ? "recording" : "recordings")")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var audioInputPanel: some View {
@@ -2572,6 +2713,10 @@ private struct AudioTranscriptRow: View {
                         metadataSeparator
                         Text(applicationName)
                     }
+                    if let modelID = record.modelID, !modelID.isEmpty {
+                        metadataSeparator
+                        AudioTranscriptionModelMetadata(modelID: modelID)
+                    }
                     metadataSeparator
                     Text("\(record.wordCount) words")
                     if let wordsPerMinute = record.wordsPerMinute {
@@ -2630,6 +2775,74 @@ private struct AudioTranscriptRow: View {
     private var metadataSeparator: some View {
         Text("·")
             .foregroundStyle(.tertiary)
+    }
+}
+
+private func audioTranscriptionModelDisplayName(_ modelID: String) -> String {
+    modelID.split(separator: "/").last.map(String.init) ?? modelID
+}
+
+private struct AudioTranscriptionModelProviderBadge: View {
+    let modelID: String?
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var provider: LocalModelProvider? {
+        guard let modelID else { return nil }
+        if modelID.caseInsensitiveCompare("apple-speech") == .orderedSame {
+            return .apple
+        }
+        return LocalModelProviderResolver.resolve(
+            repoID: modelID,
+            modelType: nil,
+            architectures: []
+        )
+    }
+
+    private var backgroundColor: Color {
+        if provider?.needsLightIconBackgroundInDarkMode == true, colorScheme == .dark {
+            return Color.white.opacity(0.92)
+        }
+        return Color.secondary.opacity(0.10)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(backgroundColor)
+
+            if let provider, let image = LocalModelProviderIcon.image(for: provider) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                    .frame(width: 17, height: 17)
+                    .accessibilityLabel(provider.displayName)
+            } else if let provider {
+                Text(provider.monogram)
+                    .font(.system(size: provider.monogram.count > 2 ? 7 : 10, weight: .bold))
+                    .foregroundStyle(Color(nsColor: provider.iconTintColor))
+            } else {
+                Image(systemName: modelID == nil ? "questionmark" : "cpu")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .help(provider?.displayName ?? "Unknown model provider")
+    }
+}
+
+private struct AudioTranscriptionModelMetadata: View {
+    let modelID: String
+
+    var body: some View {
+        Label(
+            "Model: \(audioTranscriptionModelDisplayName(modelID))",
+            systemImage: "cpu"
+        )
+            .lineLimit(1)
+            .help("Transcribed with \(modelID)")
+            .accessibilityLabel("Transcription model \(modelID)")
     }
 }
 
@@ -2708,6 +2921,10 @@ private struct AudioCaptureRecordRow: View {
                         if !record.transcript.isEmpty {
                             Text("·")
                             Text("\(record.wordCount) words")
+                        }
+                        if let modelID = record.modelID, !modelID.isEmpty {
+                            Text("·")
+                            AudioTranscriptionModelMetadata(modelID: modelID)
                         }
                     }
                     .font(.caption)

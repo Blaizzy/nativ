@@ -104,6 +104,77 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records.first?.applicationName, "Notes")
     }
 
+    func testAggregatesTranscriptionUsageByModel() throws {
+        let localModelID = "mlx-community/parakeet"
+        let appleModelID = "apple-speech (on-device)"
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = firstDate.addingTimeInterval(60)
+        let thirdDate = secondDate.addingTimeInterval(60)
+
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("dictation.wav"),
+            transcript: "one two three four",
+            durationSeconds: 10,
+            modelID: localModelID,
+            applicationName: "Notes",
+            recordedAt: firstDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("meeting.wav"),
+            transcript: "five six seven",
+            durationSeconds: 20,
+            modelID: localModelID,
+            applicationName: nil,
+            kind: .meeting,
+            recordedAt: secondDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("apple.wav"),
+            transcript: "eight nine",
+            durationSeconds: nil,
+            modelID: appleModelID,
+            applicationName: nil,
+            recordedAt: thirdDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("legacy.wav"),
+            transcript: "legacy transcript",
+            durationSeconds: nil,
+            modelID: nil,
+            applicationName: nil,
+            recordedAt: firstDate
+        )
+        store.addCapture(
+            recordingURL: temporaryDirectory.appendingPathComponent("untranscribed.wav"),
+            kind: .voiceNote,
+            title: "Untranscribed",
+            durationSeconds: 30
+        )
+
+        let usages = store.modelUsage()
+
+        XCTAssertEqual(usages.map(\.modelID), [localModelID, appleModelID, nil])
+        let localUsage = try XCTUnwrap(usages.first)
+        XCTAssertEqual(localUsage.transcriptions, 2)
+        XCTAssertEqual(localUsage.dictations, 1)
+        XCTAssertEqual(localUsage.recordings, 1)
+        XCTAssertEqual(localUsage.words, 7)
+        XCTAssertEqual(localUsage.durationSeconds, 30, accuracy: 0.001)
+        XCTAssertEqual(localUsage.timedTranscriptions, 2)
+        XCTAssertEqual(localUsage.lastUsedAt, secondDate)
+
+        let appleUsage = try XCTUnwrap(usages.first { $0.modelID == appleModelID })
+        XCTAssertEqual(appleUsage.transcriptions, 1)
+        XCTAssertEqual(appleUsage.dictations, 1)
+        XCTAssertEqual(appleUsage.recordings, 0)
+        XCTAssertEqual(appleUsage.words, 2)
+        XCTAssertEqual(appleUsage.timedTranscriptions, 0)
+
+        let unknownUsage = try XCTUnwrap(usages.first { $0.modelID == nil })
+        XCTAssertEqual(unknownUsage.transcriptions, 1)
+        XCTAssertEqual(unknownUsage.words, 2)
+    }
+
     func testRetryPreservesOriginalDurationAndRecordedDate() {
         let recordingURL = temporaryDirectory.appendingPathComponent("recording.wav")
         let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
