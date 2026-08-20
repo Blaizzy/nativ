@@ -36,6 +36,12 @@ final class NativMCPService {
             return
         }
         let access = preferences.access
+        guard !access.keys.isEmpty else {
+            let message = "no usable keys, so every request would be refused"
+            model.setAgentAccessState(.failed(message))
+            model.appendAgentAccessLog(message)
+            return
+        }
         let host = preferences.publicHost.trimmingCharacters(in: .whitespaces)
         var started: [NativMCPScope: NativMCPEndpoint] = [:]
         for scope in Set(access.keys.map(\.agent.scope)) {
@@ -64,7 +70,9 @@ final class NativMCPService {
             try await listener.start()
             listeners = [listener]
             model.setAgentAccessState(.serving(port: preferences.port))
-            model.appendAgentAccessLog("listening on port \(preferences.port)")
+            model.appendAgentAccessLog(
+                "listening on port \(preferences.port) for \(access.keys.count) app(s)"
+            )
         } catch {
             let message = "could not listen on port \(preferences.port): \(error.localizedDescription)"
             model.setAgentAccessState(.failed(error.localizedDescription))
