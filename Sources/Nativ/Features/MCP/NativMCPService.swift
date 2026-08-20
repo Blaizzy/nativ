@@ -20,7 +20,6 @@ final class NativMCPService {
     private let preferences: NativMCPPreferences
     private var model: NativModel?
     private var listeners: [NativMCPListener] = []
-    private var endpoints: [NativMCPEndpoint] = []
     private var announcedAgents: Set<UUID> = []
 
 
@@ -44,25 +43,17 @@ final class NativMCPService {
         }
         let funnel = await NativFunnelIntegration(port: preferences.port).status()
         let host = funnel.isServing ? funnel.publicHost ?? "" : ""
-        var started: [NativMCPScope: NativMCPEndpoint] = [:]
+        var endpoints: [NativMCPScope: NativMCPEndpoint] = [:]
         for scope in Set(access.keys.map(\.agent.scope)) {
-            let endpoint = NativMCPEndpoint(
+            endpoints[scope] = NativMCPEndpoint(
                 surface: surface(for: scope, access: access),
                 publicHosts: host.isEmpty ? [] : [host]
             )
-            do {
-                try await endpoint.start()
-                started[scope] = endpoint
-                endpoints.append(endpoint)
-            } catch {
-                model.setAgentAccessState(.failed(error.localizedDescription))
-                return
-            }
         }
         let listener = NativMCPListener(
             port: preferences.port,
             access: access,
-            endpoints: started,
+            endpoints: endpoints,
             report: { [weak self] agent, status in
                 await self?.report(agent, status: status)
             }
@@ -82,17 +73,13 @@ final class NativMCPService {
     }
 
     func stop() async {
-        guard !listeners.isEmpty || !endpoints.isEmpty else {
+        guard !listeners.isEmpty else {
             return
         }
         for listener in listeners {
             await listener.stop()
         }
-        for endpoint in endpoints {
-            await endpoint.stop()
-        }
         listeners = []
-        endpoints = []
         model?.setAgentAccessState(.off)
         model?.appendAgentAccessLog("Stopped.")
     }
