@@ -217,10 +217,6 @@ struct NativMCPEndpointDetails: View {
 
     private func refreshFunnel() async {
         funnel = await NativFunnelIntegration(port: preferences.port).status()
-        let host = funnel.isServing ? funnel.publicHost ?? "" : ""
-        if preferences.publicHost != host {
-            preferences.publicHost = host
-        }
     }
 
     private func configuration(for agent: NativMCPAgent) -> String {
