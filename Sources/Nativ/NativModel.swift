@@ -982,6 +982,10 @@ final class NativModel: ChatModelSwitchingSurface {
         }
     }
 
+    func appendAgentAccessLog(_ line: String) {
+        appendLog("[agent access] \(line)\n")
+    }
+
     private func appendLog(_ text: String) {
         serverLogs.append(text)
     }

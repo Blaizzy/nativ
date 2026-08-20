@@ -1,8 +1,8 @@
 import XCTest
 
 final class NativMCPAccessTests: XCTestCase {
-    private let fullKey = NativMCPKey(name: "This Mac", scope: .full, secret: "full-secret")
-    private let readOnlyKey = NativMCPKey(name: "Cloud agent", scope: .readOnly, secret: "read-secret")
+    private let fullKey = NativMCPKey(agent: NativMCPAgent(name: "This Mac", scope: .full), secret: "full-secret")
+    private let readOnlyKey = NativMCPKey(agent: NativMCPAgent(name: "Cloud agent", scope: .readOnly), secret: "read-secret")
 
     private func makeAccess() -> NativMCPAccess {
         NativMCPAccess(
@@ -13,28 +13,28 @@ final class NativMCPAccessTests: XCTestCase {
 
     func testEachKeyResolvesToItsOwnScope() {
         let access = makeAccess()
-        XCTAssertEqual(access.scope(forSecret: "full-secret"), .full)
-        XCTAssertEqual(access.scope(forSecret: "read-secret"), .readOnly)
+        XCTAssertEqual(access.key(forSecret: "full-secret")?.agent.scope, .full)
+        XCTAssertEqual(access.key(forSecret: "read-secret")?.agent.scope, .readOnly)
     }
 
     func testUnknownEmptyAndMissingSecretsAreRejected() {
         let access = makeAccess()
-        XCTAssertNil(access.scope(forSecret: "not-a-secret"))
-        XCTAssertNil(access.scope(forSecret: ""))
-        XCTAssertNil(access.scope(forSecret: nil))
+        XCTAssertNil(access.key(forSecret: "not-a-secret"))
+        XCTAssertNil(access.key(forSecret: ""))
+        XCTAssertNil(access.key(forSecret: nil))
     }
 
     func testSecretsOfADifferentLengthAreRejected() {
         let access = makeAccess()
-        XCTAssertNil(access.scope(forSecret: "full-secret-and-more"))
-        XCTAssertNil(access.scope(forSecret: "full"))
+        XCTAssertNil(access.key(forSecret: "full-secret-and-more"))
+        XCTAssertNil(access.key(forSecret: "full"))
     }
 
     func testRemovingAKeyRevokesOnlyThatAgent() {
         let access = NativMCPAccess(keys: [fullKey], readOnlyTools: [])
-        XCTAssertEqual(access.scope(forSecret: "full-secret"), .full)
+        XCTAssertEqual(access.key(forSecret: "full-secret")?.agent.scope, .full)
         XCTAssertNil(
-            access.scope(forSecret: "read-secret"),
+            access.key(forSecret: "read-secret"),
             "revoking one agent must not affect the others"
         )
     }
@@ -57,10 +57,10 @@ final class NativMCPAccessTests: XCTestCase {
         )
     }
 
-    func testANewKeyGetsItsOwnSecret() {
-        let first = NativMCPKey(name: "One", scope: .full)
-        let second = NativMCPKey(name: "Two", scope: .full)
-        XCTAssertNotEqual(first.secret, second.secret)
-        XCTAssertFalse(first.secret.isEmpty)
+    func testEachGeneratedSecretIsDistinct() {
+        let first = NativMCPKey.newSecret()
+        let second = NativMCPKey.newSecret()
+        XCTAssertNotEqual(first, second)
+        XCTAssertFalse(first.isEmpty)
     }
 }

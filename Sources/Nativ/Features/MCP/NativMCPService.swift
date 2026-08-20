@@ -21,6 +21,7 @@ final class NativMCPService {
     private let host: MCPHostManager
     private var model: NativModel?
     private var listeners: [NativMCPListener] = []
+    private var announcedAgents: Set<UUID> = []
     private(set) var lastError: String?
 
     init(preferences: NativMCPPreferences, host: MCPHostManager) {
@@ -53,21 +54,49 @@ final class NativMCPService {
         let listener = NativMCPListener(
             port: preferences.port,
             access: access,
-            endpoints: endpoints
+            endpoints: endpoints,
+            report: { [weak self] agent, status in
+                await self?.report(agent, status: status)
+            }
         )
         do {
             try await listener.start()
             listeners = [listener]
+            model.appendAgentAccessLog("listening on port \(preferences.port)")
         } catch {
-            lastError = "Could not listen on port \(preferences.port): \(error.localizedDescription)"
+            let message = "could not listen on port \(preferences.port): \(error.localizedDescription)"
+            lastError = message
+            model.appendAgentAccessLog(message)
         }
     }
 
     func stop() async {
+        guard !listeners.isEmpty else {
+            return
+        }
         for listener in listeners {
             await listener.stop()
         }
         listeners = []
+        announcedAgents = []
+        model?.appendAgentAccessLog("stopped")
+    }
+
+    private func report(_ agent: NativMCPAgent?, status: Int) async {
+        guard let agent else {
+            model?.appendAgentAccessLog("rejected a caller with an unknown key")
+            return
+        }
+        model?.appendAgentAccessLog("\(agent.name) (\(agent.scope.title)) → \(status)")
+        guard announcedAgents.insert(agent.id).inserted else {
+            return
+        }
+        _ = await NativNotificationService.shared.deliver(
+            NativNotification(
+                title: "Agent connected",
+                body: "\(agent.name) is using Nativ's tools."
+            )
+        )
     }
 
     private func surface(

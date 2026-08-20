@@ -14,18 +14,21 @@ enum NativMCPScope: String, Codable, CaseIterable, Sendable {
     }
 }
 
-struct NativMCPKey: Codable, Equatable, Identifiable, Sendable {
+struct NativMCPAgent: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var name: String
-    var secret: String
     var scope: NativMCPScope
 
-    init(id: UUID = UUID(), name: String, scope: NativMCPScope, secret: String = NativMCPKey.newSecret()) {
+    init(id: UUID = UUID(), name: String, scope: NativMCPScope) {
         self.id = id
         self.name = name
-        self.secret = secret
         self.scope = scope
     }
+}
+
+struct NativMCPKey: Equatable, Sendable {
+    let agent: NativMCPAgent
+    let secret: String
 
     static func newSecret() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -42,11 +45,11 @@ struct NativMCPAccess: Sendable {
         ChatServerStatsToolRegistry.toolName,
     ]
 
-    func scope(forSecret secret: String?) -> NativMCPScope? {
+    func key(forSecret secret: String?) -> NativMCPKey? {
         guard let secret, !secret.isEmpty else {
             return nil
         }
-        return keys.first { matches(secret, $0.secret) }?.scope
+        return keys.first { matches(secret, $0.secret) }
     }
 
     func permits(_ toolName: String, in scope: NativMCPScope) -> Bool {

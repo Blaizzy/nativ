@@ -14,12 +14,19 @@ actor NativMCPListener {
     private let port: NWEndpoint.Port
     private let access: NativMCPAccess
     private let endpoints: [NativMCPScope: NativMCPEndpoint]
+    private let report: @Sendable (NativMCPAgent?, Int) async -> Void
     private var listener: NWListener?
 
-    init(port: Int, access: NativMCPAccess, endpoints: [NativMCPScope: NativMCPEndpoint]) {
+    init(
+        port: Int,
+        access: NativMCPAccess,
+        endpoints: [NativMCPScope: NativMCPEndpoint],
+        report: @escaping @Sendable (NativMCPAgent?, Int) async -> Void
+    ) {
         self.port = NWEndpoint.Port(rawValue: UInt16(port)) ?? 8765
         self.access = access
         self.endpoints = endpoints
+        self.report = report
     }
 
     func start() async throws {
@@ -65,10 +72,11 @@ actor NativMCPListener {
         guard let request = await Self.readRequest(from: connection) else {
             return
         }
-        guard let scope = access.scope(forSecret: Self.secret(in: request)),
-              let endpoint = endpoints[scope]
+        guard let key = access.key(forSecret: Self.secret(in: request)),
+              let endpoint = endpoints[key.agent.scope]
         else {
             await Self.write(status: 401, headers: [:], body: Data(), to: connection)
+            await report(nil, 401)
             return
         }
         let response = await endpoint.respond(to: request)
@@ -78,6 +86,7 @@ actor NativMCPListener {
             body: response.bodyData ?? Data(),
             to: connection
         )
+        await report(key.agent, response.statusCode)
     }
 
     private static func secret(in request: HTTPRequest) -> String? {
