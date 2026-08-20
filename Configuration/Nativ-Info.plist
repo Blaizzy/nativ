@@ -46,6 +46,8 @@
 	<string>$(NATIV_GITHUB_APP_SLUG)</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/Blaizzy/nativ/releases/latest/download/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUPublicEDKey</key>
 	<string>$(NATIV_SPARKLE_PUBLIC_KEY)</string>
 	<key>UTExportedTypeDeclarations</key>

@@ -439,6 +439,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
         if WelcomePreferences.hasCompleted {
             model.startServer()
         }
+        DispatchQueue.main.async { [softwareUpdater] in
+            softwareUpdater.start()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
