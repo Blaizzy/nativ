@@ -22,6 +22,7 @@ struct ControlPanelView: View {
     var isExtensionsBadgeDismissed = false
     @State var sidebarSelection: ControlPanelSidebarSelection = .tab(.chat)
     @State var selectedTab: ControlPanelTab = .chat
+    @State var isFullScreen = false
     @State var selectedExtensionsHubSection: ExtensionsHubView.HubSection = .kits
     @State var chatWorkspaceMode: ChatWorkspaceMode = .chat
     @State var speechModelDiscoveryRequest: Int
@@ -126,6 +127,7 @@ struct ControlPanelView: View {
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar(removing: .title)
         .frame(minWidth: 1040, minHeight: 600)
+        .environment(\.controlPanelIsFullScreen, isFullScreen)
         .environment(\.openExtensionsHubSection) { section in
             selectedExtensionsHubSection = section
             Task { @MainActor in
@@ -149,6 +151,10 @@ struct ControlPanelView: View {
         }
         .overlay(alignment: .top) {
             controlPanelTopControls
+        }
+        .background {
+            ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
+                .frame(width: 0, height: 0)
         }
         .onAppear {
             applySidebarSelection(
@@ -261,7 +267,10 @@ struct ControlPanelView: View {
                 )
             }
         }
-        .padding(.leading, ControlPanelLayout.topControlsLeadingPadding)
+        .padding(
+            .leading,
+            isFullScreen ? ControlPanelLayout.topControlsLeadingPaddingFullScreen : ControlPanelLayout.topControlsLeadingPadding
+        )
         .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding)
         .padding(.top, ControlPanelLayout.topControlsTopPadding)
         .ignoresSafeArea(.container, edges: .top)

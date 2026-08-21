@@ -8,6 +8,13 @@ import UniformTypeIdentifiers
 extension ControlPanelView {
     var sidebar: some View {
         VStack(spacing: 0) {
+            Color.clear
+                .frame(
+                    height: isFullScreen
+                        ? ControlPanelLayout.fullScreenSidebarTopClearance
+                        : 0
+                )
+
             HStack(spacing: 6) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
                     .resizable()
@@ -138,6 +145,10 @@ extension ControlPanelView {
             .frame(width: sidebarWidth)
             .background {
                 ControlPanelSidebarMaterial()
+                    .overlay {
+                        Color.white.opacity(0.1)
+                            .allowsHitTesting(false)
+                    }
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
             }
             .overlay(alignment: .trailing) {
