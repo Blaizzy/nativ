@@ -35,6 +35,7 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
 @MainActor
 final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var isRunning = false
+    @Published private(set) var agentAccessState: NativMCPState = .off
     @Published private(set) var logText = ""
     @Published private(set) var metrics: NativMetrics?
     @Published private(set) var lastMetricsError: String?
@@ -915,6 +916,28 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         default:
             return false
         }
+    }
+
+    func voiceTranscriptionConfiguration() -> VoiceTranscriptionConfiguration {
+        let settings = settings.normalized()
+        return VoiceTranscriptionConfiguration(
+            modelSearchPath: settings.modelSearchPath,
+            additionalModelSearchPaths: settings.additionalModelSearchPaths,
+            selectedModelID: settings.speechToTextModelID,
+            languageModelID: settings.languageModelID,
+            maxTokens: settings.maxTokens,
+            serverBaseURL: activeServerBaseURL ?? settings.serverBaseURL,
+            serverAPIKey: settings.serverAPIKey,
+            serverIsRunning: isRunning
+        )
+    }
+
+    func setAgentAccessState(_ state: NativMCPState) {
+        agentAccessState = state
+    }
+
+    func appendAgentAccessLog(_ line: String) {
+        appendLog("[external plugin] \(line)\n")
     }
 
     private func appendLog(_ text: String) {

@@ -701,6 +701,7 @@ struct ControlPanelView: View {
 
     private var chat: ChatViewModel { dependencies.chat }
     private var mcpHost: MCPHostManager { dependencies.mcpHost }
+
     private var imageGeneration: ImageGenerationViewModel { dependencies.imageGeneration }
     private var artifacts: ArtifactStore { dependencies.artifacts }
     private var dashboard: DashboardViewModel { dependencies.dashboard }

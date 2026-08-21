@@ -185,6 +185,10 @@ enum ChatToolDispatcher {
         },
     ]
 
+    static func handles(_ name: String) -> Bool {
+        handlers[name] != nil
+    }
+
     static func execute(
         call: MLXChatToolCall,
         context: ChatToolExecutionContext
