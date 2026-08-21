@@ -1598,11 +1598,11 @@ struct HuggingFaceDownloadProgressState: Equatable {
         let estimatedBytes = checkpointDisplayedBytes
             + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
         // Transfer bytes are only an estimate of reconstructed bytes. Cap the
-        // estimate at the first finalizing byte so it cannot show 100%, but can
-        // still switch the UI and stall watchdog into their finalizing state.
+        // estimate at the first finishing byte so it cannot show 100%, but can
+        // still switch the UI and stall watchdog into their finishing state.
         let activeLimit = min(
             Int64(
-                (Double(totalBytes) * ModelDownloadProgressPresentation.finalizingThreshold)
+                (Double(totalBytes) * ModelDownloadProgressPresentation.finishingThreshold)
                     .rounded(.up)
             ),
             totalBytes
@@ -1634,19 +1634,19 @@ struct HuggingFaceDownloadProgressState: Equatable {
         !isPaused && now.timeIntervalSince(lastActivity) >= timeout
     }
 
-    var isFinalizing: Bool {
-        ModelDownloadProgressPresentation.isFinalizing(progress?.fractionCompleted ?? 0)
+    var isFinishing: Bool {
+        ModelDownloadProgressPresentation.isFinishing(progress?.fractionCompleted ?? 0)
     }
 }
 
 enum ModelDownloadProgressPresentation {
-    /// The final fraction of a download is spent committing blobs and creating
-    /// the snapshot. Keep 100% reserved for a download that has actually
-    /// completed and disappeared from the active-download UI.
-    static let finalizingThreshold = 0.995
+    /// Xet can continue reconstructing model files after the measurable
+    /// transfer estimate reaches its safe limit. Present that interval as a
+    /// distinct finishing state instead of leaving a percentage visibly stuck.
+    static let finishingThreshold = 0.95
 
-    static func isFinalizing(_ progress: Double) -> Bool {
-        progress >= finalizingThreshold
+    static func isFinishing(_ progress: Double) -> Bool {
+        progress >= finishingThreshold
     }
 
     static func activePercentage(_ progress: Double) -> Int {
@@ -1713,8 +1713,8 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
         lock.withLock { state.isStalled(timeout: timeout, isPaused: isPaused) }
     }
 
-    var isFinalizing: Bool {
-        lock.withLock { state.isFinalizing }
+    var isFinishing: Bool {
+        lock.withLock { state.isFinishing }
     }
 }
 
@@ -2051,7 +2051,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             }
             if !flags.paused {
                 transferSpeed(activity.bytesPerSecond)
-                let timeout = activity.isFinalizing
+                let timeout = activity.isFinishing
                     ? Self.finalizationStallTimeout
                     : Self.stallTimeout
                 if activity.isStalled(timeout: timeout, isPaused: false) {
