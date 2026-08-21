@@ -42,15 +42,10 @@ struct ScheduledTaskCard: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if isSelecting {
-                Button(action: onToggleSelection) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, 16)
-                .accessibilityLabel("Select \(task.name.isEmpty ? "Untitled scheduled task" : task.name)")
-                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .padding(.leading, 16)
             }
 
             Button(action: onEdit) {
@@ -117,7 +112,22 @@ struct ScheduledTaskCard: View {
             .fixedSize()
             .padding(.trailing, 16)
         }
-        .scheduledPanelStyle(isHighlighted: isHovering)
+        .scheduledPanelStyle(
+            isHighlighted: isHovering,
+            isSelected: isSelecting && isSelected
+        )
+        .overlay {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.clear)
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select \(task.name.isEmpty ? "Untitled scheduled task" : task.name)")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
+        }
         .contextMenu {
             taskActions
         }
@@ -271,12 +281,19 @@ extension RoutineRunSource {
 }
 
 extension View {
-    func scheduledPanelStyle(isHighlighted: Bool = false) -> some View {
+    func scheduledPanelStyle(
+        isHighlighted: Bool = false,
+        isSelected: Bool = false
+    ) -> some View {
         background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(
+                    isSelected
+                        ? Color.accentColor.opacity(0.12)
+                        : Color(nsColor: .controlBackgroundColor)
+                )
                 .overlay {
-                    if isHighlighted {
+                    if isHighlighted && !isSelected {
                         Color.primary.opacity(0.045)
                     }
                 }
@@ -285,9 +302,11 @@ extension View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(
-                    isHighlighted
-                        ? Color.primary.opacity(0.16)
-                        : Color(nsColor: .separatorColor),
+                    isSelected
+                        ? Color.accentColor.opacity(0.55)
+                        : isHighlighted
+                            ? Color.primary.opacity(0.16)
+                            : Color(nsColor: .separatorColor),
                     lineWidth: 0.5
                 )
         }
