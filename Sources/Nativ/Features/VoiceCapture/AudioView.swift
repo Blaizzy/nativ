@@ -225,7 +225,7 @@ struct AudioView: View {
             Text("“\(record.displayTitle)” and its saved audio, transcript, and summary will be permanently deleted.")
         }
         .alert(
-            "Delete \(pendingDictationDeletion.count) \(pendingDictationDeletion.count == 1 ? "dictation" : "dictations")?",
+            dictationDeletionConfirmationTitle,
             isPresented: $isConfirmingDictationDeletion
         ) {
             Button("Delete", role: .destructive) {
@@ -240,7 +240,7 @@ struct AudioView: View {
             Text("The selected transcripts and retained audio will be permanently deleted.")
         }
         .alert(
-            "Delete \(pendingRecordingDeletion.count) \(pendingRecordingDeletion.count == 1 ? "recording" : "recordings")?",
+            recordingDeletionConfirmationTitle,
             isPresented: $isConfirmingRecordingDeletion
         ) {
             Button("Delete", role: .destructive) {
@@ -921,6 +921,18 @@ struct AudioView: View {
             return .orange
         }
         return inputLevelMonitor.isMonitoring ? .green : .secondary
+    }
+
+    private var dictationDeletionConfirmationTitle: String {
+        let count = pendingDictationDeletion.count
+        let itemName = count == 1 ? "dictation" : "dictations"
+        return "Delete \(count) \(itemName)?"
+    }
+
+    private var recordingDeletionConfirmationTitle: String {
+        let count = pendingRecordingDeletion.count
+        let itemName = count == 1 ? "recording" : "recordings"
+        return "Delete \(count) \(itemName)?"
     }
 
     private var activeCaptureTitle: String {
