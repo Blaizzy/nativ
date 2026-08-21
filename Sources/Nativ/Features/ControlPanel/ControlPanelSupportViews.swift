@@ -15,28 +15,40 @@ enum FooterControl {
 enum ControlPanelLayout {
     static let sidebarMinimumWidth: CGFloat = 220
     static let sidebarIdealWidth: CGFloat = 260
-    static let sidebarMaximumWidth: CGFloat = 480
+    static let sidebarMaximumWidth: CGFloat = 440
+    static let sidebarTransitionDuration: TimeInterval = 0.3
     static let detailMinimumWidth: CGFloat = 720
-    static let titlebarHeight: CGFloat = 52
-    static let sidebarBrandTopClearance: CGFloat = 46
+    static let sidebarBrandHeight: CGFloat = 40
+    static let sidebarBrandIconSize: CGFloat = 24
     static let sidebarBrandBottomClearance: CGFloat = 8
-    static let collapsedSidebarTitleClearance: CGFloat = 108
-    static let sidebarButtonLeadingPadding: CGFloat = 88
-    static let modelConfigurationButtonTrailingPadding: CGFloat = 12
-    static let collapseButtonSize: CGFloat = 30
-    static let windowControlsLeadingPadding: CGFloat = 19
-    static let windowControlsTopPadding: CGFloat = 9
-    static let windowControlsWidth: CGFloat = 64
-    static let windowControlsHeight: CGFloat = 28
-    static let windowControlsCenterY =
-        windowControlsTopPadding + (windowControlsHeight / 2)
-    static let sidebarTransitionDuration: TimeInterval = 0.2
-    static let sidebarTransitionSettleDuration: Duration = .milliseconds(225)
+    static let detailHeaderTopInset = (sidebarBrandHeight - sidebarBrandIconSize) / 2
+    static let topControlSize: CGFloat = 30
+    static let topControlsLeadingPadding: CGFloat = 80
+    static let topControlsTrailingPadding: CGFloat = 12
+    static let topControlsTopPadding: CGFloat = 1
 }
 
 enum ControlPanelOnboarding {
     static let extensionsBadgeDismissedKey =
         "nativ.control-panel.extensions-new-badge-dismissed.v1"
+}
+
+struct ControlPanelSidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        configure(view)
+    }
+
+    private func configure(_ view: NSVisualEffectView) {
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+    }
 }
 
 extension Color {

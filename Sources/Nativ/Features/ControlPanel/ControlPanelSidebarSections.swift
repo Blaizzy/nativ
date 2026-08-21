@@ -323,29 +323,8 @@ extension ControlPanelView {
     }
 
     func toggleSidebarVisibility() {
-        let willShowSidebar = !isSidebarVisuallyVisible
-        sidebarTransitionGeneration &+= 1
-        let transitionGeneration = sidebarTransitionGeneration
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            isSidebarTransitioning = true
-            splitColumnVisibility = willShowSidebar ? .all : .detailOnly
-            detailTransitionOffset = willShowSidebar ? -sidebarWidth : sidebarWidth
-        }
-        withAnimation(.smooth(duration: ControlPanelLayout.sidebarTransitionDuration)) {
-            isSidebarVisuallyVisible = willShowSidebar
-            detailTransitionOffset = 0
-        }
-
-        Task { @MainActor in
-            try? await Task.sleep(for: ControlPanelLayout.sidebarTransitionSettleDuration)
-            guard sidebarTransitionGeneration == transitionGeneration else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                isSidebarTransitioning = false
-            }
+        withAnimation(.easeInOut(duration: ControlPanelLayout.sidebarTransitionDuration)) {
+            isSidebarVisible.toggle()
         }
     }
 

@@ -8,21 +8,21 @@ import UniformTypeIdentifiers
 extension ControlPanelView {
     var sidebar: some View {
         VStack(spacing: 0) {
-            Color.clear
-                .frame(height: ControlPanelLayout.sidebarBrandTopClearance)
-
             HStack(spacing: 6) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 24, height: 24)
+                    .frame(
+                        width: ControlPanelLayout.sidebarBrandIconSize,
+                        height: ControlPanelLayout.sidebarBrandIconSize
+                    )
 
                 Text("Nativ")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 40)
+            .frame(height: ControlPanelLayout.sidebarBrandHeight)
             .padding(.horizontal, 16)
             .padding(.bottom, ControlPanelLayout.sidebarBrandBottomClearance)
 
@@ -72,11 +72,6 @@ extension ControlPanelView {
             .padding(.vertical, 5)
         }
         .navigationTitle("Nativ")
-        .background(
-            ControlPanelSurfaceReader(
-                isFullScreen: isFullScreen
-            )
-        )
         .alert(
             "Delete chat?",
             isPresented: Binding(
@@ -142,19 +137,8 @@ extension ControlPanelView {
         sidebar
             .frame(width: sidebarWidth)
             .background {
-                Group {
-                    if isSidebarTransitioning {
-                        Rectangle()
-                            .fill(Color(nsColor: .windowBackgroundColor))
-                    } else if isFullScreen {
-                        Rectangle()
-                            .fill(.regularMaterial)
-                    } else {
-                        Color.clear
-                            .glassEffect(.regular, in: Rectangle())
-                    }
-                }
-                .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
+                ControlPanelSidebarMaterial()
+                    .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
             }
             .overlay(alignment: .trailing) {
                 sidebarResizeHandle

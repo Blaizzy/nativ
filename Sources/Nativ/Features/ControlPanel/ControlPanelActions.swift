@@ -6,24 +6,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    var detailTitleLeadingInset: CGFloat {
-        splitColumnVisibility == .detailOnly
-            ? ControlPanelLayout.collapsedSidebarTitleClearance
-            : 0
-    }
-
-    var detailExtendsIntoTitlebar: Bool {
-        if case .extensionPage = sidebarSelection {
-            return true
-        }
-        switch selectedTab {
-        case .scheduled, .dashboard, .system, .models, .extensions, .dev:
-            return true
-        case .chat, .artifacts, .settings:
-            return false
-        }
-    }
-
     func createRecentSession() {
         if selectedTab == .chat, chatWorkspaceMode == .images {
             imageGeneration.beginNewDraft()

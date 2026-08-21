@@ -17,12 +17,6 @@ extension ControlPanelView {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .modifier(
-            ControlPanelDetailSafeArea(
-                isFullScreen: isFullScreen,
-                extendsIntoTitlebar: detailExtendsIntoTitlebar
-            )
-        )
         .background(Color.nativMainContentBackground)
         .alert(
             "Models May Not Fit in Memory",
@@ -60,9 +54,6 @@ extension ControlPanelView {
                 extensionManager: extensionManager,
                 imageGeneration: imageGeneration,
                 showsConfiguration: $isModelConfigurationVisible,
-                conversationWidthReduction: isFullScreen
-                    ? 0
-                    : ControlPanelLayout.titlebarHeight,
                 onExploreImageModels: navigation.openImageModelDiscovery
             )
         case .scheduled:
@@ -70,7 +61,7 @@ extension ControlPanelView {
                 model: model,
                 mcpHost: mcpHost,
                 extensionManager: extensionManager,
-                titleLeadingInset: detailTitleLeadingInset,
+                titleLeadingInset: 0,
                 onOpenRun: { applySidebarSelection(.chat($0)) },
                 onDeleteSessions: { sessionIDs in
                     for sessionID in sessionIDs {
@@ -85,7 +76,7 @@ extension ControlPanelView {
                 downloads: downloads,
                 embeddingLibrary: embeddingLibrary,
                 settings: chromeState.artifactSettings,
-                titleLeadingInset: detailTitleLeadingInset,
+                titleLeadingInset: 0,
                 onOpenModels: { navigation.open(.models) },
                 onOpenChat: { artifact in
                     switch artifact.source {
@@ -114,19 +105,19 @@ extension ControlPanelView {
             StatsView(
                 model: model,
                 dashboard: dashboard,
-                titleLeadingInset: detailTitleLeadingInset
+                titleLeadingInset: 0
             )
         case .system:
             SystemMonitorView(
                 store: systemMonitor,
                 menuBarPreferences: .shared,
-                titleLeadingInset: detailTitleLeadingInset
+                titleLeadingInset: 0
             )
         case .models:
             ModelsViewHost(
                 model: model,
                 showsConfiguration: $isModelConfigurationVisible,
-                titleLeadingInset: detailTitleLeadingInset,
+                titleLeadingInset: 0,
                 speechModelDiscoveryRequest: speechModelDiscoveryRequest,
                 imageModelDiscoveryRequest: imageModelDiscoveryRequest,
                 imageModelDiscoveryCapability: imageModelDiscoveryCapability
@@ -161,7 +152,7 @@ extension ControlPanelView {
             id: pageID,
             context: NativExtensionPageContext(
                 model: model,
-                titleLeadingInset: detailTitleLeadingInset,
+                titleLeadingInset: 0,
                 openSpeechModels: {
                     navigation.openSpeechModelDiscovery()
                 }
@@ -232,20 +223,6 @@ extension ControlPanelView {
 
 }
 
-struct ControlPanelDetailSafeArea: ViewModifier {
-    let isFullScreen: Bool
-    let extendsIntoTitlebar: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if !isFullScreen || extendsIntoTitlebar {
-            content.ignoresSafeArea(.container, edges: .top)
-        } else {
-            content
-        }
-    }
-}
-
 struct ChatWorkspaceView: View {
     let mode: ChatWorkspaceMode
     let onSelectMode: (ChatWorkspaceMode) -> Void
@@ -255,7 +232,6 @@ struct ChatWorkspaceView: View {
     let extensionManager: NativExtensionManager
     let imageGeneration: ImageGenerationViewModel
     @Binding var showsConfiguration: Bool
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
 
     var body: some View {
@@ -270,7 +246,6 @@ struct ChatWorkspaceView: View {
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
-                    conversationWidthReduction: conversationWidthReduction,
                     onExploreImageModels: onExploreImageModels
                 )
             case .images:
@@ -279,7 +254,6 @@ struct ChatWorkspaceView: View {
                     viewModel: imageGeneration,
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
-                    conversationWidthReduction: conversationWidthReduction,
                     onExploreImageModels: { onExploreImageModels(.generate) }
                 )
             }

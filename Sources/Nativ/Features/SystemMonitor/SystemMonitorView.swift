@@ -119,7 +119,7 @@ struct SystemMonitorView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
         .padding(.bottom, 16)
     }
 

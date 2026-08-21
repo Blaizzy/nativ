@@ -28,17 +28,11 @@ struct ControlPanelView: View {
     @State var imageModelDiscoveryRequest: Int
     @State var imageModelDiscoveryCapability: LocalModelCapability
     @State var hoveredFooterControl: FooterControl?
-    @State var splitColumnVisibility: NavigationSplitViewVisibility = .all
+    @State var isSidebarVisible = true
     @State var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
     @State var sidebarDragStartWidth: CGFloat?
-    @State var isSidebarVisuallyVisible = true
-    @State var detailTransitionOffset: CGFloat = 0
-    @State var isSidebarTransitioning = false
-    @State var sidebarTransitionGeneration = 0
     @State var isModelConfigurationVisible = false
     @State var selectedDevSection: DevHubView.Section = .integrations
-    @State var isFullScreen = false
-    @State var windowControlsRefreshTrigger = 0
     @State var isNewChatHovering = false
     @State var isSelectingRecents = false
     @State var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
@@ -106,11 +100,7 @@ struct ControlPanelView: View {
         ZStack(alignment: .leading) {
             HStack(spacing: 0) {
                 Color.clear
-                    .frame(
-                        width: splitColumnVisibility == .detailOnly
-                            ? 0
-                            : sidebarWidth
-                    )
+                    .frame(width: isSidebarVisible ? sidebarWidth : 0)
 
                 detail
                     .frame(
@@ -118,23 +108,23 @@ struct ControlPanelView: View {
                         maxWidth: .infinity,
                         maxHeight: .infinity
                     )
-                    .clipped()
-                    .offset(x: detailTransitionOffset)
             }
-            .animation(nil, value: splitColumnVisibility)
 
             resizableSidebar
-                .compositingGroup()
                 .offset(
-                    x: isSidebarVisuallyVisible
+                    x: isSidebarVisible
                         ? 0
-                        : -(sidebarWidth + 5)
+                        : -sidebarWidth
                 )
-                .allowsHitTesting(isSidebarVisuallyVisible)
-                .accessibilityHidden(!isSidebarVisuallyVisible)
+                .allowsHitTesting(isSidebarVisible)
+                .accessibilityHidden(!isSidebarVisible)
         }
-        .toolbarVisibility(.hidden, for: .windowToolbar)
-        .ignoresSafeArea(.container, edges: .top)
+        .animation(
+            .easeInOut(duration: ControlPanelLayout.sidebarTransitionDuration),
+            value: isSidebarVisible
+        )
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .toolbar(removing: .title)
         .frame(minWidth: 1040, minHeight: 600)
         .environment(\.openExtensionsHubSection) { section in
             selectedExtensionsHubSection = section
@@ -157,23 +147,8 @@ struct ControlPanelView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: selectedTab)
         }
-        .background {
-            ZStack {
-                ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
-                ControlPanelWindowControls(refreshTrigger: windowControlsRefreshTrigger)
-                ControlPanelCollapseButtons(
-                    showsModelConfigurationButton: showsModelConfigurationToggle,
-                    sidebarHelp: isSidebarVisuallyVisible
-                        ? "Hide Sidebar"
-                        : "Show Sidebar",
-                    modelConfigurationHelp: isModelConfigurationVisible
-                        ? "Hide model configuration"
-                        : "Show model configuration",
-                    onToggleSidebar: toggleSidebarVisibility,
-                    onToggleModelConfiguration: toggleModelConfigurationVisibility
-                )
-            }
-            .frame(width: 0, height: 0)
+        .overlay(alignment: .top) {
+            controlPanelTopControls
         }
         .onAppear {
             applySidebarSelection(
@@ -239,22 +214,6 @@ struct ControlPanelView: View {
             imageModelDiscoveryCapability = capability
         }
         .onReceive(
-            NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)
-        ) { _ in
-            isFullScreen = true
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)
-        ) { _ in
-            windowControlsRefreshTrigger += 1
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)
-        ) { _ in
-            isFullScreen = false
-            windowControlsRefreshTrigger += 1
-        }
-        .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
         ) { _ in
             launchAtLogin.refresh()
@@ -280,6 +239,52 @@ struct ControlPanelView: View {
         } message: {
             Text(contentState.launchAtLoginErrorMessage ?? "An unknown error occurred.")
         }
+    }
+
+    private var controlPanelTopControls: some View {
+        HStack(spacing: 0) {
+            controlPanelTopButton(
+                systemName: "sidebar.left",
+                help: isSidebarVisible ? "Hide Sidebar" : "Show Sidebar",
+                action: toggleSidebarVisibility
+            )
+
+            Spacer(minLength: 0)
+
+            if showsModelConfigurationToggle {
+                controlPanelTopButton(
+                    systemName: "sidebar.right",
+                    help: isModelConfigurationVisible
+                        ? "Hide model configuration"
+                        : "Show model configuration",
+                    action: toggleModelConfigurationVisibility
+                )
+            }
+        }
+        .padding(.leading, ControlPanelLayout.topControlsLeadingPadding)
+        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding)
+        .padding(.top, ControlPanelLayout.topControlsTopPadding)
+        .ignoresSafeArea(.container, edges: .top)
+    }
+
+    private func controlPanelTopButton(
+        systemName: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(
+                    width: ControlPanelLayout.topControlSize,
+                    height: ControlPanelLayout.topControlSize
+                )
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 }
 

@@ -34,6 +34,7 @@ struct ExtensionsHubView: View {
         HStack(spacing: 0) {
             subnav
             Divider()
+                .ignoresSafeArea(.container, edges: .top)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -73,7 +74,9 @@ struct ExtensionsHubView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .padding(.bottom, 12)
         .frame(width: 188)
     }
 
@@ -134,7 +137,8 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 content()
             }
             .padding(.horizontal, 28)
-            .padding(.vertical, 24)
+            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .padding(.bottom, 24)
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
