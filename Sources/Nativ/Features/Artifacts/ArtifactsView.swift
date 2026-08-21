@@ -573,6 +573,7 @@ struct ArtifactsView: View {
                 }
                 renameTarget = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { renameTarget = nil }
         }
     }

@@ -82,6 +82,7 @@ struct ScheduledTasksView: View {
                 delete(task)
                 pendingDeletion = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeletion = nil
             }

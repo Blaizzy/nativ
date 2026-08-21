@@ -157,6 +157,7 @@ struct AudioView: View {
                 Button("Open System Settings") {
                     captureLibrary.openPermissionSettings()
                 }
+                .keyboardShortcut(.defaultAction)
                 Button("Not Now", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
@@ -164,6 +165,7 @@ struct AudioView: View {
                 Button("OK", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
+                .keyboardShortcut(.defaultAction)
             }
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
