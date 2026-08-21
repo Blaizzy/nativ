@@ -215,6 +215,18 @@ struct ChatComposer: View {
                     .padding(.bottom, 8)
                 }
 
+                if !viewModel.pendingFolderAttachments.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(viewModel.pendingFolderAttachments) { folder in
+                            ChatPendingFolderAttachmentView(folder: folder) {
+                                viewModel.removePendingFolderAttachment(folder.id)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+
                 if !attachmentNotices.isEmpty {
                     ChatAttachmentNoticesView(
                         notices: attachmentNotices,
@@ -341,6 +353,15 @@ struct ChatComposer: View {
             isWebReadAvailable: isWebReadAvailable,
             webReadProviderLabel: webReadProviderLabel,
             onAttachImages: { dismissAddPanelAndPerform(viewModel.chooseAttachments) },
+            onAddFolder: {
+                dismissAddPanelAndPerform {
+                    viewModel.chooseFolderAttachment(
+                        contextLimit: model.metrics?.server.effectiveContextLimit
+                            ?? model.metrics?.server.configuredContextLimit
+                            ?? model.metrics?.server.loadedContextSize
+                    )
+                }
+            },
             onPasteImage: { dismissAddPanelAndPerform(viewModel.pasteImageFromClipboard) },
             onCaptureScreenshot: { dismissAddPanelAndPerform(viewModel.captureScreenshot) },
             onToggleWebSearch: {
@@ -1622,6 +1643,7 @@ struct ChatComposerActionPanel: View {
     var isWebReadAvailable = false
     var webReadProviderLabel: String?
     let onAttachImages: () -> Void
+    var onAddFolder: (() -> Void)? = nil
     let onPasteImage: () -> Void
     let onCaptureScreenshot: () -> Void
     var onToggleWebSearch: () -> Void = {}
@@ -1639,6 +1661,15 @@ struct ChatComposerActionPanel: View {
                         systemName: "doc.badge.plus",
                         action: onAttachImages
                     )
+
+                    if let onAddFolder {
+                        ChatComposerActionRow(
+                            title: "Upload folder",
+                            detail: "Add text files from a folder within the model context limit",
+                            systemName: "folder.badge.plus",
+                            action: onAddFolder
+                        )
+                    }
 
                     if canPasteImage {
                         ChatComposerActionRow(

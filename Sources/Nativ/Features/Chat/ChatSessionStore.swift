@@ -330,7 +330,11 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let requestContent = [content, documentContext ?? ""]
+            let requestContent = [
+                folderAttachments.map(\.text).joined(separator: "\n\n"),
+                content,
+                documentContext ?? ""
+            ]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
             let imageParts = includesImages

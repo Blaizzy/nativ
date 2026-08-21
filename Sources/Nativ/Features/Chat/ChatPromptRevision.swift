@@ -11,6 +11,7 @@ struct ChatPromptRevision: Equatable {
         messageID: UUID,
         content: String,
         attachments: [ChatImageAttachment],
+        folderAttachments: [ChatFolderAttachment] = [],
         modelID: String,
         createdAt: Date = Date(),
         in messages: [ChatTranscriptMessage]
@@ -22,7 +23,7 @@ struct ChatPromptRevision: Equatable {
         }
 
         let content = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !content.isEmpty || !attachments.isEmpty else {
+        guard !content.isEmpty || !attachments.isEmpty || !folderAttachments.isEmpty else {
             return nil
         }
 
@@ -31,6 +32,7 @@ struct ChatPromptRevision: Equatable {
         revisedMessage.modelID = modelID
         revisedMessage.createdAt = createdAt
         revisedMessage.imageAttachments = attachments
+        revisedMessage.folderAttachments = folderAttachments
 
         var revisedMessages = Array(messages[..<messageIndex])
         revisedMessages.append(revisedMessage)
