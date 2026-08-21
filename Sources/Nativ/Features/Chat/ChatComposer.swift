@@ -433,7 +433,7 @@ struct ChatComposer: View {
     }
 
     private var languageModels: [LocalModel] {
-        localLibrary.models.filter { $0.capabilities.contains(.text) }
+        localLibrary.models.filter { $0.isEligibleForLanguageModelPicker }
     }
 
     private var selectedModelID: String? {

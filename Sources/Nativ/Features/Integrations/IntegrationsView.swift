@@ -47,6 +47,8 @@ final class IntegrationsViewModel: ObservableObject {
                         with: [.imageGeneration, .imageEditing]
                     )
                     && !$0.capabilities.contains(.embeddings)
+                    && !$0.capabilities.contains(.drafter)
+                    && !$0.capabilities.contains(.reranking)
             }
             .map(IntegrationModelDescriptor.init)
     }

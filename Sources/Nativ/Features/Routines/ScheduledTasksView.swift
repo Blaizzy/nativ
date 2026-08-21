@@ -245,7 +245,7 @@ struct ScheduledTasksView: View {
 
     @ViewBuilder
     private func editor(for draft: RoutineDraft) -> some View {
-        let textModels = modelLibrary.models.filter { $0.capabilities.contains(.text) }
+        let textModels = modelLibrary.models.filter { $0.isEligibleForLanguageModelPicker }
         let modelIDs = textModels.map(\.repoID)
         let selectedModelID = draft.routine.modelID
         let availableModelIDs = (

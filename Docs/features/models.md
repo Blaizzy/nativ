@@ -29,9 +29,10 @@ Each model carries a set of capabilities (`LocalModelCapability`):
 | `tools` | Supports tool calling. |
 | `drafter` | Usable as a speculative-decoding draft model. |
 
-Capability determines where a model is offered: only `text` (and non-image `vision`) models
-appear in the conversation model picker; image, speech, and embedding models are selected in
-their own slots.
+Capability determines where a model is offered: chat model pickers use
+`isEligibleForLanguageModelPicker` — `text` (and non-image `vision`) models qualify, while
+`drafter` and `reranking` models are always excluded. Image, speech, and embedding models are
+selected in their own slots.
 
 ## Downloading
 
