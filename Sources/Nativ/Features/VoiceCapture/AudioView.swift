@@ -179,10 +179,7 @@ struct AudioView: View {
         }
         .alert(
             "Delete dictation?",
-            isPresented: Binding(
-                get: { pendingDeleteDictation != nil },
-                set: { if !$0 { pendingDeleteDictation = nil } }
-            ),
+            isPresented: isPresentingDictationDeletion,
             presenting: pendingDeleteDictation
         ) { record in
             Button("Delete", role: .destructive) {
@@ -210,10 +207,7 @@ struct AudioView: View {
         }
         .alert(
             "Delete recording?",
-            isPresented: Binding(
-                get: { pendingDeleteRecording != nil },
-                set: { if !$0 { pendingDeleteRecording = nil } }
-            ),
+            isPresented: isPresentingRecordingDeletion,
             presenting: pendingDeleteRecording
         ) { record in
             Button("Delete", role: .destructive) {
@@ -930,6 +924,28 @@ struct AudioView: View {
         let count = pendingDictationDeletion.count
         let itemName = count == 1 ? "dictation" : "dictations"
         return "Delete \(count) \(itemName)?"
+    }
+
+    private var isPresentingDictationDeletion: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteDictation != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteDictation = nil
+                }
+            }
+        )
+    }
+
+    private var isPresentingRecordingDeletion: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteRecording != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteRecording = nil
+                }
+            }
+        )
     }
 
     private var recordingDeletionConfirmationTitle: String {
