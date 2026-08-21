@@ -56,7 +56,7 @@ struct ControlPanelRecentSessionRow: View {
                             if !focused, isRenaming { commitRename() }
                         }
                 }
-                .padding(.trailing, 52)
+                .padding(.trailing, isHovering && !isSelecting ? 52 : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
             } else {
@@ -95,7 +95,7 @@ struct ControlPanelRecentSessionRow: View {
 
                         Spacer(minLength: 0)
                     }
-                    .padding(.trailing, 52)
+                    .padding(.trailing, isHovering && !isSelecting ? 52 : 0)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(.rect)
                     .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)

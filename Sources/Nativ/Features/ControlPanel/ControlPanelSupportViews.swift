@@ -15,7 +15,7 @@ enum FooterControl {
 enum ControlPanelLayout {
     static let sidebarMinimumWidth: CGFloat = 220
     static let sidebarIdealWidth: CGFloat = 260
-    static let sidebarMaximumWidth: CGFloat = 320
+    static let sidebarMaximumWidth: CGFloat = 480
     static let detailMinimumWidth: CGFloat = 720
     static let titlebarHeight: CGFloat = 52
     static let sidebarBrandTopClearance: CGFloat = 46
