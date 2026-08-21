@@ -298,14 +298,7 @@ private struct ExtensionRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 if isSelecting {
-                    Button(action: onToggleSelection) {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Select \(record.manifest.displayName)")
-                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                    NativBulkSelectionCheckbox(isSelected: isSelected)
                 }
 
                 NativTintedIconTile(symbol: record.manifest.systemImage, size: 44)
@@ -369,6 +362,12 @@ private struct ExtensionRow: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelected,
+            accessibilityLabel: "Select \(record.manifest.displayName)",
+            action: onToggleSelection
         )
     }
 
@@ -708,15 +707,8 @@ private struct SkillRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if isSelecting, let onToggleSelection {
-                Button(action: onToggleSelection) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Select \(skill.name.isEmpty ? "Untitled skill" : skill.name)")
-                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            if isSelecting, onToggleSelection != nil {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -758,6 +750,13 @@ private struct SkillRow: View {
             }
         }
         .padding(.vertical, 11)
+        .nativBulkSelectable(
+            isSelecting: isSelecting && onToggleSelection != nil,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select \(skill.name.isEmpty ? "Untitled skill" : skill.name)",
+            action: onToggleSelection ?? {}
+        )
     }
 }
 

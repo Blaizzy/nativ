@@ -428,15 +428,8 @@ private struct ToolRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if isSelecting, let onToggleSelection {
-                Button(action: onToggleSelection) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Select \(tool.title)")
-                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            if isSelecting, onToggleSelection != nil {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -488,6 +481,13 @@ private struct ToolRow: View {
             guard !isSelecting else { return }
             onInspect()
         }
+        .nativBulkSelectable(
+            isSelecting: isSelecting && onToggleSelection != nil,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select \(tool.title)",
+            action: onToggleSelection ?? {}
+        )
     }
 }
 
