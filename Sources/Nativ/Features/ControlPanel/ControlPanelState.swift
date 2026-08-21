@@ -1,0 +1,247 @@
+import AppKit
+import Combine
+import NativExtensionSDK
+import NativServerKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+@MainActor
+final class ControlPanelDependencies: ObservableObject {
+    lazy var chat = ChatViewModel()
+    lazy var mcpHost = MCPHostManager()
+    lazy var imageGeneration = ImageGenerationViewModel()
+    lazy var artifacts = ArtifactStore()
+    lazy var dashboard = DashboardViewModel()
+    lazy var systemMonitor = SystemMonitorStore()
+    lazy var launchAtLogin = LaunchAtLoginController()
+    lazy var downloads = HuggingFaceDownloadManager.shared
+    lazy var embeddingLibrary = LocalModelLibrary()
+    lazy var routineStore = RoutineStore.shared
+    lazy var routineModelLibrary = LocalModelLibrary()
+}
+
+/// Filters `NativModel` down to values that can change control-panel chrome.
+@MainActor
+final class ControlPanelChromeState: ObservableObject {
+    struct ArtifactSettings: Equatable {
+        let serverPort: Int
+        let serverAPIKey: String?
+        let modelSearchPath: String
+        let localModelSearchPaths: LocalModelSearchPaths
+    }
+
+    private struct SettingsProjection: Equatable {
+        let languageModelID: String?
+        let sidebarPinnedCollapsed: Bool
+        let sidebarFoldersCollapsed: Bool
+        let sidebarSessionsCollapsed: Bool
+        let artifactSettings: ArtifactSettings
+    }
+
+    private struct Snapshot: Equatable {
+        var isRunning: Bool
+        var modelSwitchInProgress: Bool
+        var modelLoadingPercentage: Int?
+        var metricsLoading: Bool
+        var modelLoadFailure: ModelLoadFailure?
+        var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
+        var languageModelID: String?
+        var sidebarPinnedCollapsed: Bool
+        var sidebarFoldersCollapsed: Bool
+        var sidebarSessionsCollapsed: Bool
+        var artifactSettings: ArtifactSettings
+    }
+
+    @Published private var snapshot: Snapshot
+    private var cancellables = Set<AnyCancellable>()
+
+    init(model: NativModel) {
+        let settings = Self.settingsProjection(model.settings)
+        snapshot = Snapshot(
+            isRunning: model.isRunning,
+            modelSwitchInProgress: model.modelSwitchInProgress,
+            modelLoadingPercentage: Self.loadingPercentage(model.modelLoadingProgress),
+            metricsLoading: model.metricsLoading,
+            modelLoadFailure: model.modelLoadFailure,
+            modelPreloadMemoryWarning: model.modelPreloadMemoryWarning,
+            languageModelID: settings.languageModelID,
+            sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
+            sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
+            sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
+            artifactSettings: settings.artifactSettings
+        )
+
+        model.$isRunning
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.isRunning = value } }
+            .store(in: &cancellables)
+        model.$modelSwitchInProgress
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelSwitchInProgress = value } }
+            .store(in: &cancellables)
+        model.$modelLoadingProgress
+            .map(Self.loadingPercentage)
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelLoadingPercentage = value } }
+            .store(in: &cancellables)
+        model.$metricsLoading
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.metricsLoading = value } }
+            .store(in: &cancellables)
+        model.$modelLoadFailure
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelLoadFailure = value } }
+            .store(in: &cancellables)
+        model.$modelPreloadMemoryWarning
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.modelPreloadMemoryWarning = value } }
+            .store(in: &cancellables)
+        model.$settings
+            .map(Self.settingsProjection)
+            .removeDuplicates()
+            .sink { [weak self] value in
+                self?.update {
+                    $0.languageModelID = value.languageModelID
+                    $0.sidebarPinnedCollapsed = value.sidebarPinnedCollapsed
+                    $0.sidebarFoldersCollapsed = value.sidebarFoldersCollapsed
+                    $0.sidebarSessionsCollapsed = value.sidebarSessionsCollapsed
+                    $0.artifactSettings = value.artifactSettings
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    var isRunning: Bool { snapshot.isRunning }
+    var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var modelLoadFailure: ModelLoadFailure? { snapshot.modelLoadFailure }
+    var modelPreloadMemoryWarning: ModelPreloadMemoryWarning? {
+        snapshot.modelPreloadMemoryWarning
+    }
+    var sidebarPinnedCollapsed: Bool { snapshot.sidebarPinnedCollapsed }
+    var sidebarFoldersCollapsed: Bool { snapshot.sidebarFoldersCollapsed }
+    var sidebarSessionsCollapsed: Bool { snapshot.sidebarSessionsCollapsed }
+    var artifactSettings: ArtifactSettings { snapshot.artifactSettings }
+
+    var isModelLoading: Bool {
+        snapshot.modelSwitchInProgress
+            || (snapshot.languageModelID != nil
+                && (snapshot.metricsLoading || snapshot.modelLoadingPercentage != nil))
+    }
+
+    var modelLoadingPercentageText: String? {
+        snapshot.modelLoadingPercentage.map { "\($0)%" }
+    }
+
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
+    }
+
+    private static func loadingPercentage(_ progress: Double?) -> Int? {
+        progress.map { min(max(Int(($0 * 100).rounded()), 0), 100) }
+    }
+
+    private static func settingsProjection(_ value: NativSettings) -> SettingsProjection {
+        let settings = value.normalized()
+        return SettingsProjection(
+            languageModelID: settings.languageModelID,
+            sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
+            sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
+            sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
+            artifactSettings: ArtifactSettings(
+                serverPort: settings.serverPort,
+                serverAPIKey: settings.serverAPIKey,
+                modelSearchPath: settings.modelSearchPath,
+                localModelSearchPaths: settings.localModelSearchPaths
+            )
+        )
+    }
+}
+
+/// Projects the remaining low-frequency global presentation state. High-frequency
+/// page state remains observed by its leaf views.
+@MainActor
+final class ControlPanelContentState: ObservableObject {
+    private struct Snapshot: Equatable {
+        var extensionSidebarContributions: [NativSidebarContribution]
+        var routines: [Routine]
+        var routineRuns: [RoutineRun]
+        var launchAtLoginErrorMessage: String?
+    }
+
+    @Published private var snapshot: Snapshot
+    private var cancellables = Set<AnyCancellable>()
+
+    init(
+        dependencies: ControlPanelDependencies,
+        extensionManager: NativExtensionManager
+    ) {
+        snapshot = Snapshot(
+            extensionSidebarContributions: extensionManager.enabledSidebarContributions,
+            routines: dependencies.routineStore.routines,
+            routineRuns: dependencies.routineStore.runs,
+            launchAtLoginErrorMessage: dependencies.launchAtLogin.errorMessage
+        )
+
+        extensionManager.$records
+            .map(Self.enabledSidebarContributions)
+            .removeDuplicates()
+            .sink { [weak self] value in
+                self?.update { $0.extensionSidebarContributions = value }
+            }
+            .store(in: &cancellables)
+        dependencies.routineStore.$routines
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.routines = value } }
+            .store(in: &cancellables)
+        dependencies.routineStore.$runs
+            .removeDuplicates()
+            .sink { [weak self] value in self?.update { $0.routineRuns = value } }
+            .store(in: &cancellables)
+        dependencies.launchAtLogin.$errorMessage
+            .removeDuplicates()
+            .sink { [weak self] value in
+                self?.update { $0.launchAtLoginErrorMessage = value }
+            }
+            .store(in: &cancellables)
+    }
+
+    var extensionSidebarContributions: [NativSidebarContribution] {
+        snapshot.extensionSidebarContributions
+    }
+    var launchAtLoginErrorMessage: String? { snapshot.launchAtLoginErrorMessage }
+
+    func routine(forSession sessionID: UUID) -> Routine? {
+        snapshot.routines.first { $0.sourceSessionID == sessionID }
+    }
+
+    func isRoutineRunning(forSession sessionID: UUID) -> Bool {
+        guard let routine = routine(forSession: sessionID) else { return false }
+        return snapshot.routineRuns.contains {
+            $0.routineID == routine.id && $0.status == .running
+        }
+    }
+
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
+    }
+
+    private static func enabledSidebarContributions(
+        records: [NativExtensionRecord]
+    ) -> [NativSidebarContribution] {
+        records
+            .filter { $0.isEnabled && $0.hasRuntime }
+            .flatMap(\.manifest.contributions.sidebar)
+            .sorted {
+                if $0.order == $1.order {
+                    return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                }
+                return $0.order < $1.order
+            }
+    }
+}
