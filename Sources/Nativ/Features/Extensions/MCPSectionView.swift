@@ -7,8 +7,7 @@ struct MCPSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: MCPServerConfig?
     @State private var pendingDelete: MCPServerConfig?
-    @State private var isSelectingCustomServers = false
-    @State private var selectedCustomServerIDs = Set<MCPServerConfig.ID>()
+    @State private var customServerSelection = NativBulkSelection<MCPServerConfig.ID>()
     @State private var pendingCustomServerDeletion: [MCPServerConfig] = []
     @State private var isConfirmingCustomServerDeletion = false
 
@@ -19,11 +18,8 @@ struct MCPSectionView: View {
             title: "MCP",
             subtitle: "Connect Model Context Protocol servers so tool-capable models can use their tools."
         ) {
-            Button(isSelectingCustomServers ? "Done" : "Select") {
-                isSelectingCustomServers.toggle()
-                if !isSelectingCustomServers {
-                    selectedCustomServerIDs.removeAll()
-                }
+            Button(customServerSelection.isActive ? "Done" : "Select") {
+                customServerSelection.toggleMode()
             }
             .disabled(customServers.isEmpty)
 
@@ -56,7 +52,7 @@ struct MCPSectionView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
                         } else {
-                            if isSelectingCustomServers {
+                            if customServerSelection.isActive {
                                 customServerSelectionBar
                                     .padding(.bottom, 8)
                             }
@@ -103,9 +99,8 @@ struct MCPSectionView: View {
             Button("Delete", role: .destructive) {
                 let ids = Set(pendingCustomServerDeletion.map(\.id))
                 model.settings.mcpServers.removeAll { ids.contains($0.id) }
-                selectedCustomServerIDs.subtract(ids)
+                customServerSelection.finish()
                 pendingCustomServerDeletion = []
-                isSelectingCustomServers = false
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
@@ -160,59 +155,31 @@ struct MCPSectionView: View {
             onToggle: { toggle(server) },
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
-            isSelecting: isSelectingCustomServers,
-            isSelected: selectedCustomServerIDs.contains(server.id),
-            onToggleSelection: { toggleCustomServerSelection(server) },
+            isSelecting: customServerSelection.isActive,
+            isSelected: customServerSelection.contains(server.id),
+            onToggleSelection: { customServerSelection.toggle(server.id) },
             onDelete: { pendingDelete = server }
         )
     }
 
     private var selectedCustomServers: [MCPServerConfig] {
-        customServers.filter { selectedCustomServerIDs.contains($0.id) }
+        customServers.filter { customServerSelection.contains($0.id) }
     }
 
     private var customServerSelectionBar: some View {
         let selections = selectedCustomServers
-        return HStack(spacing: 10) {
-            Text("\(selections.count) selected")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Button(
-                selectedCustomServerIDs.count == customServers.count
-                    ? "Deselect All" : "Select All"
-            ) {
-                if selectedCustomServerIDs.count == customServers.count {
-                    selectedCustomServerIDs.removeAll()
-                } else {
-                    selectedCustomServerIDs = Set(customServers.map(\.id))
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Button(role: .destructive) {
+        let serverIDs = Set(customServers.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: customServerSelection.includesAll(serverIDs),
+            onToggleAll: {
+                customServerSelection.toggleAll(serverIDs)
+            },
+            onDelete: {
                 pendingCustomServerDeletion = selections
                 isConfirmingCustomServerDeletion = true
-            } label: {
-                Label("Delete", systemImage: "trash")
             }
-            .disabled(selections.isEmpty)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
-    }
-
-    private func toggleCustomServerSelection(_ server: MCPServerConfig) {
-        if selectedCustomServerIDs.contains(server.id) {
-            selectedCustomServerIDs.remove(server.id)
-        } else {
-            selectedCustomServerIDs.insert(server.id)
-        }
     }
 
     private func toggle(_ entry: MCPCatalogEntry) {

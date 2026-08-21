@@ -165,8 +165,7 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
-    @State private var isSelectingExtensions = false
-    @State private var selectedExtensionIDs = Set<NativExtensionRecord.ID>()
+    @State private var extensionSelection = NativBulkSelection<NativExtensionRecord.ID>()
     @State private var pendingExtensionRemoval: [NativExtensionRecord] = []
     @State private var isConfirmingExtensionRemoval = false
 
@@ -175,7 +174,7 @@ private struct ExtensionsSectionView: View {
     }
 
     private var selectedExtensions: [NativExtensionRecord] {
-        removableExtensions.filter { selectedExtensionIDs.contains($0.id) }
+        removableExtensions.filter { extensionSelection.contains($0.id) }
     }
 
     var body: some View {
@@ -183,11 +182,8 @@ private struct ExtensionsSectionView: View {
             title: "Extensions",
             subtitle: "Packages that add features to Nativ."
         ) {
-            Button(isSelectingExtensions ? "Done" : "Select") {
-                isSelectingExtensions.toggle()
-                if !isSelectingExtensions {
-                    selectedExtensionIDs.removeAll()
-                }
+            Button(extensionSelection.isActive ? "Done" : "Select") {
+                extensionSelection.toggleMode()
             }
             .disabled(removableExtensions.isEmpty)
         } content: {
@@ -198,16 +194,16 @@ private struct ExtensionsSectionView: View {
                 )
             } else {
                 VStack(spacing: 12) {
-                    if isSelectingExtensions {
+                    if extensionSelection.isActive {
                         extensionSelectionBar
                     }
                     ForEach(manager.records) { record in
                         ExtensionRow(
                             record: record,
                             manager: manager,
-                            isSelecting: isSelectingExtensions && !record.isRemoved,
-                            isSelected: selectedExtensionIDs.contains(record.id),
-                            onToggleSelection: { toggleSelection(record) },
+                            isSelecting: extensionSelection.isActive && !record.isRemoved,
+                            isSelected: extensionSelection.contains(record.id),
+                            onToggleSelection: { extensionSelection.toggle(record.id) },
                             onRemove: {
                                 pendingExtensionRemoval = [record]
                                 isConfirmingExtensionRemoval = true
@@ -227,9 +223,8 @@ private struct ExtensionsSectionView: View {
             Button("Remove", role: .destructive) {
                 let ids = pendingExtensionRemoval.map(\.id)
                 ids.forEach { manager.remove(extensionID: $0) }
-                selectedExtensionIDs.subtract(ids)
+                extensionSelection.finish()
                 pendingExtensionRemoval = []
-                isSelectingExtensions = false
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
@@ -242,47 +237,19 @@ private struct ExtensionsSectionView: View {
 
     private var extensionSelectionBar: some View {
         let selections = selectedExtensions
-        return HStack(spacing: 10) {
-            Text("\(selections.count) selected")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Button(
-                selectedExtensionIDs.count == removableExtensions.count
-                    ? "Deselect All" : "Select All"
-            ) {
-                if selectedExtensionIDs.count == removableExtensions.count {
-                    selectedExtensionIDs.removeAll()
-                } else {
-                    selectedExtensionIDs = Set(removableExtensions.map(\.id))
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Button(role: .destructive) {
+        let removableIDs = Set(removableExtensions.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: extensionSelection.includesAll(removableIDs),
+            deleteTitle: "Remove",
+            onToggleAll: {
+                extensionSelection.toggleAll(removableIDs)
+            },
+            onDelete: {
                 pendingExtensionRemoval = selections
                 isConfirmingExtensionRemoval = true
-            } label: {
-                Label("Remove", systemImage: "trash")
             }
-            .disabled(selections.isEmpty)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
-    }
-
-    private func toggleSelection(_ record: NativExtensionRecord) {
-        guard !record.isRemoved else { return }
-        if selectedExtensionIDs.contains(record.id) {
-            selectedExtensionIDs.remove(record.id)
-        } else {
-            selectedExtensionIDs.insert(record.id)
-        }
     }
 }
 
@@ -532,8 +499,7 @@ private struct SkillsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: NativSkill?
     @State private var pendingDelete: NativSkill?
-    @State private var isSelectingSkills = false
-    @State private var selectedSkillIDs = Set<NativSkill.ID>()
+    @State private var skillSelection = NativBulkSelection<NativSkill.ID>()
     @State private var pendingSkillDeletion: [NativSkill] = []
     @State private var isConfirmingSkillDeletion = false
 
@@ -542,11 +508,8 @@ private struct SkillsSectionView: View {
             title: "Skills",
             subtitle: "Reusable instructions the model can apply."
         ) {
-            Button(isSelectingSkills ? "Done" : "Select") {
-                isSelectingSkills.toggle()
-                if !isSelectingSkills {
-                    selectedSkillIDs.removeAll()
-                }
+            Button(skillSelection.isActive ? "Done" : "Select") {
+                skillSelection.toggleMode()
             }
             .disabled(model.settings.skills.isEmpty)
 
@@ -563,7 +526,7 @@ private struct SkillsSectionView: View {
                         text: "No skills yet. Add reusable instructions the model can apply."
                     )
                 } else {
-                    if isSelectingSkills {
+                    if skillSelection.isActive {
                         skillSelectionBar
                             .padding(.bottom, 8)
                     }
@@ -571,11 +534,11 @@ private struct SkillsSectionView: View {
                         if index > 0 { Divider() }
                         SkillRow(
                             skill: skill,
-                            isSelecting: isSelectingSkills,
-                            isSelected: selectedSkillIDs.contains(skill.id),
+                            isSelecting: skillSelection.isActive,
+                            isSelected: skillSelection.contains(skill.id),
                             onToggle: { toggle(skill) },
                             onEdit: { editing = skill },
-                            onToggleSelection: { toggleSkillSelection(skill) },
+                            onToggleSelection: { skillSelection.toggle(skill.id) },
                             onDelete: { pendingDelete = skill }
                         )
                     }
@@ -616,9 +579,8 @@ private struct SkillsSectionView: View {
             Button("Delete", role: .destructive) {
                 let ids = Set(pendingSkillDeletion.map(\.id))
                 model.settings.skills.removeAll { ids.contains($0.id) }
-                selectedSkillIDs.subtract(ids)
+                skillSelection.finish()
                 pendingSkillDeletion = []
-                isSelectingSkills = false
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
@@ -630,56 +592,28 @@ private struct SkillsSectionView: View {
     }
 
     private var selectedSkills: [NativSkill] {
-        model.settings.skills.filter { selectedSkillIDs.contains($0.id) }
+        model.settings.skills.filter { skillSelection.contains($0.id) }
     }
 
     private var skillSelectionBar: some View {
         let selections = selectedSkills
-        return HStack(spacing: 10) {
-            Text("\(selections.count) selected")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Button(
-                selectedSkillIDs.count == model.settings.skills.count
-                    ? "Deselect All" : "Select All"
-            ) {
-                if selectedSkillIDs.count == model.settings.skills.count {
-                    selectedSkillIDs.removeAll()
-                } else {
-                    selectedSkillIDs = Set(model.settings.skills.map(\.id))
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Button(role: .destructive) {
+        let skillIDs = Set(model.settings.skills.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: skillSelection.includesAll(skillIDs),
+            onToggleAll: {
+                skillSelection.toggleAll(skillIDs)
+            },
+            onDelete: {
                 pendingSkillDeletion = selections
                 isConfirmingSkillDeletion = true
-            } label: {
-                Label("Delete", systemImage: "trash")
             }
-            .disabled(selections.isEmpty)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
     }
 
     private func toggle(_ skill: NativSkill) {
         guard let i = model.settings.skills.firstIndex(where: { $0.id == skill.id }) else { return }
         model.settings.skills[i].isEnabled.toggle()
-    }
-
-    private func toggleSkillSelection(_ skill: NativSkill) {
-        if selectedSkillIDs.contains(skill.id) {
-            selectedSkillIDs.remove(skill.id)
-        } else {
-            selectedSkillIDs.insert(skill.id)
-        }
     }
 
     private func delete(_ skill: NativSkill) {
