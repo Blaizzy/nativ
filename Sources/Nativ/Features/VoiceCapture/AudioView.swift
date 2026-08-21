@@ -3096,7 +3096,9 @@ private final class ShortcutRecorderNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func flagsChanged(with event: NSEvent) {
-        let modifiers = VoiceShortcutModifiers(eventFlags: event.modifierFlags)
+        let modifiers = VoiceShortcutModifiers(
+            cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+        )
         if modifiers.isEmpty {
             if !pendingModifiers.isEmpty {
                 onCapture?(
