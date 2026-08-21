@@ -75,3 +75,12 @@ A draft model can accelerate a larger target model. Enable `speculativeDecodingE
 `draftModelID`; the draft must be capability-compatible with the target. Draft kind and block
 size are configurable (`draftKind`, `draftBlockSize`). Only `drafter`-eligible models are offered
 as drafts, and a mismatched hidden size is flagged as an incompatible target.
+
+Drafters are also listed in the chat composer's model menu, in their own section below the chat
+models. Selecting one does not load it as the main model — it enables speculative decoding with
+that drafter on its compatible target
+([`DrafterTargetResolver`](../../Sources/Nativ/Features/Models/LocalModelDiscovery.swift)): the
+current chat model when compatible, otherwise the name-derived pair (for example
+`Qwen3.8-27B-MTP-8bit` → `Qwen3.8-27B-8bit`), otherwise the first hidden-size-compatible chat
+model. When no compatible target is installed, the menu entry notes that a compatible chat model
+is needed and selecting it does nothing.

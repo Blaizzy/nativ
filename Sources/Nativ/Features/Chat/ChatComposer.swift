@@ -119,6 +119,7 @@ struct ChatComposer: View {
     let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
+    @State private var isApplyingDrafterSelection = false
     @State private var showsKits = false
     @State private var showsCapabilities = false
     @State private var showsAddPanel = false
@@ -302,6 +303,12 @@ struct ChatComposer: View {
             applyInitialReasoningDefaultIfNeeded(modelID: selectedModelID, models: models)
         }
         .onChange(of: selectedModelID) { oldModelID, newModelID in
+            // Drafter selection writes the switched model's full configuration itself;
+            // re-running the generic profile swap here would corrupt it.
+            if isApplyingDrafterSelection {
+                isApplyingDrafterSelection = false
+                return
+            }
             applyModelConfigOnSwitch(from: oldModelID, to: newModelID, models: localLibrary.models)
         }
         .onChange(of: model.settings.currentModelProfile) { _, _ in
@@ -428,12 +435,24 @@ struct ChatComposer: View {
             emptyStateActionTitle: nil,
             onEmptyStateAction: nil,
             onSelectModel: select,
-            onSwitchModel: { model.switchLanguageModel(to: $0) }
+            onSwitchModel: { model.switchLanguageModel(to: $0) },
+            drafters: drafterModels,
+            selectedDrafterID: selectedDrafterID,
+            onSelectDrafter: selectDrafter
         )
     }
 
     private var languageModels: [LocalModel] {
         localLibrary.models.filter { $0.isEligibleForLanguageModelPicker }
+    }
+
+    private var drafterModels: [LocalModel] {
+        localLibrary.models.filter { $0.drafterKind != nil }
+    }
+
+    private var selectedDrafterID: String? {
+        guard model.settings.speculativeDecodingActive else { return nil }
+        return model.settings.draftModelID
     }
 
     private var selectedModelID: String? {
@@ -659,6 +678,46 @@ struct ChatComposer: View {
             for: .language,
             availableModels: localLibrary.models
         ) {}
+    }
+
+    /// Picking a drafter from the model menu enables speculative decoding on its
+    /// compatible chat model instead of loading the drafter as the main model.
+    private func selectDrafter(_ drafter: LocalModel) {
+        let currentID = model.settings.normalized().languageModelID
+        guard let target = DrafterTargetResolver.compatibleTarget(
+            for: drafter,
+            currentModelID: currentID,
+            models: localLibrary.models
+        ) else { return }
+
+        var next = model.settings
+        if let currentID, !currentID.isEmpty, currentID != target.repoID {
+            next.rememberProfile(forModel: currentID)
+        }
+        if currentID != target.repoID, let existing = next.modelProfile(for: target.repoID) {
+            next.applyProfile(existing)
+        }
+        next.speculativeDecodingEnabled = true
+        next.draftModelID = drafter.repoID
+        next.draftKind = "auto"
+        next.rememberProfile(forModel: target.repoID)
+
+        if target.repoID == currentID {
+            model.settings = next.normalized()
+            model.restartServer()
+            return
+        }
+
+        model.requestPreloadedModelSwitch(
+            to: target,
+            for: .language,
+            availableModels: localLibrary.models
+        ) {
+            isApplyingDrafterSelection = true
+            var switched = next
+            switched.setModelID(target.repoID, for: .language)
+            model.settings = switched.normalized()
+        }
     }
 
     private var availableReasoningLevels: [ChatReasoningLevel] {
@@ -896,6 +955,9 @@ struct ComposerModelPicker: View {
     let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
+    let drafters: [LocalModel]
+    let selectedDrafterID: String?
+    let onSelectDrafter: (LocalModel) -> Void
 
     var body: some View {
         ZStack {
@@ -915,6 +977,9 @@ struct ComposerModelPicker: View {
                 onEmptyStateAction: onEmptyStateAction,
                 onSelectModel: onSelectModel,
                 onSwitchModel: onSwitchModel,
+                drafters: drafters,
+                selectedDrafterID: selectedDrafterID,
+                onSelectDrafter: onSelectDrafter,
                 onTrackingChanged: { isTracking in
                     isMenuOpen = isTracking
                     if !isTracking {
@@ -1000,6 +1065,9 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let onEmptyStateAction: (() -> Void)?
     let onSelectModel: (LocalModel) -> Void
     let onSwitchModel: (String) -> Void
+    let drafters: [LocalModel]
+    let selectedDrafterID: String?
+    let onSelectDrafter: (LocalModel) -> Void
     let onTrackingChanged: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1041,6 +1109,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         private weak var modelSummaryItem: NSMenuItem?
         private weak var secondarySummaryItem: NSMenuItem?
         private var modelOptionViews = [PersistentMenuActionView]()
+        private var drafterOptionViews = [PersistentMenuActionView]()
         private var secondaryOptionViews = [PersistentMenuActionView]()
 
         init(parent: ComposerModelPickerMenuControl) {
@@ -1051,6 +1120,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             // Build the entire tree before tracking begins. Keeping both submenus
             // alive for the whole session prevents hover-driven view replacement.
             modelOptionViews.removeAll()
+            drafterOptionViews.removeAll()
             secondaryOptionViews.removeAll()
             let menu = makeMenu()
             parent.onTrackingChanged(true)
@@ -1122,6 +1192,47 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                     isSelected: model.repoID == parent.selectedModelID
                 )
                 menu.addItem(item)
+            }
+
+            if !parent.drafters.isEmpty {
+                menu.addItem(.separator())
+                let header = NSMenuItem(
+                    title: "Drafters — speculative decoding",
+                    action: nil,
+                    keyEquivalent: ""
+                )
+                header.isEnabled = false
+                menu.addItem(header)
+
+                for drafter in parent.drafters {
+                    var title = modelMenuLabel(drafter.repoID)
+                    if let kindLabel = drafter.drafterKindLabel {
+                        title += " (\(kindLabel))"
+                    }
+                    let target = DrafterTargetResolver.compatibleTarget(
+                        for: drafter,
+                        currentModelID: parent.selectedModelID,
+                        models: parent.models
+                    )
+                    if target == nil {
+                        title += " — needs a compatible chat model"
+                    }
+                    let item = persistentMenuItem(
+                        title: NSAttributedString(
+                            string: title,
+                            attributes: [.font: Self.menuFont]
+                        ),
+                        optionID: drafter.repoID,
+                        image: nil,
+                        isSelected: drafter.repoID == parent.selectedDrafterID
+                    ) { [weak self] in
+                        self?.selectModel(drafter.repoID)
+                    }
+                    if let itemView = item.view as? PersistentMenuActionView {
+                        drafterOptionViews.append(itemView)
+                    }
+                    menu.addItem(item)
+                }
             }
 
             if parent.models.isEmpty && parent.selectedModelID == nil {
@@ -1221,6 +1332,12 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         }
 
         private func selectModel(_ repoID: String) {
+            if let drafter = parent.drafters.first(where: { $0.repoID == repoID }) {
+                drafterOptionViews.forEach { $0.isSelected = $0.optionID == repoID }
+                parent.onSelectDrafter(drafter)
+                return
+            }
+
             modelOptionViews.forEach { $0.isSelected = $0.optionID == repoID }
             modelSummaryItem?.title = "Model   \(modelMenuLabel(repoID))"
 

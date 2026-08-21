@@ -344,7 +344,10 @@ private struct ImageGenerationComposer: View {
             emptyStateActionTitle: "Browse Image Models…",
             onEmptyStateAction: onExploreImageModels,
             onSelectModel: selectImageModel,
-            onSwitchModel: selectImageModel
+            onSwitchModel: selectImageModel,
+            drafters: [],
+            selectedDrafterID: nil,
+            onSelectDrafter: { _ in }
         )
     }
 

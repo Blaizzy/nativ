@@ -209,6 +209,57 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Resolves which chat model a drafter model (MTP/EAGLE/DFlash) accelerates when the
+/// user picks the drafter from the chat model menu. Selecting a drafter enables
+/// speculative decoding on its compatible target instead of loading the drafter itself.
+enum DrafterTargetResolver {
+    static func compatibleTarget(
+        for drafter: LocalModel,
+        currentModelID: String?,
+        models: [LocalModel]
+    ) -> LocalModel? {
+        let chatModels = models.filter { $0.isEligibleForLanguageModelPicker }
+
+        if let currentModelID,
+           let current = chatModels.first(where: { $0.repoID == currentModelID }),
+           isCompatible(drafter: drafter, target: current) {
+            return current
+        }
+
+        for candidate in targetNameCandidates(from: drafter.repoID) {
+            if let match = chatModels.first(where: { $0.repoID == candidate }),
+               isCompatible(drafter: drafter, target: match) {
+                return match
+            }
+        }
+
+        return chatModels.first { isCompatible(drafter: drafter, target: $0) }
+    }
+
+    // Same rule as ChatConfigurationView.isDrafterIncompatible: a hidden-size
+    // mismatch is incompatible, missing metadata is treated as compatible.
+    static func isCompatible(drafter: LocalModel, target: LocalModel) -> Bool {
+        guard let drafterHiddenSize = drafter.hiddenSize,
+              let targetHiddenSize = target.hiddenSize else {
+            return true
+        }
+        return drafterHiddenSize == targetHiddenSize
+    }
+
+    /// "mlx-community/Qwen3.8-27B-MTP-8bit" → "mlx-community/Qwen3.8-27B-8bit".
+    /// Marker order matters: "eagle3" must be tried before "eagle".
+    static func targetNameCandidates(from repoID: String) -> [String] {
+        for marker in ["mtp", "eagle3", "eagle", "dflash"] {
+            if let range = repoID.range(of: "-" + marker, options: .caseInsensitive) {
+                var candidate = repoID
+                candidate.removeSubrange(range)
+                return [candidate]
+            }
+        }
+        return []
+    }
+}
+
 struct LocalModelMemoryEstimate: Equatable, Sendable {
     static let headroomFraction = 0.20
 
