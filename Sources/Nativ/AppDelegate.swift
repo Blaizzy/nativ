@@ -87,6 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         if WelcomePreferences.hasCompleted {
             model.startServer()
         }
+        DispatchQueue.main.async { [softwareUpdater] in
+            softwareUpdater.start()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
