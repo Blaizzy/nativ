@@ -177,7 +177,7 @@ extension ControlPanelView {
             (isHovering ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
         }
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
                     if sidebarDragStartWidth == nil {
                         sidebarDragStartWidth = sidebarWidth
