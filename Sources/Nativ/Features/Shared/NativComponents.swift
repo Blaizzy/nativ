@@ -258,6 +258,89 @@ struct NativStatusBadge: View {
     }
 }
 
+/// The shared selection affordance for bulk-management lists.
+struct NativBulkSelectionCheckbox: View {
+    let isSelected: Bool
+    var isEnabled = true
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(isSelected ? Color.accentColor : Color.clear)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(
+                            isSelected ? Color.accentColor : Color.secondary.opacity(0.55),
+                            lineWidth: 1.25
+                        )
+                }
+
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(width: 18, height: 18)
+        .opacity(isEnabled ? 1 : 0.45)
+        .animation(.easeInOut(duration: 0.12), value: isSelected)
+    }
+}
+
+private struct NativBulkSelectionSurface: ViewModifier {
+    let isSelecting: Bool
+    let isSelected: Bool
+    let isEnabled: Bool
+    let cornerRadius: CGFloat
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if isSelecting {
+                Button(action: action) {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                        .overlay {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                    .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
+        }
+    }
+}
+
+extension View {
+    /// Makes an entire row or card act as the bulk-selection control while selection mode is active.
+    func nativBulkSelectable(
+        isSelecting: Bool,
+        isSelected: Bool,
+        isEnabled: Bool = true,
+        cornerRadius: CGFloat = 12,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        modifier(
+            NativBulkSelectionSurface(
+                isSelecting: isSelecting,
+                isSelected: isSelected,
+                isEnabled: isEnabled,
+                cornerRadius: cornerRadius,
+                accessibilityLabel: accessibilityLabel,
+                action: action
+            )
+        )
+    }
+}
+
 /// A monospaced code/JSON block with a subtle background and selectable text.
 /// JSON content is pretty-printed; anything else is shown verbatim.
 struct NativCodeBlock: View {

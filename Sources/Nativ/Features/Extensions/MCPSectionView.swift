@@ -261,15 +261,8 @@ private struct MCPServerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                if isSelecting, let onToggleSelection {
-                    Button(action: onToggleSelection) {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Select \(server.name.isEmpty ? "Untitled server" : server.name)")
-                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                if isSelecting, onToggleSelection != nil {
+                    NativBulkSelectionCheckbox(isSelected: isSelected)
                 }
 
                 NativStatusDot(tone: statusTone, pulsing: isConnecting)
@@ -361,6 +354,13 @@ private struct MCPServerRow: View {
             }
         }
         .padding(.vertical, 11)
+        .nativBulkSelectable(
+            isSelecting: isSelecting && onToggleSelection != nil,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select \(server.name.isEmpty ? "Untitled server" : server.name)",
+            action: onToggleSelection ?? {}
+        )
     }
 
     private var isConnecting: Bool {

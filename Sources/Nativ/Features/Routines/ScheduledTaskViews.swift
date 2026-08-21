@@ -42,9 +42,7 @@ struct ScheduledTaskCard: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if isSelecting {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                NativBulkSelectionCheckbox(isSelected: isSelected)
                     .padding(.leading, 16)
             }
 
@@ -112,22 +110,13 @@ struct ScheduledTaskCard: View {
             .fixedSize()
             .padding(.trailing, 16)
         }
-        .scheduledPanelStyle(
-            isHighlighted: isHovering,
-            isSelected: isSelecting && isSelected
+        .scheduledPanelStyle(isHighlighted: isHovering)
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelected,
+            accessibilityLabel: "Select \(task.name.isEmpty ? "Untitled scheduled task" : task.name)",
+            action: onToggleSelection
         )
-        .overlay {
-            if isSelecting {
-                Button(action: onToggleSelection) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.clear)
-                        .contentShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Select \(task.name.isEmpty ? "Untitled scheduled task" : task.name)")
-                .accessibilityValue(isSelected ? "Selected" : "Not selected")
-            }
-        }
         .contextMenu {
             taskActions
         }
@@ -284,19 +273,12 @@ extension RoutineRunSource {
 }
 
 extension View {
-    func scheduledPanelStyle(
-        isHighlighted: Bool = false,
-        isSelected: Bool = false
-    ) -> some View {
+    func scheduledPanelStyle(isHighlighted: Bool = false) -> some View {
         background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color.accentColor.opacity(0.12)
-                        : Color(nsColor: .controlBackgroundColor)
-                )
+                .fill(Color(nsColor: .controlBackgroundColor))
                 .overlay {
-                    if isHighlighted && !isSelected {
+                    if isHighlighted {
                         Color.primary.opacity(0.045)
                     }
                 }
@@ -305,11 +287,9 @@ extension View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(
-                    isSelected
-                        ? Color.accentColor.opacity(0.55)
-                        : isHighlighted
-                            ? Color.primary.opacity(0.16)
-                            : Color(nsColor: .separatorColor),
+                    isHighlighted
+                        ? Color.primary.opacity(0.16)
+                        : Color(nsColor: .separatorColor),
                     lineWidth: 0.5
                 )
         }
