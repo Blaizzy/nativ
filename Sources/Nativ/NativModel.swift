@@ -478,7 +478,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             return
         }
 
-        stopServer(reason: .configurationRestart)
+        stopServer(preserveSessionStats: false, reason: .configurationRestart)
         guard !server.isRunning else {
             appendLog("\nCould not stop the current server to apply the configuration change.\n")
             return
