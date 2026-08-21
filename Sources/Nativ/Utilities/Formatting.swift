@@ -391,7 +391,9 @@ enum NativStats {
     }
 }
 
-struct NativAllTimeStats: Codable {
+struct NativAllTimeStats: Codable, Sendable {
+    static let empty = NativAllTimeStats()
+
     var requestsCompleted: Int = 0
     var requestsFailed: Int = 0
     var promptTokensTotal: Int = 0

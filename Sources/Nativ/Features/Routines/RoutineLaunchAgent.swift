@@ -3,11 +3,23 @@ import Foundation
 
 enum RoutineLaunchAgent {
     private static let labelPrefix = "dev.local.Nativ.routine."
+    private static let reconciliationQueue = DispatchQueue(
+        label: "dev.local.Nativ.routine-launch-agent",
+        qos: .utility
+    )
 
     static func refresh(routines: [Routine]) {
-        guard let directory = launchAgentsDirectory,
-              let executablePath = Bundle.main.executablePath
-        else {
+        guard let executablePath = Bundle.main.executablePath else {
+            return
+        }
+
+        reconciliationQueue.async {
+            reconcile(routines: routines, executablePath: executablePath)
+        }
+    }
+
+    private static func reconcile(routines: [Routine], executablePath: String) {
+        guard let directory = launchAgentsDirectory else {
             return
         }
 
@@ -43,7 +55,17 @@ enum RoutineLaunchAgent {
             ) else {
                 continue
             }
-            unload(url)
+
+            let fileExists = FileManager.default.fileExists(atPath: url.path)
+            if fileExists,
+               let existingData = try? Data(contentsOf: url),
+               existingData == data {
+                continue
+            }
+
+            if fileExists {
+                unload(url)
+            }
             try? data.write(to: url, options: .atomic)
             load(url)
         }
@@ -96,8 +118,12 @@ enum RoutineLaunchAgent {
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return
+        }
     }
 }
 
