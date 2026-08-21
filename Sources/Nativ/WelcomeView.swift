@@ -15,11 +15,12 @@ enum WelcomePreferences {
 
 struct WelcomeGateView: View {
     @AppStorage(WelcomePreferences.completionKey) private var hasCompletedWelcome = false
+    @StateObject private var controlPanelDependencies = ControlPanelDependencies()
 
-    @ObservedObject var model: NativModel
-    @ObservedObject var navigation: ControlPanelNavigation
-    @ObservedObject var runtime: SystemRuntimeMonitor
-    @ObservedObject var extensionManager: NativExtensionManager
+    let model: NativModel
+    let navigation: ControlPanelNavigation
+    let runtime: SystemRuntimeMonitor
+    let extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
 
@@ -31,7 +32,8 @@ struct WelcomeGateView: View {
                     navigation: navigation,
                     runtime: runtime,
                     extensionManager: extensionManager,
-                    softwareUpdater: softwareUpdater
+                    softwareUpdater: softwareUpdater,
+                    dependencies: controlPanelDependencies
                 )
             } else {
                 WelcomeView(model: model) { modelID, serverAPIKey in
@@ -467,7 +469,7 @@ private struct WelcomeView: View {
                 sizeBytes: hubModel.sizeBytes,
                 cachePath: model.settings.modelSearchPath
             ),
-            downloadError: downloadManager.errorByModelID[hubModel.id],
+            downloadError: downloadManager.errorByModelID[hubModel.id]?.localizedDescription,
             onSelect: { selectedModelID = hubModel.id },
             onDownload: { downloadRecommendedModel(hubModel) },
             onCancel: { downloadManager.removeDownload(hubModel.id) }

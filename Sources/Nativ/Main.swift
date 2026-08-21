@@ -2,8 +2,26 @@ import AppKit
 import NativServerKit
 import SwiftUI
 
+private final class MetricsProbeResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var succeeded = false
+
+    func markSucceeded() {
+        lock.lock()
+        succeeded = true
+        lock.unlock()
+    }
+
+    var value: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return succeeded
+    }
+}
+
 @main
 enum Main {
+    @MainActor
     static func main() {
         if CommandLine.arguments.contains("--smoke-test") {
             do {
@@ -81,10 +99,11 @@ enum Main {
         }
 
         let semaphore = DispatchSemaphore(value: 0)
-        var didSucceed = false
+        let result = MetricsProbeResult()
         let task = URLSession.shared.dataTask(with: url) { _, response, _ in
-            if let httpResponse = response as? HTTPURLResponse {
-                didSucceed = (200..<300).contains(httpResponse.statusCode)
+            if let httpResponse = response as? HTTPURLResponse,
+               (200..<300).contains(httpResponse.statusCode) {
+                result.markSucceeded()
             }
             semaphore.signal()
         }
@@ -93,7 +112,7 @@ enum Main {
         if semaphore.wait(timeout: .now() + 5) == .timedOut {
             task.cancel()
         }
-        return didSucceed
+        return result.value
     }
 }
 

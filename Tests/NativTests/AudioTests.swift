@@ -1,14 +1,73 @@
+import AVFoundation
 import Foundation
 import XCTest
 @testable import NativServerKit
+
+@MainActor
+final class NativSystemPermissionControllerTests: XCTestCase {
+    func testAuthorizedMicrophoneAccessDoesNotRequestAgain() async {
+        var requestCount = 0
+
+        let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+            status: .authorized
+        ) {
+            requestCount += 1
+            return false
+        }
+
+        XCTAssertTrue(granted)
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    func testUndeterminedMicrophoneAccessRequestsAndReturnsGrant() async {
+        var requestCount = 0
+
+        let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+            status: .notDetermined
+        ) {
+            requestCount += 1
+            return true
+        }
+
+        XCTAssertTrue(granted)
+        XCTAssertEqual(requestCount, 1)
+    }
+
+    func testUndeterminedMicrophoneAccessReturnsDenial() async {
+        let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+            status: .notDetermined
+        ) {
+            false
+        }
+
+        XCTAssertFalse(granted)
+    }
+
+    func testDeniedOrRestrictedMicrophoneAccessDoesNotRequestAgain() async {
+        var requestCount = 0
+
+        for status in [AVAuthorizationStatus.denied, .restricted] {
+            let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+                status: status
+            ) {
+                requestCount += 1
+                return true
+            }
+
+            XCTAssertFalse(granted)
+        }
+
+        XCTAssertEqual(requestCount, 0)
+    }
+}
 
 @MainActor
 final class AudioAnalyticsStoreTests: XCTestCase {
     private var temporaryDirectory: URL!
     private var store: AudioAnalyticsStore!
 
-    override func setUpWithError() throws {
-        try super.setUpWithError()
+    override func setUp() async throws {
+        try await super.setUp()
         temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -20,11 +79,11 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         )
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         store = nil
         try FileManager.default.removeItem(at: temporaryDirectory)
         temporaryDirectory = nil
-        try super.tearDownWithError()
+        try await super.tearDown()
     }
 
     func testCalculatesWordsSpeedAndEstimatedTimeSaved() {
@@ -351,6 +410,32 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertTrue(
             state.update(activeModifiers: [], shortcutModifiers: shortcut)
         )
+        XCTAssertTrue(tap(&state, shortcut: shortcut))
+    }
+
+    func testPartialReleaseCannotRearmFromStaleModifierSample() {
+        var state = VoiceModifierToggleShortcutState()
+        let shortcut: VoiceShortcutModifiers = [.function, .control]
+
+        XCTAssertFalse(
+            state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(
+            state.update(activeModifiers: [.function], shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(state.isAwaitingFullRelease)
+
+        // A polling sample can briefly report the old fully-held state after
+        // the release event. It must not arm a second toggle.
+        XCTAssertFalse(
+            state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        )
+        XCTAssertFalse(state.isHeld)
+
+        XCTAssertFalse(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut)
+        )
+        XCTAssertFalse(state.isAwaitingFullRelease)
         XCTAssertTrue(tap(&state, shortcut: shortcut))
     }
 }

@@ -1,4 +1,3 @@
-import NativServerKit
 import SwiftUI
 
 // A Kit is a ready-made setup: a curated bundle of MCP servers, their tools,
@@ -17,7 +16,7 @@ struct NativKit: Identifiable {
 
     /// Catalog MCP entries this kit references, in listed order.
     var mcpEntries: [MCPCatalogEntry] {
-        mcpServerIDs.compactMap { id in MCPCatalogEntry.catalog.first { $0.id == id } }
+        mcpServerIDs.compactMap { MCPServerCatalog.bundled.entry(id: $0) }
     }
 
     /// A one-line inventory of what the kit turns on.
@@ -124,13 +123,12 @@ enum NativKitActivation {
         model: NativModel,
         manager: NativExtensionManager
     ) {
+        let catalog = MCPServerCatalog.bundled
+        var servers = model.settings.mcpServers
         for entry in kit.mcpEntries {
-            if let index = matchingServerIndex(for: entry, in: model.settings.mcpServers) {
-                model.settings.mcpServers[index].isEnabled = enabled
-            } else if enabled {
-                model.settings.mcpServers.append(entry.makeConfig())
-            }
+            catalog.setEnabled(enabled, for: entry, in: &servers)
         }
+        model.settings.mcpServers = servers
 
         for skill in kit.skills {
             if let index = model.settings.skills.firstIndex(where: { $0.id == skill.id }) {
@@ -175,18 +173,7 @@ enum NativKitActivation {
         return names
     }
 
-    /// Matches a catalog entry to a configured server by launch identity
-    /// (command + arguments), so a kit never toggles an unrelated server that
-    /// merely shares a name.
-    private static func matchingServerIndex(
-        for entry: MCPCatalogEntry,
-        in servers: [MCPServerConfig]
-    ) -> Int? {
-        servers.firstIndex { $0.command == entry.command && $0.arguments == entry.arguments }
-    }
-
     private static func isServerEnabled(_ entry: MCPCatalogEntry, in model: NativModel) -> Bool {
-        guard let index = matchingServerIndex(for: entry, in: model.settings.mcpServers) else { return false }
-        return model.settings.mcpServers[index].isEnabled
+        MCPServerCatalog.bundled.isEnabled(entry, in: model.settings.mcpServers)
     }
 }

@@ -15,6 +15,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var sessionOrder: Int?
     var folderID: UUID?
     var imageGenerationModelID: String?
+    var scheduledTaskID: String?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -26,13 +27,17 @@ struct ChatSession: Identifiable, Equatable, Codable {
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
-            folderID: folderID
+            folderID: folderID,
+            scheduledTaskID: scheduledTaskID
         )
     }
 
     var displayTitle: String {
         if let customTitle, !customTitle.isEmpty {
             return customTitle
+        }
+        if scheduledTaskID != nil, !title.isEmpty {
+            return title
         }
         return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
     }
@@ -65,7 +70,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
                 if firstUserMessage.imageAttachments.count == 1 {
                     return firstUserMessage.imageAttachments[0].filename
                 }
-                return "\(firstUserMessage.imageAttachments.count) images"
+                return "\(firstUserMessage.imageAttachments.count) attachments"
             }
         }
 
@@ -110,6 +115,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let scheduledTaskID: String?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
@@ -315,23 +321,31 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     }
 
     var apiMessage: MLXChatMessage? {
+        apiMessage(documentContext: nil)
+    }
+
+    func apiMessage(
+        documentContext: String?,
+        includesImages: Bool = true
+    ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let folderText = folderAttachments.map(\.text).joined(separator: "\n\n")
-            let combined = [folderText, content].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            let imageParts = imageAttachments.filter {
-                ArtifactKind.resolve(mimeType: $0.mimeType, filename: $0.filename) == .image
-            }
+            let requestContent = [content, documentContext ?? ""]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            let imageParts = includesImages
+                ? imageAttachments.filter { $0.chatAttachmentKind == .image }
+                : []
             if !imageParts.isEmpty {
                 var parts: [MLXChatContentPart] = []
-                if !combined.isEmpty {
-                    parts.append(MLXChatContentPart(text: combined))
+                if !requestContent.isEmpty {
+                    parts.append(MLXChatContentPart(text: requestContent))
                 }
                 parts.append(contentsOf: imageParts.map { MLXChatContentPart(imageURL: $0.dataURL) })
                 return MLXChatMessage(role: "user", content: .parts(parts))
             }
 
-            return MLXChatMessage(role: "user", content: combined)
+            return MLXChatMessage(role: "user", content: requestContent)
         case .assistant:
             guard !content.isEmpty || !reasoningContent.isEmpty || !toolCalls.isEmpty else {
                 return nil

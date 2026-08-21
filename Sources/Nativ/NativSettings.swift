@@ -704,6 +704,10 @@ struct NativSettings: Codable, Equatable {
             settings.serverAPIKey = legacyToken
         }
 
+        if MCPServerCatalog.bundled.migrateConfigurations(in: &settings.mcpServers) {
+            try? settings.writePropertyList(to: url)
+        }
+
         return settings
     }
 
@@ -802,6 +806,17 @@ struct NativSettings: Codable, Equatable {
     var speculativeDecodingActive: Bool {
         speculativeDecodingEnabled
             && !draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func isToolEnabled(_ toolName: String) -> Bool {
+        !disabledToolNames.contains(toolName)
+    }
+
+    mutating func setToolEnabled(_ enabled: Bool, toolName: String) {
+        disabledToolNames.removeAll { $0 == toolName }
+        if !enabled {
+            disabledToolNames.append(toolName)
+        }
     }
 
     func hasSameLaunchConfiguration(as other: Self) -> Bool {

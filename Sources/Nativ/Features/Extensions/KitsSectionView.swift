@@ -2,17 +2,18 @@ import NativExtensionSDK
 import NativServerKit
 import SwiftUI
 
-/// The badge shown on a kit card/header for its derived activation state.
 @ViewBuilder
-private func kitStateBadge(_ state: NativKitState) -> some View {
-    switch state {
-    case .enabled:
-        NativStatusBadge(text: "Enabled", tone: .success, symbol: "checkmark")
-    case .partial:
-        NativStatusBadge(text: "Needs setup", tone: .warning)
-    case .off:
-        EmptyView()
+private func kitCompletionIndicator(_ state: NativKitState) -> some View {
+    ZStack {
+        if state == .enabled {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.green)
+                .help("Enabled")
+                .accessibilityLabel("Enabled")
+        }
     }
+    .frame(width: 16, height: 16)
 }
 
 struct KitsSectionView: View {
@@ -21,7 +22,10 @@ struct KitsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var openKit: NativKit?
 
-    private let columns = [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 14)]
+    private let columns = [
+        GridItem(.flexible(minimum: 240, maximum: 340), spacing: 14),
+        GridItem(.flexible(minimum: 240, maximum: 340)),
+    ]
 
     var body: some View {
         HubSectionScaffold(
@@ -49,6 +53,12 @@ struct KitsSectionView: View {
 }
 
 private struct KitCard: View {
+    private enum Layout {
+        static let summaryHeight: CGFloat = 50
+        static let capabilitiesHeight: CGFloat = 28
+        static let actionsHeight: CGFloat = 24
+    }
+
     let kit: NativKit
     let state: NativKitState
     let inactiveParts: [String]
@@ -62,21 +72,28 @@ private struct KitCard: View {
                 Spacer(minLength: 0)
                 NativStatusBadge(text: "Built-in")
                     .help("Ships with Nativ")
-                kitStateBadge(state)
+                kitCompletionIndicator(state)
             }
+            .frame(height: 44)
             VStack(alignment: .leading, spacing: 3) {
                 Text(kit.name)
                     .font(.system(size: 15, weight: .semibold))
                 Text(kit.summary)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .lineLimit(3)
+                    .lineLimit(2)
             }
+            .frame(height: Layout.summaryHeight, alignment: .topLeading)
             Text(capabilitiesText)
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(2)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: Layout.capabilitiesHeight,
+                    maxHeight: Layout.capabilitiesHeight,
+                    alignment: .topLeading
+                )
             HStack(spacing: 8) {
                 if state == .off {
                     Button("Enable", action: onEnable)
@@ -94,9 +111,10 @@ private struct KitCard: View {
                 Spacer(minLength: 0)
             }
             .font(.system(size: 12))
+            .frame(height: Layout.actionsHeight)
         }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             Color(nsColor: .controlBackgroundColor),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -130,16 +148,14 @@ private struct KitDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    mcpGroup
-                    if !kit.skills.isEmpty { skillsGroup }
-                    if !kit.extensionIDs.isEmpty { extensionsGroup }
-                }
-                .padding(20)
+            VStack(alignment: .leading, spacing: 22) {
+                mcpGroup
+                if !kit.skills.isEmpty { skillsGroup }
+                if !kit.extensionIDs.isEmpty { extensionsGroup }
             }
+            .padding(20)
         }
-        .frame(width: 560, height: 560)
+        .frame(width: 560)
     }
 
     private var header: some View {
@@ -149,7 +165,7 @@ private struct KitDetailView: View {
                 HStack(spacing: 8) {
                     Text(kit.name)
                         .font(.system(size: 17, weight: .semibold))
-                    kitStateBadge(state)
+                    kitCompletionIndicator(state)
                 }
                 Text(kit.summary)
                     .font(.system(size: 12))
@@ -182,7 +198,7 @@ private struct KitDetailView: View {
             ForEach(kit.mcpEntries) { entry in
                 KitPartRow(
                     symbol: entry.symbol,
-                    tint: entry.tint,
+                    tint: .nativTint(entry.tintName),
                     logoAssetName: entry.logoAssetName,
                     title: entry.name,
                     subtitle: entry.summary,
@@ -225,19 +241,13 @@ private struct KitDetailView: View {
     // MARK: Bindings
 
     private func mcpBinding(_ entry: MCPCatalogEntry) -> Binding<Bool> {
-        // Match by launch identity (command + arguments), not name, so the
-        // toggle never targets an unrelated server that shares a name.
-        func matches(_ server: MCPServerConfig) -> Bool {
-            server.command == entry.command && server.arguments == entry.arguments
-        }
+        let catalog = MCPServerCatalog.bundled
         return Binding(
-            get: { model.settings.mcpServers.first(where: matches)?.isEnabled ?? false },
+            get: { catalog.isEnabled(entry, in: model.settings.mcpServers) },
             set: { newValue in
-                if let index = model.settings.mcpServers.firstIndex(where: matches) {
-                    model.settings.mcpServers[index].isEnabled = newValue
-                } else if newValue {
-                    model.settings.mcpServers.append(entry.makeConfig())
-                }
+                var servers = model.settings.mcpServers
+                catalog.setEnabled(newValue, for: entry, in: &servers)
+                model.settings.mcpServers = servers
             }
         )
     }

@@ -24,20 +24,6 @@ final class RoutineStore: ObservableObject {
         routines.first { $0.sourceSessionID == sessionID }
     }
 
-    func deleteRoutine(forSession sessionID: UUID) {
-        guard let routine = routine(forSession: sessionID) else {
-            return
-        }
-        delete(id: routine.id)
-    }
-
-    func isRoutineRunning(forSession sessionID: UUID) -> Bool {
-        guard let routine = routine(forSession: sessionID) else {
-            return false
-        }
-        return runs.contains { $0.routineID == routine.id && $0.status == .running }
-    }
-
     func upsert(_ routine: Routine) {
         if let index = routines.firstIndex(where: { $0.id == routine.id }) {
             routines[index] = routine

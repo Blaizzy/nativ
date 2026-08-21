@@ -103,7 +103,7 @@ private struct DashboardModelState: Equatable {
     }
 }
 
-private struct DashboardContentView: View, Equatable {
+private struct DashboardContentView: View, @MainActor Equatable {
     let modelState: DashboardModelState
     @ObservedObject var dashboard: DashboardViewModel
     let titleLeadingInset: CGFloat
@@ -3605,7 +3605,7 @@ private struct TokenUsagePanelHeightReader: View {
 }
 
 private struct TokenUsagePanelHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())

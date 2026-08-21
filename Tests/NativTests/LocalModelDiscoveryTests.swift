@@ -494,6 +494,20 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
     }
 
+    func testRerankerIsClassifiedAndExcludedFromLanguageModelPicker() async throws {
+        try makeTextModelSnapshot(
+            repoID: "mlx-community/Qwen3-Reranker-0.6B-mxfp8",
+            modelType: "qwen3",
+            architectures: ["Qwen3ForCausalLM"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let reranker = try XCTUnwrap(models.first)
+        XCTAssertTrue(reranker.capabilities.contains(.reranking))
+        XCTAssertFalse(reranker.isEligibleForLanguageModelPicker)
+    }
+
     private func write(_ string: String, to url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),

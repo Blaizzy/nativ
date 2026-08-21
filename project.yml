@@ -6,8 +6,9 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    SWIFT_VERSION: "5.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_VERSION: "6.3"
+    DEAD_CODE_STRIPPING: YES
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
     ARCHS: arm64
     ENABLE_HARDENED_RUNTIME: YES
 packages:
@@ -49,7 +50,8 @@ targets:
     settings:
       base:
         ARCHS: arm64
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        CODE_SIGN_IDENTITY: ""
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_EXTENSION_SDK_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
@@ -81,6 +83,7 @@ targets:
     settings:
       base:
         ARCHS: arm64
+        CODE_SIGN_IDENTITY: ""
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_SERVER_KIT_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: YES
@@ -109,10 +112,19 @@ targets:
         product: Sparkle
       - package: textual
         product: Textual
+    postBuildScripts:
+      - name: Install GitHub OAuth MCP server
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          "$SRCROOT/scripts/install_github_mcp_server.sh" \
+            "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/MCPServers"
     settings:
       base:
         ARCHS: arm64
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ENABLE_HARDENED_RUNTIME: YES
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
         CODE_SIGN_ENTITLEMENTS: Configuration/Nativ.entitlements
         GENERATE_INFOPLIST_FILE: NO
@@ -120,8 +132,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.0
-        CURRENT_PROJECT_VERSION: 5
+        MARKETING_VERSION: 0.3.3
+        CURRENT_PROJECT_VERSION: 8
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -138,11 +150,12 @@ targets:
       base:
         ARCHS: arm64
         MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ENABLE_HARDENED_RUNTIME: YES
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.0
-        CURRENT_PROJECT_VERSION: 5
+        MARKETING_VERSION: 0.3.3
+        CURRENT_PROJECT_VERSION: 8
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -153,6 +166,10 @@ targets:
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
+      - path: Sources/Nativ/Features/Routines/Routine.swift
+      - path: Sources/Nativ/Features/Routines/ScheduledTaskChatLinker.swift
+      - path: Sources/Nativ/Features/Routines/ScheduledTaskNotification.swift
+      - path: Sources/Nativ/Utilities/NativNotificationService.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
@@ -168,9 +185,17 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceShortcut.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
+      - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
+      - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift
+      - path: Sources/Nativ/Features/MCP/GitHubOAuth.swift
+      - path: Sources/Nativ/Resources/MCPCatalog.json
+        buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
+      - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
+      - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
+      - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageModelSelection.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSystemStatsTool.swift
@@ -178,18 +203,43 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatServerStatsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingError.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingProviderClient.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingRuntime.swift
+      - path: Sources/Nativ/Features/Browsing/WebBrowsingTransport.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/BraveBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/ExaBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/FirecrawlBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/NimbleBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/PerplexityBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/TavilyBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/ParallelBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/WebReadContentSelector.swift
+      - path: Sources/Nativ/Features/Browsing/WebReadService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchProvider.swift
+      - path: Sources/Nativ/Features/Browsing/WebSearchService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchSettingsView.swift
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
+      - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
+      - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift
+      - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift
+      - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
       - path: Sources/Nativ/Utilities/Formatting.swift
+      - path: Sources/Nativ/Utilities/MarkdownFormatting.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
+      - path: Sources/Nativ/Features/MCP/MCPHostManager.swift
+      - path: Sources/Nativ/Features/Routines/Routine.swift
+      - path: Sources/Nativ/Features/Routines/RoutineStore.swift
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK

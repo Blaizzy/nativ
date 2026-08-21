@@ -13,7 +13,7 @@ enum RoutineFormatting {
 
     static func summary(_ routine: Routine) -> String {
         guard routine.runsOnSchedule else {
-            return "Runs on API request"
+            return "Automation configured"
         }
         let time = timeString(routine.schedule)
         if routine.schedule.runsEveryDay {

@@ -7,7 +7,7 @@ struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
     @ObservedObject var model: NativModel
-    @State private var section: HubSection = .kits
+    @Binding var section: HubSection
     @State private var didLaunch = false
 
     enum HubSection: String, CaseIterable, Identifiable {
@@ -40,13 +40,6 @@ struct ExtensionsHubView: View {
         .task {
             guard !didLaunch else { return }
             didLaunch = true
-            manager.launch(
-                context: NativExtensionHostContext(
-                    transcriptionConfiguration: { nil },
-                    openSpeechModels: {},
-                    showMainWindow: {}
-                )
-            )
             host.reload(servers: model.settings.mcpServers)
         }
         .onChange(of: model.settings.mcpServers) { _, servers in
@@ -98,6 +91,21 @@ struct ExtensionsHubView: View {
         case .skills:
             SkillsSectionView(model: model)
         }
+    }
+}
+
+private struct OpenExtensionsHubSectionKey: EnvironmentKey {
+    static let defaultValue: @MainActor @Sendable (
+        ExtensionsHubView.HubSection
+    ) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var openExtensionsHubSection: @MainActor @Sendable (
+        ExtensionsHubView.HubSection
+    ) -> Void {
+        get { self[OpenExtensionsHubSectionKey.self] }
+        set { self[OpenExtensionsHubSectionKey.self] = newValue }
     }
 }
 

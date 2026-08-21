@@ -5,7 +5,7 @@ typealias ChatImageModelSelectionHandler = @MainActor @Sendable (
     ChatImageModelSelectionRequest
 ) async throws -> String
 
-struct ChatToolExecutionContext {
+struct ChatToolExecutionContext: Sendable {
     let imageGenerationModelID: String?
     let baseURL: URL
     let apiKey: String?
@@ -19,7 +19,7 @@ struct ChatToolExecutionContext {
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
 
-struct ChatToolExecutionOutcome {
+struct ChatToolExecutionOutcome: Sendable {
     let content: String
     let attachments: [ChatImageAttachment]
 }
@@ -34,17 +34,39 @@ enum ChatToolRoundGate {
 
 enum ChatNativeToolConfiguration: Equatable {
     case webSearch
+    case webRead
 
     var displayName: String {
         switch self {
         case .webSearch:
             "Web Search"
+        case .webRead:
+            "Web Read"
+        }
+    }
+
+    var isConfigured: Bool {
+        switch self {
+        case .webSearch:
+            ChatWebSearchToolRegistry.isConfigured()
+        case .webRead:
+            ChatWebReadToolRegistry.isConfigured()
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .webSearch:
+            "globe"
+        case .webRead:
+            "doc.text.magnifyingglass"
         }
     }
 }
 
 struct ChatNativeToolDescriptor {
     let definition: MLXChatToolDefinition
+    let displayDescription: String
     let configuration: ChatNativeToolConfiguration?
 }
 
@@ -54,38 +76,95 @@ enum ChatToolRegistry {
     }
 
     static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
-        var definitions = ChatImageToolRegistry.definitions(canEdit: canEditImage)
-        definitions += ChatSystemMonitorToolRegistry.definitions()
-        definitions += ChatModelLibraryToolRegistry.definitions()
-        definitions += ChatServerStatsToolRegistry.definitions()
-        definitions += ChatSwitchModelToolRegistry.definitions()
-        var tools = definitions.map {
-            ChatNativeToolDescriptor(definition: $0, configuration: nil)
+        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: $0.function.name == ChatImageToolRegistry.editToolName
+                    ? "Edit an attached image by describing the changes."
+                    : "Create an image from a written description.",
+                configuration: nil
+            )
+        }
+        tools += ChatModelLibraryToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "List the models downloaded on this device.",
+                configuration: nil
+            )
+        }
+        tools += ChatSwitchModelToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Change which model this chat uses.",
+                configuration: nil
+            )
+        }
+        tools += ChatSystemMonitorToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Check this device's CPU, GPU, memory, and disk usage.",
+                configuration: nil
+            )
+        }
+        tools += ChatServerStatsToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "See the server’s speed, requests, and token usage.",
+                configuration: nil
+            )
         }
         tools.append(ChatNativeToolDescriptor(
             definition: ChatWebSearchToolRegistry.definition,
+            displayDescription: "Search the web for current information and sources.",
             configuration: .webSearch
+        ))
+        tools.append(ChatNativeToolDescriptor(
+            definition: ChatWebReadToolRegistry.definition,
+            displayDescription: "Read and find relevant information on public web pages.",
+            configuration: .webRead
         ))
         return tools
     }
 }
 
 enum ChatToolDispatcher {
-    private typealias Handler = (MLXChatToolCall, ChatToolExecutionContext) async throws -> ChatToolExecutionOutcome
-    private typealias FailureHandler = (String, Error) -> String
+    private typealias Handler = @Sendable (
+        MLXChatToolCall,
+        ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome
+    private typealias FailureHandler = @Sendable (String, Error) -> String
 
     private static let handlers: [String: Handler] = [
-        ChatImageToolRegistry.generateToolName: executeImageTool,
-        ChatImageToolRegistry.editToolName: executeImageTool,
-        ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
-        ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
-        ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
-        ChatWebSearchToolRegistry.toolName: executeWebSearchTool,
+        ChatImageToolRegistry.generateToolName: { call, context in
+            try await executeImageTool(call: call, context: context)
+        },
+        ChatImageToolRegistry.editToolName: { call, context in
+            try await executeImageTool(call: call, context: context)
+        },
+        ChatSystemMonitorToolRegistry.toolName: { call, context in
+            try await executeSystemMonitorTool(call: call, context: context)
+        },
+        ChatModelLibraryToolRegistry.toolName: { call, context in
+            try await executeModelLibraryTool(call: call, context: context)
+        },
+        ChatServerStatsToolRegistry.toolName: { call, context in
+            try await executeServerStatsTool(call: call, context: context)
+        },
+        ChatWebSearchToolRegistry.toolName: { call, context in
+            try await executeWebSearchTool(call: call, context: context)
+        },
+        ChatWebReadToolRegistry.toolName: { call, context in
+            try await executeWebReadTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
-        ChatImageToolRegistry.generateToolName: failurePayloadForImageTool,
-        ChatImageToolRegistry.editToolName: failurePayloadForImageTool,
+        ChatImageToolRegistry.generateToolName: { name, error in
+            failurePayloadForImageTool(name: name, error: error)
+        },
+        ChatImageToolRegistry.editToolName: { name, error in
+            failurePayloadForImageTool(name: name, error: error)
+        },
         ChatSystemMonitorToolRegistry.toolName: { name, error in
             ChatSystemMonitorToolExecutor().failurePayload(operation: name, error: error)
         },
@@ -100,6 +179,9 @@ enum ChatToolDispatcher {
         },
         ChatWebSearchToolRegistry.toolName: { _, error in
             ChatWebSearchToolExecutor().failurePayload(error: error)
+        },
+        ChatWebReadToolRegistry.toolName: { _, error in
+            ChatWebReadToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -204,6 +286,14 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeWebReadTool(
+        call: MLXChatToolCall,
+        context _: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatWebReadToolExecutor().execute(call: call)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -226,16 +316,19 @@ final class ChatToolConsentGate {
     }
 
     func awaitDecision(for id: UUID) async -> Bool {
-        await withTaskCancellationHandler {
+        let denyRequest: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.deny(id)
+        }
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 pending[id] = continuation
                 if Task.isCancelled {
                     pending.removeValue(forKey: id)?.resume(returning: false)
                 }
             }
-        } onCancel: { [weak self] in
+        } onCancel: {
             Task { @MainActor in
-                self?.pending.removeValue(forKey: id)?.resume(returning: false)
+                denyRequest()
             }
         }
     }
@@ -273,6 +366,8 @@ enum ChatToolPresentation {
             return switchModelTitle(status: status)
         case ChatWebSearchToolRegistry.toolName:
             return webSearchTitle(status: status)
+        case ChatWebReadToolRegistry.toolName:
+            return webReadTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -305,6 +400,8 @@ enum ChatToolPresentation {
                 return "arrow.triangle.2.circlepath"
             case ChatWebSearchToolRegistry.toolName:
                 return "globe"
+            case ChatWebReadToolRegistry.toolName:
+                return "doc.text.magnifyingglass"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -396,6 +493,19 @@ enum ChatToolPresentation {
             return "Web search"
         case nil:
             return "Web search"
+        }
+    }
+
+    private static func webReadTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Reading web pages…"
+        case .succeeded:
+            return "Read web pages"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Web read"
+        case nil:
+            return "Web read"
         }
     }
 

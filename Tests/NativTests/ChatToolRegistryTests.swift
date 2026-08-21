@@ -69,11 +69,40 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
-    func testDefinitionsAlwaysAdvertiseWebSearch() {
+    func testBuiltInToolsUseThePresentationOrder() {
+        let names = ChatToolRegistry.definitions(canEditImage: false)
+            .map(\.function.name)
+
+        XCTAssertEqual(names, [
+            ChatImageToolRegistry.generateToolName,
+            ChatModelLibraryToolRegistry.toolName,
+            ChatSwitchModelToolRegistry.toolName,
+            ChatSystemMonitorToolRegistry.toolName,
+            ChatServerStatsToolRegistry.toolName,
+            ChatWebSearchToolRegistry.toolName,
+            ChatWebReadToolRegistry.toolName,
+        ])
+    }
+
+    func testImageToolHasSeparateUserAndModelDescriptions() throws {
+        let descriptor = try XCTUnwrap(
+            ChatToolRegistry.descriptors(canEditImage: false).first
+        )
+
+        XCTAssertEqual(descriptor.displayDescription, "Create an image from a written description.")
+        XCTAssertTrue(descriptor.definition.function.description.contains("do not ask"))
+        XCTAssertNotEqual(
+            descriptor.displayDescription,
+            descriptor.definition.function.description
+        )
+    }
+
+    func testDefinitionsAdvertiseBrowsingTools() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
 
         XCTAssertTrue(names.contains(ChatWebSearchToolRegistry.toolName))
+        XCTAssertTrue(names.contains(ChatWebReadToolRegistry.toolName))
     }
 
     func testWebSearchCarriesConfigurationMetadata() {
@@ -83,6 +112,15 @@ final class ChatToolRegistryTests: XCTestCase {
 
         XCTAssertEqual(descriptor?.configuration, .webSearch)
         XCTAssertEqual(descriptor?.configuration?.displayName, "Web Search")
+    }
+
+    func testWebReadCarriesConfigurationMetadata() {
+        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
+            $0.definition.function.name == ChatWebReadToolRegistry.toolName
+        }
+
+        XCTAssertEqual(descriptor?.configuration, .webRead)
+        XCTAssertEqual(descriptor?.configuration?.displayName, "Web Read")
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
@@ -582,6 +620,51 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "fake failure")
         XCTAssertNil(object["cpu_usage_percent"])
+    }
+
+    @MainActor
+    func testSystemMonitorReportsThermalAndPower() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.thermal.dieTemperatureCelsius = 62.37
+        snapshot.thermal.hottestSensorName = "PMU tdie1"
+        snapshot.thermal.fanSpeedsRPM = [1200, 2400]
+        snapshot.thermal.thermalPressure = .fair
+        snapshot.power.cpuWatts = 3.44
+        snapshot.power.gpuWatts = 8.06
+        snapshot.power.socWatts = 14.92
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["die_temperature_c"] as? Double, 62.4)
+        XCTAssertEqual(object["hottest_sensor"] as? String, "PMU tdie1")
+        XCTAssertEqual(object["fan_rpm"] as? Int, 2400, "should report the fastest fan")
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Fair")
+        XCTAssertEqual(object["cpu_watts"] as? Double, 3.4)
+        XCTAssertEqual(object["gpu_watts"] as? Double, 8.1)
+        XCTAssertEqual(object["package_watts"] as? Double, 14.9)
+    }
+
+    @MainActor
+    func testSystemMonitorOmitsUnavailableSensors() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.power.systemInputWatts = 21.5
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertNil(object["die_temperature_c"], "machines without a die sensor report null")
+        XCTAssertNil(object["fan_rpm"], "fanless machines report null")
+        XCTAssertEqual(
+            object["package_watts"] as? Double,
+            21.5,
+            "falls back to battery-controller input power when SoC rails are absent"
+        )
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Nominal")
     }
 
     func testModelLibraryFailurePayloadShape() throws {
@@ -1096,6 +1179,19 @@ final class ChatSystemMonitorToolExecutorTests: XCTestCase {
         XCTAssertNil(object["gpu_usage_percent"], "no GPU reading must omit the field, not report 0")
     }
 
+    func testDiskUsageOmittedWhenCapacityIsUnavailable() async throws {
+        let snapshot = SystemMonitorSnapshot()
+
+        let content = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(content)
+
+        XCTAssertNil(object["disk_used_gb"], "no disk reading must omit the field, not report 0")
+        XCTAssertNil(object["disk_total_gb"], "no disk reading must omit the field, not report 0")
+    }
+
     private func decode(_ json: String) throws -> [String: Any] {
         let data = try XCTUnwrap(json.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -1119,6 +1215,22 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.imageGenerationModelID, "org/image")
     }
 
+    func testChatSessionPersistsScheduledTaskOrigin() throws {
+        let session = ChatSession(
+            id: UUID(),
+            title: "Scheduled result",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            messages: [],
+            scheduledTaskID: "task-1"
+        )
+
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
+
+        XCTAssertEqual(decoded.scheduledTaskID, "task-1")
+    }
+
     func testOldChatSessionWithoutImageModelSelectionStillDecodes() throws {
         let oldJSON = #"{"id":"8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B","title":"Old","createdAt":0,"updatedAt":0,"messages":[]}"#
         let session = try JSONDecoder().decode(
@@ -1127,6 +1239,7 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         )
 
         XCTAssertNil(session.imageGenerationModelID)
+        XCTAssertNil(session.scheduledTaskID)
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {

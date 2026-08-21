@@ -29,6 +29,7 @@ struct FnRetryShortcutState {
 struct VoiceModifierToggleShortcutState {
     private(set) var isHeld = false
     private(set) var wasUsedAsChord = false
+    private(set) var isAwaitingFullRelease = false
 
     mutating func update(
         activeModifiers: VoiceShortcutModifiers,
@@ -39,13 +40,24 @@ struct VoiceModifierToggleShortcutState {
             return false
         }
 
-        let containsShortcut =
-            activeModifiers.intersection(shortcutModifiers) == shortcutModifiers
+        let activeShortcutModifiers = activeModifiers.intersection(shortcutModifiers)
+        let containsShortcut = activeShortcutModifiers == shortcutModifiers
+        if isAwaitingFullRelease {
+            if activeShortcutModifiers.isEmpty {
+                isAwaitingFullRelease = false
+            }
+            return false
+        }
+
         if isHeld {
             guard containsShortcut else {
                 let wasCleanTap = !wasUsedAsChord
                 isHeld = false
                 wasUsedAsChord = false
+                // Modifier flags can arrive from both NSEvent and the polling
+                // fallback. Do not let a stale fully-held sample re-arm this
+                // gesture while another shortcut modifier is still down.
+                isAwaitingFullRelease = !activeShortcutModifiers.isEmpty
                 return wasCleanTap
             }
             return false
@@ -67,6 +79,7 @@ struct VoiceModifierToggleShortcutState {
     mutating func reset() {
         isHeld = false
         wasUsedAsChord = false
+        isAwaitingFullRelease = false
     }
 }
 

@@ -7,7 +7,7 @@ enum ChatSystemMonitorToolRegistry {
     static func definitions() -> [MLXChatToolDefinition] {
         [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
             name: toolName,
-            description: "Get current CPU, GPU, memory, and disk usage on this Mac.",
+            description: "Get current CPU, GPU, memory, and disk usage on this Mac, plus temperature, fan speed, thermal pressure, and power draw.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -26,6 +26,13 @@ struct ChatSystemMonitorToolResultPayload: Encodable {
     let diskUsedGB: Double?
     let diskTotalGB: Double?
     let uptimeSeconds: Int?
+    let dieTemperatureCelsius: Double?
+    let hottestSensorName: String?
+    let fanRPM: Int?
+    let thermalPressure: String?
+    let cpuWatts: Double?
+    let gpuWatts: Double?
+    let packageWatts: Double?
     let error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -37,6 +44,13 @@ struct ChatSystemMonitorToolResultPayload: Encodable {
         case diskUsedGB = "disk_used_gb"
         case diskTotalGB = "disk_total_gb"
         case uptimeSeconds = "uptime_seconds"
+        case dieTemperatureCelsius = "die_temperature_c"
+        case hottestSensorName = "hottest_sensor"
+        case fanRPM = "fan_rpm"
+        case thermalPressure = "thermal_pressure"
+        case cpuWatts = "cpu_watts"
+        case gpuWatts = "gpu_watts"
+        case packageWatts = "package_watts"
         case error
     }
 }
@@ -59,9 +73,16 @@ struct ChatSystemMonitorToolExecutor {
             gpuUsagePercent: snapshot.gpu.deviceUsage.flatMap(percent),
             memoryUsedGB: gigabytes(snapshot.memory.usedBytes),
             memoryTotalGB: gigabytes(snapshot.memory.totalBytes),
-            diskUsedGB: gigabytes(snapshot.disk.usedBytes),
-            diskTotalGB: gigabytes(snapshot.disk.totalBytes),
+            diskUsedGB: snapshot.disk.usedBytes.map(gigabytes),
+            diskTotalGB: snapshot.disk.totalBytes.map(gigabytes),
             uptimeSeconds: Int(snapshot.uptime),
+            dieTemperatureCelsius: snapshot.thermal.dieTemperatureCelsius.map(oneDecimal),
+            hottestSensorName: snapshot.thermal.hottestSensorName,
+            fanRPM: snapshot.thermal.maximumFanRPM,
+            thermalPressure: snapshot.thermal.thermalPressureLabel,
+            cpuWatts: snapshot.power.cpuWatts.map(oneDecimal),
+            gpuWatts: snapshot.power.gpuWatts.map(oneDecimal),
+            packageWatts: packageWatts(snapshot.power),
             error: nil
         )
         return try encodedPayload(payload)
@@ -87,6 +108,13 @@ struct ChatSystemMonitorToolExecutor {
             diskUsedGB: nil,
             diskTotalGB: nil,
             uptimeSeconds: nil,
+            dieTemperatureCelsius: nil,
+            hottestSensorName: nil,
+            fanRPM: nil,
+            thermalPressure: nil,
+            cpuWatts: nil,
+            gpuWatts: nil,
+            packageWatts: nil,
             error: error.localizedDescription
         )
         return (try? encodedPayload(payload))
@@ -95,6 +123,14 @@ struct ChatSystemMonitorToolExecutor {
 
     private func percent(_ usage: Double) -> Int {
         Int((usage * 100).rounded())
+    }
+
+    private func oneDecimal(_ value: Double) -> Double {
+        (value * 10).rounded() / 10
+    }
+
+    private func packageWatts(_ power: SystemPowerMetrics) -> Double? {
+        (power.socWatts ?? power.systemInputWatts).map(oneDecimal)
     }
 
     private func gigabytes(_ bytes: UInt64) -> Double {
