@@ -10,8 +10,7 @@ struct ToolsSectionView: View {
     @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
     @State private var configurationPendingEnablement: String?
-    @State private var isSelectingCustomTools = false
-    @State private var selectedCustomToolIDs = Set<CustomTool.ID>()
+    @State private var customToolSelection = NativBulkSelection<CustomTool.ID>()
     @State private var pendingCustomToolRemoval: [CustomTool] = []
     @State private var isConfirmingCustomToolRemoval = false
 
@@ -20,11 +19,8 @@ struct ToolsSectionView: View {
             title: "Tools",
             subtitle: "Built-in capabilities, custom tools, and tools from connected servers."
         ) {
-            Button(isSelectingCustomTools ? "Done" : "Select") {
-                isSelectingCustomTools.toggle()
-                if !isSelectingCustomTools {
-                    selectedCustomToolIDs.removeAll()
-                }
+            Button(customToolSelection.isActive ? "Done" : "Select") {
+                customToolSelection.toggleMode()
             }
             .disabled(customTools.isEmpty)
 
@@ -176,7 +172,7 @@ struct ToolsSectionView: View {
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
 
-            if isSelectingCustomTools {
+            if customToolSelection.isActive {
                 customToolSelectionBar
                     .padding(.bottom, 8)
             }
@@ -189,9 +185,13 @@ struct ToolsSectionView: View {
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool),
                     isEnabled: nil,
-                    isSelecting: isSelectingCustomTools,
-                    isSelected: tool.customToolID.map(selectedCustomToolIDs.contains) ?? false,
-                    onToggleSelection: { toggleCustomToolSelection(tool) }
+                    isSelecting: customToolSelection.isActive,
+                    isSelected: tool.customToolID.map { customToolSelection.contains($0) } ?? false,
+                    onToggleSelection: {
+                        if let id = tool.customToolID {
+                            customToolSelection.toggle(id)
+                        }
+                    }
                 )
             }
         }
@@ -325,52 +325,24 @@ struct ToolsSectionView: View {
     }
 
     private var selectedCustomTools: [CustomTool] {
-        model.settings.customTools.filter { selectedCustomToolIDs.contains($0.id) }
+        model.settings.customTools.filter { customToolSelection.contains($0.id) }
     }
 
     private var customToolSelectionBar: some View {
         let selections = selectedCustomTools
-        return HStack(spacing: 10) {
-            Text("\(selections.count) selected")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Button(
-                selectedCustomToolIDs.count == model.settings.customTools.count
-                    ? "Deselect All" : "Select All"
-            ) {
-                if selectedCustomToolIDs.count == model.settings.customTools.count {
-                    selectedCustomToolIDs.removeAll()
-                } else {
-                    selectedCustomToolIDs = Set(model.settings.customTools.map(\.id))
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Button(role: .destructive) {
+        let toolIDs = Set(model.settings.customTools.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: customToolSelection.includesAll(toolIDs),
+            deleteTitle: "Remove",
+            onToggleAll: {
+                customToolSelection.toggleAll(toolIDs)
+            },
+            onDelete: {
                 pendingCustomToolRemoval = selections
                 isConfirmingCustomToolRemoval = true
-            } label: {
-                Label("Remove", systemImage: "trash")
             }
-            .disabled(selections.isEmpty)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
-    }
-
-    private func toggleCustomToolSelection(_ tool: ToolItem) {
-        guard let id = tool.customToolID else { return }
-        if selectedCustomToolIDs.contains(id) {
-            selectedCustomToolIDs.remove(id)
-        } else {
-            selectedCustomToolIDs.insert(id)
-        }
     }
 
     private func removeCustomTools(_ tools: [CustomTool]) {
@@ -382,7 +354,7 @@ struct ToolsSectionView: View {
                 }
                 model.settings.customTools.removeAll { $0.id == tool.id }
                 model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
-                selectedCustomToolIDs.remove(tool.id)
+                customToolSelection.remove(Set([tool.id]))
             } catch {
                 failures += 1
             }
@@ -392,8 +364,8 @@ struct ToolsSectionView: View {
                 ? "A saved request credential could not be removed from Keychain."
                 : "Some saved request credentials could not be removed from Keychain."
         }
-        if selectedCustomToolIDs.isEmpty {
-            isSelectingCustomTools = false
+        if customToolSelection.isEmpty {
+            customToolSelection.finish()
         }
     }
 

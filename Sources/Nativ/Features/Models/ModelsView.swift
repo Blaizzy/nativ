@@ -225,8 +225,7 @@ struct ModelsView: View {
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
-    @State private var isSelectingInstalledModels = false
-    @State private var selectedInstalledModelIDs = Set<String>()
+    @State private var installedModelSelection = NativBulkSelection<String>()
     @State private var pendingInstalledModelDeletion: [LocalModel] = []
     @State private var isConfirmingInstalledModelDeletion = false
 
@@ -544,7 +543,7 @@ struct ModelsView: View {
                     .modelsListRow(top: 0)
             }
 
-            if isSelectingInstalledModels {
+            if installedModelSelection.isActive {
                 installedSelectionBar(for: visibleModels)
                     .modelsListRow(top: 0)
             }
@@ -572,8 +571,8 @@ struct ModelsView: View {
                         localModel.repoID),
                     canDelete: localModel.isDeletable && !modelState.modelSwitchInProgress
                         && !isModelInUse(localModel.repoID),
-                    isSelecting: isSelectingInstalledModels,
-                    isSelectedForDeletion: selectedInstalledModelIDs.contains(localModel.repoID),
+                    isSelecting: installedModelSelection.isActive,
+                    isSelectedForDeletion: installedModelSelection.contains(localModel.repoID),
                     onSetPreload: { slot, isEnabled in
                         if isEnabled {
                             model.requestPreloadedModelSwitch(
@@ -608,11 +607,8 @@ struct ModelsView: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             Spacer()
-            Button(isSelectingInstalledModels ? "Done" : "Select") {
-                isSelectingInstalledModels.toggle()
-                if !isSelectingInstalledModels {
-                    selectedInstalledModelIDs.removeAll()
-                }
+            Button(installedModelSelection.isActive ? "Done" : "Select") {
+                installedModelSelection.toggleMode()
             }
             .buttonStyle(.bordered)
             if localLibrary.isScanning {
@@ -623,39 +619,21 @@ struct ModelsView: View {
 
     private func installedSelectionBar(for visibleModels: [LocalModel]) -> some View {
         let eligibleVisibleModels = visibleModels.filter(canSelectForDeletion)
+        let eligibleIDs = Set(eligibleVisibleModels.map(\.repoID))
         let selectedModels = selectedInstalledModels
 
-        return HStack(spacing: 10) {
-            Text("\(selectedModels.count) selected")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Button(
-                selectedInstalledModelIDs.isSuperset(of: Set(eligibleVisibleModels.map(\.repoID)))
-                    ? "Deselect All" : "Select All"
-            ) {
-                let eligibleIDs = Set(eligibleVisibleModels.map(\.repoID))
-                if selectedInstalledModelIDs.isSuperset(of: eligibleIDs) {
-                    selectedInstalledModelIDs.subtract(eligibleIDs)
-                } else {
-                    selectedInstalledModelIDs.formUnion(eligibleIDs)
-                }
-            }
-            .disabled(eligibleVisibleModels.isEmpty)
-
-            Spacer(minLength: 0)
-
-            Button(role: .destructive) {
+        return NativBulkSelectionToolbar(
+            selectedCount: selectedModels.count,
+            allSelected: installedModelSelection.includesAll(eligibleIDs),
+            isSelectAllEnabled: !eligibleVisibleModels.isEmpty,
+            onToggleAll: {
+                installedModelSelection.toggleAll(eligibleIDs)
+            },
+            onDelete: {
                 pendingInstalledModelDeletion = selectedModels
                 isConfirmingInstalledModelDeletion = true
-            } label: {
-                Label("Delete", systemImage: "trash")
             }
-            .disabled(selectedModels.isEmpty)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
+        )
     }
 
     private var installedFilterBar: some View {
@@ -953,7 +931,7 @@ struct ModelsView: View {
 
     private var selectedInstalledModels: [LocalModel] {
         localLibrary.models.filter {
-            selectedInstalledModelIDs.contains($0.repoID) && canSelectForDeletion($0)
+            installedModelSelection.contains($0.repoID) && canSelectForDeletion($0)
         }
     }
 
@@ -965,17 +943,12 @@ struct ModelsView: View {
 
     private func toggleInstalledModelSelection(_ localModel: LocalModel) {
         guard canSelectForDeletion(localModel) else { return }
-        if selectedInstalledModelIDs.contains(localModel.repoID) {
-            selectedInstalledModelIDs.remove(localModel.repoID)
-        } else {
-            selectedInstalledModelIDs.insert(localModel.repoID)
-        }
+        installedModelSelection.toggle(localModel.repoID)
     }
 
     private func deleteInstalledModels(_ localModels: [LocalModel]) {
         localModels.forEach(deleteInstalledModel)
-        selectedInstalledModelIDs.subtract(localModels.map(\.repoID))
-        isSelectingInstalledModels = false
+        installedModelSelection.finish()
     }
 
     private var filteredLocalModels: [LocalModel] {

@@ -341,6 +341,89 @@ extension View {
     }
 }
 
+/// Feature-local bulk selection state with shared mode and set operations.
+struct NativBulkSelection<ID: Hashable> {
+    private(set) var isActive = false
+    private(set) var ids = Set<ID>()
+
+    var isEmpty: Bool { ids.isEmpty }
+
+    func contains(_ id: ID) -> Bool {
+        ids.contains(id)
+    }
+
+    func includesAll(_ candidateIDs: Set<ID>) -> Bool {
+        !candidateIDs.isEmpty && ids.isSuperset(of: candidateIDs)
+    }
+
+    mutating func toggleMode() {
+        isActive.toggle()
+        if !isActive {
+            ids.removeAll()
+        }
+    }
+
+    mutating func toggle(_ id: ID) {
+        if ids.contains(id) {
+            ids.remove(id)
+        } else {
+            ids.insert(id)
+        }
+    }
+
+    mutating func toggleAll(_ candidateIDs: Set<ID>) {
+        guard !candidateIDs.isEmpty else { return }
+        if includesAll(candidateIDs) {
+            ids.subtract(candidateIDs)
+        } else {
+            ids.formUnion(candidateIDs)
+        }
+    }
+
+    mutating func remove(_ removedIDs: Set<ID>) {
+        ids.subtract(removedIDs)
+    }
+
+    mutating func finish() {
+        isActive = false
+        ids.removeAll()
+    }
+}
+
+/// Shared controls for selecting every visible item and performing bulk removal.
+struct NativBulkSelectionToolbar: View {
+    let selectedCount: Int
+    let allSelected: Bool
+    var deleteTitle = "Delete"
+    var isSelectAllEnabled = true
+    let onToggleAll: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(selectedCount) selected")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button(allSelected ? "Deselect All" : "Select All", action: onToggleAll)
+                .disabled(!isSelectAllEnabled)
+
+            Spacer(minLength: 0)
+
+            Button(role: .destructive, action: onDelete) {
+                Label(deleteTitle, systemImage: "trash")
+            }
+            .disabled(selectedCount == 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color.primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+    }
+}
+
 /// A monospaced code/JSON block with a subtle background and selectable text.
 /// JSON content is pretty-printed; anything else is shown verbatim.
 struct NativCodeBlock: View {
