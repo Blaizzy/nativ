@@ -2867,14 +2867,9 @@ private struct AudioCaptureRecordRow: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 if isSelecting {
-                    Button(action: onToggleSelection) {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Select \(record.displayTitle)")
-                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 }
 
                 Image(systemName: record.resolvedKind.systemImage)
@@ -3010,12 +3005,27 @@ private struct AudioCaptureRecordRow: View {
         }
         .padding(14)
         .background(
-            Color.primary.opacity(0.025),
+            isSelecting && isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.025),
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+                .stroke(
+                    isSelecting && isSelected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.07),
+                    lineWidth: 1
+                )
+        }
+        .overlay {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.clear)
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select \(record.displayTitle)")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+            }
         }
     }
 

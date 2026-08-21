@@ -1606,16 +1606,10 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     var body: some View {
         HStack(spacing: 10) {
             if isSelecting {
-                Button(action: onToggleSelection) {
-                    Image(systemName: isSelectedForDeletion ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isSelectedForDeletion ? Color.accentColor : Color.secondary)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canDelete)
-                .help(canDelete ? "Select \(localModel.repoID)" : "This model can’t be deleted while it is in use")
-                .accessibilityLabel("Select \(localModel.repoID)")
-                .accessibilityValue(isSelectedForDeletion ? "Selected" : "Not selected")
+                Image(systemName: isSelectedForDeletion ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelectedForDeletion ? Color.accentColor : Color.secondary)
+                    .font(.title3)
+                    .help(canDelete ? "Select \(localModel.repoID)" : "This model can’t be deleted while it is in use")
             }
 
             Button(action: onShowReadme) {
@@ -1722,7 +1716,23 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         }
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .modelRowBackground(isHighlighted: isReadmeSelected)
+        .modelRowBackground(
+            isHighlighted: isReadmeSelected,
+            isSelected: isSelecting && isSelectedForDeletion
+        )
+        .overlay {
+            if isSelecting {
+                Button(action: onToggleSelection) {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.clear)
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canDelete)
+                .accessibilityLabel("Select \(localModel.repoID)")
+                .accessibilityValue(isSelectedForDeletion ? "Selected" : "Not selected")
+            }
+        }
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -2700,6 +2710,7 @@ private struct ModelsEmptyState: View {
 
 private struct ModelRowBackground: ViewModifier {
     let isHighlighted: Bool
+    let isSelected: Bool
     let isHovered: Bool
 
     func body(content: Content) -> some View {
@@ -2715,6 +2726,9 @@ private struct ModelRowBackground: ViewModifier {
     }
 
     private var backgroundColor: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.12)
+        }
         if isHovered {
             return Color.accentColor.opacity(0.08)
         }
@@ -2724,6 +2738,9 @@ private struct ModelRowBackground: ViewModifier {
     private var borderColor: Color {
         if isHighlighted {
             return Color.accentColor.opacity(0.90)
+        }
+        if isSelected {
+            return Color.accentColor.opacity(0.55)
         }
         if isHovered {
             return Color.accentColor.opacity(0.40)
@@ -2737,8 +2754,18 @@ private struct ModelRowBackground: ViewModifier {
 }
 
 extension View {
-    fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
-        modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
+    fileprivate func modelRowBackground(
+        isHighlighted: Bool,
+        isSelected: Bool = false,
+        isHovered: Bool = false
+    ) -> some View {
+        modifier(
+            ModelRowBackground(
+                isHighlighted: isHighlighted,
+                isSelected: isSelected,
+                isHovered: isHovered
+            )
+        )
     }
 
     fileprivate func modelsListRow(
