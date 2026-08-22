@@ -8,6 +8,8 @@ struct RuntimeSettingsPanel: View {
 
     private static let railWidth: CGFloat = 176
     private static let labelWidth: CGFloat = 116
+    private static let valueWidth: CGFloat = 160
+    private static let pathWidth: CGFloat = 360
     private static let unitWidth: CGFloat = 48
 
     var body: some View {
@@ -238,6 +240,8 @@ struct RuntimeSettingsPanel: View {
                     field: field,
                     store: store,
                     labelWidth: Self.labelWidth,
+                    valueWidth: Self.valueWidth,
+                    pathWidth: Self.pathWidth,
                     unitWidth: Self.unitWidth
                 )
             }
@@ -348,6 +352,8 @@ private struct RuntimeSettingRow: View {
     let field: RuntimeSettingField
     @ObservedObject var store: RuntimeSettingsStore
     let labelWidth: CGFloat
+    let valueWidth: CGFloat
+    let pathWidth: CGFloat
     let unitWidth: CGFloat
 
     @State private var draft = ""
@@ -358,12 +364,14 @@ private struct RuntimeSettingRow: View {
 
     private var isOverridden: Bool { !field.isDefault }
 
-    private var stretchesToFill: Bool {
+    private var controlWidth: CGFloat? {
         switch field.control {
-        case .number, .combo, .text:
-            return true
+        case .number, .combo:
+            return valueWidth
+        case .text:
+            return pathWidth
         case .toggle, .choice:
-            return false
+            return nil
         }
     }
 
@@ -382,13 +390,10 @@ private struct RuntimeSettingRow: View {
                 .frame(width: labelWidth, alignment: .leading)
                 .help(field.spec.help)
 
-            if stretchesToFill {
-                control
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                control
-                Spacer(minLength: 0)
-            }
+            Spacer(minLength: 12)
+
+            control
+                .frame(width: controlWidth, alignment: .trailing)
 
             Text(field.unitSuffix ?? "")
                 .font(.caption)
