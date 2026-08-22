@@ -9,7 +9,7 @@ struct ImageGenerationView: View {
         static let horizontalPadding: CGFloat = 32
     }
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
@@ -148,7 +148,7 @@ struct ImageGenerationView: View {
 }
 
 private struct ImageGenerationComposer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
     let localModels: [LocalModel]
     let isScanningForModels: Bool

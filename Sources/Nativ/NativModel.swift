@@ -1,6 +1,6 @@
-import Combine
 import Foundation
 import NativServerKit
+import Observation
 
 struct SessionTokenActivitySample: Equatable, Sendable {
     let recordedAt: Date
@@ -33,28 +33,29 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
 }
 
 @MainActor
-final class NativModel: ObservableObject, ChatModelSwitchingSurface {
-    @Published private(set) var isRunning = false
-    @Published private(set) var logText = ""
-    @Published private(set) var metrics: NativMetrics?
-    @Published private(set) var lastMetricsError: String?
-    @Published private(set) var lastMetricsFetchAt: Date?
-    @Published private(set) var allTimeStats = NativAllTimeStats.empty
-    @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
+@Observable
+final class NativModel: ChatModelSwitchingSurface {
+    private(set) var isRunning = false
+    private(set) var logText = ""
+    private(set) var metrics: NativMetrics?
+    private(set) var lastMetricsError: String?
+    private(set) var lastMetricsFetchAt: Date?
+    private(set) var allTimeStats = NativAllTimeStats.empty
+    private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     /// How long a model switch may stay unconfirmed before the controls unlock.
     nonisolated static let modelSwitchTimeout: TimeInterval = 180
 
-    @Published private(set) var modelSwitchInProgress = false
-    @Published private(set) var modelSwitchTargetID: String?
+    private(set) var modelSwitchInProgress = false
+    private(set) var modelSwitchTargetID: String?
     private var modelSwitchWatchdog: Task<Void, Never>?
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
-    @Published private(set) var metricsLoading = false
-    @Published private(set) var systemHuggingFaceCredential =
+    private(set) var modelLoadingProgress: Double?
+    private(set) var modelLoadFailure: ModelLoadFailure?
+    private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
+    private(set) var metricsLoading = false
+    private(set) var systemHuggingFaceCredential =
         HuggingFaceAuthentication.systemCredential()
-    @Published private(set) var serverRestartCountdown: Int?
-    @Published var settings = NativSettings.load() {
+    private(set) var serverRestartCountdown: Int?
+    var settings = NativSettings.load() {
         didSet {
             settings.save()
         }

@@ -11,7 +11,7 @@ private enum ModelConfigurationLayoutMetrics {
 }
 
 struct ModelConfigurationLayout<Content: View>: View {
-    @ObservedObject var model: NativModel
+    @Bindable var model: NativModel
     @Binding var isConfigurationVisible: Bool
     private let content: Content
 

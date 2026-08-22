@@ -6,7 +6,7 @@ import Textual
 import UniformTypeIdentifiers
 
 struct ChatView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
@@ -95,7 +95,7 @@ private enum ChatTranscriptLayout {
 
 private struct ChatTranscriptView: View {
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
@@ -294,7 +294,7 @@ private struct ChatTranscriptView: View {
 }
 
 private struct ChatComposerContainer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode

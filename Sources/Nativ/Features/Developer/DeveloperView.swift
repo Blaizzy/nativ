@@ -16,7 +16,7 @@ struct DeveloperView: View {
     private static let contentBottomPadding: CGFloat = 22
     private static let logPanelMinimumHeight: CGFloat = 320
 
-    @ObservedObject var model: NativModel
+    @Bindable var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0

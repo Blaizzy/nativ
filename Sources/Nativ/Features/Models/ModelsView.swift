@@ -78,9 +78,10 @@ private final class ModelsNativState: ObservableObject {
     @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
     @Published private(set) var loadedModelID: String?
 
-    private var cancellables = Set<AnyCancellable>()
+    private let model: NativModel
 
     init(model: NativModel) {
+        self.model = model
         settings = model.settings
         isRunning = model.isRunning
         modelSwitchInProgress = model.modelSwitchInProgress
@@ -91,43 +92,36 @@ private final class ModelsNativState: ObservableObject {
         systemHuggingFaceCredential = model.systemHuggingFaceCredential
         loadedModelID = model.metrics?.server.loadedModel
 
-        model.$settings
-            .removeDuplicates()
-            .sink { [weak self] in self?.settings = $0 }
-            .store(in: &cancellables)
-        model.$isRunning
-            .removeDuplicates()
-            .sink { [weak self] in self?.isRunning = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchInProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchInProgress = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchTargetID
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchTargetID = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadingProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadingProgress = $0 }
-            .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] in self?.metricsLoading = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadFailure
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadFailure = $0 }
-            .store(in: &cancellables)
-        model.$systemHuggingFaceCredential
-            .removeDuplicates()
-            .sink { [weak self] in self?.systemHuggingFaceCredential = $0 }
-            .store(in: &cancellables)
-        model.$metrics
-            .map { $0?.server.loadedModel }
-            .removeDuplicates()
-            .sink { [weak self] in self?.loadedModelID = $0 }
-            .store(in: &cancellables)
+        observeModel()
+    }
+
+    private func observeModel() {
+        withObservationTracking { [weak self] in
+            self?.captureModelSnapshot()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeModel() }
+        }
+    }
+
+    private func update<T: Equatable>(
+        _ keyPath: ReferenceWritableKeyPath<ModelsNativState, T>,
+        to value: T
+    ) {
+        if self[keyPath: keyPath] != value {
+            self[keyPath: keyPath] = value
+        }
+    }
+
+    private func captureModelSnapshot() {
+        update(\.settings, to: model.settings)
+        update(\.isRunning, to: model.isRunning)
+        update(\.modelSwitchInProgress, to: model.modelSwitchInProgress)
+        update(\.modelSwitchTargetID, to: model.modelSwitchTargetID)
+        update(\.modelLoadingProgress, to: model.modelLoadingProgress)
+        update(\.metricsLoading, to: model.metricsLoading)
+        update(\.modelLoadFailure, to: model.modelLoadFailure)
+        update(\.systemHuggingFaceCredential, to: model.systemHuggingFaceCredential)
+        update(\.loadedModelID, to: model.metrics?.server.loadedModel)
     }
 
     var effectiveHuggingFaceToken: String? {

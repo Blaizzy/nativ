@@ -3,7 +3,7 @@ import NativServerKit
 import SwiftUI
 
 struct StatsView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let dashboard: DashboardViewModel
     var titleLeadingInset: CGFloat = 0
 
