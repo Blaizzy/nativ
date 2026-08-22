@@ -1,10 +1,10 @@
 import AppKit
-import Combine
 import CoreGraphics
 import Darwin
 import Foundation
 import IOKit
 import Metal
+import Observation
 import QuartzCore
 
 struct SystemHistorySample: Identifiable, Equatable, Sendable {
@@ -172,24 +172,25 @@ struct SystemMonitorSnapshot: Equatable, Sendable {
 }
 
 @MainActor
-final class SystemMonitorStore: ObservableObject {
-    @Published private(set) var snapshot = SystemMonitorSnapshot()
-    @Published private(set) var cpuHistory: [SystemHistorySample] = []
-    @Published private(set) var gpuHistory: [SystemHistorySample] = []
-    @Published private(set) var aneHistory: [SystemHistorySample] = []
-    @Published private(set) var fpsHistory: [SystemHistorySample] = []
-    @Published private(set) var memoryHistory: [SystemHistorySample] = []
-    @Published private(set) var swapHistory: [SystemHistorySample] = []
-    @Published private(set) var diskReadHistory: [SystemHistorySample] = []
-    @Published private(set) var diskWriteHistory: [SystemHistorySample] = []
-    @Published private(set) var temperatureHistory: [SystemHistorySample] = []
-    @Published private(set) var powerHistory: [SystemHistorySample] = []
-    @Published private(set) var isSampling = false
+@Observable
+final class SystemMonitorStore {
+    private(set) var snapshot = SystemMonitorSnapshot()
+    private(set) var cpuHistory: [SystemHistorySample] = []
+    private(set) var gpuHistory: [SystemHistorySample] = []
+    private(set) var aneHistory: [SystemHistorySample] = []
+    private(set) var fpsHistory: [SystemHistorySample] = []
+    private(set) var memoryHistory: [SystemHistorySample] = []
+    private(set) var swapHistory: [SystemHistorySample] = []
+    private(set) var diskReadHistory: [SystemHistorySample] = []
+    private(set) var diskWriteHistory: [SystemHistorySample] = []
+    private(set) var temperatureHistory: [SystemHistorySample] = []
+    private(set) var powerHistory: [SystemHistorySample] = []
+    private(set) var isSampling = false
 
     private let collector = SystemMetricsCollector()
     private let displayFPSSampler = SystemDisplayFPSSampler()
     private let aneSampler = SystemANEUtilizationSampler()
-    private var samplingTask: Task<Void, Never>?
+    nonisolated(unsafe) private var samplingTask: Task<Void, Never>?
     private let historyLimit = 300
 
     deinit {

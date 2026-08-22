@@ -48,7 +48,7 @@ private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
 }
 
 struct SystemMonitorView: View {
-    @ObservedObject var store: SystemMonitorStore
+    var store: SystemMonitorStore
     @ObservedObject var menuBarPreferences: SystemMenuBarPreferences
     var titleLeadingInset: CGFloat = 0
     @State private var destination: SystemMonitorDestination = .overview
