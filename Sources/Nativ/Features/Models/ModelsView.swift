@@ -802,8 +802,7 @@ struct ModelsView: View {
 
     private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
         var slots: [ModelPreloadSlot] = []
-        if localModel.capabilities.contains(.text)
-            && !localModel.capabilities.contains(.reranking) {
+        if localModel.isEligibleForLanguageModelPicker {
             slots.append(.language)
         }
         if localModel.capabilities.contains(.imageGeneration) {

@@ -29,9 +29,10 @@ Each model carries a set of capabilities (`LocalModelCapability`):
 | `tools` | Supports tool calling. |
 | `drafter` | Usable as a speculative-decoding draft model. |
 
-Capability determines where a model is offered: only `text` (and non-image `vision`) models
-appear in the conversation model picker; image, speech, and embedding models are selected in
-their own slots.
+Capability determines where a model is offered: chat model pickers use
+`isEligibleForLanguageModelPicker` — `text` (and non-image `vision`) models qualify, while
+`drafter` and `reranking` models are always excluded. Image, speech, and embedding models are
+selected in their own slots.
 
 ## Downloading
 
@@ -74,3 +75,12 @@ A draft model can accelerate a larger target model. Enable `speculativeDecodingE
 `draftModelID`; the draft must be capability-compatible with the target. Draft kind and block
 size are configurable (`draftKind`, `draftBlockSize`). Only `drafter`-eligible models are offered
 as drafts, and a mismatched hidden size is flagged as an incompatible target.
+
+Drafters are also listed in the chat composer's model menu, in their own section below the chat
+models. Selecting one does not load it as the main model — it enables speculative decoding with
+that drafter on its compatible target
+([`DrafterTargetResolver`](../../Sources/Nativ/Features/Models/LocalModelDiscovery.swift)): the
+current chat model when compatible, otherwise the name-derived pair (for example
+`Qwen3.8-27B-MTP-8bit` → `Qwen3.8-27B-8bit`), otherwise the first hidden-size-compatible chat
+model. When no compatible target is installed, the menu entry notes that a compatible chat model
+is needed and selecting it does nothing.

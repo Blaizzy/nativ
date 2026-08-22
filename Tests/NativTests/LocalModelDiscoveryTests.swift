@@ -494,6 +494,25 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
     }
 
+    func testMTPSnapshotScansAsIneligibleDrafter() async throws {
+        // A real MTP checkpoint (model_type qwen3_5_mtp) must surface both the
+        // .text and .drafter capabilities: it is a language-model family member,
+        // but chat model pickers must keep it out via isEligibleForLanguageModelPicker.
+        try makeTextModelSnapshot(
+            repoID: "mlx-community/Qwen3.8-27B-MTP-8bit",
+            modelType: "qwen3_5_mtp",
+            architectures: ["Qwen3_5MTPDraftModel"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let mtp = try XCTUnwrap(models.first)
+        XCTAssertTrue(mtp.capabilities.contains(.text))
+        XCTAssertTrue(mtp.capabilities.contains(.drafter))
+        XCTAssertEqual(mtp.drafterKind, "mtp")
+        XCTAssertFalse(mtp.isEligibleForLanguageModelPicker)
+    }
+
     func testRerankerIsClassifiedAndExcludedFromLanguageModelPicker() async throws {
         try makeTextModelSnapshot(
             repoID: "mlx-community/Qwen3-Reranker-0.6B-mxfp8",

@@ -1302,6 +1302,41 @@ def install_metrics_overlay() -> None:
     async def metrics_endpoint():
         return TRACKER.snapshot()
 
+def reject_drafter_as_main_model(model_id: str) -> None:
+    """Reject speculative drafter checkpoints loaded as the main chat model.
+
+    Drafters (MTP/EAGLE-3/DFlash) are partial models that only work through the
+    speculative decoding path; loading one as the target model crashes the
+    generation thread with an opaque AttributeError. Fail fast with a clear
+    message instead. When the config cannot be read, defer to the normal
+    loading flow and its own error reporting.
+    """
+    try:
+        from mlx_vlm.speculative.drafters import DRAFTER_KIND_BY_MODEL_TYPE
+        from mlx_vlm.utils import get_model_path, load_config
+
+        config = load_config(get_model_path(model_id))
+    except Exception:
+        return
+    model_type = str(
+        config.get("model_type") or config.get("speculators_model_type") or ""
+    ).lower()
+    if not model_type:
+        return
+    is_drafter = model_type in DRAFTER_KIND_BY_MODEL_TYPE or any(
+        marker in model_type for marker in ("mtp", "dflash", "eagle")
+    )
+    if is_drafter:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{model_id} is a speculative drafter (model_type={model_type!r}) "
+                "and cannot be used as the main model. "
+                "Select it as the draft model for speculative decoding instead."
+            ),
+        )
+
+
     @base.app.post("/models/load", include_in_schema=False)
     @base.app.post("/v1/models/load")
     def load_model_endpoint(request: Request, payload: dict[str, Any]):
@@ -1317,6 +1352,8 @@ def install_metrics_overlay() -> None:
         adapter = payload.get("adapter_path")
         if adapter is not None and not isinstance(adapter, str):
             raise HTTPException(status_code=400, detail="adapter_path must be a string or null.")
+
+        reject_drafter_as_main_model(model.strip())
 
         try:
             base.get_cached_model(model.strip(), adapter)
