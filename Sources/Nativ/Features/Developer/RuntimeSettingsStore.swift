@@ -169,6 +169,35 @@ struct RuntimeSettingField: Identifiable, Equatable {
     ]
 }
 
+enum RuntimeSettingDraft {
+    static func number(
+        _ text: String,
+        isInteger: Bool,
+        allowsNull: Bool,
+        defaultValue: RuntimeSettingValue
+    ) -> RuntimeSettingValue? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            return allowsNull ? .null : defaultValue
+        }
+        if isInteger, let parsed = Int(trimmed) {
+            return .int(parsed)
+        }
+        if let parsed = Double(trimmed) {
+            return isInteger ? .int(Int(parsed)) : .double(parsed)
+        }
+        return nil
+    }
+
+    static func text(_ text: String, allowsNull: Bool) -> RuntimeSettingValue {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            return allowsNull ? .null : .string("")
+        }
+        return .string(trimmed)
+    }
+}
+
 enum RuntimeSettingGroup: String, CaseIterable, Identifiable {
     case requests
     case kvCache
@@ -221,7 +250,6 @@ final class RuntimeSettingsStore: ObservableObject {
 
     @Published private(set) var state: LoadState = .idle
     @Published private(set) var fields: [RuntimeSettingField] = []
-    @Published private(set) var fingerprint = ""
     @Published private(set) var rejections: [RuntimeSettingRejection] = []
     @Published private(set) var appliedNotice: String?
     @Published private(set) var isApplying = false
@@ -393,7 +421,6 @@ final class RuntimeSettingsStore: ObservableObject {
 
     private func adopt(_ update: RuntimeSettingsUpdate) {
         rejections = update.rejected
-        fingerprint = update.fingerprint
         merge(current: update.current)
     }
 
@@ -407,7 +434,6 @@ final class RuntimeSettingsStore: ObservableObject {
     }
 
     private func apply(snapshot: RuntimeSettingsSnapshot) {
-        fingerprint = snapshot.fingerprint
         let edits = Dictionary(
             uniqueKeysWithValues: fields.filter(\.isDirty).map { ($0.id, $0.value) }
         )

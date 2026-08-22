@@ -361,13 +361,14 @@ private struct RuntimeSettingRow: View {
     let labelWidth: CGFloat
     let valueWidth: CGFloat
 
-    @State private var draft = ""
     @State private var isHovering = false
     @FocusState private var isFocused: Bool
 
     private var isActive: Bool { store.isActive(field) }
 
     private var isOverridden: Bool { !field.isDefault }
+
+    private var showsReset: Bool { isOverridden && isActive }
 
     private var controlWidth: CGFloat? {
         switch field.control {
@@ -397,7 +398,7 @@ private struct RuntimeSettingRow: View {
 
             resetButton
 
-            control
+            RuntimeSettingControl(field: field, store: store, isFocused: $isFocused)
                 .frame(width: controlWidth, alignment: .trailing)
         }
         .disabled(!isActive)
@@ -407,10 +408,6 @@ private struct RuntimeSettingRow: View {
     private var labelColor: Color {
         if field.isDirty { return .orange }
         return isActive ? .primary : .secondary
-    }
-
-    private var showsReset: Bool {
-        isOverridden && isActive
     }
 
     private var resetButton: some View {
@@ -427,9 +424,16 @@ private struct RuntimeSettingRow: View {
         .disabled(!showsReset)
         .accessibilityHidden(!showsReset)
     }
+}
 
-    @ViewBuilder
-    private var control: some View {
+private struct RuntimeSettingControl: View {
+    let field: RuntimeSettingField
+    @ObservedObject var store: RuntimeSettingsStore
+    @FocusState.Binding var isFocused: Bool
+
+    @State private var draft = ""
+
+    var body: some View {
         switch field.control {
         case .toggle:
             Toggle(
@@ -480,9 +484,7 @@ private struct RuntimeSettingRow: View {
                         Divider()
                     }
                     ForEach(presets, id: \.self) { preset in
-                        Button(preset) {
-                            commit(preset, isInteger: isInteger)
-                        }
+                        Button(preset) { commit(preset, isInteger: isInteger) }
                     }
                 } label: {
                     Image(systemName: "chevron.up.chevron.down")
@@ -560,31 +562,30 @@ private struct RuntimeSettingRow: View {
     }
 
     private func commit(_ text: String, isInteger: Bool) {
-        draft = text
-        commitNumber(isInteger: isInteger)
+        apply(RuntimeSettingDraft.number(
+            text,
+            isInteger: isInteger,
+            allowsNull: field.spec.allowsNull,
+            defaultValue: field.spec.defaultValue
+        ))
     }
 
     private func commitNumber(isInteger: Bool) {
-        let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else {
-            store.setValue(field.spec.allowsNull ? .null : field.spec.defaultValue, for: field.id)
-            return
-        }
-        if isInteger, let parsed = Int(trimmed) {
-            store.setValue(.int(parsed), for: field.id)
-        } else if let parsed = Double(trimmed) {
-            store.setValue(isInteger ? .int(Int(parsed)) : .double(parsed), for: field.id)
-        } else {
-            draft = editableText
-        }
+        commit(draft, isInteger: isInteger)
     }
 
     private func commitText() {
-        let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty {
-            store.setValue(field.spec.allowsNull ? .null : .string(""), for: field.id)
-        } else {
-            store.setValue(.string(trimmed), for: field.id)
+        store.setValue(
+            RuntimeSettingDraft.text(draft, allowsNull: field.spec.allowsNull),
+            for: field.id
+        )
+    }
+
+    private func apply(_ value: RuntimeSettingValue?) {
+        guard let value else {
+            draft = editableText
+            return
         }
+        store.setValue(value, for: field.id)
     }
 }
