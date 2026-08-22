@@ -171,6 +171,8 @@ targets:
       - path: Sources/Nativ/Features/Routines/ScheduledTaskNotification.swift
       - path: Sources/Nativ/Utilities/NativNotificationService.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputDevicePreferences.swift
+      - path: Sources/Nativ/Features/VoiceCapture/RealtimeAudioMeter.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioInputLevelMonitor.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
