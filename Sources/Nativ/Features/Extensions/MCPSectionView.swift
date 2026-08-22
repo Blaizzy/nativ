@@ -7,6 +7,9 @@ struct MCPSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: MCPServerConfig?
     @State private var pendingDelete: MCPServerConfig?
+    @State private var customServerSelection = NativBulkSelection<MCPServerConfig.ID>()
+    @State private var pendingCustomServerDeletion: [MCPServerConfig] = []
+    @State private var isConfirmingCustomServerDeletion = false
 
     private let catalog = MCPServerCatalog.bundled
 
@@ -15,6 +18,11 @@ struct MCPSectionView: View {
             title: "MCP",
             subtitle: "Connect Model Context Protocol servers so tool-capable models can use their tools."
         ) {
+            Button(customServerSelection.isActive ? "Done" : "Select") {
+                customServerSelection.toggleMode()
+            }
+            .disabled(customServers.isEmpty)
+
             Button {
                 editing = MCPServerConfig(name: "", isEnabled: true)
             } label: {
@@ -44,6 +52,10 @@ struct MCPSectionView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
                         } else {
+                            if customServerSelection.isActive {
+                                customServerSelectionBar
+                                    .padding(.bottom, 8)
+                            }
                             ForEach(Array(customServers.enumerated()), id: \.element.id) { index, server in
                                 if index > 0 { Divider() }
                                 configuredServerRow(server)
@@ -79,6 +91,23 @@ struct MCPSectionView: View {
             }
         } message: { server in
             Text("“\(server.name.isEmpty ? "This server" : server.name)” and its configuration will be removed.")
+        }
+        .alert(
+            "Delete \(pendingCustomServerDeletion.count) MCP \(pendingCustomServerDeletion.count == 1 ? "server" : "servers")?",
+            isPresented: $isConfirmingCustomServerDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                let ids = Set(pendingCustomServerDeletion.map(\.id))
+                model.settings.mcpServers.removeAll { ids.contains($0.id) }
+                customServerSelection.finish()
+                pendingCustomServerDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingCustomServerDeletion = []
+            }
+        } message: {
+            Text("The selected MCP server configurations will be removed.")
         }
     }
 
@@ -126,7 +155,30 @@ struct MCPSectionView: View {
             onToggle: { toggle(server) },
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
+            isSelecting: customServerSelection.isActive,
+            isSelected: customServerSelection.contains(server.id),
+            onToggleSelection: { customServerSelection.toggle(server.id) },
             onDelete: { pendingDelete = server }
+        )
+    }
+
+    private var selectedCustomServers: [MCPServerConfig] {
+        customServers.filter { customServerSelection.contains($0.id) }
+    }
+
+    private var customServerSelectionBar: some View {
+        let selections = selectedCustomServers
+        let serverIDs = Set(customServers.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: customServerSelection.includesAll(serverIDs),
+            onToggleAll: {
+                customServerSelection.toggleAll(serverIDs)
+            },
+            onDelete: {
+                pendingCustomServerDeletion = selections
+                isConfirmingCustomServerDeletion = true
+            }
         )
     }
 
@@ -166,6 +218,9 @@ private struct MCPServerRow: View {
     let onToggle: () -> Void
     let onReconnect: (() -> Void)?
     let onEdit: () -> Void
+    var isSelecting = false
+    var isSelected = false
+    var onToggleSelection: (() -> Void)?
     let onDelete: (() -> Void)?
 
     @State private var copiedAuthorizationCode = false
@@ -173,6 +228,10 @@ private struct MCPServerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: showsGitHubSetup ? 10 : 0) {
             HStack(spacing: 12) {
+                if isSelecting, onToggleSelection != nil {
+                    NativBulkSelectionCheckbox(isSelected: isSelected)
+                }
+
                 NativStatusDot(tone: statusTone, pulsing: isConnecting)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name.isEmpty ? "Untitled server" : server.name)
@@ -257,6 +316,13 @@ private struct MCPServerRow: View {
             }
         }
         .padding(.vertical, 11)
+        .nativBulkSelectable(
+            isSelecting: isSelecting && onToggleSelection != nil,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select \(server.name.isEmpty ? "Untitled server" : server.name)",
+            action: onToggleSelection ?? {}
+        )
     }
 
     private var showsGitHubSetup: Bool {

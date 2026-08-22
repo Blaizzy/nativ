@@ -10,12 +10,20 @@ struct ToolsSectionView: View {
     @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
     @State private var browsingToolPendingEnablement: String?
+    @State private var customToolSelection = NativBulkSelection<CustomTool.ID>()
+    @State private var pendingCustomToolRemoval: [CustomTool] = []
+    @State private var isConfirmingCustomToolRemoval = false
 
     var body: some View {
         HubSectionScaffold(
             title: "Tools",
             subtitle: "Built-in capabilities, custom tools, and tools from connected servers."
         ) {
+            Button(customToolSelection.isActive ? "Done" : "Select") {
+                customToolSelection.toggleMode()
+            }
+            .disabled(customTools.isEmpty)
+
             Button {
                 showsAddTool = true
             } label: {
@@ -27,7 +35,7 @@ struct ToolsSectionView: View {
                 toolGroup(title: "Built-in", tools: nativeTools)
 
                 if !customTools.isEmpty {
-                    toolGroup(title: "Custom", tools: customTools)
+                    customToolsGroup
                 }
 
                 ForEach(configuredServers) { server in
@@ -93,6 +101,21 @@ struct ToolsSectionView: View {
                 Text("This removes the tool.")
             }
         }
+        .alert(
+            "Remove \(pendingCustomToolRemoval.count) \(pendingCustomToolRemoval.count == 1 ? "tool" : "tools")?",
+            isPresented: $isConfirmingCustomToolRemoval
+        ) {
+            Button("Remove", role: .destructive) {
+                removeCustomTools(pendingCustomToolRemoval)
+                pendingCustomToolRemoval = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingCustomToolRemoval = []
+            }
+        } message: {
+            Text("The selected custom tools and any saved request credentials will be removed.")
+        }
         .alert("Couldn’t remove tool", isPresented: Binding(
             get: { toolManagementError != nil },
             set: { if !$0 { toolManagementError = nil } }
@@ -127,6 +150,38 @@ struct ToolsSectionView: View {
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool),
                     isEnabled: enabledBinding(for: tool)
+                )
+            }
+        }
+    }
+
+    private var customToolsGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("CUSTOM")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 6)
+
+            if customToolSelection.isActive {
+                customToolSelectionBar
+                    .padding(.bottom, 8)
+            }
+
+            ForEach(Array(customTools.enumerated()), id: \.element.id) { index, tool in
+                if index > 0 { Divider() }
+                ToolRow(
+                    tool: tool,
+                    onInspect: { inspect(tool) },
+                    onEdit: editAction(for: tool),
+                    onRemove: removeAction(for: tool),
+                    isEnabled: nil,
+                    isSelecting: customToolSelection.isActive,
+                    isSelected: tool.customToolID.map { customToolSelection.contains($0) } ?? false,
+                    onToggleSelection: {
+                        if let id = tool.customToolID {
+                            customToolSelection.toggle(id)
+                        }
+                    }
                 )
             }
         }
@@ -259,6 +314,51 @@ struct ToolsSectionView: View {
         }
     }
 
+    private var selectedCustomTools: [CustomTool] {
+        model.settings.customTools.filter { customToolSelection.contains($0.id) }
+    }
+
+    private var customToolSelectionBar: some View {
+        let selections = selectedCustomTools
+        let toolIDs = Set(model.settings.customTools.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: customToolSelection.includesAll(toolIDs),
+            deleteTitle: "Remove",
+            onToggleAll: {
+                customToolSelection.toggleAll(toolIDs)
+            },
+            onDelete: {
+                pendingCustomToolRemoval = selections
+                isConfirmingCustomToolRemoval = true
+            }
+        )
+    }
+
+    private func removeCustomTools(_ tools: [CustomTool]) {
+        var failures = 0
+        for tool in tools {
+            do {
+                if tool.kind == .endpoint {
+                    try CustomToolKeychain().save(nil, for: tool.id)
+                }
+                model.settings.customTools.removeAll { $0.id == tool.id }
+                model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
+                customToolSelection.remove(Set([tool.id]))
+            } catch {
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            toolManagementError = failures == 1
+                ? "A saved request credential could not be removed from Keychain."
+                : "Some saved request credentials could not be removed from Keychain."
+        }
+        if customToolSelection.isEmpty {
+            customToolSelection.finish()
+        }
+    }
+
     private func mcpTools(for server: MCPServerConfig) -> [ToolItem] {
         let defs = host.toolDefinitions()
         return host.tools(forServer: server.id).map { pair in
@@ -293,10 +393,17 @@ private struct ToolRow: View {
     var onEdit: (() -> Void)?
     var onRemove: (() -> Void)?
     var isEnabled: Binding<Bool>?
+    var isSelecting = false
+    var isSelected = false
+    var onToggleSelection: (() -> Void)?
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 12) {
+            if isSelecting, onToggleSelection != nil {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(tool.title)
@@ -342,7 +449,17 @@ private struct ToolRow: View {
         .padding(.vertical, 9)
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onInspect)
+        .onTapGesture {
+            guard !isSelecting else { return }
+            onInspect()
+        }
+        .nativBulkSelectable(
+            isSelecting: isSelecting && onToggleSelection != nil,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select \(tool.title)",
+            action: onToggleSelection ?? {}
+        )
     }
 }
 

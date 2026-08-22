@@ -29,15 +29,23 @@ struct ScheduledTaskCard: View {
     let task: Routine
     let latestRun: RoutineRun?
     let isRunning: Bool
+    let isSelecting: Bool
+    let isSelected: Bool
     let onEdit: () -> Void
     let onRun: () -> Void
     let onToggleEnabled: () -> Void
+    let onToggleSelection: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
+            if isSelecting {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
+                    .padding(.leading, 16)
+            }
+
             Button(action: onEdit) {
                 HStack(alignment: .top, spacing: 14) {
                     statusIcon
@@ -84,7 +92,7 @@ struct ScheduledTaskCard: View {
 
                     Spacer(minLength: 16)
                 }
-                .padding(.leading, 16)
+                .padding(.leading, isSelecting ? 0 : 16)
                 .padding(.vertical, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
@@ -103,6 +111,12 @@ struct ScheduledTaskCard: View {
             .padding(.trailing, 16)
         }
         .scheduledPanelStyle(isHighlighted: isHovering)
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelected,
+            accessibilityLabel: "Select \(task.name.isEmpty ? "Untitled scheduled task" : task.name)",
+            action: onToggleSelection
+        )
         .contextMenu {
             taskActions
         }

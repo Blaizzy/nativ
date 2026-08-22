@@ -169,13 +169,27 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
+    @State private var extensionSelection = NativBulkSelection<NativExtensionRecord.ID>()
+    @State private var pendingExtensionRemoval: [NativExtensionRecord] = []
+    @State private var isConfirmingExtensionRemoval = false
+
+    private var removableExtensions: [NativExtensionRecord] {
+        manager.records.filter { !$0.isRemoved }
+    }
+
+    private var selectedExtensions: [NativExtensionRecord] {
+        removableExtensions.filter { extensionSelection.contains($0.id) }
+    }
 
     var body: some View {
         HubSectionScaffold(
             title: "Extensions",
             subtitle: "Packages that add features to Nativ."
         ) {
-            EmptyView()
+            Button(extensionSelection.isActive ? "Done" : "Select") {
+                extensionSelection.toggleMode()
+            }
+            .disabled(removableExtensions.isEmpty)
         } content: {
             if manager.records.isEmpty {
                 HubEmptyHint(
@@ -184,8 +198,21 @@ private struct ExtensionsSectionView: View {
                 )
             } else {
                 VStack(spacing: 12) {
+                    if extensionSelection.isActive {
+                        extensionSelectionBar
+                    }
                     ForEach(manager.records) { record in
-                        ExtensionRow(record: record, manager: manager)
+                        ExtensionRow(
+                            record: record,
+                            manager: manager,
+                            isSelecting: extensionSelection.isActive && !record.isRemoved,
+                            isSelected: extensionSelection.contains(record.id),
+                            onToggleSelection: { extensionSelection.toggle(record.id) },
+                            onRemove: {
+                                pendingExtensionRemoval = [record]
+                                isConfirmingExtensionRemoval = true
+                            }
+                        )
                     }
                 }
             }
@@ -193,22 +220,65 @@ private struct ExtensionsSectionView: View {
         .onAppear {
             manager.refreshPermissionStatuses()
         }
+        .alert(
+            "Remove \(pendingExtensionRemoval.count) \(pendingExtensionRemoval.count == 1 ? "extension" : "extensions")?",
+            isPresented: $isConfirmingExtensionRemoval
+        ) {
+            Button("Remove", role: .destructive) {
+                let ids = pendingExtensionRemoval.map(\.id)
+                ids.forEach { manager.remove(extensionID: $0) }
+                extensionSelection.finish()
+                pendingExtensionRemoval = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingExtensionRemoval = []
+            }
+        } message: {
+            Text("External packages will be deleted from disk. Included and system extensions can be restored later.")
+        }
+    }
+
+    private var extensionSelectionBar: some View {
+        let selections = selectedExtensions
+        let removableIDs = Set(removableExtensions.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: extensionSelection.includesAll(removableIDs),
+            deleteTitle: "Remove",
+            onToggleAll: {
+                extensionSelection.toggleAll(removableIDs)
+            },
+            onDelete: {
+                pendingExtensionRemoval = selections
+                isConfirmingExtensionRemoval = true
+            }
+        )
     }
 }
 
 private struct ExtensionRow: View {
     let record: NativExtensionRecord
     @ObservedObject var manager: NativExtensionManager
+    var isSelecting = false
+    var isSelected = false
+    let onToggleSelection: () -> Void
+    let onRemove: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
+                if isSelecting {
+                    NativBulkSelectionCheckbox(isSelected: isSelected)
+                }
+
                 NativTintedIconTile(symbol: record.manifest.systemImage, size: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(record.manifest.displayName)
                             .font(.system(size: 14, weight: .semibold))
                         if record.isIncluded { includedBadge }
+                        if record.isRemoved { removedBadge }
                     }
                     Text(record.manifest.summary)
                         .font(.system(size: 12))
@@ -220,16 +290,34 @@ private struct ExtensionRow: View {
                         .padding(.top, 1)
                 }
                 Spacer(minLength: 12)
-                Toggle(
-                    "",
-                    isOn: Binding(
-                        get: { record.isEnabled },
-                        set: { manager.setEnabled($0, extensionID: record.id) }
+                if record.isRemoved {
+                    Button("Restore") {
+                        manager.restore(extensionID: record.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { record.isEnabled },
+                            set: { manager.setEnabled($0, extensionID: record.id) }
+                        )
                     )
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                    Menu {
+                        Button("Remove", role: .destructive, action: onRemove)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 18)
+                    .help("Manage extension")
+                }
             }
             if !record.manifest.permissions.isEmpty {
                 Divider()
@@ -246,6 +334,12 @@ private struct ExtensionRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
         )
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelected,
+            accessibilityLabel: "Select \(record.manifest.displayName)",
+            action: onToggleSelection
+        )
     }
 
     private var includedBadge: some View {
@@ -256,6 +350,16 @@ private struct ExtensionRow: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(Color.accentColor.opacity(0.12), in: Capsule())
+    }
+
+    private var removedBadge: some View {
+        Text("REMOVED")
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.4)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
     }
 
     private var permissions: some View {
@@ -399,12 +503,20 @@ private struct SkillsSectionView: View {
     @ObservedObject var model: NativModel
     @State private var editing: NativSkill?
     @State private var pendingDelete: NativSkill?
+    @State private var skillSelection = NativBulkSelection<NativSkill.ID>()
+    @State private var pendingSkillDeletion: [NativSkill] = []
+    @State private var isConfirmingSkillDeletion = false
 
     var body: some View {
         HubSectionScaffold(
             title: "Skills",
             subtitle: "Reusable instructions the model can apply."
         ) {
+            Button(skillSelection.isActive ? "Done" : "Select") {
+                skillSelection.toggleMode()
+            }
+            .disabled(model.settings.skills.isEmpty)
+
             Button {
                 editing = NativSkill()
             } label: {
@@ -418,12 +530,19 @@ private struct SkillsSectionView: View {
                         text: "No skills yet. Add reusable instructions the model can apply."
                     )
                 } else {
+                    if skillSelection.isActive {
+                        skillSelectionBar
+                            .padding(.bottom, 8)
+                    }
                     ForEach(Array(model.settings.skills.enumerated()), id: \.element.id) { index, skill in
                         if index > 0 { Divider() }
                         SkillRow(
                             skill: skill,
+                            isSelecting: skillSelection.isActive,
+                            isSelected: skillSelection.contains(skill.id),
                             onToggle: { toggle(skill) },
                             onEdit: { editing = skill },
+                            onToggleSelection: { skillSelection.toggle(skill.id) },
                             onDelete: { pendingDelete = skill }
                         )
                     }
@@ -457,6 +576,43 @@ private struct SkillsSectionView: View {
         } message: { skill in
             Text("“\(skill.name.isEmpty ? "This skill" : skill.name)” will be permanently deleted.")
         }
+        .alert(
+            "Delete \(pendingSkillDeletion.count) \(pendingSkillDeletion.count == 1 ? "skill" : "skills")?",
+            isPresented: $isConfirmingSkillDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                let ids = Set(pendingSkillDeletion.map(\.id))
+                model.settings.skills.removeAll { ids.contains($0.id) }
+                skillSelection.finish()
+                pendingSkillDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingSkillDeletion = []
+            }
+        } message: {
+            Text("The selected skills will be permanently deleted.")
+        }
+    }
+
+    private var selectedSkills: [NativSkill] {
+        model.settings.skills.filter { skillSelection.contains($0.id) }
+    }
+
+    private var skillSelectionBar: some View {
+        let selections = selectedSkills
+        let skillIDs = Set(model.settings.skills.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: skillSelection.includesAll(skillIDs),
+            onToggleAll: {
+                skillSelection.toggleAll(skillIDs)
+            },
+            onDelete: {
+                pendingSkillDeletion = selections
+                isConfirmingSkillDeletion = true
+            }
+        )
     }
 
     private func toggle(_ skill: NativSkill) {
@@ -480,12 +636,19 @@ private struct SkillsSectionView: View {
 private struct SkillRow: View {
     let skill: NativSkill
     var isBuiltIn: Bool = false
+    var isSelecting = false
+    var isSelected = false
     let onToggle: () -> Void
     let onEdit: () -> Void
+    var onToggleSelection: (() -> Void)?
     let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
+            if isSelecting, onToggleSelection != nil {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(skill.name.isEmpty ? "Untitled skill" : skill.name)
                     .font(.system(size: 13, weight: .medium))
@@ -525,6 +688,13 @@ private struct SkillRow: View {
             }
         }
         .padding(.vertical, 11)
+        .nativBulkSelectable(
+            isSelecting: isSelecting && onToggleSelection != nil,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select \(skill.name.isEmpty ? "Untitled skill" : skill.name)",
+            action: onToggleSelection ?? {}
+        )
     }
 }
 

@@ -214,6 +214,9 @@ struct ModelsView: View {
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
+    @State private var installedModelSelection = NativBulkSelection<String>()
+    @State private var pendingInstalledModelDeletion: [LocalModel] = []
+    @State private var isConfirmingInstalledModelDeletion = false
 
     init(
         model: NativModel,
@@ -247,6 +250,21 @@ struct ModelsView: View {
 
                 modelsPage
             }
+        }
+        .alert(
+            "Delete \(pendingInstalledModelDeletion.count) \(pendingInstalledModelDeletion.count == 1 ? "model" : "models")?",
+            isPresented: $isConfirmingInstalledModelDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                deleteInstalledModels(pendingInstalledModelDeletion)
+                pendingInstalledModelDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingInstalledModelDeletion = []
+            }
+        } message: {
+            Text("The selected models will be permanently removed from the local Hugging Face cache.")
         }
         .background(Color.nativMainContentBackground)
         .task(id: modelScanPath) {
@@ -514,6 +532,11 @@ struct ModelsView: View {
                     .modelsListRow(top: 0)
             }
 
+            if installedModelSelection.isActive {
+                installedSelectionBar(for: visibleModels)
+                    .modelsListRow(top: 0)
+            }
+
             ForEach(visibleModels) { localModel in
                 let preloadSlots = preloadSlots(for: localModel)
                 let selectedSlots = Set(
@@ -537,6 +560,8 @@ struct ModelsView: View {
                         localModel.repoID),
                     canDelete: localModel.isDeletable && !modelState.modelSwitchInProgress
                         && !isModelInUse(localModel.repoID),
+                    isSelecting: installedModelSelection.isActive,
+                    isSelectedForDeletion: installedModelSelection.contains(localModel.repoID),
                     onSetPreload: { slot, isEnabled in
                         if isEnabled {
                             model.requestPreloadedModelSwitch(
@@ -555,6 +580,7 @@ struct ModelsView: View {
                             localSnapshotURL: localModel.snapshotURL
                         )
                     },
+                    onToggleSelection: { toggleInstalledModelSelection(localModel) },
                     onDelete: { deleteInstalledModel(localModel) }
                 )
                 .equatable()
@@ -570,10 +596,33 @@ struct ModelsView: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             Spacer()
+            Button(installedModelSelection.isActive ? "Done" : "Select") {
+                installedModelSelection.toggleMode()
+            }
+            .buttonStyle(.bordered)
             if localLibrary.isScanning {
                 ProgressView().controlSize(.small)
             }
         }
+    }
+
+    private func installedSelectionBar(for visibleModels: [LocalModel]) -> some View {
+        let eligibleVisibleModels = visibleModels.filter(canSelectForDeletion)
+        let eligibleIDs = Set(eligibleVisibleModels.map(\.repoID))
+        let selectedModels = selectedInstalledModels
+
+        return NativBulkSelectionToolbar(
+            selectedCount: selectedModels.count,
+            allSelected: installedModelSelection.includesAll(eligibleIDs),
+            isSelectAllEnabled: !eligibleVisibleModels.isEmpty,
+            onToggleAll: {
+                installedModelSelection.toggleAll(eligibleIDs)
+            },
+            onDelete: {
+                pendingInstalledModelDeletion = selectedModels
+                isConfirmingInstalledModelDeletion = true
+            }
+        )
     }
 
     private var installedFilterBar: some View {
@@ -846,7 +895,7 @@ struct ModelsView: View {
     }
 
     private func deleteInstalledModel(_ localModel: LocalModel) {
-        guard localModel.isDeletable else { return }
+        guard canSelectForDeletion(localModel) else { return }
         localLibrary.delete(
             model: localModel,
             path: modelState.settings.modelSearchPath
@@ -867,6 +916,28 @@ struct ModelsView: View {
             model.settings = settings
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
         }
+    }
+
+    private var selectedInstalledModels: [LocalModel] {
+        localLibrary.models.filter {
+            installedModelSelection.contains($0.repoID) && canSelectForDeletion($0)
+        }
+    }
+
+    private func canSelectForDeletion(_ localModel: LocalModel) -> Bool {
+        localModel.isDeletable
+            && !modelState.modelSwitchInProgress
+            && !isModelInUse(localModel.repoID)
+    }
+
+    private func toggleInstalledModelSelection(_ localModel: LocalModel) {
+        guard canSelectForDeletion(localModel) else { return }
+        installedModelSelection.toggle(localModel.repoID)
+    }
+
+    private func deleteInstalledModels(_ localModels: [LocalModel]) {
+        localModels.forEach(deleteInstalledModel)
+        installedModelSelection.finish()
     }
 
     private var filteredLocalModels: [LocalModel] {
@@ -1461,8 +1532,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let isReadmeSelected: Bool
     let isDeleting: Bool
     let canDelete: Bool
+    let isSelecting: Bool
+    let isSelectedForDeletion: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onShowReadme: () -> Void
+    let onToggleSelection: () -> Void
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
@@ -1479,6 +1553,8 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             && lhs.isReadmeSelected == rhs.isReadmeSelected
             && lhs.isDeleting == rhs.isDeleting
             && lhs.canDelete == rhs.canDelete
+            && lhs.isSelecting == rhs.isSelecting
+            && lhs.isSelectedForDeletion == rhs.isSelectedForDeletion
     }
 
     private var isSelected: Bool {
@@ -1491,6 +1567,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 
     var body: some View {
         HStack(spacing: 10) {
+            if isSelecting {
+                NativBulkSelectionCheckbox(
+                    isSelected: isSelectedForDeletion,
+                    isEnabled: canDelete
+                )
+                    .help(canDelete ? "Select \(localModel.repoID)" : "This model can’t be deleted while it is in use")
+            }
+
             Button(action: onShowReadme) {
                 HStack(spacing: 14) {
                     ModelProviderBadge(provider: localModel.provider)
@@ -1596,6 +1680,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .modelRowBackground(isHighlighted: isReadmeSelected)
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelectedForDeletion,
+            isEnabled: canDelete,
+            accessibilityLabel: "Select \(localModel.repoID)",
+            action: onToggleSelection
+        )
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -2610,8 +2701,16 @@ private struct ModelRowBackground: ViewModifier {
 }
 
 extension View {
-    fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
-        modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
+    fileprivate func modelRowBackground(
+        isHighlighted: Bool,
+        isHovered: Bool = false
+    ) -> some View {
+        modifier(
+            ModelRowBackground(
+                isHighlighted: isHighlighted,
+                isHovered: isHovered
+            )
+        )
     }
 
     fileprivate func modelsListRow(

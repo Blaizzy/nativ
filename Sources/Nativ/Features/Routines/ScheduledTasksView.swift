@@ -21,6 +21,9 @@ struct ScheduledTasksView: View {
     @State private var draft: RoutineDraft?
     @State private var pendingDeletion: Routine?
     @State private var filter: ScheduledTaskFilter = .all
+    @State private var taskSelection = NativBulkSelection<Routine.ID>()
+    @State private var pendingTaskDeletion: [Routine] = []
+    @State private var isConfirmingTaskDeletion = false
 
     private var orderedTasks: [Routine] {
         store.routines.sorted {
@@ -89,6 +92,22 @@ struct ScheduledTasksView: View {
         } message: { _ in
             Text("This scheduled task and its run history will be permanently deleted.")
         }
+        .alert(
+            "Delete \(pendingTaskDeletion.count) scheduled \(pendingTaskDeletion.count == 1 ? "task" : "tasks")?",
+            isPresented: $isConfirmingTaskDeletion
+        ) {
+            Button("Delete", role: .destructive) {
+                pendingTaskDeletion.forEach(delete)
+                taskSelection.finish()
+                pendingTaskDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingTaskDeletion = []
+            }
+        } message: {
+            Text("The selected scheduled tasks and their run histories will be permanently deleted.")
+        }
     }
 
     private var taskBrowser: some View {
@@ -140,6 +159,10 @@ struct ScheduledTasksView: View {
             LazyVStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 12) {
                     filterBar
+
+                    if taskSelection.isActive {
+                        taskSelectionBar
+                    }
 
                     if filteredTasks.isEmpty {
                         ContentUnavailableView(
@@ -208,7 +231,32 @@ struct ScheduledTasksView: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(filter == option ? .isSelected : [])
             }
+
+            Spacer(minLength: 8)
+
+            Button(taskSelection.isActive ? "Done" : "Select") {
+                taskSelection.toggleMode()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
+    }
+
+    private var taskSelectionBar: some View {
+        let selections = selectedTasks
+        let visibleIDs = Set(filteredTasks.map(\.id))
+        return NativBulkSelectionToolbar(
+            selectedCount: selections.count,
+            allSelected: taskSelection.includesAll(visibleIDs),
+            isSelectAllEnabled: !filteredTasks.isEmpty,
+            onToggleAll: {
+                taskSelection.toggleAll(visibleIDs)
+            },
+            onDelete: {
+                pendingTaskDeletion = selections
+                isConfirmingTaskDeletion = true
+            }
+        )
     }
 
     private func taskCard(_ task: Routine) -> some View {
@@ -217,13 +265,20 @@ struct ScheduledTasksView: View {
             task: task,
             latestRun: runs.first,
             isRunning: runs.contains { $0.status == .running },
+            isSelecting: taskSelection.isActive,
+            isSelected: taskSelection.contains(task.id),
             onEdit: { presentEditor(for: task) },
             onRun: { RoutineRunCoordinator.shared.run(task, source: .manual) },
             onToggleEnabled: {
                 store.setEnabled(!task.isEnabled, id: task.id)
             },
+            onToggleSelection: { taskSelection.toggle(task.id) },
             onDelete: { pendingDeletion = task }
         )
+    }
+
+    private var selectedTasks: [Routine] {
+        orderedTasks.filter { taskSelection.contains($0.id) }
     }
 
     private func presentNewTask() {
