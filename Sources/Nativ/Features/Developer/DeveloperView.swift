@@ -36,7 +36,7 @@ struct DeveloperView: View {
                 VStack(spacing: 0) {
                     pageHeader
                         .padding(.horizontal, 22)
-                        .padding(.top, 20)
+                        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
                         .padding(.bottom, 16)
 
                     Divider()

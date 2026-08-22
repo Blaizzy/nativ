@@ -13,7 +13,6 @@ struct ImageGenerationView: View {
     @ObservedObject var viewModel: ImageGenerationViewModel
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: () -> Void
     @StateObject private var localLibrary = LocalModelLibrary()
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
@@ -33,10 +32,7 @@ struct ImageGenerationView: View {
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
                     onExploreImageModels: onExploreImageModels
                 )
-                    .frame(
-                        maxWidth: Layout.composerMaxWidth
-                            - conversationWidthReduction
-                    )
+                    .frame(maxWidth: Layout.composerMaxWidth)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, Layout.horizontalPadding)
                     .onGeometryChange(for: CGFloat.self) { proxy in
