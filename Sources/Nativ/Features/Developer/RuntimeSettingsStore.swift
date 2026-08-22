@@ -39,21 +39,6 @@ struct RuntimeSettingField: Identifiable, Equatable {
         }
     }
 
-    var title: String {
-        spec.name
-            .split(separator: "_")
-            .map { segment -> String in
-                let word = String(segment)
-                switch word {
-                case "kv", "apc", "id":
-                    return word.uppercased()
-                default:
-                    return word.prefix(1).uppercased() + word.dropFirst()
-                }
-            }
-            .joined(separator: " ")
-    }
-
     var group: RuntimeSettingGroup {
         if spec.name.hasPrefix("apc_") {
             return .prefixCache
@@ -343,48 +328,53 @@ final class RuntimeSettingsStore: ObservableObject {
     }
 
     func apply() async {
-        guard let endpoint, !isApplying else { return }
         let changes = dirtyFields
         guard !changes.isEmpty else { return }
-        isApplying = true
-        rejections = []
-        applyError = nil
-        defer { isApplying = false }
-
         var payload: [String: RuntimeSettingValue] = [:]
         for field in changes {
             payload[field.spec.name] = field.value
         }
-        let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
-        do {
+        await send { endpoint in
+            let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
             let update = try await client.update(payload)
-            rejections = update.rejected
-            fingerprint = update.fingerprint
-            merge(current: update.current)
-            onAdopt?(update.applied)
-            appliedNotice = Self.appliedText(count: update.applied.count, kinds: update.reloadKinds)
+            self.adopt(update)
+            self.onAdopt?(update.applied)
+            self.appliedNotice = Self.appliedText(
+                count: update.applied.count,
+                kinds: update.reloadKinds
+            )
+        }
+    }
+
+    func restoreServerDefaults() async {
+        await send { endpoint in
+            let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
+            let update = try await client.update([:], resettingUnlistedToDefaults: true)
+            self.adopt(update)
+            self.onAdopt?(update.current)
+            self.appliedNotice = "Restored server defaults"
+        }
+    }
+
+    private func send(
+        _ body: @MainActor ((url: URL, key: String?)) async throws -> Void
+    ) async {
+        guard let endpoint, !isApplying else { return }
+        isApplying = true
+        rejections = []
+        applyError = nil
+        defer { isApplying = false }
+        do {
+            try await body(endpoint)
         } catch {
             applyError = error.localizedDescription
         }
     }
 
-    func restoreServerDefaults() async {
-        guard let endpoint, !isApplying else { return }
-        isApplying = true
-        rejections = []
-        applyError = nil
-        defer { isApplying = false }
-        let client = NativRuntimeSettingsClient(baseURL: endpoint.url, apiKey: endpoint.key)
-        do {
-            let update = try await client.update([:], resettingUnlistedToDefaults: true)
-            rejections = update.rejected
-            fingerprint = update.fingerprint
-            merge(current: update.current)
-            onAdopt?(update.current)
-            appliedNotice = "Restored server defaults"
-        } catch {
-            applyError = error.localizedDescription
-        }
+    private func adopt(_ update: RuntimeSettingsUpdate) {
+        rejections = update.rejected
+        fingerprint = update.fingerprint
+        merge(current: update.current)
     }
 
     private static func appliedText(count: Int, kinds: [String]) -> String {

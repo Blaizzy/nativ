@@ -182,10 +182,6 @@ public struct RuntimeSettingSpec: Decodable, Equatable, Sendable, Identifiable {
     public var allowsNull: Bool {
         type.hasSuffix("_or_none")
     }
-
-    public var reloadsModels: Bool {
-        !reloadKinds.isEmpty
-    }
 }
 
 public struct RuntimeSettingsSnapshot: Decodable, Equatable, Sendable {

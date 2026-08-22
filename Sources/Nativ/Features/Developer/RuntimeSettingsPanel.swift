@@ -397,21 +397,23 @@ private struct RuntimeSettingControlCell: View {
         .disabled(!isActive)
     }
 
-    @ViewBuilder
+    private var showsReset: Bool {
+        !field.isDefault && isActive
+    }
+
     private var resetButton: some View {
-        if !field.isDefault && isActive {
-            Button {
-                store.resetToDefault(field.id)
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 10))
-            }
-            .buttonStyle(.borderless)
-            .help("Reset to \(field.spec.defaultValue.displayText)")
-            .frame(width: 16)
-        } else {
-            Color.clear.frame(width: 16, height: 1)
+        Button {
+            store.resetToDefault(field.id)
+        } label: {
+            Image(systemName: "arrow.uturn.backward")
+                .font(.system(size: 10))
         }
+        .buttonStyle(.borderless)
+        .help("Reset to \(field.spec.defaultValue.displayText)")
+        .frame(width: 16)
+        .opacity(showsReset ? 1 : 0)
+        .disabled(!showsReset)
+        .accessibilityHidden(!showsReset)
     }
 
     @ViewBuilder
@@ -453,48 +455,34 @@ private struct RuntimeSettingControlCell: View {
             .controlSize(.small)
 
         case .number(let isInteger):
-            numberField(isInteger: isInteger)
+            editableField(alignment: .trailing, font: .footnote.monospacedDigit()) {
+                commitNumber(isInteger: isInteger)
+            }
 
         case .text:
-            textField
+            editableField(alignment: .leading, font: .footnote, commit: commitText)
         }
     }
 
     private var defaultChoiceTag: String { "\u{0000}default" }
 
-    private func numberField(isInteger: Bool) -> some View {
+    private func editableField(
+        alignment: TextAlignment,
+        font: Font,
+        commit: @escaping () -> Void
+    ) -> some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.roundedBorder)
-            .multilineTextAlignment(.trailing)
-            .font(.footnote.monospacedDigit())
+            .multilineTextAlignment(alignment)
+            .font(font)
             .controlSize(.small)
             .focused($isFocused)
-            .onSubmit { commitNumber(isInteger: isInteger) }
+            .onSubmit(commit)
             .onChange(of: isFocused) { _, focused in
                 if focused {
                     draft = editableText
                 } else {
-                    commitNumber(isInteger: isInteger)
-                }
-            }
-            .onChange(of: field.value) { _, _ in
-                if !isFocused { draft = editableText }
-            }
-            .onAppear { draft = editableText }
-    }
-
-    private var textField: some View {
-        TextField(placeholder, text: $draft)
-            .textFieldStyle(.roundedBorder)
-            .font(.footnote)
-            .controlSize(.small)
-            .focused($isFocused)
-            .onSubmit(commitText)
-            .onChange(of: isFocused) { _, focused in
-                if focused {
-                    draft = editableText
-                } else {
-                    commitText()
+                    commit()
                 }
             }
             .onChange(of: field.value) { _, _ in
