@@ -288,11 +288,13 @@ private struct DashboardContentView: View, @MainActor Equatable {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 14) {
                         analyticsChart
-                            .frame(minWidth: 680, maxWidth: .infinity)
+                            .frame(minWidth: 680, maxWidth: .infinity, maxHeight: .infinity)
 
                         userActivityPanel
                             .frame(width: 350)
+                            .frame(maxHeight: .infinity)
                     }
+                    .fixedSize(horizontal: false, vertical: true)
 
                     VStack(alignment: .leading, spacing: 14) {
                         analyticsChart
@@ -655,6 +657,7 @@ private struct UserActivityPanel: View {
             periodBreakdown
         }
         .padding(18)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .dashboardPanelStyle(cornerRadius: 14)
         .animation(.snappy(duration: 0.24), value: isExpanded)
     }
@@ -1276,7 +1279,7 @@ private struct TokenUsagePanel: View {
                     usageMarks
                     hoverMarks
                 }
-                .chartLegend(showsAllModels ? .visible : .hidden)
+                .chartLegend(.hidden)
                 .chartForegroundStyleScale(
                     domain: modelColorDomain,
                     range: DashboardModelColorScale.colors(for: modelColorDomain)
@@ -1406,9 +1409,18 @@ private struct TokenUsagePanel: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: metric)
             }
+
+            if showsScrollableModelLegend {
+                DashboardModelChartLegend(modelIDs: modelColorDomain)
+            }
         }
         .padding(18)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
         .dashboardPanelStyle(cornerRadius: 14)
+    }
+
+    private var showsScrollableModelLegend: Bool {
+        showsAllModels && !points.isEmpty && !usesSuccessRateComparison
     }
 
     private var chartTitle: String {
@@ -3320,6 +3332,69 @@ private struct ChartLegendDot: View {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(title).font(.caption2).foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct DashboardModelChartLegend: View {
+    let modelIDs: [String]
+
+    private let maximumHeight: CGFloat = 92
+    private let rowHeight: CGFloat = 20
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Models (\(modelIDs.count))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                if modelIDs.count > 4 {
+                    Label("Scroll model list", systemImage: "arrow.up.and.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(DashboardPalette.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(DashboardPalette.accent.opacity(0.12), in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .stroke(DashboardPalette.accent.opacity(0.35), lineWidth: 0.75)
+                        }
+                }
+            }
+
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(modelIDs, id: \.self) { modelID in
+                        HStack(spacing: 7) {
+                            Circle()
+                                .fill(DashboardModelColorScale.color(for: modelID, in: modelIDs))
+                                .frame(width: 7, height: 7)
+                            Text(modelID)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(modelID)
+                        }
+                        .frame(height: rowHeight)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+            .frame(height: min(maximumHeight, CGFloat(modelIDs.count) * (rowHeight + 4)))
+            .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(DashboardPalette.panelStroke, lineWidth: 0.75)
+            }
+            .scrollIndicators(.visible)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Chart legend with \(modelIDs.count) models")
+        .accessibilityHint(modelIDs.count > 4 ? "Scroll vertically to view every model" : "")
     }
 }
 
