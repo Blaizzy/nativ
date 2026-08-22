@@ -396,6 +396,12 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     )
                 }
 
+                if !message.folderAttachments.isEmpty {
+                    ForEach(message.folderAttachments) { folder in
+                        ChatFolderAttachmentBadge(folder: folder)
+                    }
+                }
+
                 if showsThinkingBubble {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
@@ -1411,6 +1417,29 @@ private struct ChatResponseMetricPill: View {
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
         .help("\(label): \(value)")
+    }
+}
+
+private struct ChatFolderAttachmentBadge: View {
+    let folder: ChatFolderAttachment
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(folder.folderName)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                Text("\(folder.includedFileCount) of \(folder.totalFileCount) files · ~\(folder.approxTokens) tokens")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.secondary.opacity(0.1)))
     }
 }
 

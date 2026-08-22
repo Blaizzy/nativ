@@ -215,6 +215,18 @@ struct ChatComposer: View {
                     .padding(.bottom, 8)
                 }
 
+                if !viewModel.pendingFolderAttachments.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(viewModel.pendingFolderAttachments) { folder in
+                            ChatPendingFolderAttachmentView(folder: folder) {
+                                viewModel.removePendingFolderAttachment(folder.id)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+
                 if !attachmentNotices.isEmpty {
                     ChatAttachmentNoticesView(
                         notices: attachmentNotices,
@@ -341,6 +353,15 @@ struct ChatComposer: View {
             isWebReadAvailable: isWebReadAvailable,
             webReadProviderLabel: webReadProviderLabel,
             onAttachImages: { dismissAddPanelAndPerform(viewModel.chooseAttachments) },
+            onAddFolder: {
+                dismissAddPanelAndPerform {
+                    viewModel.chooseFolderAttachment(
+                        contextLimit: model.metrics?.server.effectiveContextLimit
+                            ?? model.metrics?.server.configuredContextLimit
+                            ?? model.metrics?.server.loadedContextSize
+                    )
+                }
+            },
             onPasteImage: { dismissAddPanelAndPerform(viewModel.pasteImageFromClipboard) },
             onCaptureScreenshot: { dismissAddPanelAndPerform(viewModel.captureScreenshot) },
             onToggleWebSearch: {
@@ -1424,12 +1445,44 @@ private struct ChatComposerModelIcon: View {
     }
 }
 
+struct ChatPendingFolderAttachmentView: View {
+    let folder: ChatFolderAttachment
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(folder.folderName)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                Text("\(folder.includedFileCount) of \(folder.totalFileCount) files · ~\(folder.approxTokens) tokens")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.secondary.opacity(0.1)))
+    }
+}
+
 struct ChatComposerActionMenu: NSViewRepresentable {
     let isEnabled: Bool
     let canPasteImage: Bool
     var uploadMenuTitle = "Upload Image…"
     var uploadMenuSystemImage = "photo.badge.plus"
     let onAttachImages: () -> Void
+    var onAddFolder: (() -> Void)? = nil
     let onPasteImage: () -> Void
     let onCaptureScreenshot: () -> Void
 
@@ -1498,6 +1551,18 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             fileItem.isEnabled = true
             menu.addItem(fileItem)
 
+            if parent.onAddFolder != nil {
+                let folderItem = NSMenuItem(
+                    title: "Upload Folder…",
+                    action: #selector(addFolder(_:)),
+                    keyEquivalent: ""
+                )
+                folderItem.target = self
+                folderItem.image = menuImage("folder.badge.plus", description: "Upload Folder")
+                folderItem.isEnabled = true
+                menu.addItem(folderItem)
+            }
+
             let pasteItem = NSMenuItem(
                 title: "Paste Image",
                 action: #selector(pasteImage(_:)),
@@ -1523,6 +1588,10 @@ struct ChatComposerActionMenu: NSViewRepresentable {
 
         @objc private func attachImages(_ sender: NSMenuItem) {
             parent.onAttachImages()
+        }
+
+        @objc private func addFolder(_ sender: NSMenuItem) {
+            parent.onAddFolder?()
         }
 
         @objc private func pasteImage(_ sender: NSMenuItem) {
@@ -1574,6 +1643,7 @@ struct ChatComposerActionPanel: View {
     var isWebReadAvailable = false
     var webReadProviderLabel: String?
     let onAttachImages: () -> Void
+    var onAddFolder: (() -> Void)? = nil
     let onPasteImage: () -> Void
     let onCaptureScreenshot: () -> Void
     var onToggleWebSearch: () -> Void = {}
@@ -1591,6 +1661,15 @@ struct ChatComposerActionPanel: View {
                         systemName: "doc.badge.plus",
                         action: onAttachImages
                     )
+
+                    if let onAddFolder {
+                        ChatComposerActionRow(
+                            title: "Upload folder",
+                            detail: "Add text files from a folder within the model context limit",
+                            systemName: "folder.badge.plus",
+                            action: onAddFolder
+                        )
+                    }
 
                     if canPasteImage {
                         ChatComposerActionRow(
