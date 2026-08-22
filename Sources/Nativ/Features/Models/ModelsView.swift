@@ -1524,11 +1524,20 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                                     color: .accentColor
                                 )
                             } else if preloadSlots.isEmpty {
-                                ModelPill(
-                                    title: "Not supported",
-                                    systemImage: "exclamationmark.triangle",
-                                    color: .orange
-                                )
+                                if isDrafter {
+                                    ModelPill(
+                                        title: localModel.drafterKindLabel.map { "\($0) drafter" }
+                                            ?? "Drafter",
+                                        systemImage: "hare",
+                                        color: .purple
+                                    )
+                                } else {
+                                    ModelPill(
+                                        title: "Not supported",
+                                        systemImage: "exclamationmark.triangle",
+                                        color: .orange
+                                    )
+                                }
                             }
                             ForEach(
                                 preloadSlots.filter(selectedPreloadSlots.contains)
@@ -1596,13 +1605,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .modelRowBackground(isHighlighted: isReadmeSelected)
-        .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
+        .alert(
+            isDrafter ? "Drafter model" : "Model isn’t supported",
+            isPresented: $showsUnsupportedModelInformation
+        ) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {
-            Text(
-                "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
-            )
+            Text(unsupportedModelMessage)
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
             Button("Delete Model", role: .destructive, action: onDelete)
@@ -1683,7 +1693,10 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             Button {
                 showsUnsupportedModelInformation = true
             } label: {
-                Label("Unavailable", systemImage: "exclamationmark.triangle")
+                Label(
+                    isDrafter ? "Drafter" : "Unavailable",
+                    systemImage: isDrafter ? "hare" : "exclamationmark.triangle"
+                )
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -1708,7 +1721,25 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         if let preferredPreloadSlot {
             return "Preload \(localModel.repoID) for \(preferredPreloadSlot.displayName)"
         }
+        if isDrafter {
+            return
+                "\(localModel.repoID) is a drafter for speculative decoding — enable it from Chat settings"
+        }
         return "\(localModel.repoID) has no supported preload role"
+    }
+
+    private var isDrafter: Bool {
+        localModel.capabilities.contains(.drafter)
+    }
+
+    private var unsupportedModelMessage: String {
+        if isDrafter {
+            let kindLabel = localModel.drafterKindLabel.map { " (\($0))" } ?? ""
+            return
+                "\(localModel.repoID) is a drafter model\(kindLabel) for speculative decoding. It doesn’t load on its own — enable it from Chat settings under “Enable drafter” to accelerate a compatible chat model."
+        }
+        return
+            "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
     }
 }
 
