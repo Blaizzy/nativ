@@ -6,6 +6,7 @@ struct RuntimeSettingField: Identifiable, Equatable {
         case toggle
         case number(isInteger: Bool)
         case choice([String])
+        case combo([String], isInteger: Bool)
         case text
     }
 
@@ -26,6 +27,12 @@ struct RuntimeSettingField: Identifiable, Equatable {
     var control: Control {
         if let allowed = spec.allowed, !allowed.isEmpty {
             return .choice(allowed)
+        }
+        if let closed = Self.closedChoices[spec.name] {
+            return .choice(closed)
+        }
+        if let presets = Self.presets[spec.name] {
+            return .combo(presets, isInteger: !spec.type.hasPrefix("float"))
         }
         switch spec.type {
         case "bool":
@@ -122,6 +129,15 @@ struct RuntimeSettingField: Identifiable, Equatable {
         "spec_draft_model": "Draft Model",
         "spec_draft_kind": "Draft Kind",
         "vision_cache_size": "Cache Size",
+    ]
+
+    private static let closedChoices: [String: [String]] = [
+        "spec_draft_kind": ["mtp", "dflash", "eagle3"],
+    ]
+
+    private static let presets: [String: [String]] = [
+        "kv_bits": ["2", "3", "4", "5", "6", "8"],
+        "max_kv_size": ["2048", "4096", "8192", "16384", "32768", "65536"],
     ]
 
     private static let units: [String: String] = [
@@ -283,6 +299,10 @@ final class RuntimeSettingsStore: ObservableObject {
     func resetToDefault(_ name: String) {
         guard let index = fields.firstIndex(where: { $0.id == name }) else { return }
         fields[index].value = fields[index].spec.defaultValue
+        appliedNotice = nil
+    }
+
+    func dismissAppliedNotice() {
         appliedNotice = nil
     }
 

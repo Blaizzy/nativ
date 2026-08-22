@@ -8,9 +8,8 @@ struct RuntimeSettingsPanel: View {
 
     private static let railWidth: CGFloat = 176
     private static let labelWidth: CGFloat = 116
-    private static let controlWidth: CGFloat = 118
+    private static let controlWidth: CGFloat = 240
     private static let unitWidth: CGFloat = 48
-    private static let fieldColumnWidth: CGFloat = 324
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +30,12 @@ struct RuntimeSettingsPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
+        .task(id: store.appliedNotice) {
+            guard store.appliedNotice != nil else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            store.dismissAppliedNotice()
+        }
         .confirmationDialog(
             "Apply settings that reload models?",
             isPresented: $confirmingReload,
@@ -209,10 +214,7 @@ struct RuntimeSettingsPanel: View {
                         }
                         .padding(.top, 6)
                     } label: {
-                        Text(
-                            inactive.count == 1
-                                ? "1 more option" : "\(inactive.count) more options"
-                        )
+                        Text(overriddenLabel(in: inactive))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -225,40 +227,23 @@ struct RuntimeSettingsPanel: View {
         .padding(.vertical, 11)
     }
 
+    private func overriddenLabel(in fields: [RuntimeSettingField]) -> String {
+        let overridden = fields.filter { !$0.isDefault }.count
+        return overridden == 0 ? "Defaults" : "\(overridden) overridden"
+    }
+
     private func fieldFlow(_ fields: [RuntimeSettingField]) -> some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: Self.fieldColumnWidth), spacing: 20)],
-            alignment: .leading,
-            spacing: 7
-        ) {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(fields) { field in
-                fieldRow(field)
+                RuntimeSettingRow(
+                    field: field,
+                    store: store,
+                    labelWidth: Self.labelWidth,
+                    controlWidth: Self.controlWidth,
+                    unitWidth: Self.unitWidth
+                )
             }
         }
-    }
-
-    private func fieldRow(_ field: RuntimeSettingField) -> some View {
-        HStack(spacing: 10) {
-            Text(field.shortTitle)
-                .font(.footnote)
-                .foregroundStyle(labelColor(for: field))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: Self.labelWidth, alignment: .leading)
-                .help(field.spec.help)
-
-            RuntimeSettingControlCell(
-                field: field,
-                store: store,
-                controlWidth: Self.controlWidth,
-                unitWidth: Self.unitWidth
-            )
-        }
-    }
-
-    private func labelColor(for field: RuntimeSettingField) -> Color {
-        if field.isDirty { return .orange }
-        return store.isActive(field) ? .primary : .secondary
     }
 
     @ViewBuilder
@@ -361,16 +346,20 @@ struct RuntimeSettingsPanel: View {
     }
 }
 
-private struct RuntimeSettingControlCell: View {
+private struct RuntimeSettingRow: View {
     let field: RuntimeSettingField
     @ObservedObject var store: RuntimeSettingsStore
+    let labelWidth: CGFloat
     let controlWidth: CGFloat
     let unitWidth: CGFloat
 
     @State private var draft = ""
+    @State private var isHovering = false
     @FocusState private var isFocused: Bool
 
     private var isActive: Bool { store.isActive(field) }
+
+    private var isOverridden: Bool { !field.isDefault }
 
     private var stretchesToFill: Bool {
         if case .text = field.control { return true }
@@ -379,9 +368,23 @@ private struct RuntimeSettingControlCell: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Circle()
+                .fill(field.isDirty ? Color.orange : Color.secondary.opacity(0.55))
+                .frame(width: 5, height: 5)
+                .opacity(isOverridden ? 1 : 0)
+
+            Text(field.shortTitle)
+                .font(.footnote)
+                .foregroundStyle(labelColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: labelWidth, alignment: .leading)
+                .help(field.spec.help)
+
             if stretchesToFill {
                 control
                     .frame(maxWidth: .infinity, alignment: .leading)
+                resetButton
             } else {
                 control
                     .frame(width: controlWidth, alignment: .leading)
@@ -390,15 +393,28 @@ private struct RuntimeSettingControlCell: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: unitWidth, alignment: .leading)
-            }
 
-            resetButton
+                resetButton
+
+                Text(field.spec.help)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .disabled(!isActive)
+        .onHover { isHovering = $0 }
+    }
+
+    private var labelColor: Color {
+        if field.isDirty { return .orange }
+        return isActive ? .primary : .secondary
     }
 
     private var showsReset: Bool {
-        !field.isDefault && isActive
+        isOverridden && isActive
     }
 
     private var resetButton: some View {
@@ -411,7 +427,7 @@ private struct RuntimeSettingControlCell: View {
         .buttonStyle(.borderless)
         .help("Reset to \(field.spec.defaultValue.displayText)")
         .frame(width: 16)
-        .opacity(showsReset ? 1 : 0)
+        .opacity(showsReset && (isHovering || isFocused) ? 1 : 0)
         .disabled(!showsReset)
         .accessibilityHidden(!showsReset)
     }
@@ -454,6 +470,33 @@ private struct RuntimeSettingControlCell: View {
             .labelsHidden()
             .controlSize(.small)
 
+        case .combo(let presets, let isInteger):
+            HStack(spacing: 4) {
+                editableField(alignment: .trailing, font: .footnote.monospacedDigit()) {
+                    commitNumber(isInteger: isInteger)
+                }
+
+                Menu {
+                    if field.spec.allowsNull {
+                        Button(field.resolvedHint) {
+                            store.setValue(.null, for: field.id)
+                        }
+                        Divider()
+                    }
+                    ForEach(presets, id: \.self) { preset in
+                        Button(preset) {
+                            commit(preset, isInteger: isInteger)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+
         case .number(let isInteger):
             editableField(alignment: .trailing, font: .footnote.monospacedDigit()) {
                 commitNumber(isInteger: isInteger)
@@ -475,6 +518,7 @@ private struct RuntimeSettingControlCell: View {
             .textFieldStyle(.roundedBorder)
             .multilineTextAlignment(alignment)
             .font(font)
+            .foregroundStyle(.primary)
             .controlSize(.small)
             .focused($isFocused)
             .onSubmit(commit)
@@ -497,6 +541,11 @@ private struct RuntimeSettingControlCell: View {
 
     private var editableText: String {
         field.value.isNull ? "" : field.value.displayText
+    }
+
+    private func commit(_ text: String, isInteger: Bool) {
+        draft = text
+        commitNumber(isInteger: isInteger)
     }
 
     private func commitNumber(isInteger: Bool) {
