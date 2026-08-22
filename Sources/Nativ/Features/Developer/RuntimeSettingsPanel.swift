@@ -9,7 +9,6 @@ struct RuntimeSettingsPanel: View {
     private static let railWidth: CGFloat = 176
     private static let labelWidth: CGFloat = 116
     private static let valueWidth: CGFloat = 168
-    private static let pathWidth: CGFloat = 360
     private static let maximumWidth: CGFloat = 1_100
 
     var body: some View {
@@ -250,8 +249,7 @@ struct RuntimeSettingsPanel: View {
                     field: field,
                     store: store,
                     labelWidth: Self.labelWidth,
-                    valueWidth: Self.valueWidth,
-                    pathWidth: Self.pathWidth
+                    valueWidth: Self.valueWidth
                 )
             }
         }
@@ -362,7 +360,6 @@ private struct RuntimeSettingRow: View {
     @ObservedObject var store: RuntimeSettingsStore
     let labelWidth: CGFloat
     let valueWidth: CGFloat
-    let pathWidth: CGFloat
 
     @State private var draft = ""
     @State private var isHovering = false
@@ -374,10 +371,8 @@ private struct RuntimeSettingRow: View {
 
     private var controlWidth: CGFloat? {
         switch field.control {
-        case .number, .combo:
+        case .number, .combo, .text:
             return valueWidth
-        case .text:
-            return pathWidth
         case .toggle, .choice:
             return nil
         }
