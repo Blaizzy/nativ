@@ -8,9 +8,9 @@ struct RuntimeSettingsPanel: View {
 
     private static let railWidth: CGFloat = 152
     private static let labelWidth: CGFloat = 116
-    private static let controlWidth: CGFloat = 150
+    private static let controlWidth: CGFloat = 118
     private static let unitWidth: CGFloat = 48
-    private static let fieldColumnWidth: CGFloat = 348
+    private static let fieldColumnWidth: CGFloat = 324
 
     var body: some View {
         VStack(spacing: 0) {
@@ -242,7 +242,7 @@ struct RuntimeSettingsPanel: View {
         HStack(spacing: 10) {
             Text(field.shortTitle)
                 .font(.footnote)
-                .foregroundStyle(store.isActive(field) ? .primary : .secondary)
+                .foregroundStyle(labelStyle(for: field))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(width: Self.labelWidth, alignment: .leading)
@@ -255,6 +255,15 @@ struct RuntimeSettingsPanel: View {
                 unitWidth: Self.unitWidth
             )
         }
+    }
+
+    private func labelStyle(for field: RuntimeSettingField) -> AnyShapeStyle {
+        if field.isDirty {
+            return AnyShapeStyle(Color.orange)
+        }
+        return AnyShapeStyle(
+            store.isActive(field) ? HierarchicalShapeStyle.primary : HierarchicalShapeStyle.secondary
+        )
     }
 
     @ViewBuilder
