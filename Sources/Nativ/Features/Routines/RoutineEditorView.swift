@@ -6,7 +6,7 @@ struct RoutineEditor: View {
     let draft: RoutineDraft
     let availableModelIDs: [String]
     let toolCapableModelIDs: Set<String>
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject private var notifications = NativNotificationService.shared
     let isExistingTask: Bool

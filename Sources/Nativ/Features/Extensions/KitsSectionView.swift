@@ -19,7 +19,7 @@ private func kitCompletionIndicator(_ state: NativKitState) -> some View {
 struct KitsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var openKit: NativKit?
 
     private let columns = [
@@ -139,7 +139,7 @@ private struct KitDetailView: View {
     let kit: NativKit
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @Environment(\.dismiss) private var dismiss
 
     private var state: NativKitState { NativKitActivation.state(of: kit, model: model, manager: manager) }

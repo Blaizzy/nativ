@@ -124,7 +124,7 @@ private struct WelcomeView: View {
         case permissions
     }
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @StateObject private var modelLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared

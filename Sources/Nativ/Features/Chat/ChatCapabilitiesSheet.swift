@@ -33,7 +33,7 @@ private struct GlobalChatCapabilityItem: Identifiable {
 }
 
 struct ChatCapabilitiesSheet: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openExtensionsHubSection) private var openExtensionsHubSection
     @State private var query = ""
@@ -278,7 +278,7 @@ struct ChatCapabilitiesSheet: View {
 }
 
 struct ChatKitsPickerSheet: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var manager: NativExtensionManager
     @Environment(\.dismiss) private var dismiss
 

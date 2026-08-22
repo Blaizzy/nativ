@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import NativExtensionSDK
 import NativServerKit
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -53,9 +54,10 @@ final class ControlPanelChromeState: ObservableObject {
     }
 
     @Published private var snapshot: Snapshot
-    private var cancellables = Set<AnyCancellable>()
+    private let model: NativModel
 
     init(model: NativModel) {
+        self.model = model
         let settings = Self.settingsProjection(model.settings)
         snapshot = Snapshot(
             isRunning: model.isRunning,
@@ -71,44 +73,32 @@ final class ControlPanelChromeState: ObservableObject {
             artifactSettings: settings.artifactSettings
         )
 
-        model.$isRunning
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.isRunning = value } }
-            .store(in: &cancellables)
-        model.$modelSwitchInProgress
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.modelSwitchInProgress = value } }
-            .store(in: &cancellables)
-        model.$modelLoadingProgress
-            .map(Self.loadingPercentage)
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.modelLoadingPercentage = value } }
-            .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.metricsLoading = value } }
-            .store(in: &cancellables)
-        model.$modelLoadFailure
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.modelLoadFailure = value } }
-            .store(in: &cancellables)
-        model.$modelPreloadMemoryWarning
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.modelPreloadMemoryWarning = value } }
-            .store(in: &cancellables)
-        model.$settings
-            .map(Self.settingsProjection)
-            .removeDuplicates()
-            .sink { [weak self] value in
-                self?.update {
-                    $0.languageModelID = value.languageModelID
-                    $0.sidebarPinnedCollapsed = value.sidebarPinnedCollapsed
-                    $0.sidebarFoldersCollapsed = value.sidebarFoldersCollapsed
-                    $0.sidebarSessionsCollapsed = value.sidebarSessionsCollapsed
-                    $0.artifactSettings = value.artifactSettings
-                }
-            }
-            .store(in: &cancellables)
+        observeModel()
+    }
+
+    private func observeModel() {
+        withObservationTracking { [weak self] in
+            self?.captureModelSnapshot()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeModel() }
+        }
+    }
+
+    private func captureModelSnapshot() {
+        let settings = Self.settingsProjection(model.settings)
+        update {
+            $0.isRunning = model.isRunning
+            $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.modelLoadingPercentage = Self.loadingPercentage(model.modelLoadingProgress)
+            $0.metricsLoading = model.metricsLoading
+            $0.modelLoadFailure = model.modelLoadFailure
+            $0.modelPreloadMemoryWarning = model.modelPreloadMemoryWarning
+            $0.languageModelID = settings.languageModelID
+            $0.sidebarPinnedCollapsed = settings.sidebarPinnedCollapsed
+            $0.sidebarFoldersCollapsed = settings.sidebarFoldersCollapsed
+            $0.sidebarSessionsCollapsed = settings.sidebarSessionsCollapsed
+            $0.artifactSettings = settings.artifactSettings
+        }
     }
 
     var isRunning: Bool { snapshot.isRunning }

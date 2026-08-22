@@ -68,67 +68,78 @@ private struct ModelReadmeSelection: Equatable {
 /// must not invalidate the full Discover list just because uptime changed.
 @MainActor
 private final class ModelsNativState: ObservableObject {
-    @Published private(set) var settings: NativSettings
-    @Published private(set) var isRunning: Bool
-    @Published private(set) var modelSwitchInProgress: Bool
-    @Published private(set) var modelSwitchTargetID: String?
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var metricsLoading: Bool
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
-    @Published private(set) var loadedModelID: String?
+    private struct Snapshot: Equatable {
+        var settings: NativSettings
+        var isRunning: Bool
+        var modelSwitchInProgress: Bool
+        var modelSwitchTargetID: String?
+        var modelLoadingProgress: Double?
+        var metricsLoading: Bool
+        var modelLoadFailure: ModelLoadFailure?
+        var systemHuggingFaceCredential: HuggingFaceCredential?
+        var loadedModelID: String?
+    }
 
-    private var cancellables = Set<AnyCancellable>()
+    @Published private var snapshot: Snapshot
+    private let model: NativModel
 
     init(model: NativModel) {
-        settings = model.settings
-        isRunning = model.isRunning
-        modelSwitchInProgress = model.modelSwitchInProgress
-        modelSwitchTargetID = model.modelSwitchTargetID
-        modelLoadingProgress = model.modelLoadingProgress
-        metricsLoading = model.metricsLoading
-        modelLoadFailure = model.modelLoadFailure
-        systemHuggingFaceCredential = model.systemHuggingFaceCredential
-        loadedModelID = model.metrics?.server.loadedModel
+        self.model = model
+        snapshot = Snapshot(
+            settings: model.settings,
+            isRunning: model.isRunning,
+            modelSwitchInProgress: model.modelSwitchInProgress,
+            modelSwitchTargetID: model.modelSwitchTargetID,
+            modelLoadingProgress: model.modelLoadingProgress,
+            metricsLoading: model.metricsLoading,
+            modelLoadFailure: model.modelLoadFailure,
+            systemHuggingFaceCredential: model.systemHuggingFaceCredential,
+            loadedModelID: model.metrics?.server.loadedModel
+        )
 
-        model.$settings
-            .removeDuplicates()
-            .sink { [weak self] in self?.settings = $0 }
-            .store(in: &cancellables)
-        model.$isRunning
-            .removeDuplicates()
-            .sink { [weak self] in self?.isRunning = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchInProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchInProgress = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchTargetID
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchTargetID = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadingProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadingProgress = $0 }
-            .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] in self?.metricsLoading = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadFailure
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadFailure = $0 }
-            .store(in: &cancellables)
-        model.$systemHuggingFaceCredential
-            .removeDuplicates()
-            .sink { [weak self] in self?.systemHuggingFaceCredential = $0 }
-            .store(in: &cancellables)
-        model.$metrics
-            .map { $0?.server.loadedModel }
-            .removeDuplicates()
-            .sink { [weak self] in self?.loadedModelID = $0 }
-            .store(in: &cancellables)
+        observeModel()
     }
+
+    private func observeModel() {
+        withObservationTracking { [weak self] in
+            self?.captureModelSnapshot()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeModel() }
+        }
+    }
+
+    private func captureModelSnapshot() {
+        update {
+            $0.settings = model.settings
+            $0.isRunning = model.isRunning
+            $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.modelSwitchTargetID = model.modelSwitchTargetID
+            $0.modelLoadingProgress = model.modelLoadingProgress
+            $0.metricsLoading = model.metricsLoading
+            $0.modelLoadFailure = model.modelLoadFailure
+            $0.systemHuggingFaceCredential = model.systemHuggingFaceCredential
+            $0.loadedModelID = model.metrics?.server.loadedModel
+        }
+    }
+
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
+    }
+
+    var settings: NativSettings { snapshot.settings }
+    var isRunning: Bool { snapshot.isRunning }
+    var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var modelSwitchTargetID: String? { snapshot.modelSwitchTargetID }
+    var modelLoadingProgress: Double? { snapshot.modelLoadingProgress }
+    var metricsLoading: Bool { snapshot.metricsLoading }
+    var modelLoadFailure: ModelLoadFailure? { snapshot.modelLoadFailure }
+    var systemHuggingFaceCredential: HuggingFaceCredential? {
+        snapshot.systemHuggingFaceCredential
+    }
+    var loadedModelID: String? { snapshot.loadedModelID }
 
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(

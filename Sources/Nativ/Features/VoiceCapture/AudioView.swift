@@ -44,7 +44,7 @@ private enum AudioAnimationPurpose {
 
 @MainActor
 struct AudioView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
     @ObservedObject private var animations: VoiceAnimationPreferences

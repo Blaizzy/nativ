@@ -1185,7 +1185,7 @@ private enum SessionStatsSection {
 }
 
 private struct SessionStatsContainerView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var highlightState: SessionStatsHighlightState
     let section: SessionStatsSection
 

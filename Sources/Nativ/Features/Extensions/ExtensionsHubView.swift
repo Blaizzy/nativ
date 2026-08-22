@@ -6,7 +6,7 @@ import SwiftUI
 struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @Binding var section: HubSection
     @State private var didLaunch = false
 
@@ -396,7 +396,7 @@ private struct FlowLayout: Layout {
 // MARK: - Skills section
 
 private struct SkillsSectionView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var editing: NativSkill?
     @State private var pendingDelete: NativSkill?
 

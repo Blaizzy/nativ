@@ -9,7 +9,7 @@ private enum ScheduledTaskFilter: String, CaseIterable, Identifiable {
 }
 
 struct ScheduledTasksView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
     var titleLeadingInset: CGFloat = 0
