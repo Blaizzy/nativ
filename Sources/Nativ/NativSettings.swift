@@ -86,6 +86,85 @@ struct ServerAPIKeychain: ServerAPICredentialStoring {
     }
 }
 
+protocol HuggingFaceCredentialStoring {
+    func load() throws -> String?
+    func save(_ token: String?) throws
+}
+
+struct HuggingFaceCredentialKeychain: HuggingFaceCredentialStoring {
+    let service: String
+    let account: String
+
+    init(
+        service: String = "dev.local.Nativ.huggingface-token",
+        account: String = "nativ-huggingface"
+    ) {
+        self.service = service
+        self.account = account
+    }
+
+    func load() throws -> String? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(status)
+        }
+        guard let data = item as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            throw ServerAPICredentialPersistenceError.invalidKeychainData
+        }
+        return HuggingFaceAuthentication.normalizedToken(token)
+    }
+
+    func save(_ token: String?) throws {
+        guard let token = HuggingFaceAuthentication.normalizedToken(token) else {
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw ServerAPICredentialPersistenceError.keychain(status)
+            }
+            return
+        }
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw ServerAPICredentialPersistenceError.keychain(updateStatus)
+        }
+
+        var item = baseQuery
+        attributes.forEach { item[$0.key] = $0.value }
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(addStatus)
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+}
+
 struct ServerAPITokenInfo: Equatable, Sendable {
     let maskedValue: String
     let characterCount: Int
@@ -596,7 +675,6 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
-        try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
         try container.encode(maxTokens, forKey: .maxTokens)
@@ -668,7 +746,8 @@ struct NativSettings: Codable, Equatable {
 
     static func load(
         from url: URL = storageURL,
-        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain()
+        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain(),
+        huggingFaceStore: HuggingFaceCredentialStoring = HuggingFaceCredentialKeychain()
     ) -> Self {
         let storedSettings: Self
         if let data = try? Data(contentsOf: url),
@@ -704,6 +783,34 @@ struct NativSettings: Codable, Equatable {
             settings.serverAPIKey = legacyToken
         }
 
+        let legacyHuggingFaceToken = HuggingFaceAuthentication.normalizedToken(
+            storedSettings.huggingFaceToken
+        )
+
+        do {
+            if let keychainToken = try huggingFaceStore.load() {
+                settings.huggingFaceToken = keychainToken
+                if storedSettings.huggingFaceToken != nil {
+                    try? settings.writePropertyList(to: url)
+                }
+            } else if let legacyHuggingFaceToken {
+                try huggingFaceStore.save(legacyHuggingFaceToken)
+                guard try huggingFaceStore.load() == legacyHuggingFaceToken else {
+                    throw ServerAPICredentialPersistenceError.invalidKeychainData
+                }
+                settings.huggingFaceToken = legacyHuggingFaceToken
+                try? settings.writePropertyList(to: url)
+            } else {
+                settings.huggingFaceToken = nil
+                if storedSettings.huggingFaceToken != nil {
+                    try? settings.writePropertyList(to: url)
+                }
+            }
+        } catch {
+            // Keep the legacy value until it can be migrated without data loss.
+            settings.huggingFaceToken = legacyHuggingFaceToken
+        }
+
         if MCPServerCatalog.bundled.migrateConfigurations(in: &settings.mcpServers) {
             try? settings.writePropertyList(to: url)
         }
@@ -713,11 +820,13 @@ struct NativSettings: Codable, Equatable {
 
     func save(
         to url: URL = storageURL,
-        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain()
+        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain(),
+        huggingFaceStore: HuggingFaceCredentialStoring = HuggingFaceCredentialKeychain()
     ) {
         let settings = normalized()
         try? settings.writePropertyList(to: url)
         try? credentialStore.save(settings.serverAPIKey)
+        try? huggingFaceStore.save(settings.huggingFaceToken)
     }
 
     private func writePropertyList(to url: URL) throws {
