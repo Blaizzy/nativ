@@ -239,7 +239,8 @@ final class AudioAnalyticsStore: ObservableObject {
         recordingURL: URL,
         kind: AudioRecordKind,
         title: String,
-        durationSeconds: TimeInterval?
+        durationSeconds: TimeInterval?,
+        recordedAt: Date? = nil
     ) {
         upsertTranscription(
             recordingURL: recordingURL,
@@ -249,7 +250,8 @@ final class AudioAnalyticsStore: ObservableObject {
             applicationName: nil,
             kind: kind,
             title: title,
-            persistAudioReference: true
+            persistAudioReference: true,
+            recordedAt: recordedAt
         )
     }
 
@@ -440,6 +442,40 @@ final class AudioAnalyticsStore: ObservableObject {
         return values?.contentModificationDate ?? values?.creationDate
     }
 
+    private static func importedAt(from audioFileName: String?) -> Date? {
+        let prefix = "Imported Audio "
+        guard let audioFileName,
+              audioFileName.hasPrefix(prefix)
+        else {
+            return nil
+        }
+
+        let timestamp = String(audioFileName.dropFirst(prefix.count).prefix(26))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
+        return formatter.date(from: timestamp)
+    }
+
+    private static func replacingRecordedAt(
+        _ recordedAt: Date,
+        in record: AudioTranscriptionRecord
+    ) -> AudioTranscriptionRecord {
+        AudioTranscriptionRecord(
+            id: record.id,
+            recordedAt: recordedAt,
+            updatedAt: record.updatedAt,
+            durationSeconds: record.durationSeconds,
+            transcript: record.transcript,
+            modelID: record.modelID,
+            applicationName: record.applicationName,
+            kind: record.kind,
+            title: record.title,
+            audioFileName: record.audioFileName,
+            summary: record.summary
+        )
+    }
+
     private static func deleteDictationFiles(
         withID recordID: String,
         in directory: URL,
@@ -464,8 +500,21 @@ final class AudioAnalyticsStore: ObservableObject {
             rebuildDerivedMetrics()
             return
         }
-        records = decoded.sorted { $0.recordedAt > $1.recordedAt }
+        var migratedImportedDates = false
+        records = decoded.map { record in
+            guard let importedAt = Self.importedAt(from: record.audioFileName),
+                  importedAt != record.recordedAt
+            else {
+                return record
+            }
+            migratedImportedDates = true
+            return Self.replacingRecordedAt(importedAt, in: record)
+        }
+        .sorted { $0.recordedAt > $1.recordedAt }
         rebuildDerivedMetrics()
+        if migratedImportedDates {
+            save()
+        }
     }
 
     private func save() {
