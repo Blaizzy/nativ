@@ -45,11 +45,12 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
+    @ObservedObject private var notifications = NativNotificationService.shared
 
     var body: some View {
         ScrollView {
@@ -61,7 +62,8 @@ struct SettingsView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 28)
-            .padding(.vertical, 26)
+            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .padding(.bottom, 26)
         }
         .background(Color.nativMainContentBackground)
     }
@@ -167,6 +169,17 @@ struct SettingsView: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
                 }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
+                    title: "Notifications",
+                    description: notificationDescription,
+                    systemImage: "bell.badge"
+                ) {
+                    notificationSettingsControl
+                }
             }
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -186,6 +199,7 @@ struct SettingsView: View {
         }
         .onAppear {
             permissions.refresh()
+            notifications.refreshAuthorizationStatus()
         }
         .onReceive(
             NotificationCenter.default.publisher(
@@ -193,6 +207,40 @@ struct SettingsView: View {
             )
         ) { _ in
             permissions.refresh()
+            notifications.refreshAuthorizationStatus()
+        }
+    }
+
+    @ViewBuilder
+    private var notificationSettingsControl: some View {
+        switch notifications.authorizationStatus {
+        case .unknown:
+            ProgressView()
+                .controlSize(.small)
+        case .notDetermined:
+            Button(notifications.isRequestingAuthorization ? "Requesting…" : "Allow") {
+                notifications.requestAuthorization()
+            }
+            .buttonStyle(.bordered)
+            .disabled(notifications.isRequestingAuthorization)
+        case .denied, .authorized:
+            Button("Open Settings…") {
+                notifications.openSystemSettings()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var notificationDescription: String {
+        switch notifications.authorizationStatus {
+        case .unknown:
+            "Checking notification access…"
+        case .notDetermined:
+            "Allow Nativ to send notifications."
+        case .denied:
+            "Notifications are blocked in System Settings."
+        case .authorized:
+            "Nativ can send notifications."
         }
     }
 

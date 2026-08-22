@@ -124,7 +124,7 @@ private struct WelcomeView: View {
         case permissions
     }
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @StateObject private var modelLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
@@ -469,7 +469,7 @@ private struct WelcomeView: View {
                 sizeBytes: hubModel.sizeBytes,
                 cachePath: model.settings.modelSearchPath
             ),
-            downloadError: downloadManager.errorByModelID[hubModel.id],
+            downloadError: downloadManager.errorByModelID[hubModel.id]?.localizedDescription,
             onSelect: { selectedModelID = hubModel.id },
             onDownload: { downloadRecommendedModel(hubModel) },
             onCancel: { downloadManager.removeDownload(hubModel.id) }

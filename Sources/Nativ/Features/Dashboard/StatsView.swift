@@ -3,7 +3,7 @@ import NativServerKit
 import SwiftUI
 
 struct StatsView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let dashboard: DashboardViewModel
     var titleLeadingInset: CGFloat = 0
 
@@ -122,7 +122,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
             VStack(spacing: 0) {
                 pageHeader
                     .padding(.horizontal, 22)
-                    .padding(.top, 20)
+                    .padding(.top, ControlPanelLayout.detailHeaderTopInset)
                     .padding(.bottom, 16)
 
                 Divider()

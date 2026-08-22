@@ -281,6 +281,98 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(try propertyList(at: url)["serverAPIKey"])
     }
 
+    func testHuggingFaceTokenIsOmittedFromEncodedSettings() throws {
+        let data = try PropertyListEncoder().encode(
+            NativSettings(huggingFaceToken: "hf_secret")
+        )
+        let propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+
+        XCTAssertNil(propertyList["huggingFaceToken"])
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("hf_secret"))
+    }
+
+    func testSavingSettingsStoresHuggingFaceTokenInCredentialStore() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let credentialStore = TestServerAPICredentialStore()
+
+        NativSettings(huggingFaceToken: "  hf_secret\n").save(
+            to: url,
+            huggingFaceStore: credentialStore
+        )
+
+        XCTAssertEqual(credentialStore.token, "hf_secret")
+        XCTAssertNil(try propertyList(at: url)["huggingFaceToken"] as? String)
+    }
+
+    func testSavingWritesPropertyListEvenWhenHuggingFaceStoreFails() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let huggingFaceStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        NativSettings(languageModelID: "org/model").save(
+            to: url,
+            huggingFaceStore: huggingFaceStore
+        )
+
+        XCTAssertEqual(
+            try propertyList(at: url)["languageModelID"] as? String,
+            "org/model",
+            "a Keychain failure must not block persisting the rest of settings to disk"
+        )
+    }
+
+    func testLoadingMigratesLegacyHuggingFaceTokenIntoCredentialStore() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(huggingFaceToken: "hf_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore()
+
+        let settings = NativSettings.load(from: url, huggingFaceStore: credentialStore)
+
+        XCTAssertEqual(settings.huggingFaceToken, "hf_legacy")
+        XCTAssertEqual(credentialStore.token, "hf_legacy")
+        XCTAssertNil(try propertyList(at: url)["huggingFaceToken"])
+    }
+
+    func testFailedHuggingFaceMigrationRetainsRecoverableToken() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(huggingFaceToken: "hf_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        let settings = NativSettings.load(from: url, huggingFaceStore: credentialStore)
+
+        XCTAssertEqual(settings.huggingFaceToken, "hf_legacy")
+        XCTAssertEqual(
+            try propertyList(at: url)["huggingFaceToken"] as? String,
+            "hf_legacy"
+        )
+    }
+
+    func testHuggingFaceCredentialTakesPrecedenceOverLegacyToken() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(huggingFaceToken: "hf_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore(token: "hf_keychain")
+
+        let settings = NativSettings.load(from: url, huggingFaceStore: credentialStore)
+
+        XCTAssertEqual(settings.huggingFaceToken, "hf_keychain")
+        XCTAssertEqual(credentialStore.token, "hf_keychain")
+        XCTAssertNil(try propertyList(at: url)["huggingFaceToken"])
+    }
+
     func testServerAuthorizationAddsBearerHeader() {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
 
@@ -598,7 +690,11 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
-    private func writeLegacySettings(serverAPIKey: String, to url: URL) throws {
+    private func writeLegacySettings(
+        serverAPIKey: String? = nil,
+        huggingFaceToken: String? = nil,
+        to url: URL
+    ) throws {
         let encoded = try PropertyListEncoder().encode(NativSettings())
         var propertyList = try XCTUnwrap(
             PropertyListSerialization.propertyList(
@@ -607,7 +703,12 @@ final class NativSettingsTests: XCTestCase {
                 format: nil
             ) as? [String: Any]
         )
-        propertyList["serverAPIKey"] = serverAPIKey
+        if let serverAPIKey {
+            propertyList["serverAPIKey"] = serverAPIKey
+        }
+        if let huggingFaceToken {
+            propertyList["huggingFaceToken"] = huggingFaceToken
+        }
         let data = try PropertyListSerialization.data(
             fromPropertyList: propertyList,
             format: .binary,
@@ -625,7 +726,7 @@ private enum TestCredentialStoreError: Error {
     case unavailable
 }
 
-private final class TestServerAPICredentialStore: ServerAPICredentialStoring {
+private final class TestServerAPICredentialStore: ServerAPICredentialStoring, HuggingFaceCredentialStoring {
     var token: String?
     var loadError: Error?
     var saveError: Error?

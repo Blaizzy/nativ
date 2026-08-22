@@ -6,6 +6,10 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Nativ</string>
+	<key>CFBundleIconFile</key>
+	<string>NotificationAppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -42,6 +46,8 @@
 	<string>$(NATIV_GITHUB_APP_SLUG)</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/Blaizzy/nativ/releases/latest/download/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUPublicEDKey</key>
 	<string>$(NATIV_SPARKLE_PUBLIC_KEY)</string>
 	<key>UTExportedTypeDeclarations</key>

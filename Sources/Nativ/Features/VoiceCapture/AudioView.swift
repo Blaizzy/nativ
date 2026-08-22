@@ -44,7 +44,7 @@ private enum AudioAnimationPurpose {
 
 @MainActor
 struct AudioView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
     @ObservedObject private var animations: VoiceAnimationPreferences
@@ -157,6 +157,7 @@ struct AudioView: View {
                 Button("Open System Settings") {
                     captureLibrary.openPermissionSettings()
                 }
+                .keyboardShortcut(.defaultAction)
                 Button("Not Now", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
@@ -164,6 +165,7 @@ struct AudioView: View {
                 Button("OK", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
+                .keyboardShortcut(.defaultAction)
             }
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
@@ -240,7 +242,7 @@ struct AudioView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
         .padding(.bottom, 16)
     }
 
@@ -894,7 +896,7 @@ struct AudioView: View {
         case .preparing:
             "Preparing \(captureLibrary.activeKind?.title.lowercased() ?? "recording")…"
         case .recording:
-            "Recording \(captureLibrary.activeKind?.title.lowercased() ?? "audio")"
+            "Recording"
         case .processing:
             "Saving and transcribing…"
         }
@@ -3096,7 +3098,9 @@ private final class ShortcutRecorderNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func flagsChanged(with event: NSEvent) {
-        let modifiers = VoiceShortcutModifiers(eventFlags: event.modifierFlags)
+        let modifiers = VoiceShortcutModifiers(
+            cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+        )
         if modifiers.isEmpty {
             if !pendingModifiers.isEmpty {
                 onCapture?(

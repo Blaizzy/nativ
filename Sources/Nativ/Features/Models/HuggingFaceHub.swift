@@ -461,7 +461,6 @@ enum HuggingFaceHubError: LocalizedError {
     case invalidResponse
     case requestFailed(Int, String)
     case pythonUnavailable
-    case downloadFailed(String)
     case downloadStalled
     case anotherDownloadInProgress(String)
 
@@ -473,12 +472,42 @@ enum HuggingFaceHubError: LocalizedError {
             message.isEmpty ? "Hugging Face request failed (HTTP \(status))." : message
         case .pythonUnavailable:
             "The bundled model downloader is unavailable."
-        case .downloadFailed(let message):
-            message.isEmpty ? "The model download failed." : message
         case .downloadStalled:
             "The model download stopped responding after multiple automatic retries. Check your connection and try again."
         case .anotherDownloadInProgress(let modelID):
             "Wait for \(modelID) to finish downloading before starting another model download."
+        }
+    }
+}
+
+enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
+    case gatedRepository
+    case message(String)
+
+    init(processOutput: String) {
+        let normalizedOutput = processOutput.lowercased()
+        if normalizedOutput.contains("gatedrepoerror")
+            || normalizedOutput.contains("cannot access gated repo")
+            || normalizedOutput.contains("is restricted and you are not in the authorized list") {
+            self = .gatedRepository
+            return
+        }
+
+        let usefulMessage = processOutput
+            .split(whereSeparator: { $0.isNewline || $0 == "\r" })
+            .suffix(4)
+            .joined(separator: "\n")
+        self = .message(
+            usefulMessage.isEmpty ? "The model download failed. Try again." : usefulMessage
+        )
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .gatedRepository:
+            "This gated model requires access approval from its publisher."
+        case .message(let message):
+            message
         }
     }
 }
@@ -992,7 +1021,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let isDownloading: Bool
         let progress: Double
         let isPaused: Bool
-        let error: String?
+        let error: HuggingFaceDownloadFailure?
     }
 
     struct ActiveDownload: Identifiable, Equatable {
@@ -1024,7 +1053,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 
     @Published private(set) var downloads: [ActiveDownload] = []
-    @Published private(set) var errorByModelID: [String: String] = [:]
+    @Published private(set) var errorByModelID: [String: HuggingFaceDownloadFailure] = [:]
     /// Emits the affected model ID for progress/state changes. `nil` denotes
     /// a structural change that can affect capacity for every download row.
     let rowUpdates = PassthroughSubject<String?, Never>()
@@ -1078,7 +1107,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 
     func reportError(_ message: String, for modelID: String) {
-        errorByModelID[modelID] = message
+        errorByModelID[modelID] = .message(message)
     }
 
     func capacityBlocker(sizeBytes: Int64?, cachePath: String) -> String? {
@@ -1101,7 +1130,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     ) {
         guard contexts[repoID] == nil else { return }
         if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-            errorByModelID[repoID] = blocker
+            errorByModelID[repoID] = .message(blocker)
             rowUpdates.send(repoID)
             return
         }
@@ -1114,8 +1143,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 onCompletion: onCompletion
             )
         } catch {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorByModelID[repoID] = downloadFailure(for: error)
             rowUpdates.send(repoID)
         }
     }
@@ -1141,8 +1169,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                     onCompletion: nil
                 )
             } catch {
-                errorByModelID[repoID] =
-                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                errorByModelID[repoID] = downloadFailure(for: error)
                 rowUpdates.send(repoID)
                 throw error
             }
@@ -1300,8 +1327,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let completion = context.onCompletion
         let waiters = Array(context.waiters.values)
         if let error {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorByModelID[repoID] = downloadFailure(for: error)
         }
         removeContext(repoID)
 
@@ -1406,6 +1432,15 @@ final class HuggingFaceDownloadManager: ObservableObject {
         rowUpdates.send(nil)
     }
 
+    private func downloadFailure(for error: Error) -> HuggingFaceDownloadFailure {
+        if let failure = error as? HuggingFaceDownloadFailure {
+            return failure
+        }
+        return .message(
+            (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        )
+    }
+
     private func cancelWaiter(_ waiterID: UUID, modelID: String) {
         contexts[modelID]?.waiters.removeValue(forKey: waiterID)?
             .resume(throwing: CancellationError())
@@ -1456,7 +1491,6 @@ private enum HuggingFaceSnapshotDownloader {
 }
 
 struct HuggingFaceDownloadProgressState: Equatable {
-    private static let activeProgressLimit = 0.994
     private static let speedSampleInterval: TimeInterval = 0.4
     private static let speedStaleInterval: TimeInterval = 2
 
@@ -1563,7 +1597,16 @@ struct HuggingFaceDownloadProgressState: Equatable {
         let transferDelta = bytes - checkpointTransferredBytes
         let estimatedBytes = checkpointDisplayedBytes
             + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
-        let activeLimit = Int64(Double(totalBytes) * Self.activeProgressLimit)
+        // Transfer bytes are only an estimate of reconstructed bytes. Cap the
+        // estimate at the first finishing byte so it cannot show 100%, but can
+        // still switch the UI and stall watchdog into their finishing state.
+        let activeLimit = min(
+            Int64(
+                (Double(totalBytes) * ModelDownloadProgressPresentation.finishingThreshold)
+                    .rounded(.up)
+            ),
+            totalBytes
+        )
         guard let estimate = ModelDownloadProgress(
             completedBytes: min(estimatedBytes, activeLimit),
             totalBytes: totalBytes
@@ -1591,19 +1634,19 @@ struct HuggingFaceDownloadProgressState: Equatable {
         !isPaused && now.timeIntervalSince(lastActivity) >= timeout
     }
 
-    var isFinalizing: Bool {
-        ModelDownloadProgressPresentation.isFinalizing(progress?.fractionCompleted ?? 0)
+    var isFinishing: Bool {
+        ModelDownloadProgressPresentation.isFinishing(progress?.fractionCompleted ?? 0)
     }
 }
 
 enum ModelDownloadProgressPresentation {
-    /// The final fraction of a download is spent committing blobs and creating
-    /// the snapshot. Keep 100% reserved for a download that has actually
-    /// completed and disappeared from the active-download UI.
-    static let finalizingThreshold = 0.995
+    /// Xet can continue reconstructing model files after the measurable
+    /// transfer estimate reaches its safe limit. Present that interval as a
+    /// distinct finishing state instead of leaving a percentage visibly stuck.
+    static let finishingThreshold = 0.95
 
-    static func isFinalizing(_ progress: Double) -> Bool {
-        progress >= finalizingThreshold
+    static func isFinishing(_ progress: Double) -> Bool {
+        progress >= finishingThreshold
     }
 
     static func activePercentage(_ progress: Double) -> Int {
@@ -1670,8 +1713,8 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
         lock.withLock { state.isStalled(timeout: timeout, isPaused: isPaused) }
     }
 
-    var isFinalizing: Bool {
-        lock.withLock { state.isFinalizing }
+    var isFinishing: Bool {
+        lock.withLock { state.isFinishing }
     }
 }
 
@@ -1814,6 +1857,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             _reconstructed_bytes = cached_bytes
             _transferred_bytes = 0
             _last_progress_report = 0.0
+            _last_reported_progress = None
             _last_transfer_report = 0.0
 
             def __init__(self, *args, **kwargs):
@@ -1846,10 +1890,17 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
             @classmethod
             def _emit_progress(cls, now):
-                if cls._total_bytes <= 0 or now - cls._last_progress_report < 0.1:
+                if cls._total_bytes <= 0:
+                    return
+                completed = min(max(cls._reconstructed_bytes, 0), cls._total_bytes)
+                reported_progress = (completed, cls._total_bytes)
+                if reported_progress == cls._last_reported_progress:
+                    return
+                is_complete = completed >= cls._total_bytes
+                if not is_complete and now - cls._last_progress_report < 0.1:
                     return
                 cls._last_progress_report = now
-                completed = min(max(cls._reconstructed_bytes, 0), cls._total_bytes)
+                cls._last_reported_progress = reported_progress
                 print(
                     f"__NATIV_PROGRESS__:{completed}:{cls._total_bytes}",
                     flush=True,
@@ -2000,7 +2051,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             }
             if !flags.paused {
                 transferSpeed(activity.bytesPerSecond)
-                let timeout = activity.isFinalizing
+                let timeout = activity.isFinishing
                     ? Self.finalizationStallTimeout
                     : Self.stallTimeout
                 if activity.isStalled(timeout: timeout, isPaused: false) {
@@ -2024,11 +2075,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
         guard process.terminationStatus == 0 else {
             let message = String(decoding: output.snapshot(), as: UTF8.self)
-            let usefulMessage = message
-                .split(whereSeparator: { $0.isNewline || $0 == "\r" })
-                .suffix(4)
-                .joined(separator: "\n")
-            throw HuggingFaceHubError.downloadFailed(usefulMessage)
+            throw HuggingFaceDownloadFailure(processOutput: message)
         }
     }
 

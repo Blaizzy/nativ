@@ -16,7 +16,7 @@ struct DeveloperView: View {
     private static let contentBottomPadding: CGFloat = 22
     private static let logPanelMinimumHeight: CGFloat = 320
 
-    @ObservedObject var model: NativModel
+    @Bindable var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
@@ -37,7 +37,7 @@ struct DeveloperView: View {
                 VStack(spacing: 0) {
                     pageHeader
                         .padding(.horizontal, 22)
-                        .padding(.top, 20)
+                        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
                         .padding(.bottom, 16)
 
                     Divider()
@@ -175,7 +175,7 @@ struct DeveloperView: View {
 
     private var logPanel: some View {
         let output = LogOutput.filtered(
-            model.logText,
+            model.serverLogs.text,
             query: logQuery,
             level: logLevelFilter
         )
@@ -188,7 +188,7 @@ struct DeveloperView: View {
             ZStack {
                 LogTextView(text: output.text, searchQuery: logQuery)
 
-                if model.logText.isEmpty {
+                if model.serverLogs.text.isEmpty {
                     ContentUnavailableView(
                         "No server output",
                         systemImage: "terminal",
@@ -562,7 +562,7 @@ struct DeveloperView: View {
                 title: "Clear logs",
                 systemImage: "trash",
                 hoverTint: .red,
-                isDisabled: model.logText.isEmpty
+                isDisabled: model.serverLogs.text.isEmpty
             ) {
                 model.clearLogs()
             }
@@ -581,7 +581,7 @@ struct DeveloperView: View {
     }
 
     private func logSummary(_ output: LogOutput) -> String {
-        if model.logText.isEmpty {
+        if model.serverLogs.text.isEmpty {
             return "No output yet"
         }
         if !logQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || logLevelFilter != .all {

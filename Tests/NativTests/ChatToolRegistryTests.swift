@@ -622,6 +622,51 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertNil(object["cpu_usage_percent"])
     }
 
+    @MainActor
+    func testSystemMonitorReportsThermalAndPower() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.thermal.dieTemperatureCelsius = 62.37
+        snapshot.thermal.hottestSensorName = "PMU tdie1"
+        snapshot.thermal.fanSpeedsRPM = [1200, 2400]
+        snapshot.thermal.thermalPressure = .fair
+        snapshot.power.cpuWatts = 3.44
+        snapshot.power.gpuWatts = 8.06
+        snapshot.power.socWatts = 14.92
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["die_temperature_c"] as? Double, 62.4)
+        XCTAssertEqual(object["hottest_sensor"] as? String, "PMU tdie1")
+        XCTAssertEqual(object["fan_rpm"] as? Int, 2400, "should report the fastest fan")
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Fair")
+        XCTAssertEqual(object["cpu_watts"] as? Double, 3.4)
+        XCTAssertEqual(object["gpu_watts"] as? Double, 8.1)
+        XCTAssertEqual(object["package_watts"] as? Double, 14.9)
+    }
+
+    @MainActor
+    func testSystemMonitorOmitsUnavailableSensors() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.power.systemInputWatts = 21.5
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertNil(object["die_temperature_c"], "machines without a die sensor report null")
+        XCTAssertNil(object["fan_rpm"], "fanless machines report null")
+        XCTAssertEqual(
+            object["package_watts"] as? Double,
+            21.5,
+            "falls back to battery-controller input power when SoC rails are absent"
+        )
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Nominal")
+    }
+
     func testModelLibraryFailurePayloadShape() throws {
         let payload = ChatModelLibraryToolExecutor().failurePayload(operation: "x", error: FakeToolError())
         let object = try decode(payload)
@@ -1170,6 +1215,22 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.imageGenerationModelID, "org/image")
     }
 
+    func testChatSessionPersistsScheduledTaskOrigin() throws {
+        let session = ChatSession(
+            id: UUID(),
+            title: "Scheduled result",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            messages: [],
+            scheduledTaskID: "task-1"
+        )
+
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
+
+        XCTAssertEqual(decoded.scheduledTaskID, "task-1")
+    }
+
     func testOldChatSessionWithoutImageModelSelectionStillDecodes() throws {
         let oldJSON = #"{"id":"8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B","title":"Old","createdAt":0,"updatedAt":0,"messages":[]}"#
         let session = try JSONDecoder().decode(
@@ -1178,6 +1239,7 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         )
 
         XCTAssertNil(session.imageGenerationModelID)
+        XCTAssertNil(session.scheduledTaskID)
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {

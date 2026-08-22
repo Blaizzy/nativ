@@ -4,7 +4,7 @@ import SwiftUI
 
 struct MCPSectionView: View {
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var editing: MCPServerConfig?
     @State private var pendingDelete: MCPServerConfig?
 

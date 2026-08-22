@@ -6,20 +6,35 @@ final class RoutineRunner {
     private let model: NativModel
     private let store: RoutineStore
     private let sessionStore: ChatSessionStore
+    private let mcpHost: MCPHostManager
 
     var onRunCompleted: ((Routine, RoutineRun) -> Void)?
 
     private var queue: [(Routine, RoutineRunSource)] = []
     private var isExecuting = false
 
-    init(model: NativModel, store: RoutineStore, sessionStore: ChatSessionStore) {
+    init(
+        model: NativModel,
+        store: RoutineStore,
+        sessionStore: ChatSessionStore,
+        mcpHost: MCPHostManager? = nil
+    ) {
         self.model = model
         self.store = store
         self.sessionStore = sessionStore
+        self.mcpHost = mcpHost ?? MCPHostManager()
     }
 
     func run(_ routine: Routine, source: RoutineRunSource) {
-        queue.append((routine, source))
+        let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
+            for: routine,
+            runs: store.runs(forRoutine: routine.id),
+            sessionStore: sessionStore
+        )
+        if linkedRoutine != routine {
+            store.upsert(linkedRoutine)
+        }
+        queue.append((linkedRoutine, source))
         drain()
     }
 
@@ -51,56 +66,231 @@ final class RoutineRunner {
         }
 
         let settings = model.settings.normalized()
-        var messages: [MLXChatMessage] = []
-        if let systemPrompt = systemPrompt(for: routine) {
-            messages.append(MLXChatMessage(role: "system", content: systemPrompt))
-        }
-        messages.append(MLXChatMessage(role: "user", content: routine.instructions))
-
-        let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
-        let request = MLXChatCompletionRequest(
-            model: routine.modelID,
-            messages: messages,
-            maxTokens: settings.maxTokens,
-            temperature: settings.temperature,
-            topK: settings.topK,
-            topP: settings.topP,
-            minP: settings.minP
+        let selectedServers = Self.selectedMCPServers(for: routine, settings: settings)
+        await mcpHost.prepare(servers: selectedServers)
+        let capabilities = Self.resolveCapabilities(
+            for: routine,
+            settings: settings,
+            mcpHost: mcpHost
         )
+        guard capabilities.unavailable.isEmpty else {
+            finish(
+                &run,
+                routine: routine,
+                status: .failed,
+                summary: "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
+            )
+            return
+        }
 
         do {
-            let completion = try await client.completeChat(request)
-            let sessionID = appendRun(routine: routine, completion: completion)
+            let result = try await complete(
+                routine: routine,
+                settings: settings,
+                capabilities: capabilities,
+                baseURL: baseURL
+            )
+            let sessionID = appendRun(routine: routine, messages: result.transcript)
             NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
             run.sessionID = sessionID
-            finish(&run, routine: routine, status: .succeeded, summary: Self.summarize(completion.content))
+            finish(
+                &run,
+                routine: routine,
+                status: .succeeded,
+                summary: Self.summarize(result.finalContent)
+            )
+        } catch let failure as ScheduledCompletionFailure {
+            let errorMessage = failure.localizedDescription
+            let transcript = failure.transcript + [
+                ChatTranscriptMessage(role: .error, content: errorMessage)
+            ]
+            let sessionID = appendRun(routine: routine, messages: transcript)
+            NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
+            run.sessionID = sessionID
+            finish(&run, routine: routine, status: .failed, summary: errorMessage)
         } catch {
             finish(&run, routine: routine, status: .failed, summary: error.localizedDescription)
         }
     }
 
-    private func appendRun(routine: Routine, completion: MLXChatCompletion) -> UUID {
-        let userMessage = ChatTranscriptMessage(
-            role: .user,
-            content: routine.instructions
-        )
-        let assistantMessage = ChatTranscriptMessage(
-            role: .assistant,
-            content: completion.content,
-            reasoningContent: completion.reasoningContent ?? "",
-            modelID: routine.modelID
-        )
-        if let sessionID = routine.sourceSessionID,
-           var session = sessionStore.loadSession(id: sessionID) {
-            session.messages.append(userMessage)
-            session.messages.append(assistantMessage)
-            session.updatedAt = Date()
-            sessionStore.saveSession(session)
-            return sessionID
+    private func complete(
+        routine: Routine,
+        settings: NativSettings,
+        capabilities: ResolvedCapabilities,
+        baseURL: URL
+    ) async throws -> ScheduledExecutionResult {
+        let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
+        var requestMessages: [MLXChatMessage] = []
+        let systemPrompt = Self.systemPrompt(for: capabilities)
+        if !systemPrompt.isEmpty {
+            requestMessages.append(MLXChatMessage(role: "system", content: systemPrompt))
         }
-        let session = makeSession(routine: routine, completion: completion)
+        requestMessages.append(MLXChatMessage(role: "user", content: routine.instructions))
+
+        var transcript = [ChatTranscriptMessage(role: .user, content: routine.instructions)]
+        var toolRound = 0
+
+        while true {
+            let advertisesTools = !capabilities.tools.isEmpty
+                && ChatToolRoundGate.advertisesTools(atRound: toolRound)
+            let toolDefinitions = advertisesTools
+                ? capabilities.tools.map(\.definition)
+                : nil
+            let request = MLXChatCompletionRequest(
+                model: routine.modelID,
+                messages: requestMessages,
+                maxTokens: settings.maxTokens,
+                temperature: settings.temperature,
+                topK: settings.topK,
+                topP: settings.topP,
+                minP: settings.minP,
+                repetitionPenalty: settings.repetitionPenaltyEnabled
+                    ? settings.repetitionPenalty
+                    : nil,
+                enableThinking: settings.thinkingEnabled,
+                thinkingBudget: settings.thinkingEnabled
+                    && settings.thinkingBudgetEnabled
+                    && !settings.speculativeDecodingActive
+                    ? settings.thinkingBudget
+                    : nil,
+                thinkingStartToken: settings.thinkingEnabled ? settings.thinkingStartToken : nil,
+                thinkingEndToken: settings.thinkingEnabled ? settings.thinkingEndToken : nil,
+                responseFormat: toolDefinitions == nil ? settings.chatResponseFormat : nil,
+                tools: toolDefinitions,
+                toolChoice: toolDefinitions == nil ? nil : "auto"
+            )
+            let completion: MLXChatCompletion
+            do {
+                completion = try await client.completeChat(request)
+            } catch {
+                throw ScheduledCompletionFailure(underlying: error, transcript: transcript)
+            }
+            let toolCalls = Self.normalizedToolCalls(completion.toolCalls)
+
+            guard advertisesTools, !toolCalls.isEmpty else {
+                transcript.append(ChatTranscriptMessage(
+                    role: .assistant,
+                    content: completion.content,
+                    reasoningContent: completion.reasoningContent ?? "",
+                    modelID: routine.modelID
+                ))
+                return ScheduledExecutionResult(
+                    finalContent: completion.content,
+                    transcript: transcript
+                )
+            }
+
+            requestMessages.append(MLXChatMessage(
+                role: "assistant",
+                content: completion.content,
+                reasoningContent: completion.reasoningContent,
+                toolCalls: toolCalls
+            ))
+            transcript.append(ChatTranscriptMessage(
+                role: .assistant,
+                content: completion.content,
+                reasoningContent: completion.reasoningContent ?? "",
+                modelID: routine.modelID,
+                toolCalls: toolCalls
+            ))
+
+            for call in toolCalls {
+                let result = await executeTool(
+                    call,
+                    capabilities: capabilities,
+                    settings: settings,
+                    baseURL: baseURL
+                )
+                requestMessages.append(MLXChatMessage(
+                    role: "tool",
+                    content: result.content,
+                    toolCallID: call.id,
+                    name: call.function?.name
+                ))
+                transcript.append(ChatTranscriptMessage(
+                    role: .tool,
+                    content: result.content,
+                    imageAttachments: result.attachments,
+                    toolCallID: call.id,
+                    toolName: call.function?.name,
+                    toolStatus: result.succeeded ? .succeeded : .failed,
+                    toolArguments: call.function?.arguments
+                ))
+            }
+            toolRound += 1
+        }
+    }
+
+    private func executeTool(
+        _ call: MLXChatToolCall,
+        capabilities: ResolvedCapabilities,
+        settings: NativSettings,
+        baseURL: URL
+    ) async -> ScheduledToolResult {
+        do {
+            guard let name = call.function?.name,
+                  let tool = capabilities.tool(named: name)
+            else {
+                throw ScheduledToolExecutionError.notAllowed(call.function?.name ?? "unknown")
+            }
+
+            let outcome: ChatToolExecutionOutcome
+            switch tool.provider {
+            case .custom(let id):
+                guard let customTool = settings.customTools.first(where: { $0.id == id }) else {
+                    throw ScheduledToolExecutionError.unavailable(name)
+                }
+                let content = try await CustomToolExecutor.execute(
+                    customTool,
+                    argumentsJSON: call.function?.arguments
+                )
+                outcome = ChatToolExecutionOutcome(content: content, attachments: [])
+            case .mcp:
+                guard mcpHost.handlesTool(named: name) else {
+                    throw ScheduledToolExecutionError.unavailable(name)
+                }
+                let content = try await mcpHost.callTool(
+                    named: name,
+                    argumentsJSON: call.function?.arguments
+                )
+                outcome = ChatToolExecutionOutcome(content: content, attachments: [])
+            case .builtIn:
+                let context = ChatToolExecutionContext(
+                    imageGenerationModelID: settings.imageGenerationModelID,
+                    baseURL: baseURL,
+                    apiKey: settings.serverAPIKey,
+                    imageReferences: [],
+                    modelSearchPath: settings.expandedModelSearchPath,
+                    additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                    huggingFaceToken: model.effectiveHuggingFaceToken
+                )
+                outcome = try await ChatToolDispatcher.execute(call: call, context: context)
+            }
+            return ScheduledToolResult(
+                content: outcome.content,
+                attachments: outcome.attachments,
+                succeeded: true
+            )
+        } catch {
+            return ScheduledToolResult(
+                content: ChatToolDispatcher.failurePayload(
+                    toolName: call.function?.name,
+                    error: error
+                ),
+                attachments: [],
+                succeeded: false
+            )
+        }
+    }
+
+    private func appendRun(routine: Routine, messages: [ChatTranscriptMessage]) -> UUID {
+        let sessionID = routine.sourceSessionID ?? UUID()
+        var session = sessionStore.loadSession(id: sessionID)
+            ?? ScheduledTaskChatLinker.makeSession(for: routine, id: sessionID)
+        session.messages.append(contentsOf: messages)
+        session.updatedAt = Date()
         sessionStore.saveSession(session)
-        return session.id
+        return sessionID
     }
 
     private func finish(
@@ -144,43 +334,13 @@ final class RoutineRunner {
         }
     }
 
-    private func systemPrompt(for routine: Routine) -> String? {
-        guard let kitID = routine.kitID,
-              let kit = NativKit.all.first(where: { $0.id == kitID })
-        else {
-            return nil
+    private static func systemPrompt(for capabilities: ResolvedCapabilities) -> String {
+        var instructions: [String] = []
+        if !capabilities.tools.isEmpty {
+            instructions.append(NativSkill.builtInToolGuide.instructions)
         }
-        let instructions = kit.skills
-            .filter(\.isEnabled)
-            .map(\.instructions)
-            .filter { !$0.isEmpty }
-        return instructions.isEmpty ? nil : instructions.joined(separator: "\n\n")
-    }
-
-    private func makeSession(routine: Routine, completion: MLXChatCompletion) -> ChatSession {
-        let userMessage = ChatTranscriptMessage(
-            role: .user,
-            content: routine.instructions
-        )
-        let assistantMessage = ChatTranscriptMessage(
-            role: .assistant,
-            content: completion.content,
-            reasoningContent: completion.reasoningContent ?? "",
-            modelID: routine.modelID
-        )
-        let now = Date()
-        return ChatSession(
-            id: UUID(),
-            title: routine.name.isEmpty ? "Routine" : routine.name,
-            customTitle: nil,
-            createdAt: now,
-            updatedAt: now,
-            messages: [userMessage, assistantMessage],
-            pinned: nil,
-            pinnedOrder: nil,
-            sessionOrder: nil,
-            folderID: nil
-        )
+        instructions.append(contentsOf: capabilities.skills.map(\.instructions).filter { !$0.isEmpty })
+        return instructions.joined(separator: "\n\n")
     }
 
     private static func summarize(_ content: String) -> String {
@@ -189,6 +349,235 @@ final class RoutineRunner {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? ""
         return firstLine.count > 140 ? String(firstLine.prefix(139)) + "…" : firstLine
+    }
+
+    private static func selectedMCPServers(
+        for routine: Routine,
+        settings: NativSettings
+    ) -> [MCPServerConfig] {
+        var ids = Set<UUID>()
+        for capability in routine.capabilities {
+            switch capability {
+            case .kit(let kitID):
+                guard let kit = NativKit.all.first(where: { $0.id == kitID }) else { continue }
+                for entry in kit.mcpEntries {
+                    if let server = settings.mcpServers.first(where: {
+                        $0.command == entry.command && $0.arguments == entry.arguments
+                    }) {
+                        ids.insert(server.id)
+                    }
+                }
+            case .mcpServer(let id):
+                ids.insert(id)
+            case .tool(let tool):
+                if case .mcp(let id) = tool.provider {
+                    ids.insert(id)
+                }
+            case .skill:
+                break
+            }
+        }
+        return settings.mcpServers.filter { ids.contains($0.id) && $0.isEnabled }
+    }
+
+    private static func resolveCapabilities(
+        for routine: Routine,
+        settings: NativSettings,
+        mcpHost: MCPHostManager
+    ) -> ResolvedCapabilities {
+        var toolsByName: [String: ResolvedTool] = [:]
+        var conflictingToolNames = Set<String>()
+        var skillsByID: [UUID: NativSkill] = [:]
+        var unavailable: [String] = []
+        var wholeMCPServers = Set<UUID>()
+        var selectedTools: [ScheduledTool] = []
+
+        func registerTool(
+            _ definition: MLXChatToolDefinition,
+            provider: ScheduledTool.Provider
+        ) {
+            let name = definition.function.name
+            guard !conflictingToolNames.contains(name) else { return }
+            if let existing = toolsByName[name], existing.provider != provider {
+                toolsByName[name] = nil
+                conflictingToolNames.insert(name)
+                unavailable.append("Conflicting tools named \(name)")
+                return
+            }
+            toolsByName[name] = ResolvedTool(definition: definition, provider: provider)
+        }
+
+        for capability in routine.capabilities {
+            switch capability {
+            case .kit(let kitID):
+                guard let kit = NativKit.all.first(where: { $0.id == kitID }) else {
+                    unavailable.append(kitID)
+                    continue
+                }
+                for entry in kit.mcpEntries {
+                    if let server = settings.mcpServers.first(where: {
+                        $0.command == entry.command
+                            && $0.arguments == entry.arguments
+                            && $0.isEnabled
+                    }) {
+                        wholeMCPServers.insert(server.id)
+                    }
+                }
+                for skill in kit.skills {
+                    if let configured = settings.skills.first(where: { $0.id == skill.id }) {
+                        if configured.isEnabled {
+                            skillsByID[skill.id] = configured
+                        }
+                    } else {
+                        skillsByID[skill.id] = skill
+                    }
+                }
+            case .mcpServer(let id):
+                wholeMCPServers.insert(id)
+            case .tool(let tool):
+                selectedTools.append(tool)
+            case .skill(let id):
+                if let skill = settings.skills.first(where: { $0.id == id }) {
+                    if skill.isEnabled {
+                        skillsByID[id] = skill
+                    } else {
+                        unavailable.append(skill.name.isEmpty ? "Skill \(id.uuidString)" : skill.name)
+                    }
+                } else {
+                    unavailable.append("Skill \(id.uuidString)")
+                }
+            }
+        }
+
+        for serverID in wholeMCPServers {
+            let definitions = mcpHost.toolDefinitions(forServer: serverID)
+            if definitions.isEmpty {
+                let configuredName = settings.mcpServers.first(where: { $0.id == serverID })?.name
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = configuredName.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? "MCP server \(serverID.uuidString)"
+                unavailable.append(name)
+            }
+            for definition in definitions {
+                let name = definition.function.name
+                guard !settings.disabledToolNames.contains(name) else { continue }
+                registerTool(definition, provider: .mcp(serverID))
+            }
+        }
+
+        let nativeDefinitions = ChatToolRegistry.descriptors(canEditImage: false)
+            .map(\.definition)
+            .filter { $0.function.name != ChatSwitchModelToolRegistry.toolName }
+        for tool in selectedTools {
+            switch tool.provider {
+            case .builtIn:
+                if let definition = nativeDefinitions.first(where: {
+                    $0.function.name == tool.name
+                }), !settings.disabledToolNames.contains(tool.name),
+                   (tool.name != ChatWebSearchToolRegistry.toolName
+                    || ChatWebSearchToolRegistry.isConfigured()) {
+                    registerTool(definition, provider: .builtIn)
+                } else {
+                    unavailable.append(
+                        tool.name.isEmpty ? "Built-in tool" : tool.name
+                    )
+                }
+            case .custom(let id):
+                if let customTool = settings.customTools.first(where: { $0.id == id }),
+                   !settings.disabledToolNames.contains(customTool.toolName),
+                   let definition = try? customTool.definition() {
+                    registerTool(definition, provider: .custom(id))
+                } else {
+                    unavailable.append(
+                        tool.name.isEmpty ? "Custom tool \(id.uuidString)" : tool.name
+                    )
+                }
+            case .mcp(let serverID):
+                guard let exposedName = mcpHost.tools(forServer: serverID)
+                    .first(where: { $0.displayName == tool.name })?.name,
+                    !settings.disabledToolNames.contains(exposedName),
+                    let definition = mcpHost.toolDefinitions(forServer: serverID)
+                        .first(where: { $0.function.name == exposedName })
+                else {
+                    unavailable.append(
+                        tool.name.isEmpty ? "MCP tool on \(serverID.uuidString)" : tool.name
+                    )
+                    continue
+                }
+                registerTool(definition, provider: .mcp(serverID))
+            }
+        }
+
+        return ResolvedCapabilities(
+            tools: toolsByName.values.sorted {
+                $0.definition.function.name < $1.definition.function.name
+            },
+            skills: skillsByID.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            unavailable: Array(Set(unavailable)).sorted()
+        )
+    }
+
+    private static func normalizedToolCalls(_ calls: [MLXChatToolCall]) -> [MLXChatToolCall] {
+        calls.enumerated().map { index, call in
+            var normalized = call
+            normalized.index = index
+            if normalized.id?.isEmpty != false {
+                normalized.id = "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            }
+            if normalized.type?.isEmpty != false {
+                normalized.type = "function"
+            }
+            return normalized
+        }
+    }
+}
+
+private struct ResolvedCapabilities {
+    let tools: [ResolvedTool]
+    let skills: [NativSkill]
+    let unavailable: [String]
+
+    func tool(named name: String) -> ResolvedTool? {
+        tools.first { $0.definition.function.name == name }
+    }
+}
+
+private struct ResolvedTool {
+    let definition: MLXChatToolDefinition
+    let provider: ScheduledTool.Provider
+}
+
+private struct ScheduledExecutionResult {
+    let finalContent: String
+    let transcript: [ChatTranscriptMessage]
+}
+
+private struct ScheduledCompletionFailure: LocalizedError {
+    let underlying: Error
+    let transcript: [ChatTranscriptMessage]
+
+    var errorDescription: String? {
+        underlying.localizedDescription
+    }
+}
+
+private struct ScheduledToolResult {
+    let content: String
+    let attachments: [ChatImageAttachment]
+    let succeeded: Bool
+}
+
+private enum ScheduledToolExecutionError: LocalizedError {
+    case notAllowed(String)
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notAllowed(let name):
+            "The scheduled task is not allowed to use \(name)."
+        case .unavailable(let name):
+            "\(name) is no longer available."
+        }
     }
 }
 

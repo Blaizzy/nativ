@@ -1,38 +1,48 @@
-# Routines
+# Scheduled
 
-A routine runs a saved prompt on its own — on a schedule or when its endpoint is called — and
-appends the result to a chat. Source lives in
+A scheduled task runs a saved prompt on its own schedule and appends the result to a chat. Source lives in
 [`Sources/Nativ/Features/Routines/`](../../Sources/Nativ/Features/Routines/).
 
 ## Model
 
-A routine belongs to one chat. Each run appends the prompt and the model's reply as new turns in
-that chat (`sourceSessionID`), so the routine's history reads as an ongoing conversation rather than
-a series of disconnected outputs. Routine chats are marked in the sidebar.
+A scheduled task belongs to one chat. Each run appends the prompt, tool activity, and the model's
+reply as new turns in that chat (`sourceSessionID`). Scheduled chats are marked in the sidebar.
 
-A routine records its name, instructions (the prompt), the model to run, its trigger, an optional
-[Kit](../extending/kits.md) for added capabilities (`kitID`), a finish-notification preference, and
-an enabled flag — see [`Routine`](../../Sources/Nativ/Features/Routines/Routine.swift).
+A scheduled task records its name, instructions, schedule, capability selections,
+finish-notification preference, and enabled flag. Capabilities can reference a
+[Kit](../extending/kits.md), an enabled MCP server, one tool, or one skill. Existing records with the
+legacy `kitID` field migrate to a kit capability when loaded.
 
-## Creating a routine
+## Creating a scheduled task
 
-- **New routine** from the sidebar creation menu opens the editor and, on save, creates the
-  routine's chat.
+- **New scheduled task** from the Scheduled page opens the editor and, on save, creates its linked
+  chat. Selecting a kit enables the kit's constituent integrations; individual selections remain
+  narrow allowlists for that task.
 
-Removing a routine chat cancels its routine; editing a routine offers removal that keeps the chat.
+Deleting a scheduled chat also deletes its task and run history. Deleting the task from the
+Scheduled page removes the same linked data.
 
-## Triggers
+## Schedule
 
-| Trigger (`triggerKind`) | Runs when |
-|---|---|
-| `schedule` | A configured time and set of weekdays is reached. |
-| `api` | The routine's endpoint receives a request: `POST /v1/routines/{id}/run`. |
+Runs are delivered at the configured time and weekdays by a per-task launchd agent that launches a
+headless run. A disabled task does not run. Completion notifications are opt-in per task and are
+delivered only after the user grants notification access in Nativ or System Settings.
 
-Scheduled runs are delivered by a per-routine launchd agent that launches a headless run; a
-disabled routine does not run. A finished run can post a completion notification when enabled.
+## Capabilities
+
+- **Kits** are convenience bundles. Selecting one enables its integrations; at runtime it expands
+  to the kit skills and any constituent MCP servers that remain enabled.
+- **MCP servers** grant all enabled tools exposed by one connected server.
+- **Tools** grant one built-in, custom, or MCP operation.
+- **Skills** add selected reusable instructions to the system prompt.
+
+Global switches in Extensions remain authoritative: a disabled or removed server or tool is not
+made available to a scheduled task. The selected model must support tool calling to use tools.
 
 ## Execution
 
-When a run fires, the server is started if needed and awaited for readiness, the prompt (with the
-routine's Kit instructions, if any) is sent to the routine's model, and the reply is appended to the
-routine's chat and persisted. Run status and a short result summary are recorded per run.
+When a run fires, the model server is started if needed and awaited for readiness. Selected MCP
+servers are connected, capability references are resolved, and only the resulting tools and skills
+are sent to the model. Tool calls run for at most four advertised rounds; one final untooled round
+lets the model synthesize the result. The prompt, tool activity, and final reply are appended to the
+scheduled chat. Run status and a short result summary are recorded per run.

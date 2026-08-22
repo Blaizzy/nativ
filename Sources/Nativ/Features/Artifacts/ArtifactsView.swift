@@ -573,6 +573,7 @@ struct ArtifactsView: View {
                 }
                 renameTarget = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { renameTarget = nil }
         }
     }
@@ -729,7 +730,7 @@ struct ArtifactsView: View {
         }
         .padding(.horizontal, 24)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 14)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
         .padding(.bottom, 12)
     }
 
