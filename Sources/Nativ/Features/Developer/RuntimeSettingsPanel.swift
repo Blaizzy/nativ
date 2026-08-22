@@ -10,7 +10,7 @@ struct RuntimeSettingsPanel: View {
     private static let labelWidth: CGFloat = 116
     private static let valueWidth: CGFloat = 160
     private static let pathWidth: CGFloat = 360
-    private static let unitWidth: CGFloat = 48
+    private static let unitWidth: CGFloat = 44
 
     var body: some View {
         VStack(spacing: 0) {
@@ -392,6 +392,8 @@ private struct RuntimeSettingRow: View {
 
             Spacer(minLength: 12)
 
+            resetButton
+
             control
                 .frame(width: controlWidth, alignment: .trailing)
 
@@ -399,8 +401,6 @@ private struct RuntimeSettingRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: unitWidth, alignment: .leading)
-
-            resetButton
         }
         .disabled(!isActive)
         .onHover { isHovering = $0 }
