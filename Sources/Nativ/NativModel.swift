@@ -19,6 +19,13 @@ private struct PendingModelPreloadSwitch {
     let onSelectionAccepted: () -> Void
 }
 
+private enum RequestedServerStopReason: String {
+    case stopRequest = "a stop request"
+    case modelSwitch = "a model switch"
+    case configurationRestart = "a configuration restart"
+    case appTermination = "app termination"
+}
+
 struct ModelLoadFailure: Equatable, Identifiable, Sendable {
     let id = UUID()
     let modelID: String?
@@ -96,6 +103,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     private var preservedSessionMetrics: NativMetrics?
     private var preservedSessionTokenActivity: [SessionTokenActivitySample] = []
     private var isStoppingForModelSwitch = false
+    private var requestedServerStopReason: RequestedServerStopReason?
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
@@ -438,6 +446,13 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func stopServer(preserveSessionStats: Bool = false) {
+        stopServer(preserveSessionStats: preserveSessionStats, reason: .stopRequest)
+    }
+
+    private func stopServer(
+        preserveSessionStats: Bool,
+        reason: RequestedServerStopReason
+    ) {
         cancelPendingServerRestart()
         modelLoadingProgress = nil
         if preserveSessionStats {
@@ -450,10 +465,13 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
         do {
             appendLog("\nStopping mlx-vlm-server...\n")
+            requestedServerStopReason = reason
             try server.stop()
         } catch NativError.notRunning {
+            requestedServerStopReason = nil
             appendLog("\nmlx-vlm-server is not running.\n")
         } catch {
+            requestedServerStopReason = nil
             appendLog("\nFailed to stop mlx-vlm-server: \(error)\n")
         }
 
@@ -479,7 +497,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
             return
         }
 
-        stopServer()
+        stopServer(preserveSessionStats: false, reason: .configurationRestart)
         guard !server.isRunning else {
             appendLog("\nCould not stop the current server to apply the configuration change.\n")
             return
@@ -645,7 +663,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
             if self.server.isRunning {
                 self.isStoppingForModelSwitch = true
-                self.stopServer(preserveSessionStats: true)
+                self.stopServer(preserveSessionStats: true, reason: .modelSwitch)
                 await Task.yield()
                 self.isStoppingForModelSwitch = false
             }
@@ -714,6 +732,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         allTimeStatsLoadTask = nil
         stopMetricsPolling(clearSession: true)
         if server.isRunning {
+            requestedServerStopReason = .appTermination
             try? server.stop(timeout: 2)
         }
         isRunning = false
@@ -798,7 +817,12 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         }
         server.onTermination = { [weak self] status in
             Task { @MainActor [weak self] in
-                guard let self, !self.server.isRunning else {
+                guard let self else {
+                    return
+                }
+                let stopReason = self.requestedServerStopReason
+                self.requestedServerStopReason = nil
+                guard !self.server.isRunning else {
                     return
                 }
                 let wasLoadingModel = self.modelSwitchInProgress
@@ -815,7 +839,15 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
                         message: message
                     )
                 }
-                self.appendLog("\nmlx-vlm-server stopped with status \(status)\n")
+                if let stopReason {
+                    self.appendLog(
+                        "\nmlx-vlm-server stopped after Nativ requested \(stopReason.rawValue) (status \(status))\n"
+                    )
+                } else {
+                    self.appendLog(
+                        "\nmlx-vlm-server stopped unexpectedly (status \(status); Nativ did not request a stop)\n"
+                    )
+                }
                 self.isRunning = false
                 self.settingsAppliedAtServerStart = nil
                 self.huggingFaceTokenAppliedAtServerStart = nil
