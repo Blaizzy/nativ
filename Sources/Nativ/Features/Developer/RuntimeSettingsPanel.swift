@@ -8,9 +8,9 @@ struct RuntimeSettingsPanel: View {
 
     private static let railWidth: CGFloat = 176
     private static let labelWidth: CGFloat = 116
-    private static let valueWidth: CGFloat = 160
+    private static let valueWidth: CGFloat = 168
     private static let pathWidth: CGFloat = 360
-    private static let unitWidth: CGFloat = 44
+    private static let maximumWidth: CGFloat = 1_100
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +24,7 @@ struct RuntimeSettingsPanel: View {
                 footer
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: Self.maximumWidth, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -221,6 +221,16 @@ struct RuntimeSettingsPanel: View {
                     }
                     .tint(.secondary)
                 }
+
+                if fields.contains(where: { !$0.isDefault }) {
+                    Button("Restore defaults") {
+                        for field in fields {
+                            store.resetToDefault(field.id)
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -230,7 +240,7 @@ struct RuntimeSettingsPanel: View {
 
     private func overriddenLabel(in fields: [RuntimeSettingField]) -> String {
         let overridden = fields.filter { !$0.isDefault }.count
-        return overridden == 0 ? "Defaults" : "\(overridden) overridden"
+        return overridden == 0 ? "More options" : "\(overridden) overridden"
     }
 
     private func fieldFlow(_ fields: [RuntimeSettingField]) -> some View {
@@ -241,8 +251,7 @@ struct RuntimeSettingsPanel: View {
                     store: store,
                     labelWidth: Self.labelWidth,
                     valueWidth: Self.valueWidth,
-                    pathWidth: Self.pathWidth,
-                    unitWidth: Self.unitWidth
+                    pathWidth: Self.pathWidth
                 )
             }
         }
@@ -354,7 +363,6 @@ private struct RuntimeSettingRow: View {
     let labelWidth: CGFloat
     let valueWidth: CGFloat
     let pathWidth: CGFloat
-    let unitWidth: CGFloat
 
     @State private var draft = ""
     @State private var isHovering = false
@@ -396,11 +404,6 @@ private struct RuntimeSettingRow: View {
 
             control
                 .frame(width: controlWidth, alignment: .trailing)
-
-            Text(field.unitSuffix ?? "")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: unitWidth, alignment: .leading)
         }
         .disabled(!isActive)
         .onHover { isHovering = $0 }
@@ -512,25 +515,45 @@ private struct RuntimeSettingRow: View {
         font: Font,
         commit: @escaping () -> Void
     ) -> some View {
-        TextField(placeholder, text: $draft)
-            .textFieldStyle(.roundedBorder)
-            .multilineTextAlignment(alignment)
-            .font(font)
-            .foregroundStyle(.primary)
-            .controlSize(.small)
-            .focused($isFocused)
-            .onSubmit(commit)
-            .onChange(of: isFocused) { _, focused in
-                if focused {
-                    draft = editableText
-                } else {
-                    commit()
+        HStack(spacing: 5) {
+            TextField(placeholder, text: $draft)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(alignment)
+                .font(font)
+                .foregroundStyle(.primary)
+                .focused($isFocused)
+                .onSubmit(commit)
+                .onChange(of: isFocused) { _, focused in
+                    if focused {
+                        draft = editableText
+                    } else {
+                        commit()
+                    }
                 }
+                .onChange(of: field.value) { _, _ in
+                    if !isFocused { draft = editableText }
+                }
+                .onAppear { draft = editableText }
+
+            if let unit = field.unitSuffix {
+                Text(unit)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .onChange(of: field.value) { _, _ in
-                if !isFocused { draft = editableText }
-            }
-            .onAppear { draft = editableText }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color(nsColor: .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(
+                    isFocused ? Color.accentColor : Color(nsColor: .separatorColor),
+                    lineWidth: isFocused ? 2 : 1
+                )
+        )
     }
 
     private var placeholder: String {
