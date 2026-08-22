@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import NativServerKit
+import Observation
 
 struct SessionTokenActivitySample: Equatable, Sendable {
     let recordedAt: Date
@@ -33,9 +34,28 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
 }
 
 @MainActor
+@Observable
+final class ServerLogStore {
+    private(set) var text = ""
+
+    private let maxLogCharacters = 250_000
+
+    func append(_ newOutput: String) {
+        text.append(newOutput)
+        if text.count > maxLogCharacters {
+            text.removeFirst(text.count - maxLogCharacters)
+        }
+    }
+
+    func clear() {
+        text = ""
+    }
+}
+
+@MainActor
 final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     @Published private(set) var isRunning = false
-    @Published private(set) var logText = ""
+    let serverLogs = ServerLogStore()
     @Published private(set) var metrics: NativMetrics?
     @Published private(set) var lastMetricsError: String?
     @Published private(set) var lastMetricsFetchAt: Date?
@@ -81,7 +101,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     private var serverRestartTask: Task<Void, Never>?
     private var currentServerOutput = ""
 
-    private let maxLogCharacters = 250_000
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
 
@@ -707,7 +726,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func clearLogs() {
-        logText = ""
+        serverLogs.clear()
     }
 
     func reportModelLoadFailure(modelID: String?, error: Error) {
@@ -918,10 +937,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     private func appendLog(_ text: String) {
-        logText.append(text)
-        if logText.count > maxLogCharacters {
-            logText.removeFirst(logText.count - maxLogCharacters)
-        }
+        serverLogs.append(text)
     }
 
     private func handleServerOutput(_ text: String) {
