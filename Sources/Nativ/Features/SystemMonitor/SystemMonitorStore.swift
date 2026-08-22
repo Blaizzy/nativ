@@ -190,10 +190,10 @@ final class SystemMonitorStore {
     private let collector = SystemMetricsCollector()
     private let displayFPSSampler = SystemDisplayFPSSampler()
     private let aneSampler = SystemANEUtilizationSampler()
-    nonisolated(unsafe) private var samplingTask: Task<Void, Never>?
+    private var samplingTask: Task<Void, Never>?
     private let historyLimit = 300
 
-    deinit {
+    isolated deinit {
         samplingTask?.cancel()
     }
 
