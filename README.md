@@ -43,7 +43,7 @@ Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)*
 | **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, SMART health, and thermal and power sensors. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, embeddings, and model endpoints, plus Anthropic Messages endpoints. |
 | **Coding-tool integrations** | Configure and launch terminal coding agents — Codex, Claude Code, Pi, Hermes, OpenCode, Aider, Goose, Crush, Qwen Code, OpenClaw — and set up editors — VS Code, Cursor, Zed, JetBrains, Cline, Continue — against models served by Nativ. See [Docs/features/integrations.md](Docs/features/integrations.md) for per-tool setup. |
-| **Developer workspace** | Set the server host and port, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
+| **Developer workspace** | Set the local server port, rotate its required API key, add a Hugging Face token for gated models, inspect runtime details, copy endpoint URLs, search and filter live server logs, and monitor server health. |
 | **Menu bar controls** | Start or stop the server, change the loaded model, check serving statistics, open the main app without breaking focus, or pin multiple live CPU, GPU, and RAM percentages and mini graphs. |
 | **Extension platform** | Install, disable, remove, and restore independently versioned capabilities. Audio ships as the first included extension and contributes its own pages, commands, shortcuts, settings, and permission declarations. |
 | **Audio extension** | Use private local audio capabilities, including voice dictation in any app with either a pointer-following waveform or a camera-cutout pill with a reactive gradient orb and timer. Review transcript history, track words per minute, total words, time saved, and streaks, choose an installed speech model, and customize the record and retry shortcuts. |
@@ -93,7 +93,7 @@ Download the latest DMG from [GitHub Releases](https://github.com/Blaizzy/nativ/
 On first launch:
 
 1. Choose an installed language model, download a recommended one, or continue with load-on-demand.
-2. Optionally generate an API key to protect the server's management endpoints.
+2. Save the generated API key. Nativ requires it for every server endpoint and stores it in Keychain.
 3. Grant microphone, accessibility, and screen recording permissions up front, or change them later in Settings.
 4. Open **Models** to download or select a compatible model.
 5. Start chatting, inspect analytics, or connect one of the supported coding tools.
@@ -138,13 +138,14 @@ branch is detected automatically, matching the existing local `mlx-vlm` behavior
 
 ## Use Nativ as a local API server
 
-By default, the app exposes its server at `http://127.0.0.1:8080`. You can change the host and port in the Developer page, which also lists every available endpoint and lets you copy URLs directly.
+The app serves only on this Mac at `http://127.0.0.1:8080`. You can change the port in the Developer page, which also lets you rotate or copy the required API key, lists every available endpoint, and lets you copy URLs directly.
 
 For example, with a model selected:
 
 ```sh
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer your-api-key' \
   -d '{
     "model": "your-model-id",
     "messages": [{"role": "user", "content": "Why is the sky blue?"}],
@@ -152,11 +153,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-If you enabled a server API key, also send it as a Bearer token:
-
-```sh
--H 'Authorization: Bearer your-api-key'
-```
+Copy the API key from the Developer page and send it as a Bearer token with every request.
 
 The server includes:
 

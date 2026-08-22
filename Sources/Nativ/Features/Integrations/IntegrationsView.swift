@@ -66,6 +66,10 @@ final class IntegrationsViewModel: ObservableObject {
         profiles.openAIBaseURL
     }
 
+    var integrationAPIKey: String {
+        profiles.apiKey
+    }
+
     var modelSearchPaths: LocalModelSearchPaths {
         serverModel.settings.localModelSearchPaths
     }
@@ -74,7 +78,7 @@ final class IntegrationsViewModel: ObservableObject {
         serverModel.activeServerBaseURL ?? serverModel.settings.serverBaseURL
     }
 
-    private var serverAPIKey: String? {
+    private var serverAPIKey: String {
         serverModel.settings.normalized().serverAPIKey
     }
 
@@ -596,7 +600,7 @@ private struct IntegrationDetailView: View {
         IntegrationPanel(title: "Guided setup", systemImage: "sparkles") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
-                IntegrationConfigurationRow(label: "API key", value: "nativ")
+                IntegrationConfigurationRow(label: "API key", value: viewModel.integrationAPIKey)
             }
 
             VStack(alignment: .leading, spacing: 8) {

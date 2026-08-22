@@ -1,4 +1,5 @@
 import XCTest
+import Testing
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
@@ -123,34 +124,63 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--image-model"))
     }
 
-    func testServerHostIsNormalizedAndPassedToServer() {
-        let settings = NativSettings(serverHost: "  0.0.0.0  ", serverPort: 9_001)
+    func testLegacyNonLoopbackServerHostIsReplacedWithLoopback() throws {
+        let data = Data(#"{"serverHost":"0.0.0.0","serverPort":9001}"#.utf8)
+        let settings = try JSONDecoder().decode(NativSettings.self, from: data)
 
-        XCTAssertEqual(settings.normalized().serverHost, "0.0.0.0")
-        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://0.0.0.0:9001")
-        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "0.0.0.0"))
+        XCTAssertEqual(settings.serverHost, "127.0.0.1")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://127.0.0.1:9001")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "127.0.0.1"))
     }
 
-    func testIPv6ServerHostProducesValidBaseURL() {
-        let settings = NativSettings(serverHost: "[::1]", serverPort: 9_002)
+    func testServerHostIsNotPersisted() throws {
+        let data = try PropertyListEncoder().encode(NativSettings())
+        let propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
 
-        XCTAssertEqual(settings.normalized().serverHost, "::1")
-        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://[::1]:9002")
-        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::1"))
+        XCTAssertNil(propertyList["serverHost"])
+    }
+
+    func testPythonServerSecuritySuitePasses() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [
+            "-m", "unittest", "discover",
+            "-s", "PythonDistribution/Tests",
+            "-p", "test_*.py",
+            "-v"
+        ]
+        process.currentDirectoryURL = repositoryRoot
+        process.standardOutput = output
+        process.standardError = output
+
+        try process.run()
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let result = String(decoding: outputData, as: UTF8.self)
+
+        XCTAssertEqual(process.terminationStatus, 0, result)
+        XCTAssertNotNil(
+            result.range(of: #"Ran [1-9][0-9]* tests"#, options: .regularExpression),
+            result
+        )
+        XCTAssertTrue(result.contains("OK"), result)
     }
 
     func testMissingServerHostUsesLoopbackDefault() throws {
         let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
 
         XCTAssertEqual(settings.serverHost, "127.0.0.1")
-    }
-
-    func testServerHostRequiresServerRestart() {
-        let original = NativSettings()
-        var changed = original
-        changed.serverHost = "0.0.0.0"
-
-        XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
     }
 
     func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {
@@ -171,11 +201,14 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
-    func testBlankServerAPITokenIsOmitted() {
+    func testBlankServerAPITokenIsReplaced() {
         let settings = NativSettings(serverAPIKey: " \n ").normalized()
 
-        XCTAssertNil(settings.serverAPIKey)
-        XCTAssertNil(settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"])
+        XCTAssertTrue(settings.serverAPIKey.hasPrefix("nativ_"))
+        XCTAssertEqual(
+            settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"],
+            settings.serverAPIKey
+        )
     }
 
     func testGeneratedServerAPITokenHasNativPrefix() {
@@ -266,6 +299,26 @@ final class NativSettingsTests: XCTestCase {
             try propertyList(at: url)["serverAPIKey"] as? String,
             "nativ_legacy"
         )
+    }
+
+    func testLoadingRemovesLegacyServerHostWithoutDroppingRecoverableCredential() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(
+            serverAPIKey: "nativ_legacy",
+            serverHost: "0.0.0.0",
+            to: url
+        )
+        let credentialStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        let settings = NativSettings.load(from: url, credentialStore: credentialStore)
+        let storedPropertyList = try propertyList(at: url)
+
+        XCTAssertEqual(settings.serverHost, NativSettings.defaultServerHost)
+        XCTAssertNil(storedPropertyList["serverHost"])
+        XCTAssertEqual(storedPropertyList["serverAPIKey"] as? String, "nativ_legacy")
     }
 
     func testKeychainCredentialTakesPrecedenceOverLegacyCredential() throws {
@@ -598,7 +651,11 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
-    private func writeLegacySettings(serverAPIKey: String, to url: URL) throws {
+    private func writeLegacySettings(
+        serverAPIKey: String,
+        serverHost: String? = nil,
+        to url: URL
+    ) throws {
         let encoded = try PropertyListEncoder().encode(NativSettings())
         var propertyList = try XCTUnwrap(
             PropertyListSerialization.propertyList(
@@ -608,6 +665,7 @@ final class NativSettingsTests: XCTestCase {
             ) as? [String: Any]
         )
         propertyList["serverAPIKey"] = serverAPIKey
+        propertyList["serverHost"] = serverHost
         let data = try PropertyListSerialization.data(
             fromPropertyList: propertyList,
             format: .binary,
@@ -820,6 +878,53 @@ final class NativChatToolProtocolTests: XCTestCase {
             NativServerErrorMessage.modelLoadFailure(
                 in: "Chat endpoint returned HTTP 400: Prompt is too long."
             )
+        )
+    }
+}
+
+@Suite("Server security policy")
+struct ServerSecurityPolicyTests {
+    @Test("Loading without a credential creates and persists one")
+    func loadingWithoutCredentialCreatesCredential() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("settings.plist")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let credentialStore = TestServerAPICredentialStore()
+
+        let settings = NativSettings.load(from: url, credentialStore: credentialStore)
+
+        #expect(settings.serverAPIKey.hasPrefix("nativ_"))
+        #expect(credentialStore.token == settings.serverAPIKey)
+        #expect(
+            settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"]
+                == settings.serverAPIKey
+        )
+    }
+
+    @Test("Legacy network exposure cannot survive decoding")
+    func legacyNetworkExposureCannotSurviveDecoding() throws {
+        let data = Data(#"{"serverHost":"0.0.0.0","serverPort":8080}"#.utf8)
+
+        let settings = try JSONDecoder().decode(NativSettings.self, from: data)
+
+        #expect(settings.serverHost == NativSettings.defaultServerHost)
+        #expect(
+            settings.launchArguments.containsAdjacent(
+                "--host",
+                NativSettings.defaultServerHost
+            )
+        )
+    }
+
+    @Test("Blank credentials are replaced before launch")
+    func blankCredentialsAreReplacedBeforeLaunch() {
+        let settings = NativSettings(serverAPIKey: " \n ").normalized()
+
+        #expect(settings.serverAPIKey.hasPrefix("nativ_"))
+        #expect(
+            settings.launchEnvironment["MLX_VLM_SERVER_API_KEY"]
+                == settings.serverAPIKey
         )
     }
 }

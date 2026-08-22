@@ -333,9 +333,11 @@ struct NativSettings: Codable, Equatable {
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
     var embeddingModelID: String?
-    var serverAPIKey: String?
+    var serverAPIKey: String
     var huggingFaceToken: String?
-    var serverHost: String
+    var serverHost: String {
+        Self.defaultServerHost
+    }
     var serverPort: Int
     var maxTokens: Int
     var maxKVSize: Int
@@ -386,7 +388,6 @@ struct NativSettings: Codable, Equatable {
         embeddingModelID: String? = nil,
         serverAPIKey: String? = nil,
         huggingFaceToken: String? = nil,
-        serverHost: String = Self.defaultServerHost,
         serverPort: Int = 8080,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
@@ -434,9 +435,9 @@ struct NativSettings: Codable, Equatable {
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
         self.embeddingModelID = embeddingModelID
-        self.serverAPIKey = serverAPIKey
+        self.serverAPIKey = ServerAPIAuthentication.normalizedToken(serverAPIKey)
+            ?? ServerAPIAuthentication.generateToken()
         self.huggingFaceToken = huggingFaceToken
-        self.serverHost = serverHost
         self.serverPort = serverPort
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
@@ -543,9 +544,11 @@ struct NativSettings: Codable, Equatable {
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
         speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
         embeddingModelID = try container.decodeIfPresent(String.self, forKey: .embeddingModelID) ?? defaults.embeddingModelID
-        serverAPIKey = try container.decodeIfPresent(String.self, forKey: .serverAPIKey) ?? defaults.serverAPIKey
+        serverAPIKey = ServerAPIAuthentication.normalizedToken(
+            try container.decodeIfPresent(String.self, forKey: .serverAPIKey)
+        ) ?? defaults.serverAPIKey
         huggingFaceToken = try container.decodeIfPresent(String.self, forKey: .huggingFaceToken) ?? defaults.huggingFaceToken
-        serverHost = try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
+        _ = try container.decodeIfPresent(String.self, forKey: .serverHost)
         serverPort = try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize = try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
@@ -597,7 +600,6 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
         try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
-        try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
@@ -679,14 +681,12 @@ struct NativSettings: Codable, Equatable {
         }
 
         var settings = storedSettings
-        let legacyToken = ServerAPIAuthentication.normalizedToken(
-            storedSettings.serverAPIKey
-        )
+        let legacyToken = legacyServerAPIKey(from: url)
 
         do {
             if let keychainToken = try credentialStore.load() {
                 settings.serverAPIKey = keychainToken
-                if storedSettings.serverAPIKey != nil {
+                if legacyToken != nil {
                     try? settings.writePropertyList(to: url)
                 }
             } else if let legacyToken {
@@ -694,15 +694,13 @@ struct NativSettings: Codable, Equatable {
                 settings.serverAPIKey = legacyToken
                 try? settings.writePropertyList(to: url)
             } else {
-                settings.serverAPIKey = nil
-                if storedSettings.serverAPIKey != nil {
-                    try? settings.writePropertyList(to: url)
-                }
+                try credentialStore.save(settings.serverAPIKey)
             }
         } catch {
-            // Keep the legacy value until it can be migrated without data loss.
-            settings.serverAPIKey = legacyToken
+            settings.serverAPIKey = legacyToken ?? settings.serverAPIKey
         }
+
+        removeLegacyServerHost(from: url)
 
         if MCPServerCatalog.bundled.migrateConfigurations(in: &settings.mcpServers) {
             try? settings.writePropertyList(to: url)
@@ -729,6 +727,43 @@ struct NativSettings: Codable, Equatable {
         try data.write(to: url, options: .atomic)
     }
 
+    private static func legacyServerAPIKey(from url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let propertyList = try? PropertyListSerialization.propertyList(
+                  from: data,
+                  options: [],
+                  format: nil
+              ) as? [String: Any]
+        else {
+            return nil
+        }
+        return ServerAPIAuthentication.normalizedToken(
+            propertyList[CodingKeys.serverAPIKey.rawValue] as? String
+        )
+    }
+
+    private static func removeLegacyServerHost(from url: URL) {
+        guard let data = try? Data(contentsOf: url) else {
+            return
+        }
+        var format = PropertyListSerialization.PropertyListFormat.xml
+        guard var propertyList = try? PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: &format
+        ) as? [String: Any],
+            propertyList.removeValue(forKey: CodingKeys.serverHost.rawValue) != nil,
+            let migratedData = try? PropertyListSerialization.data(
+                fromPropertyList: propertyList,
+                format: format,
+                options: 0
+            )
+        else {
+            return
+        }
+        try? migratedData.write(to: url, options: .atomic)
+    }
+
     func normalized() -> Self {
         var settings = self
         let trimmedPath = settings.modelSearchPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -747,8 +782,8 @@ struct NativSettings: Codable, Equatable {
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
         settings.embeddingModelID = Self.normalizedModelID(settings.embeddingModelID)
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
+            ?? ServerAPIAuthentication.generateToken()
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
-        settings.serverHost = Self.normalizedServerHost(settings.serverHost)
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
@@ -835,7 +870,6 @@ struct NativSettings: Codable, Equatable {
             && lhs.embeddingModelID == rhs.embeddingModelID
             && lhs.serverAPIKey == rhs.serverAPIKey
             && lhs.huggingFaceToken == rhs.huggingFaceToken
-            && lhs.serverHost == rhs.serverHost
             && lhs.serverPort == rhs.serverPort
             && lhs.maxTokens == rhs.maxTokens
             && lhs.maxKVSize == rhs.maxKVSize
@@ -861,8 +895,7 @@ struct NativSettings: Codable, Equatable {
 
     var serverBaseURL: URL {
         let settings = normalized()
-        let host = Self.urlHost(settings.serverHost)
-        return URL(string: "http://\(host):\(settings.serverPort)")!
+        return URL(string: "http://\(settings.serverHost):\(settings.serverPort)")!
     }
 
     var launchEnvironment: [String: String] {
@@ -872,9 +905,7 @@ struct NativSettings: Codable, Equatable {
         ]
 
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
-        if let serverAPIKey = settings.serverAPIKey {
-            environment["MLX_VLM_SERVER_API_KEY"] = serverAPIKey
-        }
+        environment["MLX_VLM_SERVER_API_KEY"] = settings.serverAPIKey
         if let huggingFaceToken = settings.huggingFaceToken {
             environment[HuggingFaceAuthentication.environmentVariableName] = huggingFaceToken
         }
@@ -1041,38 +1072,6 @@ struct NativSettings: Codable, Equatable {
     private static func normalizedModelID(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
-    }
-
-    private static func normalizedServerHost(_ value: String) -> String {
-        var host = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if host.hasPrefix("["), host.hasSuffix("]") {
-            host.removeFirst()
-            host.removeLast()
-        }
-        guard !host.isEmpty else {
-            return defaultServerHost
-        }
-
-        let candidate = "http://\(urlHost(host)):8080"
-        guard let components = URLComponents(string: candidate),
-              components.host != nil,
-              components.port == 8080,
-              components.path.isEmpty,
-              components.user == nil,
-              components.password == nil,
-              components.query == nil,
-              components.fragment == nil
-        else {
-            return defaultServerHost
-        }
-        return host
-    }
-
-    private static func urlHost(_ host: String) -> String {
-        guard host.contains(":") else {
-            return host
-        }
-        return "[\(host.replacingOccurrences(of: "%", with: "%25"))]"
     }
 
     private static func nonEmpty(_ value: String, fallback: String) -> String {

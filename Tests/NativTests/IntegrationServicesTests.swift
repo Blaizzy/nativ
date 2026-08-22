@@ -53,6 +53,7 @@ final class IntegrationServicesTests: XCTestCase {
         try FileManager.default.createDirectory(at: homeDirectory, withIntermediateDirectories: true)
         manager = IntegrationProfileManager(
             serverBaseURL: serverBaseURL,
+            serverAPIKey: "nativ_test_token",
             homeDirectory: homeDirectory,
             applicationSupportDirectory: applicationSupportDirectory
         )
@@ -112,6 +113,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertNotNil(providers["existing"])
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["baseUrl"] as? String, "http://nativ.test:49152/v1")
+        XCTAssertEqual(provider["apiKey"] as? String, "nativ_test_token")
         XCTAssertEqual(provider["api"] as? String, "openai-completions")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
@@ -155,7 +157,7 @@ final class IntegrationServicesTests: XCTestCase {
             launchCommand(for: .codex),
             """
             cd '/tmp/Nativ Project'
-            export NATIV_API_KEY='nativ'
+            export NATIV_API_KEY='nativ_test_token'
             '/tools/codex' '--profile' 'nativ' '--model' 'org/local-model'
             """
         )
@@ -167,7 +169,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .claudeCode)
         let root = try json(at: configurationURL)
         let environment = try XCTUnwrap(root["env"] as? [String: Any])
-        XCTAssertEqual(environment["ANTHROPIC_AUTH_TOKEN"] as? String, "nativ")
+        XCTAssertEqual(environment["ANTHROPIC_AUTH_TOKEN"] as? String, "nativ_test_token")
         XCTAssertEqual(environment["ANTHROPIC_API_KEY"] as? String, "")
         XCTAssertEqual(environment["ANTHROPIC_BASE_URL"] as? String, "http://nativ.test:49152")
         XCTAssertEqual(environment["ANTHROPIC_MODEL"] as? String, selectedModel.id)
@@ -177,7 +179,7 @@ final class IntegrationServicesTests: XCTestCase {
             """
             cd '/tmp/Nativ Project'
             export ANTHROPIC_API_KEY=''
-            export ANTHROPIC_AUTH_TOKEN='nativ'
+            export ANTHROPIC_AUTH_TOKEN='nativ_test_token'
             export ANTHROPIC_BASE_URL='http://nativ.test:49152'
             '/tools/claude' '--settings' '\(configurationURL.path)' '--model' 'org/local-model'
             """
@@ -191,6 +193,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configuration = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(configuration.contains("default: \"org/local-model\""))
         XCTAssertTrue(configuration.contains("base_url: \"http://nativ.test:49152/v1\""))
+        XCTAssertTrue(configuration.contains("api_key: \"nativ_test_token\""))
         XCTAssertTrue(configuration.contains("\"org/local-model\":\n        context_length: 32768\n        supports_vision: true"))
         XCTAssertTrue(configuration.contains("\"org/basic-model\":\n        context_length: 131072"))
         XCTAssertEqual(
@@ -217,6 +220,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(provider["npm"] as? String, "@ai-sdk/openai-compatible")
         let options = try XCTUnwrap(provider["options"] as? [String: Any])
         XCTAssertEqual(options["baseURL"] as? String, "http://nativ.test:49152/v1")
+        XCTAssertEqual(options["apiKey"] as? String, "nativ_test_token")
         let models = try XCTUnwrap(provider["models"] as? [String: Any])
         let selected = try XCTUnwrap(models[selectedModel.id] as? [String: Any])
         XCTAssertEqual(selected["attachment"] as? Bool, true)
@@ -243,7 +247,7 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .aider)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
         XCTAssertTrue(contents.contains("OPENAI_API_BASE=http://nativ.test:49152/v1"))
-        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
+        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ_test_token"))
         XCTAssertEqual(
             launchCommand(for: .aider),
             "cd '/tmp/Nativ Project'\n'/tools/aider' '--env-file' '\(configurationURL.path)' '--model' 'openai/org/local-model'"
@@ -269,7 +273,7 @@ final class IntegrationServicesTests: XCTestCase {
             """
             cd '/tmp/Nativ Project'
             export GOOSE_MODEL='org/local-model'
-            export NATIV_API_KEY='nativ'
+            export NATIV_API_KEY='nativ_test_token'
             '/tools/goose' 'session' 'start' '--provider' 'nativ'
             """
         )
@@ -284,7 +288,7 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["type"] as? String, "openai-compat")
         XCTAssertEqual(provider["base_url"] as? String, "http://nativ.test:49152/v1")
-        XCTAssertEqual(provider["api_key"] as? String, "nativ")
+        XCTAssertEqual(provider["api_key"] as? String, "nativ_test_token")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["id"] as? String, selectedModel.id)
@@ -310,14 +314,14 @@ final class IntegrationServicesTests: XCTestCase {
 
         let configurationURL = manager.configurationURL(for: .qwenCode)
         let contents = try String(contentsOf: configurationURL, encoding: .utf8)
-        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ"))
+        XCTAssertTrue(contents.contains("OPENAI_API_KEY=nativ_test_token"))
         XCTAssertTrue(contents.contains("OPENAI_BASE_URL=http://nativ.test:49152/v1"))
         XCTAssertTrue(contents.contains("OPENAI_MODEL=org/local-model"))
         XCTAssertEqual(
             launchCommand(for: .qwenCode),
             """
             cd '/tmp/Nativ Project'
-            export OPENAI_API_KEY='nativ'
+            export OPENAI_API_KEY='nativ_test_token'
             export OPENAI_BASE_URL='http://nativ.test:49152/v1'
             export OPENAI_MODEL='org/local-model'
             '/tools/qwen'
@@ -335,7 +339,7 @@ final class IntegrationServicesTests: XCTestCase {
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["baseUrl"] as? String, "http://nativ.test:49152/v1")
         XCTAssertEqual(provider["api"] as? String, "openai-completions")
-        XCTAssertEqual(provider["apiKey"] as? String, "nativ")
+        XCTAssertEqual(provider["apiKey"] as? String, "nativ_test_token")
         let models = try XCTUnwrap(provider["models"] as? [[String: Any]])
         XCTAssertEqual(models.count, 2)
         XCTAssertEqual(models[0]["id"] as? String, selectedModel.id)
@@ -366,7 +370,7 @@ final class IntegrationServicesTests: XCTestCase {
             launchCommand(for: .zed),
             """
             cd '/tmp/Nativ Project'
-            export NATIV_API_KEY='nativ'
+            export NATIV_API_KEY='nativ_test_token'
             '/tools/zed' '.'
             """
         )
@@ -380,7 +384,7 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertTrue(contents.contains("provider: openai"))
         XCTAssertTrue(contents.contains("apiBase: \"http://nativ.test:49152/v1\""))
         XCTAssertTrue(contents.contains("model: \"org/local-model\""))
-        XCTAssertTrue(contents.contains("apiKey: \"nativ\""))
+        XCTAssertTrue(contents.contains("apiKey: \"nativ_test_token\""))
         XCTAssertEqual(
             launchCommand(for: .continueDev),
             "cd '/tmp/Nativ Project'\n'/tools/cn' '--config' '\(configurationURL.path)'"
@@ -416,7 +420,7 @@ final class IntegrationServicesTests: XCTestCase {
         let home = configurationURL.deletingLastPathComponent().path
         XCTAssertEqual(
             launchCommand(for: .openInterpreter),
-            "cd '/tmp/Nativ Project'\nexport CODEX_HOME='\(home)'\nexport NATIV_API_KEY='nativ'\n'/tools/interpreter' '--provider' 'nativ' '--model' 'org/local-model'"
+            "cd '/tmp/Nativ Project'\nexport CODEX_HOME='\(home)'\nexport NATIV_API_KEY='nativ_test_token'\n'/tools/interpreter' '--provider' 'nativ' '--model' 'org/local-model'"
         )
     }
 

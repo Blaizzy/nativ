@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import time
 import uuid
 from contextvars import ContextVar
@@ -18,11 +19,18 @@ import mlx.core as mx
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from mlx.utils import tree_flatten
+from starlette.middleware.cors import CORSMiddleware
 
 import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
+from nativ_server_security import (
+    LOOPBACK_SERVER_HOST,
+    ServerAuthenticationMiddleware,
+    remove_middleware,
+    validate_server_start,
+)
 
 
 BACKEND_NAME = f"mlx_vlm/{base.__version__}"
@@ -1304,12 +1312,8 @@ def install_metrics_overlay() -> None:
 
     @base.app.post("/models/load", include_in_schema=False)
     @base.app.post("/v1/models/load")
-    def load_model_endpoint(request: Request, payload: dict[str, Any]):
+    def load_model_endpoint(payload: dict[str, Any]):
         """Load or hot-swap the text model without restarting the server."""
-        require_api_key = getattr(base, "_require_management_api_key", None)
-        if require_api_key is not None:
-            require_api_key(request)
-
         model = payload.get("model")
         if not isinstance(model, str) or not model.strip():
             raise HTTPException(status_code=400, detail="A non-empty model is required.")
@@ -1334,12 +1338,8 @@ def install_metrics_overlay() -> None:
 
     @base.app.post("/routines/{routine_id}/run", include_in_schema=False)
     @base.app.post("/v1/routines/{routine_id}/run")
-    def run_routine_endpoint(routine_id: str, request: Request):
+    def run_routine_endpoint(routine_id: str):
         """Queue a routine for the Nativ app to run."""
-        require_api_key = getattr(base, "_require_management_api_key", None)
-        if require_api_key is not None:
-            require_api_key(request)
-
         if not routine_id.strip():
             raise HTTPException(status_code=400, detail="A routine id is required.")
 
@@ -1354,16 +1354,41 @@ def install_metrics_overlay() -> None:
         return {"status": "queued", "routine_id": routine_id}
 
 
+def install_security_overlay() -> None:
+    if getattr(base.app.state, "nativ_security_installed", False):
+        return
+    remove_middleware(base.app, CORSMiddleware)
+    base.app.add_middleware(ServerAuthenticationMiddleware)
+    base.app.state.nativ_security_installed = True
+
+
 def main() -> None:
+    validate_server_start(sys.argv[1:])
     install_metrics_overlay()
+    install_security_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse
 
-    def nativ_argument_parser(*args: Any, **kwargs: Any):
-        kwargs["description"] = "Nativ."
-        return original_argparse.ArgumentParser(*args, **kwargs)
+    class NativArgumentParser(original_argparse.ArgumentParser):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["description"] = "Nativ."
+            super().__init__(*args, **kwargs)
 
-    base_cli.argparse = SimpleNamespace(ArgumentParser=nativ_argument_parser)
+        def add_argument(self, *names: str, **kwargs: Any):
+            if "--host" in names:
+                kwargs["default"] = LOOPBACK_SERVER_HOST
+                kwargs["help"] = (
+                    "Host for the HTTP server; loopback addresses only "
+                    f"(default: {LOOPBACK_SERVER_HOST})."
+                )
+            elif "--api-key" in names:
+                kwargs["help"] = (
+                    "Required bearer token for every endpoint. May also be set "
+                    "with MLX_VLM_SERVER_API_KEY."
+                )
+            return super().add_argument(*names, **kwargs)
+
+    base_cli.argparse = SimpleNamespace(ArgumentParser=NativArgumentParser)
     try:
         base.main()
     finally:
@@ -1372,6 +1397,7 @@ def main() -> None:
 
 install_model_load_progress()
 install_metrics_overlay()
+install_security_overlay()
 
 
 if __name__ == "__main__":

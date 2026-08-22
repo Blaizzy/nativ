@@ -22,7 +22,7 @@ struct WelcomeGateView: View {
     let runtime: SystemRuntimeMonitor
     let extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
-    let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
+    let onComplete: (_ modelID: String?, _ serverAPIKey: String) -> Void
 
     var body: some View {
         Group {
@@ -134,23 +134,21 @@ private struct WelcomeView: View {
     @State private var didRequestRecommendedModels = false
     @State private var showsAPIKeyEditor = false
     @State private var serverAPIKey: String
-    @State private var configuredServerAPIKey: String?
+    @State private var configuredServerAPIKey: String
     @StateObject private var permissions = NativPermissionStore()
     @FocusState private var isAPIKeyFieldFocused: Bool
 
-    let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
+    let onComplete: (_ modelID: String?, _ serverAPIKey: String) -> Void
 
     init(
         model: NativModel,
-        onComplete: @escaping (_ modelID: String?, _ serverAPIKey: String?) -> Void
+        onComplete: @escaping (_ modelID: String?, _ serverAPIKey: String) -> Void
     ) {
         self.model = model
         self.onComplete = onComplete
         let settings = model.settings.normalized()
         _selectedModelID = State(initialValue: settings.languageModelID)
-        _serverAPIKey = State(
-            initialValue: settings.serverAPIKey ?? ServerAPIAuthentication.generateToken()
-        )
+        _serverAPIKey = State(initialValue: settings.serverAPIKey)
         _configuredServerAPIKey = State(initialValue: settings.serverAPIKey)
     }
 
@@ -490,7 +488,7 @@ private struct WelcomeView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("Protect management access")
                                 .font(.headline)
-                            Text("An API key provides basic security if you're running Nativ on a shared network.")
+                            Text("Nativ requires an API key for every server request and stores it in Keychain.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -516,12 +514,6 @@ private struct WelcomeView: View {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.large)
 
-                            Button("Skip") {
-                                skipAPIKey()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                            .frame(maxWidth: .infinity)
                         }
                     }
                 }
@@ -541,12 +533,6 @@ private struct WelcomeView: View {
                 Spacer()
 
                 if showsAPIKeyEditor {
-                    Button("Skip") {
-                        skipAPIKey()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-
                     Button("Save & Continue") {
                         continueFromAPIKey()
                     }
@@ -556,7 +542,7 @@ private struct WelcomeView: View {
                     .disabled(normalizedAPIKey == nil)
                 } else {
                     Button("Continue") {
-                        skipAPIKey()
+                        continueFromAPIKey()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
@@ -637,13 +623,6 @@ private struct WelcomeView: View {
     private func continueFromAPIKey() {
         guard let normalizedAPIKey else { return }
         configuredServerAPIKey = normalizedAPIKey
-        withAnimation(.easeInOut(duration: 0.2)) {
-            step = .permissions
-        }
-    }
-
-    private func skipAPIKey() {
-        configuredServerAPIKey = nil
         withAnimation(.easeInOut(duration: 0.2)) {
             step = .permissions
         }
@@ -763,7 +742,7 @@ private struct WelcomeView: View {
         return nil
     }
 
-    private func finish(serverAPIKey: String?) {
+    private func finish(serverAPIKey: String) {
         onComplete(selectedModelID, serverAPIKey)
     }
 

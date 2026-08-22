@@ -46,12 +46,20 @@ enum Main {
             do {
                 let smokeHost = ProcessInfo.processInfo.environment["NATIV_SMOKE_HOST"] ?? "127.0.0.1"
                 let smokePort = ProcessInfo.processInfo.environment["NATIV_SMOKE_PORT"] ?? "18080"
-                try server.start(arguments: ["--host", smokeHost, "--port", smokePort])
+                let smokeAPIKey = ServerAPIAuthentication.generateToken()
+                try server.start(
+                    arguments: ["--host", smokeHost, "--port", smokePort],
+                    environment: ["MLX_VLM_SERVER_API_KEY": smokeAPIKey]
+                )
                 guard server.isRunning else {
                     fputs("mlx-vlm-server exited before stop was requested\n", stderr)
                     exit(EXIT_FAILURE)
                 }
-                guard waitForMetricsEndpoint(host: smokeHost, port: smokePort) else {
+                guard waitForMetricsEndpoint(
+                    host: smokeHost,
+                    port: smokePort,
+                    apiKey: smokeAPIKey
+                ) else {
                     fputs("mlx-vlm-server did not expose /metrics at \(smokeHost):\(smokePort)\n", stderr)
                     try? server.stop()
                     exit(EXIT_FAILURE)
@@ -80,11 +88,12 @@ enum Main {
     private static func waitForMetricsEndpoint(
         host: String,
         port: String,
+        apiKey: String,
         timeout: TimeInterval = 5
     ) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if checkMetricsEndpoint(host: host, port: port) {
+            if checkMetricsEndpoint(host: host, port: port, apiKey: apiKey) {
                 return true
             }
             Thread.sleep(forTimeInterval: 0.2)
@@ -92,7 +101,7 @@ enum Main {
         return false
     }
 
-    private static func checkMetricsEndpoint(host: String, port: String) -> Bool {
+    private static func checkMetricsEndpoint(host: String, port: String, apiKey: String) -> Bool {
         let urlHost = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
         guard let url = URL(string: "http://\(urlHost):\(port)/metrics") else {
             return false
@@ -100,7 +109,9 @@ enum Main {
 
         let semaphore = DispatchSemaphore(value: 0)
         let result = MetricsProbeResult()
-        let task = URLSession.shared.dataTask(with: url) { _, response, _ in
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let task = URLSession.shared.dataTask(with: request) { _, response, _ in
             if let httpResponse = response as? HTTPURLResponse,
                (200..<300).contains(httpResponse.statusCode) {
                 result.markSucceeded()

@@ -8,14 +8,15 @@ observe it. Sources:
 
 ## Server and endpoints
 
-The bundled server listens on `http://127.0.0.1:8080` by default. Host and port are set in the
-Developer page (`serverHost` / `serverPort`); the page lists every endpoint and copies URLs
-directly. An optional server API key (`serverAPIKey`) is sent as a bearer token.
+The bundled server listens only on this Mac at `http://127.0.0.1:8080`. The port is set in the
+Developer page (`serverPort`); the host is permanently restricted to loopback. The page lists
+every endpoint and copies URLs directly. A generated server API key (`serverAPIKey`) is required
+as a bearer token for every HTTP and WebSocket request and is stored in Keychain.
 
 ```sh
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer nativ' \
+  -H 'Authorization: Bearer <server-api-key>' \
   -d '{"model":"<model-id>","messages":[{"role":"user","content":"Hi"}],"stream":false}'
 ```
 

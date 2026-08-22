@@ -20,7 +20,7 @@ struct IntegrationProfileManager {
 
     init(
         serverBaseURL: URL,
-        serverAPIKey: String? = nil,
+        serverAPIKey: String,
         fileManager: FileManager = .default,
         homeDirectory: URL? = nil,
         applicationSupportDirectory: URL? = nil
@@ -29,12 +29,9 @@ struct IntegrationProfileManager {
         self.fileManager = fileManager
         self.homeDirectory = resolvedHomeDirectory
         self.serverBaseURL = serverBaseURL
-        let normalizedAPIKey = serverAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalizedAPIKey, !normalizedAPIKey.isEmpty {
-            self.apiKey = normalizedAPIKey
-        } else {
-            self.apiKey = "nativ"
-        }
+        let normalizedAPIKey = serverAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        precondition(!normalizedAPIKey.isEmpty)
+        self.apiKey = normalizedAPIKey
         self.applicationSupportDirectory = applicationSupportDirectory
             ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? resolvedHomeDirectory

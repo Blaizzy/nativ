@@ -256,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    private func completeWelcome(modelID: String?, serverAPIKey: String?) {
+    private func completeWelcome(modelID: String?, serverAPIKey: String) {
         var settings = model.settings
         settings.languageModelID = modelID
         settings.serverAPIKey = serverAPIKey

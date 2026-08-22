@@ -5,7 +5,6 @@ import NativServerKit
 import SwiftUI
 
 private enum EndpointEditorField: Hashable {
-    case host
     case port
 }
 
@@ -256,7 +255,7 @@ struct DeveloperView: View {
                     endpointCategoryPicker
                         .frame(width: 300, alignment: .leading)
 
-                    serverHostField
+                    serverHostDisplay
 
                     serverPortField
                 }
@@ -269,7 +268,7 @@ struct DeveloperView: View {
                         endpointCategoryPicker
                             .frame(width: 320)
 
-                        serverHostField
+                        serverHostDisplay
 
                         serverPortField
 
@@ -284,7 +283,7 @@ struct DeveloperView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(spacing: 10) {
-                        serverHostField
+                        serverHostDisplay
                         serverPortField
                         Spacer(minLength: 0)
                     }
@@ -401,25 +400,18 @@ struct DeveloperView: View {
         }
     }
 
-    private var serverHostField: some View {
+    private var serverHostDisplay: some View {
         HStack(spacing: 6) {
             Text("Host")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.primary)
-            TextField("", text: $model.settings.serverHost)
-                .textFieldStyle(.plain)
+            Text(model.settings.serverHost)
                 .font(.callout.monospaced())
-                .focused($focusedEndpointField, equals: .host)
-                .editableFieldChrome(
-                    isFocused: focusedEndpointField == .host
-                )
+                .foregroundStyle(.secondary)
                 .frame(width: 144)
                 .accessibilityLabel("Server host")
-                .onSubmit {
-                    model.settings.serverHost = model.settings.normalized().serverHost
-                }
         }
-        .help("The host or IP address the local server binds to. Changes restart a running server after 3 seconds.")
+        .help("The server is restricted to this Mac.")
     }
 
     private var serverEndpointProbeID: String {
@@ -643,11 +635,10 @@ private extension View {
 }
 
 private struct ServerAPIAuthenticationPanel: View {
-    let token: String?
-    let onSetToken: (String?) -> Void
+    let token: String
+    let onSetToken: (String) -> Void
     @State private var tokenEntry = ""
     @State private var isEditingToken = false
-    @State private var showsRemovalConfirmation = false
     @FocusState private var tokenFieldIsFocused: Bool
 
     private var activeToken: String? {
@@ -682,21 +673,6 @@ private struct ServerAPIAuthenticationPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .alert(
-            "Remove the server API token?",
-            isPresented: $showsRemovalConfirmation
-        ) {
-            Button("Remove Token") {
-                onSetToken(nil)
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "API requests will no longer require this token. "
-                    + "The running server restarts automatically."
-            )
-        }
     }
 
     private var authenticationHeader: some View {
@@ -725,7 +701,7 @@ private struct ServerAPIAuthenticationPanel: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Server API Authentication")
                     .font(.callout.weight(.semibold))
-                Text("Protect API requests with a custom Bearer token.")
+                Text("Every API request requires this Bearer token.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -747,15 +723,15 @@ private struct ServerAPIAuthenticationPanel: View {
     }
 
     private var authenticationStatus: String {
-        activeToken == nil ? "Not Configured" : "Configured"
+        "Configured"
     }
 
     private var authenticationStatusImage: String {
-        activeToken == nil ? "circle.dashed" : "checkmark.circle.fill"
+        "checkmark.circle.fill"
     }
 
     private var authenticationStatusColor: Color {
-        activeToken == nil ? .secondary : .green
+        .green
     }
 
     private var credentialOverview: some View {
@@ -827,33 +803,24 @@ private struct ServerAPIAuthenticationPanel: View {
     }
 
     private var credentialStatus: some View {
-        Label(
-            activeToken == nil ? "No Active Credential" : "Active Credential",
-            systemImage: activeToken == nil ? "key" : "key.fill"
-        )
+        Label("Active Credential", systemImage: "key.fill")
         .font(.caption.weight(.semibold))
-        .foregroundStyle(activeToken == nil ? .secondary : .primary)
+        .foregroundStyle(.primary)
         .fixedSize()
     }
 
     @ViewBuilder
     private var credentialActions: some View {
-        if activeToken != nil {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    copyTokenButton
-                    changeTokenButton
-                    removeTokenButton
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    copyTokenButton
-                    changeTokenButton
-                    removeTokenButton
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                copyTokenButton
+                changeTokenButton
             }
-        } else {
-            addTokenButton
+
+            VStack(alignment: .leading, spacing: 8) {
+                copyTokenButton
+                changeTokenButton
+            }
         }
     }
 
@@ -874,24 +841,6 @@ private struct ServerAPIAuthenticationPanel: View {
             Label("Change", systemImage: "pencil")
         }
         .buttonStyle(.bordered)
-    }
-
-    private var removeTokenButton: some View {
-        Button(role: .destructive) {
-            showsRemovalConfirmation = true
-        } label: {
-            Label("Remove", systemImage: "trash")
-        }
-        .buttonStyle(.bordered)
-    }
-
-    private var addTokenButton: some View {
-        Button {
-            beginEditingToken()
-        } label: {
-            Label("Add Token", systemImage: "plus")
-        }
-        .buttonStyle(.borderedProminent)
     }
 
     private var tokenEditor: some View {
@@ -942,7 +891,7 @@ private struct ServerAPIAuthenticationPanel: View {
 
     private var tokenEditorTitle: some View {
         Label(
-            activeToken == nil ? "Add Server API Token" : "Replace Server API Token",
+            "Replace Server API Token",
             systemImage: "key.fill"
         )
         .font(.caption.weight(.semibold))

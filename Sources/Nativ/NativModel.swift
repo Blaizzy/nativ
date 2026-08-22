@@ -205,6 +205,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     func setServerAPIKey(_ token: String?) {
         let normalizedToken = ServerAPIAuthentication.normalizedToken(token)
+            ?? ServerAPIAuthentication.generateToken()
         guard normalizedToken != settings.normalized().serverAPIKey else {
             return
         }
@@ -345,6 +346,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func startServer() {
+        settings = settings.normalized()
         var shouldStartMetrics = false
         clearModelLoadFailure()
         currentServerOutput = ""

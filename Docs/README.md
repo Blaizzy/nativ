@@ -16,7 +16,7 @@ For running Nativ, building from source, and the project layout, see the
 | [Voice](features/voice.md) | Voice dictation, global shortcuts, hands-free and push-to-talk capture, transcription, and permissions. |
 | [Scheduled](features/routines.md) | Saved prompts that run on a schedule with task-specific capabilities. |
 | [Integrations](features/integrations.md) | Serving local models over OpenAI- and Anthropic-compatible APIs, MCP host usage, and per-tool coding-agent and editor setup. |
-| [Developer](features/developer.md) | Server host and port, local API endpoints, logs, performance analytics, and the system monitor. |
+| [Developer](features/developer.md) | Local server port and authentication, API endpoints, logs, performance analytics, and the system monitor. |
 
 ## Extending Nativ
 
