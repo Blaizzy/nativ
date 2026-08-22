@@ -6,7 +6,7 @@ struct RuntimeSettingsPanel: View {
     @State private var confirmingReload = false
     @State private var confirmingRestoreDefaults = false
 
-    private static let railWidth: CGFloat = 152
+    private static let railWidth: CGFloat = 176
     private static let labelWidth: CGFloat = 116
     private static let controlWidth: CGFloat = 118
     private static let unitWidth: CGFloat = 48
@@ -181,13 +181,13 @@ struct RuntimeSettingsPanel: View {
         return HStack(alignment: .top, spacing: 16) {
             HStack(spacing: 7) {
                 Image(systemName: group.symbol)
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 15, alignment: .leading)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 17, alignment: .leading)
 
                 Text(group.title)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(width: Self.railWidth, alignment: .leading)
@@ -209,7 +209,10 @@ struct RuntimeSettingsPanel: View {
                         }
                         .padding(.top, 6)
                     } label: {
-                        Text(disclosureLabel(count: inactive.count))
+                        Text(
+                            inactive.count == 1
+                                ? "1 more option" : "\(inactive.count) more options"
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -220,10 +223,6 @@ struct RuntimeSettingsPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
-    }
-
-    private func disclosureLabel(count: Int) -> String {
-        count == 1 ? "1 more option" : "\(count) more options"
     }
 
     private func fieldFlow(_ fields: [RuntimeSettingField]) -> some View {
@@ -242,7 +241,7 @@ struct RuntimeSettingsPanel: View {
         HStack(spacing: 10) {
             Text(field.shortTitle)
                 .font(.footnote)
-                .foregroundStyle(labelStyle(for: field))
+                .foregroundStyle(labelColor(for: field))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(width: Self.labelWidth, alignment: .leading)
@@ -257,13 +256,9 @@ struct RuntimeSettingsPanel: View {
         }
     }
 
-    private func labelStyle(for field: RuntimeSettingField) -> AnyShapeStyle {
-        if field.isDirty {
-            return AnyShapeStyle(Color.orange)
-        }
-        return AnyShapeStyle(
-            store.isActive(field) ? HierarchicalShapeStyle.primary : HierarchicalShapeStyle.secondary
-        )
+    private func labelColor(for field: RuntimeSettingField) -> Color {
+        if field.isDirty { return .orange }
+        return store.isActive(field) ? .primary : .secondary
     }
 
     @ViewBuilder
@@ -305,9 +300,8 @@ struct RuntimeSettingsPanel: View {
     @ViewBuilder
     private var footerStatus: some View {
         if store.isDirty {
-            Label(changeSummary, systemImage: "circle.fill")
-                .labelStyle(DotLabelStyle())
-                .font(.caption)
+            Text(changeSummary)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.orange)
         } else if let appliedNotice = store.appliedNotice {
             Label(appliedNotice, systemImage: "checkmark.circle.fill")
@@ -364,16 +358,6 @@ struct RuntimeSettingsPanel: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct DotLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 5) {
-            configuration.icon
-                .font(.system(size: 6))
-            configuration.title
-        }
     }
 }
 
