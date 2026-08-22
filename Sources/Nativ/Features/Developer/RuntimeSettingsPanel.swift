@@ -8,7 +8,6 @@ struct RuntimeSettingsPanel: View {
 
     private static let railWidth: CGFloat = 176
     private static let labelWidth: CGFloat = 116
-    private static let controlWidth: CGFloat = 240
     private static let unitWidth: CGFloat = 48
 
     var body: some View {
@@ -239,7 +238,6 @@ struct RuntimeSettingsPanel: View {
                     field: field,
                     store: store,
                     labelWidth: Self.labelWidth,
-                    controlWidth: Self.controlWidth,
                     unitWidth: Self.unitWidth
                 )
             }
@@ -350,7 +348,6 @@ private struct RuntimeSettingRow: View {
     let field: RuntimeSettingField
     @ObservedObject var store: RuntimeSettingsStore
     let labelWidth: CGFloat
-    let controlWidth: CGFloat
     let unitWidth: CGFloat
 
     @State private var draft = ""
@@ -362,8 +359,12 @@ private struct RuntimeSettingRow: View {
     private var isOverridden: Bool { !field.isDefault }
 
     private var stretchesToFill: Bool {
-        if case .text = field.control { return true }
-        return false
+        switch field.control {
+        case .number, .combo, .text:
+            return true
+        case .toggle, .choice:
+            return false
+        }
     }
 
     var body: some View {
@@ -384,25 +385,17 @@ private struct RuntimeSettingRow: View {
             if stretchesToFill {
                 control
                     .frame(maxWidth: .infinity, alignment: .leading)
-                resetButton
             } else {
                 control
-                    .frame(width: controlWidth, alignment: .leading)
-
-                Text(field.unitSuffix ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: unitWidth, alignment: .leading)
-
-                resetButton
-
-                Text(field.spec.help)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
             }
+
+            Text(field.unitSuffix ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: unitWidth, alignment: .leading)
+
+            resetButton
         }
         .disabled(!isActive)
         .onHover { isHovering = $0 }
