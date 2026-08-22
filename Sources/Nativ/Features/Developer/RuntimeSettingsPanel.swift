@@ -6,23 +6,25 @@ struct RuntimeSettingsPanel: View {
     @State private var confirmingReload = false
     @State private var confirmingRestoreDefaults = false
 
+    private static let railWidth: CGFloat = 152
+    private static let labelWidth: CGFloat = 116
     private static let controlWidth: CGFloat = 150
+    private static let unitWidth: CGFloat = 48
+    private static let fieldColumnWidth: CGFloat = 348
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             header
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
 
             if !isCollapsed {
                 Divider()
-
                 content
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 12)
+                footer
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -62,8 +64,6 @@ struct RuntimeSettingsPanel: View {
         store.state == .unsupported
     }
 
-    // MARK: Header
-
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "slider.horizontal.3")
@@ -77,42 +77,18 @@ struct RuntimeSettingsPanel: View {
                     .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 24)
+            Spacer(minLength: 16)
 
-            headerActions
+            if store.isApplying {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            overflowMenu
         }
     }
 
-    @ViewBuilder
-    private var headerActions: some View {
-        if store.isApplying {
-            ProgressView()
-                .controlSize(.small)
-        }
-
-        headerStatus
-
-        if case .loaded = store.state {
-            Button("Discard") {
-                store.discardChanges()
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .disabled(!store.isDirty || store.isApplying)
-
-            Button("Apply") {
-                if store.reloadWarningKinds.isEmpty {
-                    Task { await store.apply() }
-                } else {
-                    confirmingReload = true
-                }
-            }
-            .keyboardShortcut(.return, modifiers: .command)
-            .controlSize(.small)
-            .buttonStyle(.borderedProminent)
-            .disabled(!store.isDirty || store.isApplying)
-        }
-
+    private var overflowMenu: some View {
         Menu {
             Button("Reload from Server") {
                 Task { await store.load() }
@@ -134,20 +110,6 @@ struct RuntimeSettingsPanel: View {
         .disabled(store.isApplying)
     }
 
-    @ViewBuilder
-    private var headerStatus: some View {
-        if store.isDirty {
-            Text(changeSummary)
-                .font(.caption)
-                .foregroundStyle(.orange)
-        } else if let appliedNotice = store.appliedNotice {
-            Label(appliedNotice, systemImage: "checkmark.circle.fill")
-                .labelStyle(.titleAndIcon)
-                .font(.caption)
-                .foregroundStyle(.green)
-        }
-    }
-
     private var headerSubtitle: String {
         switch store.state {
         case .idle, .loading:
@@ -157,11 +119,9 @@ struct RuntimeSettingsPanel: View {
         case .failed:
             return "Unavailable"
         case .loaded:
-            return "No server restart required"
+            return "Changes take effect without a server restart"
         }
     }
-
-    // MARK: Content
 
     @ViewBuilder
     private var content: some View {
@@ -174,14 +134,10 @@ struct RuntimeSettingsPanel: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
 
         case .unsupported:
-            notice(
-                symbol: "info.circle",
-                tint: .secondary,
-                text: "This server build does not expose /v1/settings. Update the bundled "
-                    + "server to change these without a restart."
-            )
+            EmptyView()
 
         case .failed(let message):
             VStack(alignment: .leading, spacing: 8) {
@@ -191,97 +147,164 @@ struct RuntimeSettingsPanel: View {
                 }
                 .controlSize(.small)
             }
+            .padding(12)
 
         case .loaded:
-            loadedContent
+            VStack(spacing: 0) {
+                ForEach(Array(store.groups.enumerated()), id: \.element.id) { index, group in
+                    if index > 0 {
+                        Divider()
+                    }
+                    band(group)
+                }
+
+                if let applyError = store.applyError {
+                    Divider()
+                    notice(symbol: "exclamationmark.triangle", tint: .orange, text: applyError)
+                        .padding(12)
+                }
+
+                if !store.rejections.isEmpty {
+                    Divider()
+                    rejectionNotice
+                        .padding(12)
+                }
+            }
         }
     }
 
-    private var loadedContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ForEach(store.groups) { group in
-                groupSection(group)
-            }
-
-            if let applyError = store.applyError {
-                notice(symbol: "exclamationmark.triangle", tint: .orange, text: applyError)
-            }
-
-            if !store.rejections.isEmpty {
-                rejectionNotice
-            }
-        }
-    }
-
-    private func groupSection(_ group: RuntimeSettingGroup) -> some View {
+    private func band(_ group: RuntimeSettingGroup) -> some View {
         let fields = store.fields(in: group)
         let active = fields.filter { store.isActive($0) }
         let inactive = fields.filter { !store.isActive($0) }
 
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        return HStack(alignment: .top, spacing: 16) {
+            HStack(spacing: 7) {
                 Image(systemName: group.symbol)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 15, alignment: .leading)
+
                 Text(group.title)
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(width: Self.railWidth, alignment: .leading)
 
-            if !active.isEmpty {
-                fieldGrid(active)
-            }
-
-            if !inactive.isEmpty {
-                DisclosureGroup {
-                    fieldGrid(inactive)
-                        .padding(.top, 4)
-                } label: {
-                    Text(disclosureLabel(count: inactive.count, group: group))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                if !active.isEmpty {
+                    fieldFlow(active)
                 }
-                .tint(.secondary)
+
+                if !inactive.isEmpty {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let hint = store.inactiveHint(for: group) {
+                                Text(hint.prefix(1).uppercased() + hint.dropFirst())
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            fieldFlow(inactive)
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        Text(disclosureLabel(count: inactive.count))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tint(.secondary)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
     }
 
-    private func disclosureLabel(count: Int, group: RuntimeSettingGroup) -> String {
-        let noun = count == 1 ? "option" : "options"
-        if let hint = store.inactiveHint(for: group) {
-            return "\(count) more \(noun) · \(hint)"
-        }
-        return "\(count) more \(noun)"
+    private func disclosureLabel(count: Int) -> String {
+        count == 1 ? "1 more option" : "\(count) more options"
     }
 
-    private func fieldGrid(_ fields: [RuntimeSettingField]) -> some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 28, verticalSpacing: 4) {
+    private func fieldFlow(_ fields: [RuntimeSettingField]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: Self.fieldColumnWidth), spacing: 20)],
+            alignment: .leading,
+            spacing: 7
+        ) {
             ForEach(fields) { field in
-                GridRow {
-                    label(for: field)
-                    RuntimeSettingControlCell(
-                        field: field,
-                        store: store,
-                        controlWidth: Self.controlWidth
-                    )
-                }
+                fieldRow(field)
             }
         }
     }
 
-    private func label(for field: RuntimeSettingField) -> some View {
-        let active = store.isActive(field)
-        return HStack(spacing: 7) {
-            Circle()
-                .fill(field.isDirty ? Color.orange : Color.clear)
-                .frame(width: 6, height: 6)
-
+    private func fieldRow(_ field: RuntimeSettingField) -> some View {
+        HStack(spacing: 10) {
             Text(field.shortTitle)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(active ? .primary : .secondary)
+                .font(.footnote)
+                .foregroundStyle(store.isActive(field) ? .primary : .secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: Self.labelWidth, alignment: .leading)
+                .help(field.spec.help)
+
+            RuntimeSettingControlCell(
+                field: field,
+                store: store,
+                controlWidth: Self.controlWidth,
+                unitWidth: Self.unitWidth
+            )
         }
-        .help(field.spec.help)
-        .gridColumnAlignment(.leading)
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if case .loaded = store.state, store.isDirty || store.appliedNotice != nil {
+            Divider()
+
+            HStack(spacing: 10) {
+                footerStatus
+
+                Spacer(minLength: 12)
+
+                if store.isDirty {
+                    Button("Discard") {
+                        store.discardChanges()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(store.isApplying)
+
+                    Button("Apply") {
+                        if store.reloadWarningKinds.isEmpty {
+                            Task { await store.apply() }
+                        } else {
+                            confirmingReload = true
+                        }
+                    }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(store.isApplying)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+        }
+    }
+
+    @ViewBuilder
+    private var footerStatus: some View {
+        if store.isDirty {
+            Label(changeSummary, systemImage: "circle.fill")
+                .labelStyle(DotLabelStyle())
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if let appliedNotice = store.appliedNotice {
+            Label(appliedNotice, systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        }
     }
 
     private var rejectionNotice: some View {
@@ -303,7 +326,7 @@ struct RuntimeSettingsPanel: View {
 
     private var changeSummary: String {
         let count = store.dirtyFields.count
-        return count == 1 ? "1 change" : "\(count) changes"
+        return count == 1 ? "1 unapplied change" : "\(count) unapplied changes"
     }
 
     private var reloadWarningMessage: String {
@@ -335,31 +358,50 @@ struct RuntimeSettingsPanel: View {
     }
 }
 
+private struct DotLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon
+                .font(.system(size: 6))
+            configuration.title
+        }
+    }
+}
+
 private struct RuntimeSettingControlCell: View {
     let field: RuntimeSettingField
     @ObservedObject var store: RuntimeSettingsStore
     let controlWidth: CGFloat
+    let unitWidth: CGFloat
 
     @State private var draft = ""
     @FocusState private var isFocused: Bool
 
     private var isActive: Bool { store.isActive(field) }
 
-    var body: some View {
-        HStack(spacing: 6) {
-            control
-                .frame(width: controlWidth, alignment: .trailing)
+    private var stretchesToFill: Bool {
+        if case .text = field.control { return true }
+        return false
+    }
 
-            Text(field.unitSuffix ?? "")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .leading)
+    var body: some View {
+        HStack(spacing: 8) {
+            if stretchesToFill {
+                control
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                control
+                    .frame(width: controlWidth, alignment: .leading)
+
+                Text(field.unitSuffix ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: unitWidth, alignment: .leading)
+            }
 
             resetButton
-                .frame(width: 16)
         }
         .disabled(!isActive)
-        .gridColumnAlignment(.trailing)
     }
 
     @ViewBuilder
@@ -373,6 +415,7 @@ private struct RuntimeSettingControlCell: View {
             }
             .buttonStyle(.borderless)
             .help("Reset to \(field.spec.defaultValue.displayText)")
+            .frame(width: 16)
         } else {
             Color.clear.frame(width: 16, height: 1)
         }
