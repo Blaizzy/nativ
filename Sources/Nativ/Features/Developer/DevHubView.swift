@@ -26,6 +26,7 @@ struct DevHubView: View {
         HStack(spacing: 0) {
             subnav
             Divider()
+                .ignoresSafeArea(.container, edges: .top)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -57,7 +58,9 @@ struct DevHubView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .padding(.bottom, 12)
         .frame(width: 188)
     }
 

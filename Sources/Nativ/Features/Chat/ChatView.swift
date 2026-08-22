@@ -13,7 +13,6 @@ struct ChatView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
 
@@ -28,7 +27,6 @@ struct ChatView: View {
                 extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
-                conversationWidthReduction: conversationWidthReduction,
                 onExploreImageModels: onExploreImageModels
             )
             .dropDestination(for: URL.self) { urls, _ in
@@ -100,7 +98,6 @@ private struct ChatTranscriptView: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
@@ -161,7 +158,6 @@ private struct ChatTranscriptView: View {
             }
             .frame(
                 maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                    - conversationWidthReduction
                     - (ChatTranscriptLayout.messageHorizontalInset * 2)
             )
             .frame(maxWidth: .infinity)
@@ -187,7 +183,6 @@ private struct ChatTranscriptView: View {
                     extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
-                    conversationWidthReduction: conversationWidthReduction,
                     onHeightChange: { height in
                         let isInitialMeasurement = composerHeight == 0
                         composerHeight = height
@@ -299,7 +294,6 @@ private struct ChatComposerContainer: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onHeightChange: (CGFloat) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
@@ -332,10 +326,7 @@ private struct ChatComposerContainer: View {
             },
             onBackdropHeightChange: onBackdropHeightChange
         )
-        .frame(
-            maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                - conversationWidthReduction
-        )
+        .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -1804,7 +1795,6 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        conversationWidthReduction: 0,
         onExploreImageModels: { _ in }
     )
 }

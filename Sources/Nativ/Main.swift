@@ -126,6 +126,7 @@ private struct NativApplication: App {
         .defaultSize(width: 1240, height: 720)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowBackgroundDragBehavior(.enabled)
         .commands {
             CommandGroup(after: .appInfo) {

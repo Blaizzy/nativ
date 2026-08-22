@@ -82,7 +82,7 @@ enum IssueDiagnostics {
     }
 
     static func serverOutputTail(model: NativModel, maxLines: Int = 60) -> [String] {
-        let lines = model.logText
+        let lines = model.serverLogs.text
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
