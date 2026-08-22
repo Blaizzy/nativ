@@ -117,7 +117,7 @@ private struct ChatTranscriptView: View {
         let latestUserMessageID = chat.latestUserMessageID
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
