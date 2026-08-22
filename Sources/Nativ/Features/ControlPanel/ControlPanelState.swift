@@ -85,14 +85,14 @@ final class ControlPanelChromeState: ObservableObject {
     }
 
     private func captureModelSnapshot() {
-        update { $0.isRunning = model.isRunning }
-        update { $0.modelSwitchInProgress = model.modelSwitchInProgress }
-        update { $0.modelLoadingPercentage = Self.loadingPercentage(model.modelLoadingProgress) }
-        update { $0.metricsLoading = model.metricsLoading }
-        update { $0.modelLoadFailure = model.modelLoadFailure }
-        update { $0.modelPreloadMemoryWarning = model.modelPreloadMemoryWarning }
         let settings = Self.settingsProjection(model.settings)
         update {
+            $0.isRunning = model.isRunning
+            $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.modelLoadingPercentage = Self.loadingPercentage(model.modelLoadingProgress)
+            $0.metricsLoading = model.metricsLoading
+            $0.modelLoadFailure = model.modelLoadFailure
+            $0.modelPreloadMemoryWarning = model.modelPreloadMemoryWarning
             $0.languageModelID = settings.languageModelID
             $0.sidebarPinnedCollapsed = settings.sidebarPinnedCollapsed
             $0.sidebarFoldersCollapsed = settings.sidebarFoldersCollapsed

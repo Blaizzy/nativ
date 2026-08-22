@@ -68,29 +68,34 @@ private struct ModelReadmeSelection: Equatable {
 /// must not invalidate the full Discover list just because uptime changed.
 @MainActor
 private final class ModelsNativState: ObservableObject {
-    @Published private(set) var settings: NativSettings
-    @Published private(set) var isRunning: Bool
-    @Published private(set) var modelSwitchInProgress: Bool
-    @Published private(set) var modelSwitchTargetID: String?
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var metricsLoading: Bool
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
-    @Published private(set) var loadedModelID: String?
+    private struct Snapshot: Equatable {
+        var settings: NativSettings
+        var isRunning: Bool
+        var modelSwitchInProgress: Bool
+        var modelSwitchTargetID: String?
+        var modelLoadingProgress: Double?
+        var metricsLoading: Bool
+        var modelLoadFailure: ModelLoadFailure?
+        var systemHuggingFaceCredential: HuggingFaceCredential?
+        var loadedModelID: String?
+    }
 
+    @Published private var snapshot: Snapshot
     private let model: NativModel
 
     init(model: NativModel) {
         self.model = model
-        settings = model.settings
-        isRunning = model.isRunning
-        modelSwitchInProgress = model.modelSwitchInProgress
-        modelSwitchTargetID = model.modelSwitchTargetID
-        modelLoadingProgress = model.modelLoadingProgress
-        metricsLoading = model.metricsLoading
-        modelLoadFailure = model.modelLoadFailure
-        systemHuggingFaceCredential = model.systemHuggingFaceCredential
-        loadedModelID = model.metrics?.server.loadedModel
+        snapshot = Snapshot(
+            settings: model.settings,
+            isRunning: model.isRunning,
+            modelSwitchInProgress: model.modelSwitchInProgress,
+            modelSwitchTargetID: model.modelSwitchTargetID,
+            modelLoadingProgress: model.modelLoadingProgress,
+            metricsLoading: model.metricsLoading,
+            modelLoadFailure: model.modelLoadFailure,
+            systemHuggingFaceCredential: model.systemHuggingFaceCredential,
+            loadedModelID: model.metrics?.server.loadedModel
+        )
 
         observeModel()
     }
@@ -103,26 +108,38 @@ private final class ModelsNativState: ObservableObject {
         }
     }
 
-    private func update<T: Equatable>(
-        _ keyPath: ReferenceWritableKeyPath<ModelsNativState, T>,
-        to value: T
-    ) {
-        if self[keyPath: keyPath] != value {
-            self[keyPath: keyPath] = value
+    private func captureModelSnapshot() {
+        update {
+            $0.settings = model.settings
+            $0.isRunning = model.isRunning
+            $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.modelSwitchTargetID = model.modelSwitchTargetID
+            $0.modelLoadingProgress = model.modelLoadingProgress
+            $0.metricsLoading = model.metricsLoading
+            $0.modelLoadFailure = model.modelLoadFailure
+            $0.systemHuggingFaceCredential = model.systemHuggingFaceCredential
+            $0.loadedModelID = model.metrics?.server.loadedModel
         }
     }
 
-    private func captureModelSnapshot() {
-        update(\.settings, to: model.settings)
-        update(\.isRunning, to: model.isRunning)
-        update(\.modelSwitchInProgress, to: model.modelSwitchInProgress)
-        update(\.modelSwitchTargetID, to: model.modelSwitchTargetID)
-        update(\.modelLoadingProgress, to: model.modelLoadingProgress)
-        update(\.metricsLoading, to: model.metricsLoading)
-        update(\.modelLoadFailure, to: model.modelLoadFailure)
-        update(\.systemHuggingFaceCredential, to: model.systemHuggingFaceCredential)
-        update(\.loadedModelID, to: model.metrics?.server.loadedModel)
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
     }
+
+    var settings: NativSettings { snapshot.settings }
+    var isRunning: Bool { snapshot.isRunning }
+    var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var modelSwitchTargetID: String? { snapshot.modelSwitchTargetID }
+    var modelLoadingProgress: Double? { snapshot.modelLoadingProgress }
+    var metricsLoading: Bool { snapshot.metricsLoading }
+    var modelLoadFailure: ModelLoadFailure? { snapshot.modelLoadFailure }
+    var systemHuggingFaceCredential: HuggingFaceCredential? {
+        snapshot.systemHuggingFaceCredential
+    }
+    var loadedModelID: String? { snapshot.loadedModelID }
 
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(
