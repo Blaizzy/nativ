@@ -10,6 +10,7 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
+from importlib import import_module
 from threading import Lock
 from types import SimpleNamespace
 from typing import Any
@@ -25,6 +26,7 @@ import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
 
 
+base_app = import_module("mlx_vlm.server.app")
 BACKEND_NAME = f"mlx_vlm/{base.__version__}"
 TRACKED_PATHS = {
     "/chat/completions",
@@ -134,6 +136,38 @@ def install_model_load_progress() -> None:
     base_generation.load = load_with_progress
     base_generation.ResponseGenerator._initialize_model = initialize_model_with_progress
     base_generation._nativ_model_load_progress_installed = True
+
+
+def install_model_lifecycle_cache_reset() -> None:
+    """Clear text APC state before upstream releases its resident model."""
+    if getattr(base_app, "_nativ_model_lifecycle_cache_reset_installed", False):
+        return
+
+    original_unload_model_cache_group = getattr(
+        base_app,
+        "_unload_model_cache_group",
+        None,
+    )
+    if original_unload_model_cache_group is None:
+        return
+
+    def unload_model_cache_group_with_apc_reset(cache_group: str) -> bool:
+        if cache_group == "text_generation":
+            registry = base_app._model_cache_registry()
+            cache = registry.for_kind(cache_group)
+            apc_manager = cache.get("apc_manager") if cache else None
+            if apc_manager is not None:
+                apc_manager.clear()
+
+        return original_unload_model_cache_group(cache_group)
+
+    base_app._unload_model_cache_group = unload_model_cache_group_with_apc_reset
+    if (
+        getattr(base, "_unload_model_cache_group", None)
+        is original_unload_model_cache_group
+    ):
+        base._unload_model_cache_group = unload_model_cache_group_with_apc_reset
+    base_app._nativ_model_lifecycle_cache_reset_installed = True
 
 
 class MetricsAccessLogFilter(logging.Filter):
@@ -1371,6 +1405,7 @@ def main() -> None:
 
 
 install_model_load_progress()
+install_model_lifecycle_cache_reset()
 install_metrics_overlay()
 
 
