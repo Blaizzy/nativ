@@ -326,7 +326,7 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records.first?.recordedAt, importedAt)
     }
 
-    func testMigratesExistingImportedCaptureDateFromManagedFileName() throws {
+    func testMigratesExistingImportedCaptureDateFromUTCManagedFileName() throws {
         let legacyDate = Date(timeIntervalSince1970: 1_700_000_000)
         let importedAudioURL = temporaryDirectory.appendingPathComponent(
             "Imported Audio 2026-08-20 at 02.18.18.000 ABCD1234.m4a"
@@ -343,7 +343,9 @@ final class AudioAnalyticsStoreTests: XCTestCase {
             storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
         )
         let migratedDate = try XCTUnwrap(reloaded.records.first?.recordedAt)
-        let components = Calendar.current.dateComponents(
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let components = calendar.dateComponents(
             [.year, .month, .day, .hour, .minute, .second],
             from: migratedDate
         )

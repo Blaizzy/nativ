@@ -890,6 +890,7 @@ final class AudioCaptureLibrary: ObservableObject {
     private static func copyImportedAudio(from sourceURL: URL) throws -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
         let fileName = "Imported Audio \(formatter.string(from: Date())) \(UUID().uuidString.prefix(8))"
         let destinationURL = try recordingsDirectory

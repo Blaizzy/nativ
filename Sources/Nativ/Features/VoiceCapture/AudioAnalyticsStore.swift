@@ -453,6 +453,7 @@ final class AudioAnalyticsStore: ObservableObject {
         let timestamp = String(audioFileName.dropFirst(prefix.count).prefix(26))
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
         return formatter.date(from: timestamp)
     }

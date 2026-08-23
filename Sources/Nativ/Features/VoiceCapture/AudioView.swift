@@ -1925,7 +1925,7 @@ struct AudioView: View {
                 }
                 Spacer()
                 Button(action: chooseAudioToImport) {
-                    Label("Upload audio", systemImage: "square.and.arrow.up")
+                    Label("Add Recording", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -1980,9 +1980,9 @@ struct AudioView: View {
 
     private func chooseAudioToImport() {
         let panel = NSOpenPanel()
-        panel.title = "Upload audio"
-        panel.message = "Choose an audio file to transcribe and summarize locally."
-        panel.prompt = "Upload"
+        panel.title = "Add Recording"
+        panel.message = "Choose a recording to transcribe and summarize locally."
+        panel.prompt = "Add"
         panel.allowedContentTypes = [.audio]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
