@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import Charts
 import SwiftUI
 import Textual
+import UniformTypeIdentifiers
 
 private enum AudioDestination: String, CaseIterable, Identifiable {
     case overview
@@ -1925,6 +1926,12 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(action: chooseAudioToImport) {
+                    Label("Add Recording", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
                 Button {
                     destination = .record
                 } label: {
@@ -1971,6 +1978,24 @@ struct AudioView: View {
         }
         .padding(18)
         .audioPanelStyle()
+    }
+
+    private func chooseAudioToImport() {
+        let panel = NSOpenPanel()
+        panel.title = "Add Recording"
+        panel.message = "Choose a recording to transcribe and summarize locally."
+        panel.prompt = "Add"
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK, let sourceURL = panel.url else {
+                return
+            }
+            Task { @MainActor in
+                await captureLibrary.importAudio(from: sourceURL)
+            }
+        }
     }
 
     private func shortcutRow(

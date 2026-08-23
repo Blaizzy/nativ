@@ -287,6 +287,76 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         )
         XCTAssertEqual(reloaded.records.first?.displayTitle, "Product launch idea")
     }
+
+    func testImportedCaptureUsesImportDateAndPreservesItAfterTranscription() throws {
+        let earlierRecordingURL = temporaryDirectory.appendingPathComponent("earlier.wav")
+        let uploadedAudioURL = temporaryDirectory.appendingPathComponent("uploaded.m4a")
+        let earlierDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let importedAt = earlierDate.addingTimeInterval(3_600)
+
+        store.addCapture(
+            recordingURL: earlierRecordingURL,
+            kind: .voiceNote,
+            title: "Earlier recording",
+            durationSeconds: 30,
+            recordedAt: earlierDate
+        )
+        store.addCapture(
+            recordingURL: uploadedAudioURL,
+            kind: .voiceNote,
+            title: "Uploaded audio",
+            durationSeconds: 60,
+            recordedAt: importedAt
+        )
+
+        XCTAssertEqual(store.records.map(\.id), ["uploaded", "earlier"])
+
+        store.upsertTranscription(
+            recordingURL: uploadedAudioURL,
+            transcript: "A completed uploaded audio transcript.",
+            durationSeconds: 60,
+            modelID: "local-asr",
+            applicationName: nil,
+            kind: .voiceNote,
+            title: "Uploaded audio",
+            persistAudioReference: true
+        )
+
+        XCTAssertEqual(store.records.map(\.id), ["uploaded", "earlier"])
+        XCTAssertEqual(store.records.first?.recordedAt, importedAt)
+    }
+
+    func testMigratesExistingImportedCaptureDateFromUTCManagedFileName() throws {
+        let legacyDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let importedAudioURL = temporaryDirectory.appendingPathComponent(
+            "Imported Audio 2026-08-20 at 02.18.18.000 ABCD1234.m4a"
+        )
+        store.addCapture(
+            recordingURL: importedAudioURL,
+            kind: .voiceNote,
+            title: "Existing upload",
+            durationSeconds: 60,
+            recordedAt: legacyDate
+        )
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        let migratedDate = try XCTUnwrap(reloaded.records.first?.recordedAt)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let components = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: migratedDate
+        )
+
+        XCTAssertEqual(components.year, 2026)
+        XCTAssertEqual(components.month, 8)
+        XCTAssertEqual(components.day, 20)
+        XCTAssertEqual(components.hour, 2)
+        XCTAssertEqual(components.minute, 18)
+        XCTAssertEqual(components.second, 18)
+    }
 }
 
 final class FnControlShortcutStateTests: XCTestCase {
