@@ -171,7 +171,7 @@ private struct MCPServerRow: View {
     @State private var copiedAuthorizationCode = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: showsGitHubSetup ? 10 : 0) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 NativStatusDot(tone: statusTone, pulsing: isConnecting)
                 VStack(alignment: .leading, spacing: 2) {
@@ -254,15 +254,14 @@ private struct MCPServerRow: View {
                     destination: installationURL
                 )
                 .padding(.leading, 20)
+            } else if case .failed(let failure) = state,
+                      let details = failure.details,
+                      !details.isEmpty {
+                MCPConnectionFailureCallout(details: details)
+                    .padding(.leading, 20)
             }
         }
         .padding(.vertical, 11)
-    }
-
-    private var showsGitHubSetup: Bool {
-        if case .authorizingGitHub = state { return true }
-        if case .installingGitHub = state { return true }
-        return false
     }
 
     private var isConnecting: Bool {
@@ -287,7 +286,7 @@ private struct MCPServerRow: View {
         case .connecting: "Connecting\u{2026}"
         case .authorizingGitHub: "Authorization required"
         case .installingGitHub: "Repository access required"
-        case .failed(let message): message.isEmpty ? "Failed to connect" : message
+        case .failed(let failure): failure.message.isEmpty ? "Failed to connect" : failure.message
         case .disabled: "Off"
         case .none: server.isEnabled ? "Not connected" : "Off"
         }
@@ -297,6 +296,31 @@ private struct MCPServerRow: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(code, forType: .string)
         copiedAuthorizationCode = true
+    }
+}
+
+private struct MCPConnectionFailureCallout: View {
+    let details: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .accessibilityHidden(true)
+
+            Text(details)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: 650, alignment: .leading)
+        .background(Color.red.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.red.opacity(0.16), lineWidth: 1)
+        }
     }
 }
 
