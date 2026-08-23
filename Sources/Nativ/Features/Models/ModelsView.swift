@@ -801,6 +801,12 @@ struct ModelsView: View {
     }
 
     private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
+        // Drafter models attach to a chat model via Chat settings and never
+        // take a preload slot, even when their model_type resolves as a
+        // language model (e.g. qwen3_5_mtp).
+        guard !localModel.capabilities.contains(.drafter) else {
+            return []
+        }
         var slots: [ModelPreloadSlot] = []
         if localModel.capabilities.contains(.text)
             && !localModel.capabilities.contains(.reranking) {
