@@ -60,30 +60,31 @@ final class ServerLogStore {
 }
 
 @MainActor
-final class NativModel: ObservableObject, ChatModelSwitchingSurface {
-    @Published private(set) var isRunning = false
+@Observable
+final class NativModel: ChatModelSwitchingSurface {
+    private(set) var isRunning = false
     let serverLogs = ServerLogStore()
-    @Published private(set) var metrics: NativMetrics?
-    @Published private(set) var lastMetricsError: String?
-    @Published private(set) var lastMetricsFetchAt: Date?
-    @Published private(set) var allTimeStats = NativAllTimeStats.empty
-    @Published private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
+    private(set) var metrics: NativMetrics?
+    private(set) var lastMetricsError: String?
+    private(set) var lastMetricsFetchAt: Date?
+    private(set) var allTimeStats = NativAllTimeStats.empty
+    private(set) var sessionTokenActivity: [SessionTokenActivitySample] = []
     /// How long a model switch may stay unconfirmed before the controls unlock.
     nonisolated static let modelSwitchTimeout: TimeInterval = 180
 
-    @Published private(set) var modelSwitchInProgress = false
-    @Published private(set) var modelSwitchTargetID: String?
-    @Published private(set) var inferenceActivityInProgress = false
+    private(set) var modelSwitchInProgress = false
+    private(set) var modelSwitchTargetID: String?
+    private(set) var inferenceActivityInProgress = false
     private var modelSwitchWatchdog: Task<Void, Never>?
     private var inferenceActivityCancellable: AnyCancellable?
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
-    @Published private(set) var metricsLoading = false
-    @Published private(set) var systemHuggingFaceCredential =
+    private(set) var modelLoadingProgress: Double?
+    private(set) var modelLoadFailure: ModelLoadFailure?
+    private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
+    private(set) var metricsLoading = false
+    private(set) var systemHuggingFaceCredential =
         HuggingFaceAuthentication.systemCredential()
-    @Published private(set) var serverRestartCountdown: Int?
-    @Published var settings = NativSettings.load() {
+    private(set) var serverRestartCountdown: Int?
+    var settings = NativSettings.load() {
         didSet {
             settings.save()
         }
@@ -327,6 +328,17 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         lastMetricsError == nil ? "Waiting for server..." : "Metrics unavailable"
     }
 
+    func adoptLiveServerSettings(_ applied: [String: RuntimeSettingValue]) {
+        guard !applied.isEmpty else { return }
+        var updated = settings
+        guard RuntimeSettingsMirror.fold(applied, into: &updated) else { return }
+        settings = updated
+        if var snapshot = settingsAppliedAtServerStart {
+            _ = RuntimeSettingsMirror.fold(applied, into: &snapshot)
+            settingsAppliedAtServerStart = snapshot.normalized()
+        }
+    }
+
     var settingsRequireRestart: Bool {
         guard isRunning, let settingsAppliedAtServerStart else {
             return false
@@ -416,10 +428,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         notifyMenuStateChanged()
     }
 
-    /// Returns true only when the model is present locally and its config's
-    /// architectures are all non-generative (e.g. a BERT/RoBERTa encoder), which
-    /// mlx-vlm cannot load as a chat model. Any uncertainty returns false, so a
-    /// genuine chat model is never skipped.
     private func isKnownNonGenerativeModel(_ repoID: String) -> Bool {
         let cacheName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
         let fileManager = FileManager.default
@@ -1100,17 +1108,6 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         onMenuStateChanged?()
     }
 
-    /// Unlocks the model controls if a switch never reports back.
-    ///
-    /// `modelSwitchInProgress` normally clears once metrics confirm the newly
-    /// started server. When that server comes up but never serves metrics, the
-    /// flag used to stay set forever, disabling the model picker and the
-    /// start/stop buttons with no way to recover short of relaunching.
-    ///
-    /// Each switch replaces the previous watchdog, so only the newest one can
-    /// fire. Comparing the target alone is not enough: switching away from a
-    /// model and back again would otherwise let the first watchdog time out the
-    /// second switch early.
     private func armModelSwitchWatchdog(
         timeout: TimeInterval = NativModel.modelSwitchTimeout
     ) {

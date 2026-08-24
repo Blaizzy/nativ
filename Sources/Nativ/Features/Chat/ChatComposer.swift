@@ -105,7 +105,7 @@ private struct ChatBrowsingAvailability: Sendable {
 }
 
 struct ChatComposer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     @Environment(\.openExtensionsHubSection) private var openExtensionsHubSection

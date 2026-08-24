@@ -18,7 +18,7 @@ struct DevHubView: View {
     }
 
     @Binding var section: Section
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
 

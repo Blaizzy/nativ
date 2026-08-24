@@ -45,7 +45,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system

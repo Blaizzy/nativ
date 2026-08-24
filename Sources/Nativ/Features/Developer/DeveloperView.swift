@@ -16,7 +16,7 @@ struct DeveloperView: View {
     private static let contentBottomPadding: CGFloat = 22
     private static let logPanelMinimumHeight: CGFloat = 320
 
-    @ObservedObject var model: NativModel
+    @Bindable var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
@@ -25,6 +25,7 @@ struct DeveloperView: View {
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
     @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
     @State private var contentAboveLogHeight: CGFloat?
+    @StateObject private var runtimeSettings = RuntimeSettingsStore()
     @FocusState private var focusedEndpointField: EndpointEditorField?
 
     var body: some View {
@@ -47,6 +48,7 @@ struct DeveloperView: View {
                                 VStack(alignment: .leading, spacing: Self.contentSpacing) {
                                     runtimeGrid
                                     serverEndpointsPanel
+                                    liveSettingsPanel
                                     authenticationPanels
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,6 +247,25 @@ struct DeveloperView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private var liveSettingsPanel: some View {
+        RuntimeSettingsPanel(store: runtimeSettings)
+            .task(id: liveSettingsEndpointID) {
+                guard model.isRunning else { return }
+                runtimeSettings.onServerAccepted { applied in
+                    model.adoptLiveServerSettings(applied)
+                }
+                runtimeSettings.connect(
+                    to: model.settings.serverBaseURL,
+                    apiKey: model.settings.serverAPIKey
+                )
+            }
+    }
+
+    private var liveSettingsEndpointID: String {
+        let key = model.settings.serverAPIKey ?? ""
+        return "\(model.isRunning)|\(model.settings.serverBaseURL.absoluteString)|\(key.count)"
     }
 
     private var serverEndpointsPanel: some View {
@@ -1598,6 +1619,8 @@ private struct ServerEndpoint: Identifiable {
         .init(method: .get, path: "/v1/cache/stats", category: .metrics),
         .init(method: .post, path: "/v1/cache/reset", category: .metrics),
         .init(method: .post, path: "/unload", category: .metrics),
+        .init(method: .get, path: "/v1/settings", category: .metrics),
+        .init(method: .patch, path: "/v1/settings", category: .metrics),
     ]
 }
 
@@ -1621,6 +1644,7 @@ private enum ServerEndpointCategory: String, CaseIterable, Identifiable {
 private enum ServerEndpointMethod: String {
     case get = "GET"
     case post = "POST"
+    case patch = "PATCH"
     case delete = "DELETE"
 
     var displayTitle: String {
@@ -1631,6 +1655,7 @@ private enum ServerEndpointMethod: String {
         switch self {
         case .get: .blue
         case .post: .green
+        case .patch: .orange
         case .delete: .red
         }
     }
