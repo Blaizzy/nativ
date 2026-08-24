@@ -748,7 +748,7 @@ private enum SystemDeviceArtworkProvider {
         let sourceSize = sourceImage.size
         let sourceRect = NSRect(
             x: sourceSize.width * 0.065,
-            y: sourceSize.height * 0.15,
+            y: sourceSize.height * 0.18,
             width: sourceSize.width * 0.87,
             height: sourceSize.height * 0.56
         )
@@ -772,10 +772,10 @@ private enum SystemDeviceArtworkProvider {
         guard let wallpaper else { return }
 
         let screenRect = NSRect(
-            x: rect.minX + (rect.width * 0.164),
-            y: rect.minY + (rect.height * 0.239),
-            width: rect.width * 0.672,
-            height: rect.height * 0.675
+            x: rect.minX + (rect.width * 0.107),
+            y: rect.minY + (rect.height * 0.186),
+            width: rect.width * 0.786,
+            height: rect.height * 0.789
         )
         let wallpaperSize = wallpaper.size
         let targetAspectRatio = screenRect.width / screenRect.height
@@ -815,10 +815,10 @@ private enum SystemDeviceArtworkProvider {
         NSGraphicsContext.restoreGraphicsState()
 
         let notchRect = NSRect(
-            x: screenRect.midX - (screenRect.width * 0.062),
-            y: screenRect.maxY - (screenRect.height * 0.055),
-            width: screenRect.width * 0.124,
-            height: screenRect.height * 0.055
+            x: screenRect.midX - (screenRect.width * 0.0525),
+            y: screenRect.maxY - (screenRect.height * 0.03),
+            width: screenRect.width * 0.105,
+            height: screenRect.height * 0.03
         )
         NSColor.black.setFill()
         NSBezierPath(
