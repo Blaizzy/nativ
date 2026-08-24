@@ -144,7 +144,7 @@ extension ControlPanelView {
             .background {
                 ControlPanelSidebarMaterial()
                     .overlay {
-                        Color.white.opacity(0.1)
+                        Color.nativMaterialOverlay(for: colorScheme)
                             .allowsHitTesting(false)
                     }
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
