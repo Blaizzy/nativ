@@ -313,8 +313,8 @@ struct RoutineEditor: View {
                 Text("Describe what Nativ should do")
                     .font(.system(size: 16))
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 15)
+                    .padding(.horizontal, 15)
+                    .padding(.top, 7)
                     .allowsHitTesting(false)
             }
         }
