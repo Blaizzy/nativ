@@ -331,97 +331,101 @@ struct RoutineEditor: View {
 
     private var modelPicker: some View {
         settingRow("Model") {
-            Menu {
-                ForEach(availableModelIDs, id: \.self) { id in
-                    Button {
-                        modelID = id
-                    } label: {
-                        if modelID == id {
-                            Label(
-                                NativFormatting.truncateModelName(id, maxLength: 52),
-                                systemImage: "checkmark"
-                            )
-                        } else {
-                            Text(NativFormatting.truncateModelName(id, maxLength: 52))
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(availableModelIDs, id: \.self) { id in
+                        Button {
+                            modelID = id
+                        } label: {
+                            if modelID == id {
+                                Label(
+                                    NativFormatting.truncateModelName(id, maxLength: 52),
+                                    systemImage: "checkmark"
+                                )
+                            } else {
+                                Text(NativFormatting.truncateModelName(id, maxLength: 52))
+                            }
                         }
                     }
+                } label: {
+                    Text(
+                        modelID.isEmpty
+                            ? "Select a model"
+                            : NativFormatting.truncateModelName(modelID, maxLength: 40)
+                    )
                 }
-            } label: {
-                Text(
-                    modelID.isEmpty
-                        ? "Select a model"
-                        : NativFormatting.truncateModelName(modelID, maxLength: 40)
-                )
-                .padding(.trailing, 20)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(availableModelIDs.isEmpty)
-            .overlay(alignment: .trailing) {
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(availableModelIDs.isEmpty)
+
                 menuChevron
+                    .opacity(availableModelIDs.isEmpty ? 0.35 : 1)
             }
+            .fixedSize()
         }
     }
 
     private var repeatPicker: some View {
         settingRow("Repeat") {
-            Menu {
-                repeatPreset("Daily", weekdays: [])
-                repeatPreset("Weekdays", weekdays: Set(2...6))
-                repeatPreset("Weekends", weekdays: Set([1, 7]))
+            HStack(spacing: 8) {
+                Menu {
+                    repeatPreset("Daily", weekdays: [])
+                    repeatPreset("Weekdays", weekdays: Set(2...6))
+                    repeatPreset("Weekends", weekdays: Set([1, 7]))
 
-                Divider()
+                    Divider()
 
-                ForEach(1...7, id: \.self) { weekday in
-                    Button {
-                        toggleWeekday(weekday)
-                    } label: {
-                        if weekdays.contains(weekday) {
-                            Label(Calendar.current.weekdaySymbols[weekday - 1], systemImage: "checkmark")
-                        } else {
-                            Text(Calendar.current.weekdaySymbols[weekday - 1])
+                    ForEach(1...7, id: \.self) { weekday in
+                        Button {
+                            toggleWeekday(weekday)
+                        } label: {
+                            if weekdays.contains(weekday) {
+                                Label(Calendar.current.weekdaySymbols[weekday - 1], systemImage: "checkmark")
+                            } else {
+                                Text(Calendar.current.weekdaySymbols[weekday - 1])
+                            }
                         }
                     }
+                } label: {
+                    Text(repeatSummary)
                 }
-            } label: {
-                Text(repeatSummary)
-                    .padding(.trailing, 20)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .overlay(alignment: .trailing) {
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
                 menuChevron
             }
+            .fixedSize()
         }
     }
 
     private var timePicker: some View {
         settingRow("At") {
-            Menu {
-                ForEach(timeOptions, id: \.self) { minutes in
-                    Button {
-                        time = date(forMinutesSinceMidnight: minutes)
-                    } label: {
-                        if selectedTimeMinutes == minutes {
-                            Label(timeLabel(forMinutesSinceMidnight: minutes), systemImage: "checkmark")
-                        } else {
-                            Text(timeLabel(forMinutesSinceMidnight: minutes))
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(timeOptions, id: \.self) { minutes in
+                        Button {
+                            time = date(forMinutesSinceMidnight: minutes)
+                        } label: {
+                            if selectedTimeMinutes == minutes {
+                                Label(timeLabel(forMinutesSinceMidnight: minutes), systemImage: "checkmark")
+                            } else {
+                                Text(timeLabel(forMinutesSinceMidnight: minutes))
+                            }
                         }
                     }
+                } label: {
+                    Text(time.formatted(date: .omitted, time: .shortened))
+                        .monospacedDigit()
                 }
-            } label: {
-                Text(time.formatted(date: .omitted, time: .shortened))
-                    .monospacedDigit()
-                    .padding(.trailing, 20)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .overlay(alignment: .trailing) {
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
                 menuChevron
             }
+            .fixedSize()
         }
     }
 
