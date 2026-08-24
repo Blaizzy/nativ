@@ -542,9 +542,7 @@ public final class NativChatClient {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
-    /// How long a response may go without delivering any bytes before the request
-    /// fails. Cold model loading happens before the first response bytes arrive,
-    /// so allow enough time for large local models to start.
+
     public static let defaultIdleTimeout: TimeInterval = 600
 
     /// Total budget for one request. Long generations legitimately run for many
