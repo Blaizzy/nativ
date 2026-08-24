@@ -56,20 +56,33 @@ struct ScheduledTasksView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            taskBrowser
-                .frame(
-                    minWidth: draft == nil ? 0 : 320,
-                    idealWidth: draft == nil ? nil : 380,
-                    maxWidth: draft == nil ? .infinity : 440
-                )
+        GeometryReader { proxy in
+            let showsTaskBrowser = draft == nil || proxy.size.width >= 760
 
-            if let draft {
-                Divider()
-                editor(for: draft)
-                    .id(draft.id)
-                    .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            HStack(spacing: 0) {
+                if showsTaskBrowser {
+                    taskBrowser
+                        .frame(
+                            minWidth: draft == nil ? 0 : 320,
+                            idealWidth: draft == nil ? nil : 380,
+                            maxWidth: draft == nil ? .infinity : 440
+                        )
+                }
+
+                if let draft {
+                    if showsTaskBrowser {
+                        Divider()
+                    }
+
+                    editor(for: draft)
+                        .id(draft.id)
+                        .frame(
+                            minWidth: showsTaskBrowser ? 440 : 0,
+                            maxWidth: .infinity,
+                            maxHeight: .infinity
+                        )
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
         }
         .animation(.snappy(duration: 0.22), value: draft?.id)
