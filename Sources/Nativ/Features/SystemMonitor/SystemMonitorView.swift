@@ -686,14 +686,16 @@ private enum SystemDeviceArtworkProvider {
     private static func contentType(
         for identity: SystemMonitorIdentity
     ) -> UTType? {
-        guard let contentType = UTType(
-            tag: identity.deviceModelCode,
-            tagClass: deviceModelCodeTagClass,
-            conformingTo: nil
-        ), contentType.isDeclared else {
-            return nil
+        for deviceModelCode in identity.deviceModelCodeCandidates {
+            if let contentType = UTType(
+                tag: deviceModelCode,
+                tagClass: deviceModelCodeTagClass,
+                conformingTo: nil
+            ), contentType.isDeclared {
+                return contentType
+            }
         }
-        return contentType
+        return nil
     }
 
     private static func wallpaper(

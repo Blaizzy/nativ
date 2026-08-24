@@ -166,6 +166,14 @@ struct SystemMonitorIdentity: Equatable, Sendable {
         }
         return "\(modelIdentifier)@ECOLOR=\(enclosureColorCode)"
     }
+
+    var deviceModelCodeCandidates: [String] {
+        let colorSpecificCode = deviceModelCode
+        guard colorSpecificCode != modelIdentifier else {
+            return [modelIdentifier]
+        }
+        return [colorSpecificCode, modelIdentifier]
+    }
 }
 
 struct SystemMonitorSnapshot: Equatable, Sendable {
