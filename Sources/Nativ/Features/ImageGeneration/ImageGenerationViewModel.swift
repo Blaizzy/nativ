@@ -770,36 +770,59 @@ final class ImageGenerationViewModel: ObservableObject {
         currentSessionID = session.id
     }
 
-    func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) {
+    @discardableResult
+    func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) -> Bool {
         guard canModifySession(sessionID) else {
-            return
+            return false
         }
         if sessionID == currentSessionID {
-            for turnIndex in turns.indices where turns[turnIndex].id == turnID {
-                turns[turnIndex].outputs.removeAll { $0.id == outputID }
+            let previousTurns = turns
+            guard removeOutput(turnID: turnID, outputID: outputID, from: &turns) else {
+                return false
             }
-            persistCurrentSession(updateTimestamp: false)
-            return
+            guard persistCurrentSession(updateTimestamp: false) else {
+                turns = previousTurns
+                return false
+            }
+            return true
         }
 
         guard var session = storedSessions.first(where: { $0.id == sessionID })
             ?? sessionStore.loadSession(id: sessionID)
         else {
-            return
+            return false
         }
-        for turnIndex in session.turns.indices where session.turns[turnIndex].id == turnID {
-            session.turns[turnIndex].outputs.removeAll { $0.id == outputID }
+        guard removeOutput(turnID: turnID, outputID: outputID, from: &session.turns) else {
+            return false
+        }
+        guard saveSession(session) else {
+            return false
         }
         upsertStoredSession(session)
-        saveSession(session)
         refreshSessionList()
+        return true
     }
 
-    private func persistCurrentSession(updateTimestamp: Bool) {
+    private func removeOutput(
+        turnID: UUID,
+        outputID: UUID,
+        from turns: inout [ImageGenerationTurn]
+    ) -> Bool {
+        guard let turnIndex = turns.firstIndex(where: { $0.id == turnID }),
+              let outputIndex = turns[turnIndex].outputs.firstIndex(where: { $0.id == outputID })
+        else {
+            return false
+        }
+        turns[turnIndex].outputs.remove(at: outputIndex)
+        return true
+    }
+
+    @discardableResult
+    private func persistCurrentSession(updateTimestamp: Bool) -> Bool {
         guard var session = currentSession,
               canModifySession(session.id)
         else {
-            return
+            return false
         }
         session.modelKind = .imageGeneration
         session.modelID = normalized(modelID) ?? Self.fallbackModelID
@@ -815,10 +838,13 @@ final class ImageGenerationViewModel: ObservableObject {
             session.updatedAt = Date()
         }
 
+        guard saveSession(session) else {
+            return false
+        }
         currentSession = session
         upsertStoredSession(session)
-        saveSession(session)
         refreshSessionList()
+        return true
     }
 
     private func upsertStoredSession(_ session: ImageGenerationSession) {
@@ -866,15 +892,19 @@ final class ImageGenerationViewModel: ObservableObject {
         refreshSessionList()
     }
 
-    private func saveSession(_ session: ImageGenerationSession) {
+    @discardableResult
+    private func saveSession(_ session: ImageGenerationSession) -> Bool {
         guard canModifySession(session.id) else {
-            return
+            return false
         }
-        sessionStore.saveSession(session)
+        guard sessionStore.saveSession(session) else {
+            return false
+        }
         persistedDataChanges.send(
             .imageGenerationSession(session.id),
             originWindowID: windowID
         )
+        return true
     }
 
     private func canModifySession(_ sessionID: UUID) -> Bool {
@@ -1081,15 +1111,18 @@ private struct ImageGenerationSessionStore {
             .joined(separator: "|")
     }
 
-    func saveSession(_ session: ImageGenerationSession) {
+    @discardableResult
+    func saveSession(_ session: ImageGenerationSession) -> Bool {
         do {
             try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(session).write(to: sessionURL(for: session.id), options: .atomic)
+            return true
         } catch {
             // Persistence should never prevent local image generation.
+            return false
         }
     }
 

@@ -418,26 +418,61 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.append(attachment)
     }
 
-    func removeAttachment(sessionID: UUID, messageID: UUID, attachmentID: UUID) {
+    @discardableResult
+    func removeAttachment(sessionID: UUID, messageID: UUID, attachmentID: UUID) -> Bool {
+        guard canModifySession(sessionID) else {
+            return false
+        }
         if sessionID == currentSessionID {
-            for index in messages.indices where messages[index].id == messageID {
-                messages[index].imageAttachments.removeAll { $0.id == attachmentID }
+            let previousMessages = messages
+            guard removeAttachment(
+                messageID: messageID,
+                attachmentID: attachmentID,
+                from: &messages
+            ) else {
+                return false
             }
-            persistCurrentSession(updateTimestamp: false)
-            return
+            guard persistCurrentSession(updateTimestamp: false) else {
+                messages = previousMessages
+                return false
+            }
+            return true
         }
 
         guard var session = storedSessions.first(where: { $0.id == sessionID })
             ?? sessionStore.loadSession(id: sessionID)
         else {
-            return
+            return false
         }
-        for index in session.messages.indices where session.messages[index].id == messageID {
-            session.messages[index].imageAttachments.removeAll { $0.id == attachmentID }
+        guard removeAttachment(
+            messageID: messageID,
+            attachmentID: attachmentID,
+            from: &session.messages
+        ) else {
+            return false
+        }
+        guard saveSession(session) else {
+            return false
         }
         upsertStoredSession(session)
-        saveSession(session)
         refreshSessionList()
+        return true
+    }
+
+    private func removeAttachment(
+        messageID: UUID,
+        attachmentID: UUID,
+        from messages: inout [ChatTranscriptMessage]
+    ) -> Bool {
+        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
+              let attachmentIndex = messages[messageIndex].imageAttachments.firstIndex(
+                where: { $0.id == attachmentID }
+              )
+        else {
+            return false
+        }
+        messages[messageIndex].imageAttachments.remove(at: attachmentIndex)
+        return true
     }
 
     func selectSession(_ sessionID: UUID) {
@@ -2244,11 +2279,12 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func persistCurrentSession(updateTimestamp: Bool) {
+    @discardableResult
+    private func persistCurrentSession(updateTimestamp: Bool) -> Bool {
         guard var session = currentSession,
               canModifySession(session.id)
         else {
-            return
+            return false
         }
 
         session.messages = messages
@@ -2257,10 +2293,13 @@ final class ChatViewModel: ObservableObject {
             session.updatedAt = Date()
         }
 
+        guard saveSession(session) else {
+            return false
+        }
         currentSession = session
         upsertStoredSession(session)
-        saveSession(session)
         refreshSessionList()
+        return true
     }
 
     private var currentSessionSnapshot: ChatSession? {
@@ -2359,12 +2398,16 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func saveSession(_ session: ChatSession) {
+    @discardableResult
+    private func saveSession(_ session: ChatSession) -> Bool {
         guard canModifySession(session.id) else {
-            return
+            return false
         }
-        sessionStore.saveSession(session)
+        guard sessionStore.saveSession(session) else {
+            return false
+        }
         persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
+        return true
     }
 
     func canModifySession(_ sessionID: UUID) -> Bool {

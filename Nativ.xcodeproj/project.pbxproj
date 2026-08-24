@@ -36,6 +36,7 @@
 		13EF841E714086B0DDD46399 /* WebSearchProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2580C52ECE6D40D71E44463F /* WebSearchProvider.swift */; };
 		1423FD497A75A14770FCA9E1 /* LocalModelDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE984320AE8CCF8783DD30CE /* LocalModelDiscovery.swift */; };
 		145464A2B098437667795AFB /* Artifact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BB9D1D0FC24AC771442B628 /* Artifact.swift */; };
+		14A7C622E8F64E748BA1F3D2 /* ArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C2AB90FC12D1B83D6691F4 /* ArtifactStore.swift */; };
 		14CEDB8ACA6EB7BCF8A3430C /* SystemSensorSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653E58FFA38742CD4D5D41F5 /* SystemSensorSampler.swift */; };
 		1523799A41450A96269D097C /* ControlPanelState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028A6EB95776995CFF6F82A9 /* ControlPanelState.swift */; };
 		184CEAB6FBA72EB5BF2A319D /* BraveBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF6D2D7280064648E0EFC847 /* BraveBrowsingProvider.swift */; };
@@ -1659,6 +1660,7 @@
 				1C6295D830FE941FDCE3ECCC /* CodexCLIProfile.swift in Sources */,
 				44F8A17BDE2610C6E90CE53F /* CustomTool.swift in Sources */,
 				AB4C49A5BFDAA9352BD257B7 /* CustomToolTests.swift in Sources */,
+				14A7C622E8F64E748BA1F3D2 /* ArtifactStore.swift in Sources */,
 				9FC9DFAEC00710427FDD509C /* ExaBrowsingProvider.swift in Sources */,
 				CB0D232F71771BF7F3EE2B53 /* FirecrawlBrowsingProvider.swift in Sources */,
 				8E16504AFD5457AC965426F2 /* FnControlShortcutMonitor.swift in Sources */,

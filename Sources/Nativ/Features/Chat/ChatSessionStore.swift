@@ -525,7 +525,8 @@ struct ChatSessionStore {
         loadSession(from: sessionURL(for: id))
     }
 
-    func saveSession(_ session: ChatSession) {
+    @discardableResult
+    func saveSession(_ session: ChatSession) -> Bool {
         do {
             try fileManager.createDirectory(
                 at: sessionsDirectory,
@@ -537,8 +538,10 @@ struct ChatSessionStore {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(session)
             try data.write(to: sessionURL(for: session.id), options: .atomic)
+            return true
         } catch {
             reportFailure("saveSession", sessionID: session.id, error: error)
+            return false
         }
     }
 

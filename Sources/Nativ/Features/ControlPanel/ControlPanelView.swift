@@ -161,22 +161,6 @@ struct ControlPanelView: View {
                 navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
             handleNewChatRequest()
             embeddingLibrary.scan(searchPaths: chromeState.artifactSettings.localModelSearchPaths)
-            artifacts.onDeleteArtifact = { artifact in
-                switch artifact.source {
-                case .uploaded:
-                    chat.removeAttachment(
-                        sessionID: artifact.sessionID,
-                        messageID: artifact.messageID,
-                        attachmentID: artifact.id
-                    )
-                case .generated:
-                    imageGeneration.removeOutput(
-                        sessionID: artifact.sessionID,
-                        turnID: artifact.messageID,
-                        outputID: artifact.id
-                    )
-                }
-            }
         }
         .onReceive(navigation.$requestedTab) { tab in
             guard let tab else { return }
