@@ -167,6 +167,10 @@ struct ControlPanelSidebarMaterial: NSViewRepresentable {
 }
 
 extension Color {
+    static func nativMaterialOverlay(for colorScheme: ColorScheme) -> Color {
+        (colorScheme == .dark ? Color.black : Color.white).opacity(0.1)
+    }
+
     static let nativMainContentBackground = Color(
         nsColor: NSColor(name: NSColor.Name("NativMainContentBackground")) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {

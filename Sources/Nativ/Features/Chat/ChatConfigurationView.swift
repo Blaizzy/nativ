@@ -40,6 +40,7 @@ struct ModelConfigurationLayout<Content: View>: View {
 }
 
 struct ModelConfigurationLayoutContent<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.controlPanelIsFullScreen) private var isFullScreen
     @Environment(\.displayScale) private var displayScale
     @Binding var settings: NativSettings
@@ -91,7 +92,7 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
         ZStack {
             ModelConfigurationPanelMaterial()
                 .overlay {
-                    Color.white.opacity(0.1)
+                    Color.nativMaterialOverlay(for: colorScheme)
                         .allowsHitTesting(false)
                 }
                 .ignoresSafeArea(

@@ -6,6 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ControlPanelView: View {
+    @Environment(\.colorScheme) var colorScheme
     @Environment(\.displayScale) var displayScale
 
     let model: NativModel
