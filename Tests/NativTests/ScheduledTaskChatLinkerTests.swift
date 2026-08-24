@@ -91,4 +91,49 @@ struct ScheduledTaskChatLinkerTests {
         #expect(session.messages == messages)
         #expect(session.scheduledTaskID == routine.id)
     }
+
+    @Test("Linked session IDs include source and run chats without duplicates")
+    func linkedSessionIDs() {
+        let sourceSessionID = UUID()
+        let runSessionID = UUID()
+        let routine = Routine(name: "Daily brief", sourceSessionID: sourceSessionID)
+        let runs = [
+            RoutineRun(
+                routineID: routine.id,
+                source: .scheduled,
+                sessionID: sourceSessionID
+            ),
+            RoutineRun(
+                routineID: routine.id,
+                source: .scheduled,
+                sessionID: runSessionID
+            )
+        ]
+
+        let sessionIDs = ScheduledTaskChatLinker.linkedSessionIDs(
+            for: routine,
+            runs: runs
+        )
+
+        #expect(sessionIDs == [sourceSessionID, runSessionID])
+    }
+
+    @Test("Keeping a linked chat detaches it without changing its content")
+    func keepingLinkedChatMakesItIndependent() {
+        let routine = Routine(name: "Daily brief")
+        let session = ScheduledTaskChatLinker.makeRunSession(
+            for: routine,
+            messages: [
+                ChatTranscriptMessage(role: .user, content: "Summarize product changes.")
+            ]
+        )
+
+        let detached = ScheduledTaskChatLinker.makeIndependentSession(from: session)
+
+        #expect(detached.id == session.id)
+        #expect(detached.messages == session.messages)
+        #expect(detached.scheduledTaskID == nil)
+        #expect(detached.customTitle == "Daily brief")
+        #expect(detached.displayTitle == "Daily brief")
+    }
 }

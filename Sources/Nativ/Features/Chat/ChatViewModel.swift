@@ -555,6 +555,38 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func handleScheduledTaskDeletion(
+        taskID: String,
+        linkedSessionIDs: Set<UUID>,
+        disposition: ScheduledTaskChatDisposition
+    ) {
+        let sessionIDs = linkedSessionIDs.union(
+            storedSessions.lazy
+                .filter { $0.scheduledTaskID == taskID }
+                .map(\.id)
+        )
+
+        switch disposition {
+        case .keepChats:
+            for index in storedSessions.indices where sessionIDs.contains(storedSessions[index].id) {
+                let session = ScheduledTaskChatLinker.makeIndependentSession(
+                    from: storedSessions[index]
+                )
+                storedSessions[index] = session
+                sessionStore.saveSession(session)
+                if currentSession?.id == session.id {
+                    currentSession = session
+                }
+            }
+            refreshSessionList()
+
+        case .deleteChats:
+            for sessionID in sessionIDs {
+                deleteSession(sessionID)
+            }
+        }
+    }
+
     func sessionDataFileURL(for sessionID: UUID) -> URL? {
         guard storedSessions.contains(where: { $0.id == sessionID }) else {
             return nil
