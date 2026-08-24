@@ -231,15 +231,7 @@ struct RoutineEditor: View {
 
                                 settingsDivider
 
-                                settingRow("At") {
-                                    DatePicker(
-                                        "Time",
-                                        selection: $time,
-                                        displayedComponents: .hourAndMinute
-                                    )
-                                    .labelsHidden()
-                                    .fixedSize()
-                                }
+                                timePicker
 
                                 settingsDivider
 
@@ -355,21 +347,20 @@ struct RoutineEditor: View {
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    Text(
-                        modelID.isEmpty
-                            ? "Select a model"
-                            : NativFormatting.truncateModelName(modelID, maxLength: 40)
-                    )
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
+                Text(
+                    modelID.isEmpty
+                        ? "Select a model"
+                        : NativFormatting.truncateModelName(modelID, maxLength: 40)
+                )
+                .padding(.trailing, 20)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(availableModelIDs.isEmpty)
+            .overlay(alignment: .trailing) {
+                menuChevron
+            }
         }
     }
 
@@ -394,17 +385,79 @@ struct RoutineEditor: View {
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    Text(repeatSummary)
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
+                Text(repeatSummary)
+                    .padding(.trailing, 20)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .overlay(alignment: .trailing) {
+                menuChevron
+            }
         }
+    }
+
+    private var timePicker: some View {
+        settingRow("At") {
+            Menu {
+                ForEach(timeOptions, id: \.self) { minutes in
+                    Button {
+                        time = date(forMinutesSinceMidnight: minutes)
+                    } label: {
+                        if selectedTimeMinutes == minutes {
+                            Label(timeLabel(forMinutesSinceMidnight: minutes), systemImage: "checkmark")
+                        } else {
+                            Text(timeLabel(forMinutesSinceMidnight: minutes))
+                        }
+                    }
+                }
+            } label: {
+                Text(time.formatted(date: .omitted, time: .shortened))
+                    .monospacedDigit()
+                    .padding(.trailing, 20)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .overlay(alignment: .trailing) {
+                menuChevron
+            }
+        }
+    }
+
+    private var menuChevron: some View {
+        Image(systemName: "chevron.down")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .allowsHitTesting(false)
+    }
+
+    private var selectedTimeMinutes: Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private var timeOptions: [Int] {
+        var options = Array(stride(from: 0, to: 24 * 60, by: 15))
+        if !options.contains(selectedTimeMinutes) {
+            options.append(selectedTimeMinutes)
+            options.sort()
+        }
+        return options
+    }
+
+    private func date(forMinutesSinceMidnight minutes: Int) -> Date {
+        Calendar.current.date(
+            bySettingHour: minutes / 60,
+            minute: minutes % 60,
+            second: 0,
+            of: time
+        ) ?? time
+    }
+
+    private func timeLabel(forMinutesSinceMidnight minutes: Int) -> String {
+        date(forMinutesSinceMidnight: minutes)
+            .formatted(date: .omitted, time: .shortened)
     }
 
     private func repeatPreset(_ title: String, weekdays preset: Set<Int>) -> some View {
