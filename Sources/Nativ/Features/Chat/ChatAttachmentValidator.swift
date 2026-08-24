@@ -2,36 +2,24 @@ import Foundation
 
 enum ChatAttachmentValidation: Equatable, Sendable {
     case processing(message: String)
-    case ready(extractedCharacterCount: Int?)
-    case warning(message: String, extractedCharacterCount: Int?)
+    case ready
     case blocked(message: String)
 
     var preventsSending: Bool {
         switch self {
         case .processing, .blocked:
             true
-        case .ready, .warning:
+        case .ready:
             false
-        }
-    }
-
-    var extractedCharacterCount: Int? {
-        switch self {
-        case .ready(let count), .warning(_, let count):
-            count
-        case .processing, .blocked:
-            nil
         }
     }
 }
 
 actor ChatAttachmentValidator {
     private let extractionCache: ChatDocumentExtractionCache
-    private let maximumCharactersPerDocument: Int
 
     init(extractionCache: ChatDocumentExtractionCache) {
         self.extractionCache = extractionCache
-        self.maximumCharactersPerDocument = extractionCache.maximumCharactersPerDocument
     }
 
     nonisolated static func immediateValidation(
@@ -42,7 +30,7 @@ actor ChatAttachmentValidator {
             guard let data = Data(base64Encoded: attachment.base64Data), !data.isEmpty else {
                 return .blocked(message: "“\(attachment.filename)” is empty or couldn’t be read.")
             }
-            return .ready(extractedCharacterCount: nil)
+            return .ready
         case .pdf:
             return nil
         case .unsupported:
@@ -59,17 +47,9 @@ actor ChatAttachmentValidator {
         }
 
         do {
-            let document = try await extractionCache.document(for: attachment)
+            _ = try await extractionCache.document(for: attachment)
             try Task.checkCancellation()
-            guard document.sourceCharacterCount > maximumCharactersPerDocument else {
-                return .ready(extractedCharacterCount: document.sourceCharacterCount)
-            }
-            let formattedLimit = maximumCharactersPerDocument.formatted()
-            return .warning(
-                message: "“\(attachment.filename)” is long. "
-                    + "Only the first \(formattedLimit) characters will be included.",
-                extractedCharacterCount: document.sourceCharacterCount
-            )
+            return .ready
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as DocumentTextExtractionError {

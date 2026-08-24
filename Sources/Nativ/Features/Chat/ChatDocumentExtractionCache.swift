@@ -1,6 +1,22 @@
 import Foundation
 
-/// Shares bounded PDF extraction results between attachment validation and request construction.
+struct IndexedChatDocument: Sendable {
+    let content: ExtractedDocumentContent
+    let termsBySection: [Set<String>]
+
+    init(_ content: ExtractedDocumentContent) {
+        self.content = content
+        termsBySection = content.sections.map { Set(Self.tokens(in: $0.text)) }
+    }
+
+    static func tokens(in text: String) -> [String] {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+    }
+}
+
+/// Shares complete PDF extraction results between attachment validation and request construction.
 actor ChatDocumentExtractionCache {
     typealias Extraction = @Sendable (
         _ data: Data,
@@ -8,38 +24,22 @@ actor ChatDocumentExtractionCache {
         _ mimeType: String
     ) async throws -> ExtractedDocumentContent
 
-    struct Document: Sendable {
-        let content: ExtractedDocumentContent
-        let sourceCharacterCount: Int
-    }
-
-    nonisolated let maximumCharactersPerDocument: Int
-
     private let extract: Extraction
-    private var documents: [UUID: Document] = [:]
-    private var extractionTasks: [UUID: Task<Document, Error>] = [:]
+    private var documents: [UUID: IndexedChatDocument] = [:]
+    private var extractionTasks: [UUID: Task<IndexedChatDocument, Error>] = [:]
 
-    init(
-        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument
-    ) {
-        precondition(maximumCharactersPerDocument > 0)
+    init() {
         let extractor = PDFDocumentTextExtractor()
         self.extract = { data, filename, mimeType in
             try await extractor.extract(data: data, filename: filename, mimeType: mimeType)
         }
-        self.maximumCharactersPerDocument = maximumCharactersPerDocument
     }
 
-    init(
-        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument,
-        extract: @escaping Extraction
-    ) {
-        precondition(maximumCharactersPerDocument > 0)
+    init(extract: @escaping Extraction) {
         self.extract = extract
-        self.maximumCharactersPerDocument = maximumCharactersPerDocument
     }
 
-    func document(for attachment: ChatImageAttachment) async throws -> Document {
+    func document(for attachment: ChatImageAttachment) async throws -> IndexedChatDocument {
         try Task.checkCancellation()
         if let document = documents[attachment.id] {
             return document
@@ -55,50 +55,17 @@ actor ChatDocumentExtractionCache {
             throw DocumentTextExtractionError.invalidDocument
         }
 
-        let extract = self.extract
-        let characterLimit = maximumCharactersPerDocument
         let task = Task {
-            let content = try await extract(data, attachment.filename, attachment.mimeType)
-            return Self.boundedDocument(from: content, characterLimit: characterLimit)
+            try await IndexedChatDocument(
+                extract(data, attachment.filename, attachment.mimeType)
+            )
         }
         extractionTasks[attachment.id] = task
 
-        do {
-            let document = try await task.value
-            documents[attachment.id] = document
-            extractionTasks[attachment.id] = nil
-            try Task.checkCancellation()
-            return document
-        } catch {
-            extractionTasks[attachment.id] = nil
-            throw error
-        }
-    }
-
-    private nonisolated static func boundedDocument(
-        from content: ExtractedDocumentContent,
-        characterLimit: Int
-    ) -> Document {
-        var remainingCharacters = characterLimit
-        let sections = content.sections.compactMap { section -> ExtractedDocumentSection? in
-            guard remainingCharacters > 0 else {
-                return nil
-            }
-            let text = String(section.text.prefix(remainingCharacters))
-            remainingCharacters -= text.count
-            return text.isEmpty ? nil : ExtractedDocumentSection(
-                pageNumber: section.pageNumber,
-                text: text
-            )
-        }
-        return Document(
-            content: ExtractedDocumentContent(
-                filename: content.filename,
-                mimeType: content.mimeType,
-                pageCount: content.pageCount,
-                sections: sections
-            ),
-            sourceCharacterCount: content.characterCount
-        )
+        defer { extractionTasks[attachment.id] = nil }
+        let document = try await task.value
+        documents[attachment.id] = document
+        try Task.checkCancellation()
+        return document
     }
 }

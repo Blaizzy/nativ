@@ -31,7 +31,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
 
         XCTAssertEqual(
             ChatAttachmentValidator.immediateValidation(for: image),
-            .ready(extractedCharacterCount: nil)
+            .ready
         )
     }
 
@@ -89,29 +89,22 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         XCTAssertTrue(message.contains("Unlock it"))
     }
 
-    func testLongPDFWarnsWithoutBlockingSending() async throws {
+    func testLongPDFIsReadyBecauseContextSelectionHappensAtRequestTime() async throws {
         let content = ExtractedDocumentContent(
             filename: "long.pdf",
             mimeType: "application/pdf",
             pageCount: 1,
             sections: [ExtractedDocumentSection(pageNumber: 1, text: "123456")]
         )
-        let validator = validator(
-            result: .success(content),
-            maximumCharactersPerDocument: 5
-        )
+        let validator = validator(result: .success(content))
 
         let validation = try await validator.validatePDF(attachment(filename: "long.pdf"))
 
         XCTAssertFalse(validation.preventsSending)
-        XCTAssertEqual(validation.extractedCharacterCount, 6)
-        guard case .warning(let message, _) = validation else {
-            return XCTFail("Expected long PDF warning")
-        }
-        XCTAssertTrue(message.contains("Only the first 5 characters"))
+        XCTAssertEqual(validation, .ready)
     }
 
-    func testReadablePDFIsReadyWithExtractedCharacterCount() async throws {
+    func testReadablePDFIsReady() async throws {
         let content = ExtractedDocumentContent(
             filename: "report.pdf",
             mimeType: "application/pdf",
@@ -122,10 +115,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
 
         let validation = try await validator.validatePDF(attachment(filename: "report.pdf"))
 
-        XCTAssertEqual(
-            validation,
-            .ready(extractedCharacterCount: "Report text".count)
-        )
+        XCTAssertEqual(validation, .ready)
     }
 
     func testValidationPropagatesCancellation() async throws {
@@ -158,12 +148,9 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     }
 
     private func validator(
-        result: Result<ExtractedDocumentContent, DocumentTextExtractionError>,
-        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument
+        result: Result<ExtractedDocumentContent, DocumentTextExtractionError>
     ) -> ChatAttachmentValidator {
-        let cache = ChatDocumentExtractionCache(
-            maximumCharactersPerDocument: maximumCharactersPerDocument
-        ) { _, _, _ in
+        let cache = ChatDocumentExtractionCache { _, _, _ in
             try result.get()
         }
         return ChatAttachmentValidator(extractionCache: cache)

@@ -501,13 +501,6 @@ struct ChatComposer: View {
                     severity: .progress,
                     message: message
                 ))
-            case .warning(let message, _):
-                notices.append(ChatAttachmentNotice(
-                    id: "attachment-\(attachment.id.uuidString)",
-                    severity: .warning,
-                    title: "PDF will be shortened",
-                    message: message
-                ))
             case .blocked(let message):
                 notices.append(ChatAttachmentNotice(
                     id: "attachment-\(attachment.id.uuidString)",
@@ -518,22 +511,6 @@ struct ChatComposer: View {
             case .ready:
                 break
             }
-        }
-
-        let pendingPDFCount = viewModel.pendingImageAttachments.count {
-            $0.chatAttachmentKind == .pdf
-        }
-        if pendingPDFCount > 1,
-           viewModel.pendingPDFCharacterCount
-            > ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest {
-            notices.append(ChatAttachmentNotice(
-                id: "pdf-request-limit",
-                severity: .warning,
-                title: "PDF context limit reached",
-                message: "These PDFs exceed the "
-                    + "\(ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest.formatted())"
-                    + "-character request limit. Newer documents will be prioritized."
-            ))
         }
 
         if modelLacksVision,
@@ -2184,11 +2161,6 @@ struct ChatPendingImageAttachmentView: View {
                     .controlSize(.small)
                     .help("Reading PDF")
                     .accessibilityLabel("Reading PDF")
-            case .warning(let message, _):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help(message)
-                    .accessibilityLabel("Attachment warning")
             case .blocked(let message):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Color.orange)
@@ -2208,7 +2180,7 @@ struct ChatPendingImageAttachmentView: View {
             return false
         }
         switch validation {
-        case .warning, .blocked:
+        case .blocked:
             return true
         case .processing, .ready:
             return false

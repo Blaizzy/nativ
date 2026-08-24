@@ -2,9 +2,8 @@ import Foundation
 
 /// Builds bounded request-only context from documents attached to chat messages.
 ///
-/// Extracted text is deliberately not written back to the transcript. Attachments remain the
-/// source of truth, and context is regenerated when a request is prepared. Newer messages are
-/// processed first so the most recent user-provided documents win when the request budget is full.
+/// Complete extraction results stay in the shared cache. When a document does not fit, this
+/// builder selects relevant pages for the latest user request instead of keeping only the start.
 struct ChatDocumentContextBuilder: Sendable {
     static let defaultMaximumCharactersPerDocument = 24_000
     static let defaultMaximumCharactersPerRequest = 48_000
@@ -15,17 +14,20 @@ struct ChatDocumentContextBuilder: Sendable {
 
     init(
         extractionCache: ChatDocumentExtractionCache,
+        maximumCharactersPerDocument: Int = defaultMaximumCharactersPerDocument,
         maximumCharactersPerRequest: Int = defaultMaximumCharactersPerRequest
     ) {
+        precondition(maximumCharactersPerDocument > 0)
         precondition(maximumCharactersPerRequest > 0)
         self.extractionCache = extractionCache
-        self.maximumCharactersPerDocument = extractionCache.maximumCharactersPerDocument
+        self.maximumCharactersPerDocument = maximumCharactersPerDocument
         self.maximumCharactersPerRequest = maximumCharactersPerRequest
     }
 
-    /// Returns context keyed by transcript message ID. The limits apply only to extracted source
-    /// characters; short labels and delimiters add a small, fixed amount of request overhead.
+    /// Returns context keyed by transcript message ID. Source-character limits exclude the short
+    /// labels and delimiters added around excerpts.
     func contexts(for messages: [ChatTranscriptMessage]) async throws -> [UUID: String] {
+        let query = messages.last(where: { $0.role == .user })?.content ?? ""
         var remainingRequestCharacters = maximumCharactersPerRequest
         var documentsByMessage: [UUID: [String]] = [:]
 
@@ -33,27 +35,24 @@ struct ChatDocumentContextBuilder: Sendable {
             try Task.checkCancellation()
 
             for attachment in message.imageAttachments where attachment.chatAttachmentKind == .pdf {
-                guard remainingRequestCharacters > 0 else {
-                    break
-                }
-                let document: ChatDocumentExtractionCache.Document
+                guard remainingRequestCharacters > 0 else { break }
+
+                let document: IndexedChatDocument
                 do {
                     document = try await extractionCache.document(for: attachment)
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    // Request construction is best-effort; unreadable documents add no context.
+                    // Request construction is best-effort; validation presents readable errors.
                     continue
                 }
 
-                let characterLimit = min(
-                    maximumCharactersPerDocument,
-                    remainingRequestCharacters
+                let rendered = Self.render(
+                    document,
+                    query: query,
+                    characterLimit: min(maximumCharactersPerDocument, remainingRequestCharacters)
                 )
-                let rendered = Self.render(document, characterLimit: characterLimit)
-                guard rendered.extractedCharacterCount > 0 else {
-                    continue
-                }
+                guard rendered.extractedCharacterCount > 0 else { continue }
 
                 documentsByMessage[message.id, default: []].append(rendered.text)
                 remainingRequestCharacters -= rendered.extractedCharacterCount
@@ -71,39 +70,56 @@ struct ChatDocumentContextBuilder: Sendable {
     }
 
     private static func render(
-        _ document: ChatDocumentExtractionCache.Document,
+        _ document: IndexedChatDocument,
+        query: String,
         characterLimit: Int
     ) -> (text: String, extractedCharacterCount: Int) {
         let content = document.content
+        guard characterLimit > 0, !content.sections.isEmpty else { return ("", 0) }
+
+        let queryTokens = IndexedChatDocument.tokens(in: query)
+        let queryTerms = Set(queryTokens)
+        let pageReferences = referencedPages(in: queryTokens)
+        let sectionIndexes = prioritizedSectionIndexes(
+            in: document,
+            queryTerms: queryTerms,
+            pageReferences: pageReferences
+        )
+        let maximumExcerptCharacters = content.characterCount > characterLimit
+            ? max(1, characterLimit / min(3, sectionIndexes.count))
+            : characterLimit
+
         var remainingCharacters = characterLimit
+        var excerpts: [(index: Int, text: String)] = []
         var extractedCharacterCount = 0
+
+        for index in sectionIndexes where remainingCharacters > 0 {
+            let section = content.sections[index]
+            let excerpt = excerpt(
+                from: section.text,
+                matching: queryTerms,
+                characterLimit: min(maximumExcerptCharacters, remainingCharacters)
+            )
+            guard !excerpt.text.isEmpty else { continue }
+            excerpts.append((index, excerpt.text))
+            remainingCharacters -= excerpt.sourceCharacterCount
+            extractedCharacterCount += excerpt.sourceCharacterCount
+        }
+
+        guard extractedCharacterCount > 0 else { return ("", 0) }
+
         var parts: [String] = []
-
-        for section in content.sections {
-            guard remainingCharacters > 0 else {
-                break
-            }
-
-            let excerpt = String(section.text.prefix(remainingCharacters))
-            guard !excerpt.isEmpty else {
-                continue
-            }
-
-            if let pageNumber = section.pageNumber {
-                parts.append("[Page \(pageNumber)]\n\(excerpt)")
-            } else {
-                parts.append(excerpt)
-            }
-            extractedCharacterCount += excerpt.count
-            remainingCharacters -= excerpt.count
+        if extractedCharacterCount < content.characterCount {
+            let selectedPageCount = excerpts.count
+            let totalPageCount = content.pageCount ?? content.sections.count
+            parts.append(
+                "[Selected relevant excerpts from \(selectedPageCount) of \(totalPageCount) pages.]"
+            )
         }
-
-        guard extractedCharacterCount > 0 else {
-            return ("", 0)
-        }
-
-        if extractedCharacterCount < document.sourceCharacterCount {
-            parts.append("[Document truncated to fit the chat context limit.]")
+        for excerpt in excerpts.sorted(by: { $0.index < $1.index }) {
+            let section = content.sections[excerpt.index]
+            let label = section.pageNumber.map { "[Page \($0)]\n" } ?? ""
+            parts.append(label + excerpt.text)
         }
 
         let filename = sanitizedFilename(content.filename)
@@ -115,6 +131,96 @@ struct ChatDocumentContextBuilder: Sendable {
             """,
             extractedCharacterCount
         )
+    }
+
+    private static func prioritizedSectionIndexes(
+        in document: IndexedChatDocument,
+        queryTerms: Set<String>,
+        pageReferences: Set<Int>
+    ) -> [Int] {
+        let sections = document.content.sections
+        guard !sections.isEmpty else { return [] }
+
+        let weights = queryTerms.reduce(into: [String: Int]()) { weights, term in
+            let matchingSectionCount = document.termsBySection.count { $0.contains(term) }
+            if matchingSectionCount > 0 {
+                weights[term] = sections.count - matchingSectionCount
+            }
+        }
+        var matches: [(index: Int, referenced: Bool, score: Int)] = []
+        matches.reserveCapacity(sections.count)
+        for (index, section) in sections.enumerated() {
+            let referenced = section.pageNumber.map(pageReferences.contains) ?? false
+            let score = weights.reduce(0) { result, term in
+                result + (document.termsBySection[index].contains(term.key) ? term.value : 0)
+            }
+            if referenced || score > 0 {
+                matches.append((index, referenced, score))
+            }
+        }
+        matches.sort { lhs, rhs in
+            if lhs.referenced != rhs.referenced { return lhs.referenced }
+            return lhs.score == rhs.score ? lhs.index < rhs.index : lhs.score > rhs.score
+        }
+
+        var result: [Int] = []
+        result.reserveCapacity(sections.count)
+        var included: Set<Int> = []
+        func append(_ index: Int) {
+            guard sections.indices.contains(index), included.insert(index).inserted else { return }
+            result.append(index)
+        }
+
+        for match in matches {
+            append(match.index)
+            append(match.index - 1)
+            append(match.index + 1)
+        }
+        for index in [0, sections.count - 1, sections.count / 2] {
+            append(index)
+        }
+        for index in sections.indices {
+            append(index)
+        }
+        return result
+    }
+
+    private static func excerpt(
+        from text: String,
+        matching queryTerms: Set<String>,
+        characterLimit: Int
+    ) -> (text: String, sourceCharacterCount: Int) {
+        guard text.count > characterLimit else { return (text, text.count) }
+
+        let matchOffset = queryTerms.compactMap { term -> Int? in
+            guard let range = text.range(
+                of: term,
+                options: [.caseInsensitive, .diacriticInsensitive]
+            ) else { return nil }
+            return text.distance(from: text.startIndex, to: range.lowerBound)
+        }.min()
+        let preferredStart = max(0, (matchOffset ?? 0) - characterLimit / 3)
+        let startOffset = min(preferredStart, text.count - characterLimit)
+        let start = text.index(text.startIndex, offsetBy: startOffset)
+        let end = text.index(start, offsetBy: characterLimit)
+        let prefix = startOffset > 0 ? "[…]\n" : ""
+        let suffix = end < text.endIndex ? "\n[…]" : ""
+        return (prefix + String(text[start..<end]) + suffix, characterLimit)
+    }
+
+    private static func referencedPages(in tokens: [String]) -> Set<Int> {
+        var pageNumbers: Set<Int> = []
+        for (index, token) in tokens.enumerated()
+        where token == "page" || token == "pages" {
+            for candidate in tokens.dropFirst(index + 1).prefix(4) {
+                if let pageNumber = Int(candidate) {
+                    pageNumbers.insert(pageNumber)
+                } else if candidate != "and" {
+                    break
+                }
+            }
+        }
+        return pageNumbers
     }
 
     private static func sanitizedFilename(_ filename: String) -> String {

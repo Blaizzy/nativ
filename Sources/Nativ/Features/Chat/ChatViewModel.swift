@@ -199,15 +199,6 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    var pendingPDFCharacterCount: Int {
-        pendingImageAttachments.reduce(into: 0) { total, attachment in
-            guard attachment.chatAttachmentKind == .pdf else {
-                return
-            }
-            total += attachmentValidations[attachment.id]?.extractedCharacterCount ?? 0
-        }
-    }
-
     func attachmentValidation(for attachmentID: UUID) -> ChatAttachmentValidation? {
         attachmentValidations[attachmentID]
     }
