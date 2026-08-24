@@ -164,87 +164,6 @@ struct RoutineEditor: View {
         }
     }
 
-    private var selectedCapabilityOptions: [ScheduledCapabilityOption] {
-        capabilities.map { capability in
-            capabilityOptions.first(where: { $0.capability == capability })
-                ?? ScheduledCapabilityOption.unavailable(capability)
-        }
-        .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-    }
-
-    @ViewBuilder
-    private var capabilitySelection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if selectedCapabilityOptions.isEmpty {
-                HStack(spacing: 10) {
-                    Image(systemName: "lock.shield")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("No tools selected")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                }
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(selectedCapabilityOptions.enumerated()), id: \.element.id) { index, option in
-                        if index > 0 { Divider() }
-                        HStack(spacing: 10) {
-                            Image(systemName: option.systemImage)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 22)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.title)
-                                    .font(.system(size: 12, weight: .medium))
-                                Text(option.summaryLine)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Text(option.section.singularTitle)
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Color.secondary.opacity(0.1), in: Capsule())
-                            Button {
-                                capabilities.remove(option.capability)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Remove \(option.title)")
-                            .accessibilityLabel("Remove \(option.title)")
-                        }
-                        .padding(.vertical, 8)
-                    }
-                }
-            }
-
-            HStack {
-                Button {
-                    isSelectingCapabilities = true
-                } label: {
-                    Label(
-                        capabilities.isEmpty ? "Add tools" : "Manage tools",
-                        systemImage: "plus"
-                    )
-                }
-                .controlSize(.small)
-                Spacer()
-                if !capabilities.isEmpty {
-                    Text("\(capabilities.count) selected")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-    }
-
     private func humanized(_ name: String) -> String {
         name.split(separator: "_")
             .map { String($0).capitalized }
@@ -254,59 +173,112 @@ struct RoutineEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    field("Name") {
-                        TextField("Scheduled task name", text: $name)
+                VStack(alignment: .leading, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(isExistingTask ? "Edit" : "New")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+
+                        TextField("Scheduled task title", text: $name)
                             .textFieldStyle(.plain)
+                            .font(.system(size: 28))
                     }
-                    field("Instructions") {
-                        TextEditor(text: $instructions)
-                            .scrollContentBackground(.hidden)
-                            .frame(minHeight: 130)
-                            .font(.body)
-                    }
-                    field("Model") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Picker("Model", selection: $modelID) {
-                                Text("Select a model").tag("")
-                                ForEach(availableModelIDs, id: \.self) { id in
-                                    Text(NativFormatting.truncateModelName(id, maxLength: 52)).tag(id)
+
+                    promptEditor
+
+                    editorSection("Details") {
+                        settingsGroup {
+                            settingRow("Runs on") {
+                                Label("This Mac", systemImage: "desktopcomputer")
+                                    .foregroundStyle(.primary)
+                            }
+
+                            settingsDivider
+
+                            modelPicker
+
+                            settingsDivider
+
+                            Button {
+                                isSelectingCapabilities = true
+                            } label: {
+                                settingRow("Tools") {
+                                    HStack(spacing: 8) {
+                                        Text(capabilitySummary)
+                                        Image(systemName: "chevron.down")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.tertiary)
+                                    }
                                 }
                             }
-                            .labelsHidden()
-                            if requiresToolCalling, !toolCapableModelIDs.contains(modelID) {
-                                Label(
-                                    "Choose a model that supports tool calling to use these tools.",
-                                    systemImage: "exclamationmark.triangle.fill"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                            .buttonStyle(.plain)
+                        }
+
+                        if requiresToolCalling, !toolCapableModelIDs.contains(modelID) {
+                            Label(
+                                "Choose a model that supports tool calling to use these tools.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                        }
+                    }
+
+                    if draft.routine.runsOnSchedule {
+                        editorSection("Frequency") {
+                            settingsGroup {
+                                repeatPicker
+
+                                settingsDivider
+
+                                settingRow("At") {
+                                    DatePicker(
+                                        "Time",
+                                        selection: $time,
+                                        displayedComponents: .hourAndMinute
+                                    )
+                                    .labelsHidden()
+                                    .fixedSize()
+                                }
+
+                                settingsDivider
+
+                                settingRow("Notifications") {
+                                    HStack(spacing: 10) {
+                                        Text(notifyOnFinish ? "On" : "Off")
+                                            .foregroundStyle(.secondary)
+                                        Toggle("Notify when finished", isOn: $notifyOnFinish)
+                                            .labelsHidden()
+                                            .toggleStyle(.switch)
+                                            .disabled(!notifications.isAuthorized)
+                                    }
+                                }
+                            }
+
+                            if notifications.authorizationStatus != .authorized {
+                                notificationAccessCallout
                             }
                         }
                     }
-                    if draft.routine.runsOnSchedule {
-                        field("Schedule") { scheduleContent }
-                    }
-                    field("Tools") {
-                        capabilitySelection
-                    }
-                    notificationPreference
                 }
-                .padding(20)
+                .frame(maxWidth: 780)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 28)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
 
             Divider()
 
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
                 Button(isExistingTask ? "Save" : "Create") {
                     onSave(makeRoutine())
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canSave)
             }
-            .padding(16)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.nativMainContentBackground)
@@ -333,29 +305,166 @@ struct RoutineEditor: View {
         .onExitCommand(perform: onCancel)
     }
 
-    private var notificationPreference: some View {
-        box {
-            VStack(alignment: .leading, spacing: 12) {
-                Toggle(
-                    "Notify me when this scheduled task finishes",
-                    isOn: $notifyOnFinish
-                )
-                .disabled(!notifications.isAuthorized)
+    private var promptEditor: some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: $instructions)
+                .scrollContentBackground(.hidden)
+                .font(.system(size: 16))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
 
-                if notifications.authorizationStatus != .authorized {
-                    Divider()
-
-                    HStack(spacing: 12) {
-                        Label(notificationPermissionMessage, systemImage: "bell.badge")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-
-                        Spacer()
-                        notificationPermissionControl
-                    }
-                }
+            if instructions.isEmpty {
+                Text("Describe what Nativ should do")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 15)
+                    .allowsHitTesting(false)
             }
         }
+        .frame(minHeight: 132)
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    private var capabilitySummary: String {
+        capabilities.isEmpty ? "None selected" : "\(capabilities.count) selected"
+    }
+
+    private var modelPicker: some View {
+        settingRow("Model") {
+            Menu {
+                ForEach(availableModelIDs, id: \.self) { id in
+                    Button {
+                        modelID = id
+                    } label: {
+                        if modelID == id {
+                            Label(
+                                NativFormatting.truncateModelName(id, maxLength: 52),
+                                systemImage: "checkmark"
+                            )
+                        } else {
+                            Text(NativFormatting.truncateModelName(id, maxLength: 52))
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(
+                        modelID.isEmpty
+                            ? "Select a model"
+                            : NativFormatting.truncateModelName(modelID, maxLength: 40)
+                    )
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(availableModelIDs.isEmpty)
+        }
+    }
+
+    private var repeatPicker: some View {
+        settingRow("Repeat") {
+            Menu {
+                repeatPreset("Daily", weekdays: [])
+                repeatPreset("Weekdays", weekdays: Set(2...6))
+                repeatPreset("Weekends", weekdays: Set([1, 7]))
+
+                Divider()
+
+                ForEach(1...7, id: \.self) { weekday in
+                    Button {
+                        toggleWeekday(weekday)
+                    } label: {
+                        if weekdays.contains(weekday) {
+                            Label(Calendar.current.weekdaySymbols[weekday - 1], systemImage: "checkmark")
+                        } else {
+                            Text(Calendar.current.weekdaySymbols[weekday - 1])
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(repeatSummary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+    }
+
+    private func repeatPreset(_ title: String, weekdays preset: Set<Int>) -> some View {
+        Button {
+            weekdays = preset
+        } label: {
+            if weekdays == preset {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private func toggleWeekday(_ weekday: Int) {
+        if weekdays.isEmpty {
+            weekdays = [weekday]
+        } else if weekdays.contains(weekday) {
+            guard weekdays.count > 1 else { return }
+            weekdays.remove(weekday)
+        } else {
+            weekdays.insert(weekday)
+            if weekdays.count == 7 {
+                weekdays.removeAll()
+            }
+        }
+    }
+
+    private var repeatSummary: String {
+        if weekdays.isEmpty {
+            return "Daily"
+        }
+        if weekdays == Set(2...6) {
+            return "Weekdays"
+        }
+        if weekdays == Set([1, 7]) {
+            return "Weekends"
+        }
+        if weekdays.count == 1, let weekday = weekdays.first {
+            return "Every \(Calendar.current.weekdaySymbols[weekday - 1])"
+        }
+        return weekdays.sorted()
+            .map { Calendar.current.shortWeekdaySymbols[$0 - 1] }
+            .joined(separator: ", ")
+    }
+
+    private var notificationAccessCallout: some View {
+        HStack(spacing: 12) {
+            Label(notificationPermissionMessage, systemImage: "bell.badge")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+            notificationPermissionControl
+        }
+        .padding(12)
+        .background(
+            Color.secondary.opacity(0.06),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
     }
 
     private var notificationPermissionMessage: String {
@@ -393,64 +502,53 @@ struct RoutineEditor: View {
         }
     }
 
-    @ViewBuilder
-    private var scheduleContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Time")
-                Spacer()
-                DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
-                    .labelsHidden()
-            }
-            weekdayPicker
-        }
-    }
-
-    @ViewBuilder
-    private func field<Content: View>(
+    private func editorSection<Content: View>(
         _ title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
-            box { content() }
-        }
-    }
-
-    @ViewBuilder
-    private func box<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Color(nsColor: .controlBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 10)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            )
-    }
-
-    private var weekdayPicker: some View {
-        HStack(spacing: 6) {
-            ForEach(1...7, id: \.self) { weekday in
-                let symbol = Calendar.current.veryShortWeekdaySymbols[weekday - 1]
-                let isOn = weekdays.contains(weekday)
-                Button(symbol) {
-                    if isOn { weekdays.remove(weekday) } else { weekdays.insert(weekday) }
-                }
-                .buttonStyle(.bordered)
-                .tint(isOn ? Color.accentColor : Color.secondary)
-                .accessibilityLabel(Calendar.current.weekdaySymbols[weekday - 1])
-                .accessibilityValue(isOn ? "Selected" : "Not selected")
-            }
-            Spacer()
-            Text(weekdays.isEmpty ? "Every day" : "")
-                .font(.caption)
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
+            content()
         }
+    }
+
+    private func settingsGroup<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            content()
+        }
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    private func settingRow<Content: View>(
+        _ title: String,
+        @ViewBuilder value: () -> Content
+    ) -> some View {
+        HStack(spacing: 16) {
+            Text(title)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 20)
+            value()
+        }
+        .font(.system(size: 15))
+        .padding(.horizontal, 16)
+        .frame(minHeight: 54)
+        .contentShape(Rectangle())
+    }
+
+    private var settingsDivider: some View {
+        Divider()
+            .padding(.leading, 16)
     }
 
     private func makeRoutine() -> Routine {
