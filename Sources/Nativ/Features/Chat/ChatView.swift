@@ -89,6 +89,7 @@ private enum ChatTranscriptLayout {
     static let messageHorizontalInset: CGFloat = 32
     static let composerClearance: CGFloat = 48
     static let composerFadeExtension: CGFloat = 40
+    static let scrollIndicatorClearance: CGFloat = 17
 }
 
 private struct ChatTranscriptView: View {
@@ -259,6 +260,7 @@ private struct ChatTranscriptView: View {
             Color.nativMainContentBackground
                 .frame(height: max(72, composerBackdropHeight))
         }
+        .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
