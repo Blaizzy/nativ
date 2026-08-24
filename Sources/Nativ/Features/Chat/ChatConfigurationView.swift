@@ -4,14 +4,16 @@ import NativServerKit
 import SwiftUI
 
 private enum ModelConfigurationLayoutMetrics {
-    static let contentMinimumWidth: CGFloat = 420
-    static let contentMinimumWidthWithConfiguration: CGFloat = 360
-    static let configurationWidth: CGFloat = 320
-    static let transitionDuration: TimeInterval = 0.2
+    static let minimumWidth: CGFloat = 280
+    static let idealWidth: CGFloat = 320
+    static let maximumWidth: CGFloat = 480
+    static let topInset: CGFloat = 32
+    static let transitionDuration: TimeInterval = 0.3
+    static let resizeHandleWidth: CGFloat = 9
 }
 
 struct ModelConfigurationLayout<Content: View>: View {
-    @ObservedObject var model: NativModel
+    @Bindable var model: NativModel
     @Binding var isConfigurationVisible: Bool
     private let content: Content
 
@@ -38,11 +40,15 @@ struct ModelConfigurationLayout<Content: View>: View {
 }
 
 struct ModelConfigurationLayoutContent<Content: View>: View {
+    @Environment(\.controlPanelIsFullScreen) private var isFullScreen
+    @Environment(\.displayScale) private var displayScale
     @Binding var settings: NativSettings
     let settingsRequireRestart: Bool
     @Binding var isConfigurationVisible: Bool
     let onReset: () -> Void
     private let content: Content
+    @State private var configurationWidth = ModelConfigurationLayoutMetrics.idealWidth
+    @State private var configurationDragStartWidth: CGFloat?
 
     init(
         settings: Binding<NativSettings>,
@@ -62,45 +68,102 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 0) {
                 content
-                    .frame(
-                        minWidth: isConfigurationVisible
-                            ? ModelConfigurationLayoutMetrics.contentMinimumWidthWithConfiguration
-                            : ModelConfigurationLayoutMetrics.contentMinimumWidth,
-                        maxWidth: .infinity,
-                        maxHeight: .infinity
-                    )
-                    .clipped()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 Color.clear
-                    .frame(
-                        width: isConfigurationVisible
-                            ? ModelConfigurationLayoutMetrics.configurationWidth
-                            : 0
-                    )
+                    .frame(width: isConfigurationVisible ? configurationWidth : 0)
             }
-            .animation(nil, value: isConfigurationVisible)
 
-            if isConfigurationVisible {
-                ModelConfigurationView(
-                    settings: $settings,
-                    settingsRequireRestart: settingsRequireRestart,
-                    onReset: onReset
-                )
-                .frame(width: ModelConfigurationLayoutMetrics.configurationWidth)
-                .ignoresSafeArea(.container, edges: .top)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(Color(nsColor: .separatorColor))
-                        .frame(width: 1)
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
-                }
-                .transition(.move(edge: .trailing))
-            }
+            configurationPanel
+                .frame(width: configurationWidth)
+                .offset(x: isConfigurationVisible ? 0 : configurationWidth)
+                .allowsHitTesting(isConfigurationVisible)
+                .accessibilityHidden(!isConfigurationVisible)
+                .zIndex(1)
         }
         .animation(
-            .smooth(duration: ModelConfigurationLayoutMetrics.transitionDuration),
+            .easeInOut(duration: ModelConfigurationLayoutMetrics.transitionDuration),
             value: isConfigurationVisible
         )
+    }
+
+    private var configurationPanel: some View {
+        ZStack {
+            ModelConfigurationPanelMaterial()
+                .overlay {
+                    Color.white.opacity(0.1)
+                        .allowsHitTesting(false)
+                }
+                .ignoresSafeArea(
+                    .container,
+                    edges: [.top, .bottom, .trailing]
+                )
+
+            ModelConfigurationView(
+                settings: $settings,
+                settingsRequireRestart: settingsRequireRestart,
+                onReset: onReset
+            )
+            .padding(.top, isFullScreen ? ModelConfigurationLayoutMetrics.topInset : 0)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .leading) {
+            configurationResizeHandle
+        }
+    }
+
+    private var configurationResizeHandle: some View {
+        ZStack {
+            Color.clear
+
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1 / max(displayScale, 1))
+        }
+        .frame(width: ModelConfigurationLayoutMetrics.resizeHandleWidth)
+        .contentShape(Rectangle())
+        .offset(x: -(ModelConfigurationLayoutMetrics.resizeHandleWidth / 2))
+        .onHover { isHovering in
+            (isHovering ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    if configurationDragStartWidth == nil {
+                        configurationDragStartWidth = configurationWidth
+                    }
+
+                    let startWidth = configurationDragStartWidth ?? configurationWidth
+                    let proposedWidth = startWidth - value.translation.width
+                    configurationWidth = min(
+                        max(proposedWidth, ModelConfigurationLayoutMetrics.minimumWidth),
+                        ModelConfigurationLayoutMetrics.maximumWidth
+                    )
+                }
+                .onEnded { _ in
+                    configurationDragStartWidth = nil
+                    NSCursor.arrow.set()
+                }
+        )
+    }
+}
+
+private struct ModelConfigurationPanelMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        configure(view)
+    }
+
+    private func configure(_ view: NSVisualEffectView) {
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
     }
 }
 
@@ -132,10 +195,6 @@ struct ModelConfigurationView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 18)
             }
-        }
-        .background {
-            Color(nsColor: .windowBackgroundColor)
-                .ignoresSafeArea(.container, edges: [.top, .bottom, .trailing])
         }
         .task(id: modelConfigurationLookupID) {
             await loadModelConfiguration(for: modelConfigurationLookupID)
@@ -189,7 +248,7 @@ struct ModelConfigurationView: View {
             }
         }
         .padding(.leading, 16)
-        .padding(.trailing, 52)
+        .padding(.trailing, 16)
         .padding(.top, 13)
         .padding(.bottom, 16)
     }

@@ -68,67 +68,78 @@ private struct ModelReadmeSelection: Equatable {
 /// must not invalidate the full Discover list just because uptime changed.
 @MainActor
 private final class ModelsNativState: ObservableObject {
-    @Published private(set) var settings: NativSettings
-    @Published private(set) var isRunning: Bool
-    @Published private(set) var modelSwitchInProgress: Bool
-    @Published private(set) var modelSwitchTargetID: String?
-    @Published private(set) var modelLoadingProgress: Double?
-    @Published private(set) var metricsLoading: Bool
-    @Published private(set) var modelLoadFailure: ModelLoadFailure?
-    @Published private(set) var systemHuggingFaceCredential: HuggingFaceCredential?
-    @Published private(set) var loadedModelID: String?
+    private struct Snapshot: Equatable {
+        var settings: NativSettings
+        var isRunning: Bool
+        var modelSwitchInProgress: Bool
+        var modelSwitchTargetID: String?
+        var modelLoadingProgress: Double?
+        var metricsLoading: Bool
+        var modelLoadFailure: ModelLoadFailure?
+        var systemHuggingFaceCredential: HuggingFaceCredential?
+        var loadedModelID: String?
+    }
 
-    private var cancellables = Set<AnyCancellable>()
+    @Published private var snapshot: Snapshot
+    private let model: NativModel
 
     init(model: NativModel) {
-        settings = model.settings
-        isRunning = model.isRunning
-        modelSwitchInProgress = model.modelSwitchInProgress
-        modelSwitchTargetID = model.modelSwitchTargetID
-        modelLoadingProgress = model.modelLoadingProgress
-        metricsLoading = model.metricsLoading
-        modelLoadFailure = model.modelLoadFailure
-        systemHuggingFaceCredential = model.systemHuggingFaceCredential
-        loadedModelID = model.metrics?.server.loadedModel
+        self.model = model
+        snapshot = Snapshot(
+            settings: model.settings,
+            isRunning: model.isRunning,
+            modelSwitchInProgress: model.modelSwitchInProgress,
+            modelSwitchTargetID: model.modelSwitchTargetID,
+            modelLoadingProgress: model.modelLoadingProgress,
+            metricsLoading: model.metricsLoading,
+            modelLoadFailure: model.modelLoadFailure,
+            systemHuggingFaceCredential: model.systemHuggingFaceCredential,
+            loadedModelID: model.metrics?.server.loadedModel
+        )
 
-        model.$settings
-            .removeDuplicates()
-            .sink { [weak self] in self?.settings = $0 }
-            .store(in: &cancellables)
-        model.$isRunning
-            .removeDuplicates()
-            .sink { [weak self] in self?.isRunning = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchInProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchInProgress = $0 }
-            .store(in: &cancellables)
-        model.$modelSwitchTargetID
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelSwitchTargetID = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadingProgress
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadingProgress = $0 }
-            .store(in: &cancellables)
-        model.$metricsLoading
-            .removeDuplicates()
-            .sink { [weak self] in self?.metricsLoading = $0 }
-            .store(in: &cancellables)
-        model.$modelLoadFailure
-            .removeDuplicates()
-            .sink { [weak self] in self?.modelLoadFailure = $0 }
-            .store(in: &cancellables)
-        model.$systemHuggingFaceCredential
-            .removeDuplicates()
-            .sink { [weak self] in self?.systemHuggingFaceCredential = $0 }
-            .store(in: &cancellables)
-        model.$metrics
-            .map { $0?.server.loadedModel }
-            .removeDuplicates()
-            .sink { [weak self] in self?.loadedModelID = $0 }
-            .store(in: &cancellables)
+        observeModel()
     }
+
+    private func observeModel() {
+        withObservationTracking { [weak self] in
+            self?.captureModelSnapshot()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeModel() }
+        }
+    }
+
+    private func captureModelSnapshot() {
+        update {
+            $0.settings = model.settings
+            $0.isRunning = model.isRunning
+            $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.modelSwitchTargetID = model.modelSwitchTargetID
+            $0.modelLoadingProgress = model.modelLoadingProgress
+            $0.metricsLoading = model.metricsLoading
+            $0.modelLoadFailure = model.modelLoadFailure
+            $0.systemHuggingFaceCredential = model.systemHuggingFaceCredential
+            $0.loadedModelID = model.metrics?.server.loadedModel
+        }
+    }
+
+    private func update(_ mutate: (inout Snapshot) -> Void) {
+        var next = snapshot
+        mutate(&next)
+        guard next != snapshot else { return }
+        snapshot = next
+    }
+
+    var settings: NativSettings { snapshot.settings }
+    var isRunning: Bool { snapshot.isRunning }
+    var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var modelSwitchTargetID: String? { snapshot.modelSwitchTargetID }
+    var modelLoadingProgress: Double? { snapshot.modelLoadingProgress }
+    var metricsLoading: Bool { snapshot.metricsLoading }
+    var modelLoadFailure: ModelLoadFailure? { snapshot.modelLoadFailure }
+    var systemHuggingFaceCredential: HuggingFaceCredential? {
+        snapshot.systemHuggingFaceCredential
+    }
+    var loadedModelID: String? { snapshot.loadedModelID }
 
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(
@@ -372,7 +383,7 @@ struct ModelsView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
         .padding(.bottom, 16)
     }
 
@@ -413,6 +424,7 @@ struct ModelsView: View {
                             onClose: { self.readmeSelection = nil }
                         )
                         .frame(width: geometry.size.width * 0.4)
+                        .frame(maxHeight: .infinity, alignment: .top)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
@@ -1745,6 +1757,7 @@ private struct ActiveDownloadBannerRow: View {
     let onPauseResume: () -> Void
     let onRemove: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isConfirmingRemoval = false
 
     var body: some View {
@@ -1755,15 +1768,22 @@ private struct ActiveDownloadBannerRow: View {
                         .font(.headline)
                         .lineLimit(1)
 
-                    HStack(spacing: 4) {
-                        Text(statusText)
-                            .foregroundStyle(.secondary)
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                            .accessibilityHidden(true)
-                        Text("\(percentage)%")
-                            .bold()
-                            .monospacedDigit()
+                    Group {
+                        if isFinishing {
+                            Text("Finishing…")
+                                .bold()
+                        } else {
+                            HStack(spacing: 4) {
+                                Text(statusText)
+                                    .foregroundStyle(.secondary)
+                                Text("·")
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
+                                Text("\(percentage)%")
+                                    .bold()
+                                    .monospacedDigit()
+                            }
+                        }
                     }
                     .font(.subheadline)
                 }
@@ -1797,17 +1817,33 @@ private struct ActiveDownloadBannerRow: View {
                 .controlSize(.large)
             }
 
-            ProgressView(value: displayedProgress)
-                .progressViewStyle(.linear)
-                .tint(download.state == .paused ? .secondary : .accentColor)
-                .accessibilityLabel("Download progress")
-                .accessibilityValue("\(percentage) percent")
+            Group {
+                if isFinishing {
+                    ProgressView()
+                        .accessibilityLabel("Finishing download")
+                        .accessibilityValue("Assembling downloaded model files")
+                } else {
+                    ProgressView(value: displayedProgress)
+                        .animation(
+                            reduceMotion ? nil : .linear(duration: 0.25),
+                            value: displayedProgress
+                        )
+                        .accessibilityLabel("Download progress")
+                        .accessibilityValue("\(percentage) percent")
+                }
+            }
+            .progressViewStyle(.linear)
+            .tint(download.state == .paused ? .secondary : .accentColor)
 
             HStack(spacing: 6) {
-                Text(byteProgress ?? "Calculating download size…")
-                    .monospacedDigit()
+                if isFinishing {
+                    Text("Assembling downloaded model files…")
+                } else {
+                    Text(byteProgress ?? "Calculating download size…")
+                        .monospacedDigit()
+                }
 
-                if let speed {
+                if !isFinishing, let speed {
                     Text("·")
                         .accessibilityHidden(true)
                     Text(speed)
@@ -1837,6 +1873,12 @@ private struct ActiveDownloadBannerRow: View {
         min(max(download.progress, 0), 0.99)
     }
 
+    private var isFinishing: Bool {
+        download.state == .downloading
+            && (download.phase == .finalizing
+                || ModelDownloadProgressPresentation.isFinishing(download.progress))
+    }
+
     private var pauseResumeTitle: String {
         download.state == .paused ? "Resume download" : "Pause download"
     }
@@ -1858,13 +1900,10 @@ private struct ActiveDownloadBannerRow: View {
         if download.state == .paused {
             return "Paused"
         }
-        if ModelDownloadProgressPresentation.isFinalizing(download.progress) {
-            return "Finalizing"
-        }
         switch download.phase {
         case .preparing: return "Preparing"
         case .downloading: return "Downloading"
-        case .finalizing: return "Finalizing"
+        case .finalizing: return "Finishing"
         case .retrying: return "Retrying"
         }
     }
@@ -1891,7 +1930,7 @@ private struct HubModelRow: View, @MainActor Equatable {
     let isDownloading: Bool
     let downloadProgress: Double
     let isDownloadPaused: Bool
-    let downloadError: String?
+    let downloadError: HuggingFaceDownloadFailure?
     let onShowReadme: () -> Void
     let onDownload: () -> Void
     let onPauseResume: () -> Void
@@ -2034,10 +2073,7 @@ private struct HubModelRow: View, @MainActor Equatable {
             }
 
             if let downloadError {
-                Label(downloadError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
+                downloadErrorView(downloadError)
             }
         }
         .padding(14)
@@ -2048,6 +2084,38 @@ private struct HubModelRow: View, @MainActor Equatable {
         return model.isGated
             ? "Gated models require Hugging Face authentication."
             : "Download to the configured cache"
+    }
+
+    @ViewBuilder
+    private func downloadErrorView(_ error: HuggingFaceDownloadFailure) -> some View {
+        switch error {
+        case .gatedRepository:
+            VStack(alignment: .leading, spacing: 6) {
+                Label(error.localizedDescription, systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text("Request access, then add or update the approved account’s token in Developer and retry.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Link(destination: modelHubURL) {
+                    Label("Request access on Hugging Face", systemImage: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+        case .message:
+            Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var modelHubURL: URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "huggingface.co"
+        components.path = "/\(model.id)"
+        return components.url ?? URL(string: "https://huggingface.co/")!
     }
 }
 
@@ -2328,8 +2396,8 @@ struct ModelDownloadProgressControl: View {
         if isPaused {
             return "Download paused"
         }
-        if ModelDownloadProgressPresentation.isFinalizing(progress) {
-            return "Finalizing download"
+        if ModelDownloadProgressPresentation.isFinishing(progress) {
+            return "Finishing download"
         }
         return "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
     }

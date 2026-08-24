@@ -6,14 +6,13 @@ import Textual
 import UniformTypeIdentifiers
 
 struct ChatView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
 
@@ -28,7 +27,6 @@ struct ChatView: View {
                 extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
-                conversationWidthReduction: conversationWidthReduction,
                 onExploreImageModels: onExploreImageModels
             )
             .dropDestination(for: URL.self) { urls, _ in
@@ -95,12 +93,11 @@ private enum ChatTranscriptLayout {
 
 private struct ChatTranscriptView: View {
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
@@ -161,7 +158,6 @@ private struct ChatTranscriptView: View {
             }
             .frame(
                 maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                    - conversationWidthReduction
                     - (ChatTranscriptLayout.messageHorizontalInset * 2)
             )
             .frame(maxWidth: .infinity)
@@ -187,7 +183,6 @@ private struct ChatTranscriptView: View {
                     extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
-                    conversationWidthReduction: conversationWidthReduction,
                     onHeightChange: { height in
                         let isInitialMeasurement = composerHeight == 0
                         composerHeight = height
@@ -294,12 +289,11 @@ private struct ChatTranscriptView: View {
 }
 
 private struct ChatComposerContainer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onHeightChange: (CGFloat) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
@@ -332,10 +326,7 @@ private struct ChatComposerContainer: View {
             },
             onBackdropHeightChange: onBackdropHeightChange
         )
-        .frame(
-            maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                - conversationWidthReduction
-        )
+        .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -1013,7 +1004,7 @@ private struct ChatImageModelOptionRow: View {
             }
 
             if let error = downloadManager.errorByModelID[model.modelID] {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1804,7 +1795,6 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        conversationWidthReduction: 0,
         onExploreImageModels: { _ in }
     )
 }

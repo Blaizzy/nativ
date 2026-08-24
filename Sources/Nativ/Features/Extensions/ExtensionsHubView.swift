@@ -6,7 +6,7 @@ import SwiftUI
 struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @Binding var section: HubSection
     @State private var didLaunch = false
 
@@ -34,6 +34,7 @@ struct ExtensionsHubView: View {
         HStack(spacing: 0) {
             subnav
             Divider()
+                .ignoresSafeArea(.container, edges: .top)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -73,7 +74,9 @@ struct ExtensionsHubView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .padding(.bottom, 12)
         .frame(width: 188)
     }
 
@@ -134,7 +137,8 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 content()
             }
             .padding(.horizontal, 28)
-            .padding(.vertical, 24)
+            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .padding(.bottom, 24)
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -392,7 +396,7 @@ private struct FlowLayout: Layout {
 // MARK: - Skills section
 
 private struct SkillsSectionView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var editing: NativSkill?
     @State private var pendingDelete: NativSkill?
 

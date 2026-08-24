@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import Charts
 import SwiftUI
 import Textual
+import UniformTypeIdentifiers
 
 private enum AudioDestination: String, CaseIterable, Identifiable {
     case overview
@@ -44,7 +45,7 @@ private enum AudioAnimationPurpose {
 
 @MainActor
 struct AudioView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
     @ObservedObject private var animations: VoiceAnimationPreferences
@@ -157,6 +158,7 @@ struct AudioView: View {
                 Button("Open System Settings") {
                     captureLibrary.openPermissionSettings()
                 }
+                .keyboardShortcut(.defaultAction)
                 Button("Not Now", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
@@ -164,6 +166,7 @@ struct AudioView: View {
                 Button("OK", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
+                .keyboardShortcut(.defaultAction)
             }
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
@@ -240,7 +243,7 @@ struct AudioView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
+        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
         .padding(.bottom, 16)
     }
 
@@ -1923,6 +1926,12 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(action: chooseAudioToImport) {
+                    Label("Add Recording", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
                 Button {
                     destination = .record
                 } label: {
@@ -1969,6 +1978,24 @@ struct AudioView: View {
         }
         .padding(18)
         .audioPanelStyle()
+    }
+
+    private func chooseAudioToImport() {
+        let panel = NSOpenPanel()
+        panel.title = "Add Recording"
+        panel.message = "Choose a recording to transcribe and summarize locally."
+        panel.prompt = "Add"
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK, let sourceURL = panel.url else {
+                return
+            }
+            Task { @MainActor in
+                await captureLibrary.importAudio(from: sourceURL)
+            }
+        }
     }
 
     private func shortcutRow(
@@ -3096,7 +3123,9 @@ private final class ShortcutRecorderNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func flagsChanged(with event: NSEvent) {
-        let modifiers = VoiceShortcutModifiers(eventFlags: event.modifierFlags)
+        let modifiers = VoiceShortcutModifiers(
+            cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+        )
         if modifiers.isEmpty {
             if !pendingModifiers.isEmpty {
                 onCapture?(

@@ -45,7 +45,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
@@ -62,7 +62,8 @@ struct SettingsView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 28)
-            .padding(.vertical, 26)
+            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .padding(.bottom, 26)
         }
         .background(Color.nativMainContentBackground)
     }

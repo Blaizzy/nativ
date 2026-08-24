@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ToolsSectionView: View {
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var inspecting: ToolItem?
     @State private var showsAddTool = false
     @State private var editingTool: CustomTool?
@@ -518,7 +518,7 @@ private struct ToolInspectorView: View {
 }
 
 private struct CustomToolEditorSheet: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let tool: CustomTool?
     @Environment(\.dismiss) private var dismiss
 

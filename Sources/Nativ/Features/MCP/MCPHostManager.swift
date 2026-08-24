@@ -8,7 +8,7 @@ enum MCPServerConnectionState: Equatable {
     case authorizingGitHub(code: String, verificationURL: URL)
     case installingGitHub(URL)
     case connected(toolCount: Int)
-    case failed(String)
+    case failed(MCPConnectionFailure)
 }
 
 @MainActor
@@ -144,7 +144,9 @@ final class MCPHostManager: ObservableObject {
         var githubPending: [(config: MCPServerConfig, executable: URL)] = []
         for config in toConnect where connections[config.id] == nil {
             guard let executable = Self.resolveExecutable(config.command, searchPath: searchPath) else {
-                states[config.id] = .failed("Couldn’t find “\(config.command)”")
+                states[config.id] = .failed(
+                    MCPConnectionFailure(message: "Couldn’t find “\(config.command)”")
+                )
                 continue
             }
             let catalogEntry = MCPServerCatalog.bundled.entry(matching: config)
@@ -206,7 +208,7 @@ final class MCPHostManager: ObservableObject {
                         return ConnectOutcome(
                             config: item.config,
                             tools: nil,
-                            error: error.localizedDescription,
+                            error: Self.connectionFailure(from: error),
                             client: item.client
                         )
                     }
@@ -234,7 +236,7 @@ final class MCPHostManager: ObservableObject {
                 } else {
                     await outcome.client.disconnect()
                     states[outcome.config.id] = .failed(
-                        outcome.error ?? "Failed to connect"
+                        outcome.error ?? MCPConnectionFailure(message: "Failed to connect")
                     )
                 }
             }
@@ -249,7 +251,7 @@ final class MCPHostManager: ObservableObject {
     ) async {
         guard let githubOAuth else {
             states[config.id] = .failed(
-                GitHubOAuthError.notConfigured.localizedDescription
+                MCPConnectionFailure(message: GitHubOAuthError.notConfigured.localizedDescription)
             )
             return
         }
@@ -318,19 +320,26 @@ final class MCPHostManager: ObservableObject {
                 states[config.id] = .connected(toolCount: tools.count)
             } catch {
                 await client.disconnect()
-                states[config.id] = .failed(error.localizedDescription)
+                states[config.id] = .failed(Self.connectionFailure(from: error))
             }
         } catch {
             guard generation == reloadGeneration else { return }
-            states[config.id] = .failed(error.localizedDescription)
+            states[config.id] = .failed(Self.connectionFailure(from: error))
         }
     }
 
     private struct ConnectOutcome: Sendable {
         let config: MCPServerConfig
         let tools: [MCPToolInfo]?
-        let error: String?
+        let error: MCPConnectionFailure?
         let client: MCPClient
+    }
+
+    nonisolated private static func connectionFailure(from error: Error) -> MCPConnectionFailure {
+        if let failure = error as? MCPConnectionFailure {
+            return failure
+        }
+        return MCPConnectionFailure(message: error.localizedDescription)
     }
 
     private static func toolDefinitions(for connection: Connection) -> [MLXChatToolDefinition] {

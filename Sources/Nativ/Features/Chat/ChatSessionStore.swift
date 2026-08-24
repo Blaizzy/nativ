@@ -1,7 +1,14 @@
 import AppKit
 import Foundation
 import NativServerKit
+import OSLog
 import UniformTypeIdentifiers
+
+struct ChatPersistenceFailure: Equatable, Sendable {
+    let operation: String
+    let sessionID: UUID?
+    let message: String
+}
 
 struct ChatSession: Identifiable, Equatable, Codable {
     var id: UUID
@@ -472,6 +479,29 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 
 struct ChatSessionStore {
     private let fileManager = FileManager.default
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Nativ",
+        category: "ChatPersistence"
+    )
+
+    var onFailure: ((ChatPersistenceFailure) -> Void)?
+
+    private func reportFailure(
+        _ operation: String,
+        sessionID: UUID? = nil,
+        error: Error
+    ) {
+        Self.logger.error(
+            "\(operation, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
+        )
+        onFailure?(
+            ChatPersistenceFailure(
+                operation: operation,
+                sessionID: sessionID,
+                message: error.localizedDescription
+            )
+        )
+    }
 
     init() {}
 
@@ -508,12 +538,18 @@ struct ChatSessionStore {
             let data = try encoder.encode(session)
             try data.write(to: sessionURL(for: session.id), options: .atomic)
         } catch {
-            // Chat persistence should not block the local server UI.
+            reportFailure("saveSession", sessionID: session.id, error: error)
         }
     }
 
     func deleteSession(id: UUID) {
-        try? fileManager.removeItem(at: sessionURL(for: id))
+        do {
+            try fileManager.removeItem(at: sessionURL(for: id))
+        } catch CocoaError.fileNoSuchFile {
+            return
+        } catch {
+            reportFailure("deleteSession", sessionID: id, error: error)
+        }
     }
 
     func loadFolders() -> [ChatFolder] {
@@ -535,6 +571,7 @@ struct ChatSessionStore {
             let data = try encoder.encode(folders)
             try data.write(to: foldersURL, options: .atomic)
         } catch {
+            reportFailure("saveFolders", error: error)
         }
     }
 
