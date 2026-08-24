@@ -532,6 +532,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         storedSessions.removeAll { $0.id == sessionID }
+        RoutineStore.shared.detachSession(sessionID)
         sessionStore.deleteSession(id: sessionID)
         pruneRedundantEmptySessions()
 
@@ -551,6 +552,38 @@ final class ChatViewModel: ObservableObject {
             currentSessionID = nil
             messages = []
             refreshSessionList()
+        }
+    }
+
+    func handleScheduledTaskDeletion(
+        taskID: String,
+        linkedSessionIDs: Set<UUID>,
+        disposition: ScheduledTaskChatDisposition
+    ) {
+        let sessionIDs = linkedSessionIDs.union(
+            storedSessions.lazy
+                .filter { $0.scheduledTaskID == taskID }
+                .map(\.id)
+        )
+
+        switch disposition {
+        case .keepChats:
+            for index in storedSessions.indices where sessionIDs.contains(storedSessions[index].id) {
+                let session = ScheduledTaskChatLinker.makeIndependentSession(
+                    from: storedSessions[index]
+                )
+                storedSessions[index] = session
+                sessionStore.saveSession(session)
+                if currentSession?.id == session.id {
+                    currentSession = session
+                }
+            }
+            refreshSessionList()
+
+        case .deleteChats:
+            for sessionID in sessionIDs {
+                deleteSession(sessionID)
+            }
         }
     }
 
@@ -2207,10 +2240,6 @@ final class ChatViewModel: ObservableObject {
             }
 
             if session.messages.isEmpty {
-                if RoutineStore.shared.routine(forSession: session.id) != nil {
-                    keptSessions.append(session)
-                    continue
-                }
                 if keptEmptySession {
                     removedSessionIDs.append(session.id)
                     continue
@@ -2223,6 +2252,7 @@ final class ChatViewModel: ObservableObject {
 
         storedSessions = keptSessions
         for sessionID in removedSessionIDs {
+            RoutineStore.shared.detachSession(sessionID)
             sessionStore.deleteSession(id: sessionID)
         }
     }

@@ -14,6 +14,10 @@ final class RoutineRunCoordinator {
         runner?.run(routine, source: source)
     }
 
+    func cancel(routineID: String) {
+        runner?.cancel(routineID: routineID)
+    }
+
     func runRoutine(id: String, source: RoutineRunSource) {
         guard let routine = RoutineStore.shared.routine(id: id) else {
             return

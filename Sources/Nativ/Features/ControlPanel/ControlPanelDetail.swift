@@ -63,10 +63,12 @@ extension ControlPanelView {
                 extensionManager: extensionManager,
                 titleLeadingInset: 0,
                 onOpenRun: { applySidebarSelection(.chat($0)) },
-                onDeleteSessions: { sessionIDs in
-                    for sessionID in sessionIDs {
-                        chat.deleteSession(sessionID)
-                    }
+                onDeleteTaskChats: { taskID, sessionIDs, disposition in
+                    chat.handleScheduledTaskDeletion(
+                        taskID: taskID,
+                        linkedSessionIDs: sessionIDs,
+                        disposition: disposition
+                    )
                 }
             )
         case .artifacts:

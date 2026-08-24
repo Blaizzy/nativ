@@ -14,7 +14,11 @@ struct ScheduledTasksView: View {
     @ObservedObject var extensionManager: NativExtensionManager
     var titleLeadingInset: CGFloat = 0
     let onOpenRun: (UUID) -> Void
-    let onDeleteSessions: (Set<UUID>) -> Void
+    let onDeleteTaskChats: (
+        _ taskID: String,
+        _ linkedSessionIDs: Set<UUID>,
+        _ disposition: ScheduledTaskChatDisposition
+    ) -> Void
 
     @ObservedObject private var store = RoutineStore.shared
     @StateObject private var modelLibrary = LocalModelLibrary()
@@ -78,16 +82,21 @@ struct ScheduledTasksView: View {
             ),
             presenting: pendingDeletion
         ) { task in
-            Button("Delete", role: .destructive) {
-                delete(task)
+            Button("Delete Task, Keep Chats", role: .destructive) {
+                delete(task, chatDisposition: .keepChats)
                 pendingDeletion = nil
             }
             .keyboardShortcut(.defaultAction)
+            Button("Delete Task and Chats", role: .destructive) {
+                delete(task, chatDisposition: .deleteChats)
+                pendingDeletion = nil
+            }
             Button("Cancel", role: .cancel) {
                 pendingDeletion = nil
             }
-        } message: { _ in
-            Text("This scheduled task and its run history will be permanently deleted.")
+        } message: { task in
+            let count = linkedSessionIDs(for: task).count
+            Text(deletionMessage(linkedChatCount: count))
         }
     }
 
@@ -276,13 +285,7 @@ struct ScheduledTasksView: View {
 
     private func save(_ task: Routine) {
         enableNewKits(in: task)
-        let linkedTask = ScheduledTaskChatLinker.ensureChat(
-            for: task,
-            runs: store.runs(forRoutine: task.id),
-            sessionStore: ChatSessionStore()
-        )
-        store.upsert(linkedTask)
-        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
+        store.upsert(task)
     }
 
     private func enableNewKits(in task: Routine) {
@@ -306,15 +309,29 @@ struct ScheduledTasksView: View {
         }
     }
 
-    private func delete(_ task: Routine) {
-        let sessionIDs = Set(
-            [task.sourceSessionID].compactMap { $0 }
-                + store.runs(forRoutine: task.id).compactMap(\.sessionID)
+    private func linkedSessionIDs(for task: Routine) -> Set<UUID> {
+        ScheduledTaskChatLinker.linkedSessionIDs(
+            for: task,
+            runs: store.runs(forRoutine: task.id)
         )
+    }
+
+    private func deletionMessage(linkedChatCount: Int) -> String {
+        let chats = linkedChatCount == 1 ? "1 linked chat" : "\(linkedChatCount) linked chats"
+        return "The task and its run history will be permanently deleted. "
+            + "Choose whether to keep its \(chats) as regular chats."
+    }
+
+    private func delete(
+        _ task: Routine,
+        chatDisposition: ScheduledTaskChatDisposition
+    ) {
+        let sessionIDs = linkedSessionIDs(for: task)
+        RoutineRunCoordinator.shared.cancel(routineID: task.id)
         store.delete(id: task.id)
         if draft?.id == task.id {
             draft = nil
         }
-        onDeleteSessions(sessionIDs)
+        onDeleteTaskChats(task.id, sessionIDs, chatDisposition)
     }
 }

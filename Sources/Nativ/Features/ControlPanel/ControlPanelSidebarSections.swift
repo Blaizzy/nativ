@@ -346,25 +346,7 @@ extension ControlPanelView {
     }
 
     var recentSessions: [ControlPanelRecentSession] {
-        sidebarState.recents.recentSessions.filter(shouldDisplayRecentSession)
-    }
-
-    var scheduledTaskChatIDs: Set<UUID> {
-        Set(routineStore.routines.compactMap(\.sourceSessionID))
-    }
-
-    var scheduledRunChatIDs: Set<UUID> {
-        Set(routineStore.runs.compactMap(\.sessionID))
-    }
-
-    func shouldDisplayRecentSession(_ recent: ControlPanelRecentSession) -> Bool {
-        guard case .chat(let sessionID) = recent.selection else {
-            return true
-        }
-        if scheduledTaskChatIDs.contains(sessionID) {
-            return true
-        }
-        return recent.scheduledTaskID == nil && !scheduledRunChatIDs.contains(sessionID)
+        sidebarState.recents.recentSessions
     }
 
     var pinnedSessions: [ControlPanelRecentSession] {

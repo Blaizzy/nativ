@@ -12,6 +12,8 @@ final class RoutineRunner {
 
     private var queue: [(Routine, RoutineRunSource)] = []
     private var isExecuting = false
+    private var activeRoutineID: String?
+    private var activeTask: Task<Void, Never>?
 
     init(
         model: NativModel,
@@ -26,16 +28,15 @@ final class RoutineRunner {
     }
 
     func run(_ routine: Routine, source: RoutineRunSource) {
-        let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
-            for: routine,
-            runs: store.runs(forRoutine: routine.id),
-            sessionStore: sessionStore
-        )
-        if linkedRoutine != routine {
-            store.upsert(linkedRoutine)
-        }
-        queue.append((linkedRoutine, source))
+        guard store.routine(id: routine.id) != nil else { return }
+        queue.append((routine, source))
         drain()
+    }
+
+    func cancel(routineID: String) {
+        queue.removeAll { $0.0.id == routineID }
+        guard activeRoutineID == routineID else { return }
+        activeTask?.cancel()
     }
 
     private func drain() {
@@ -44,41 +45,79 @@ final class RoutineRunner {
         }
         isExecuting = true
         let (routine, source) = queue.removeFirst()
-        Task { @MainActor in
-            await execute(routine, source: source)
-            isExecuting = false
-            drain()
+        activeRoutineID = routine.id
+        activeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.execute(routine, source: source)
+            self.activeTask = nil
+            self.activeRoutineID = nil
+            self.isExecuting = false
+            self.drain()
         }
     }
 
     private func execute(_ routine: Routine, source: RoutineRunSource) async {
-        var run = RoutineRun(routineID: routine.id, source: source, status: .running)
+        guard shouldContinue(routine) else { return }
+        let startedAt = Date()
+        let sessionID = UUID()
+        let initialTranscript = [
+            ChatTranscriptMessage(role: .user, content: routine.instructions)
+        ]
+        saveRunChat(
+            routine: routine,
+            sessionID: sessionID,
+            createdAt: startedAt,
+            messages: initialTranscript
+        )
+        var run = RoutineRun(
+            routineID: routine.id,
+            startedAt: startedAt,
+            source: source,
+            sessionID: sessionID,
+            status: .running
+        )
         store.recordRun(run)
 
         if !model.isRunning {
             model.startServer()
         }
         await waitForServer()
+        guard shouldContinue(routine) else { return }
 
         guard let baseURL = model.activeServerBaseURL else {
-            finish(&run, routine: routine, status: .failed, summary: "The Nativ server isn’t running.")
+            let message = "The Nativ server isn’t running."
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: initialTranscript + [ChatTranscriptMessage(role: .error, content: message)]
+            )
+            finish(&run, routine: routine, status: .failed, summary: message)
             return
         }
 
         let settings = model.settings.normalized()
         let selectedServers = Self.selectedMCPServers(for: routine, settings: settings)
         await mcpHost.prepare(servers: selectedServers)
+        guard shouldContinue(routine) else { return }
         let capabilities = Self.resolveCapabilities(
             for: routine,
             settings: settings,
             mcpHost: mcpHost
         )
         guard capabilities.unavailable.isEmpty else {
+            let message = "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: initialTranscript + [ChatTranscriptMessage(role: .error, content: message)]
+            )
             finish(
                 &run,
                 routine: routine,
                 status: .failed,
-                summary: "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
+                summary: message
             )
             return
         }
@@ -90,9 +129,13 @@ final class RoutineRunner {
                 capabilities: capabilities,
                 baseURL: baseURL
             )
-            let sessionID = appendRun(routine: routine, messages: result.transcript)
-            NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
-            run.sessionID = sessionID
+            guard shouldContinue(routine) else { return }
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: result.transcript
+            )
             finish(
                 &run,
                 routine: routine,
@@ -100,16 +143,30 @@ final class RoutineRunner {
                 summary: Self.summarize(result.finalContent)
             )
         } catch let failure as ScheduledCompletionFailure {
+            guard shouldContinue(routine) else { return }
             let errorMessage = failure.localizedDescription
             let transcript = failure.transcript + [
                 ChatTranscriptMessage(role: .error, content: errorMessage)
             ]
-            let sessionID = appendRun(routine: routine, messages: transcript)
-            NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
-            run.sessionID = sessionID
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: transcript
+            )
             finish(&run, routine: routine, status: .failed, summary: errorMessage)
         } catch {
-            finish(&run, routine: routine, status: .failed, summary: error.localizedDescription)
+            guard shouldContinue(routine) else { return }
+            let errorMessage = error.localizedDescription
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: initialTranscript + [
+                    ChatTranscriptMessage(role: .error, content: errorMessage)
+                ]
+            )
+            finish(&run, routine: routine, status: .failed, summary: errorMessage)
         }
     }
 
@@ -131,6 +188,7 @@ final class RoutineRunner {
         var toolRound = 0
 
         while true {
+            try Task.checkCancellation()
             let advertisesTools = !capabilities.tools.isEmpty
                 && ChatToolRoundGate.advertisesTools(atRound: toolRound)
             let toolDefinitions = advertisesTools
@@ -195,7 +253,8 @@ final class RoutineRunner {
             ))
 
             for call in toolCalls {
-                let result = await executeTool(
+                try Task.checkCancellation()
+                let result = try await executeTool(
                     call,
                     capabilities: capabilities,
                     settings: settings,
@@ -226,8 +285,9 @@ final class RoutineRunner {
         capabilities: ResolvedCapabilities,
         settings: NativSettings,
         baseURL: URL
-    ) async -> ScheduledToolResult {
+    ) async throws -> ScheduledToolResult {
         do {
+            try Task.checkCancellation()
             guard let name = call.function?.name,
                   let tool = capabilities.tool(named: name)
             else {
@@ -271,6 +331,8 @@ final class RoutineRunner {
                 attachments: outcome.attachments,
                 succeeded: true
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return ScheduledToolResult(
                 content: ChatToolDispatcher.failurePayload(
@@ -283,14 +345,22 @@ final class RoutineRunner {
         }
     }
 
-    private func appendRun(routine: Routine, messages: [ChatTranscriptMessage]) -> UUID {
-        let sessionID = routine.sourceSessionID ?? UUID()
-        var session = sessionStore.loadSession(id: sessionID)
-            ?? ScheduledTaskChatLinker.makeSession(for: routine, id: sessionID)
-        session.messages.append(contentsOf: messages)
+    private func saveRunChat(
+        routine: Routine,
+        sessionID: UUID,
+        createdAt: Date,
+        messages: [ChatTranscriptMessage]
+    ) {
+        guard shouldContinue(routine) else { return }
+        var session = ScheduledTaskChatLinker.makeRunSession(
+            for: routine,
+            messages: messages,
+            id: sessionID,
+            createdAt: createdAt
+        )
         session.updatedAt = Date()
         sessionStore.saveSession(session)
-        return sessionID
+        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func finish(
@@ -299,6 +369,7 @@ final class RoutineRunner {
         status: RoutineRunStatus,
         summary: String
     ) {
+        guard shouldContinue(routine) else { return }
         run.status = status
         run.finishedAt = Date()
         run.resultSummary = summary
@@ -309,18 +380,32 @@ final class RoutineRunner {
     private func waitForServer(timeout: TimeInterval = 120) async {
         let deadline = Date().addingTimeInterval(timeout)
         while model.activeServerBaseURL == nil, Date() < deadline {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            } catch {
+                return
+            }
         }
         guard let baseURL = model.activeServerBaseURL else {
             return
         }
         let healthURL = baseURL.appendingPathComponent("v1/models")
         while Date() < deadline {
+            guard !Task.isCancelled else { return }
             if await Self.isReachable(healthURL) {
                 return
             }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 500_000_000)
+            } catch {
+                return
+            }
         }
+    }
+
+    private func shouldContinue(_ routine: Routine) -> Bool {
+        !Task.isCancelled && store.routine(id: routine.id) != nil
     }
 
     private static func isReachable(_ url: URL) async -> Bool {

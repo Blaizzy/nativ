@@ -96,12 +96,10 @@ extension ControlPanelView {
                 pendingDeleteRecent = nil
             }
         } message: { recent in
-            if case .chat(let sessionID) = recent.selection,
-                contentState.routine(forSession: sessionID) != nil
-            {
+            if recent.scheduledTaskID != nil {
                 Text(
-                    "“\(recent.title)” is a scheduled task. Deleting this chat also deletes "
-                        + "the scheduled task and its run history."
+                    "“\(recent.title)” will be permanently deleted. "
+                        + "The scheduled task and its run record will be kept."
                 )
             } else {
                 Text("“\(recent.title)” will be permanently deleted.")

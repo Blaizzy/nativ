@@ -56,7 +56,6 @@ struct ControlPanelView: View {
     var launchAtLogin: LaunchAtLoginController { dependencies.launchAtLogin }
     var downloads: HuggingFaceDownloadManager { dependencies.downloads }
     var embeddingLibrary: LocalModelLibrary { dependencies.embeddingLibrary }
-    var routineStore: RoutineStore { dependencies.routineStore }
     var routineModelLibrary: LocalModelLibrary { dependencies.routineModelLibrary }
 
     init(

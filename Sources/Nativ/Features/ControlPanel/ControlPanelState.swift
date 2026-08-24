@@ -17,7 +17,6 @@ final class ControlPanelDependencies: ObservableObject {
     lazy var launchAtLogin = LaunchAtLoginController()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
-    lazy var routineStore = RoutineStore.shared
     lazy var routineModelLibrary = LocalModelLibrary()
 }
 
@@ -156,8 +155,6 @@ final class ControlPanelChromeState: ObservableObject {
 final class ControlPanelContentState: ObservableObject {
     private struct Snapshot: Equatable {
         var extensionSidebarContributions: [NativSidebarContribution]
-        var routines: [Routine]
-        var routineRuns: [RoutineRun]
         var launchAtLoginErrorMessage: String?
     }
 
@@ -170,8 +167,6 @@ final class ControlPanelContentState: ObservableObject {
     ) {
         snapshot = Snapshot(
             extensionSidebarContributions: extensionManager.enabledSidebarContributions,
-            routines: dependencies.routineStore.routines,
-            routineRuns: dependencies.routineStore.runs,
             launchAtLoginErrorMessage: dependencies.launchAtLogin.errorMessage
         )
 
@@ -181,14 +176,6 @@ final class ControlPanelContentState: ObservableObject {
             .sink { [weak self] value in
                 self?.update { $0.extensionSidebarContributions = value }
             }
-            .store(in: &cancellables)
-        dependencies.routineStore.$routines
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.routines = value } }
-            .store(in: &cancellables)
-        dependencies.routineStore.$runs
-            .removeDuplicates()
-            .sink { [weak self] value in self?.update { $0.routineRuns = value } }
             .store(in: &cancellables)
         dependencies.launchAtLogin.$errorMessage
             .removeDuplicates()
@@ -202,17 +189,6 @@ final class ControlPanelContentState: ObservableObject {
         snapshot.extensionSidebarContributions
     }
     var launchAtLoginErrorMessage: String? { snapshot.launchAtLoginErrorMessage }
-
-    func routine(forSession sessionID: UUID) -> Routine? {
-        snapshot.routines.first { $0.sourceSessionID == sessionID }
-    }
-
-    func isRoutineRunning(forSession sessionID: UUID) -> Bool {
-        guard let routine = routine(forSession: sessionID) else { return false }
-        return snapshot.routineRuns.contains {
-            $0.routineID == routine.id && $0.status == .running
-        }
-    }
 
     private func update(_ mutate: (inout Snapshot) -> Void) {
         var next = snapshot
