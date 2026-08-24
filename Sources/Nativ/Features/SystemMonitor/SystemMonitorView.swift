@@ -1,6 +1,7 @@
 import AppKit
 import Charts
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum SystemMonitorDestination: String, CaseIterable, Identifiable {
     case overview
@@ -626,6 +627,9 @@ private enum SystemDeviceArtworkProvider {
     .appendingPathComponent("Contents/Resources", isDirectory: true)
 
     private static let imageCache = NSCache<NSString, NSImage>()
+    private static let deviceModelCodeTagClass = UTTagClass(
+        rawValue: "com.apple.device-model-code"
+    )
     private static let motionPurpleWallpaper = NSImage(
         contentsOfFile: "/System/Library/Desktop Pictures/.thumbnails/Motion Purple Dark.heic"
     )
@@ -634,6 +638,24 @@ private enum SystemDeviceArtworkProvider {
     )
 
     static func image(for identity: SystemMonitorIdentity) -> NSImage? {
+        if let contentType = contentType(for: identity) {
+            let cacheKey = "content-type:\(contentType.identifier)" as NSString
+            if let cachedImage = imageCache.object(forKey: cacheKey) {
+                return cachedImage
+            }
+
+            let sourceImage = NSWorkspace.shared.icon(for: contentType)
+            let image = identity.computerName
+                .localizedCaseInsensitiveContains("macbook")
+                ? croppedLaptopImage(
+                    sourceImage,
+                    wallpaper: wallpaper(for: identity)
+                )
+                : sourceImage
+            imageCache.setObject(image, forKey: cacheKey)
+            return image
+        }
+
         guard let resourceName = resourceName(for: identity) else {
             return NSImage(named: NSImage.computerName)
         }
@@ -659,6 +681,19 @@ private enum SystemDeviceArtworkProvider {
         }
         imageCache.setObject(image, forKey: resourceName as NSString)
         return image
+    }
+
+    private static func contentType(
+        for identity: SystemMonitorIdentity
+    ) -> UTType? {
+        guard let contentType = UTType(
+            tag: identity.deviceModelCode,
+            tagClass: deviceModelCodeTagClass,
+            conformingTo: nil
+        ), contentType.isDeclared else {
+            return nil
+        }
+        return contentType
     }
 
     private static func wallpaper(
