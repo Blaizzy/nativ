@@ -772,10 +772,10 @@ private enum SystemDeviceArtworkProvider {
         guard let wallpaper else { return }
 
         let screenRect = NSRect(
-            x: rect.minX + (rect.width * 0.107),
+            x: rect.minX + (rect.width * 0.102),
             y: rect.minY + (rect.height * 0.186),
-            width: rect.width * 0.786,
-            height: rect.height * 0.789
+            width: rect.width * 0.796,
+            height: rect.height * 0.796
         )
         let wallpaperSize = wallpaper.size
         let targetAspectRatio = screenRect.width / screenRect.height
