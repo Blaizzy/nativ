@@ -26,15 +26,7 @@ final class RoutineRunner {
     }
 
     func run(_ routine: Routine, source: RoutineRunSource) {
-        let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
-            for: routine,
-            runs: store.runs(forRoutine: routine.id),
-            sessionStore: sessionStore
-        )
-        if linkedRoutine != routine {
-            store.upsert(linkedRoutine)
-        }
-        queue.append((linkedRoutine, source))
+        queue.append((routine, source))
         drain()
     }
 
@@ -52,7 +44,24 @@ final class RoutineRunner {
     }
 
     private func execute(_ routine: Routine, source: RoutineRunSource) async {
-        var run = RoutineRun(routineID: routine.id, source: source, status: .running)
+        let startedAt = Date()
+        let sessionID = UUID()
+        let initialTranscript = [
+            ChatTranscriptMessage(role: .user, content: routine.instructions)
+        ]
+        saveRunChat(
+            routine: routine,
+            sessionID: sessionID,
+            createdAt: startedAt,
+            messages: initialTranscript
+        )
+        var run = RoutineRun(
+            routineID: routine.id,
+            startedAt: startedAt,
+            source: source,
+            sessionID: sessionID,
+            status: .running
+        )
         store.recordRun(run)
 
         if !model.isRunning {
@@ -61,7 +70,14 @@ final class RoutineRunner {
         await waitForServer()
 
         guard let baseURL = model.activeServerBaseURL else {
-            finish(&run, routine: routine, status: .failed, summary: "The Nativ server isn’t running.")
+            let message = "The Nativ server isn’t running."
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: initialTranscript + [ChatTranscriptMessage(role: .error, content: message)]
+            )
+            finish(&run, routine: routine, status: .failed, summary: message)
             return
         }
 
@@ -74,11 +90,18 @@ final class RoutineRunner {
             mcpHost: mcpHost
         )
         guard capabilities.unavailable.isEmpty else {
+            let message = "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: initialTranscript + [ChatTranscriptMessage(role: .error, content: message)]
+            )
             finish(
                 &run,
                 routine: routine,
                 status: .failed,
-                summary: "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
+                summary: message
             )
             return
         }
@@ -90,9 +113,12 @@ final class RoutineRunner {
                 capabilities: capabilities,
                 baseURL: baseURL
             )
-            let sessionID = appendRun(routine: routine, messages: result.transcript)
-            NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
-            run.sessionID = sessionID
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: result.transcript
+            )
             finish(
                 &run,
                 routine: routine,
@@ -104,12 +130,24 @@ final class RoutineRunner {
             let transcript = failure.transcript + [
                 ChatTranscriptMessage(role: .error, content: errorMessage)
             ]
-            let sessionID = appendRun(routine: routine, messages: transcript)
-            NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
-            run.sessionID = sessionID
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: transcript
+            )
             finish(&run, routine: routine, status: .failed, summary: errorMessage)
         } catch {
-            finish(&run, routine: routine, status: .failed, summary: error.localizedDescription)
+            let errorMessage = error.localizedDescription
+            saveRunChat(
+                routine: routine,
+                sessionID: sessionID,
+                createdAt: startedAt,
+                messages: initialTranscript + [
+                    ChatTranscriptMessage(role: .error, content: errorMessage)
+                ]
+            )
+            finish(&run, routine: routine, status: .failed, summary: errorMessage)
         }
     }
 
@@ -283,14 +321,21 @@ final class RoutineRunner {
         }
     }
 
-    private func appendRun(routine: Routine, messages: [ChatTranscriptMessage]) -> UUID {
-        let sessionID = routine.sourceSessionID ?? UUID()
-        var session = sessionStore.loadSession(id: sessionID)
-            ?? ScheduledTaskChatLinker.makeSession(for: routine, id: sessionID)
-        session.messages.append(contentsOf: messages)
+    private func saveRunChat(
+        routine: Routine,
+        sessionID: UUID,
+        createdAt: Date,
+        messages: [ChatTranscriptMessage]
+    ) {
+        var session = ScheduledTaskChatLinker.makeRunSession(
+            for: routine,
+            messages: messages,
+            id: sessionID,
+            createdAt: createdAt
+        )
         session.updatedAt = Date()
         sessionStore.saveSession(session)
-        return sessionID
+        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func finish(

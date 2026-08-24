@@ -603,7 +603,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
     }
 
     private func setUpRoutines() {
-        restoreScheduledTaskChats()
         RoutineRunCoordinator.shared.configure(runner: routineRunner)
         routineRunner.onRunCompleted = { routine, run in
             Task { @MainActor in
@@ -619,22 +618,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @MainA
         }
         refreshRoutineAgents()
         routineScheduler.start()
-    }
-
-    private func restoreScheduledTaskChats() {
-        guard !routineStore.routines.isEmpty else { return }
-
-        for routine in routineStore.routines {
-            let linkedRoutine = ScheduledTaskChatLinker.ensureChat(
-                for: routine,
-                runs: routineStore.runs(forRoutine: routine.id),
-                sessionStore: routineSessionStore
-            )
-            if linkedRoutine != routine {
-                routineStore.upsert(linkedRoutine)
-            }
-        }
-        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
     }
 
     private func refreshRoutineAgents() {

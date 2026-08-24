@@ -532,6 +532,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         storedSessions.removeAll { $0.id == sessionID }
+        RoutineStore.shared.detachSession(sessionID)
         sessionStore.deleteSession(id: sessionID)
         pruneRedundantEmptySessions()
 
@@ -2207,10 +2208,6 @@ final class ChatViewModel: ObservableObject {
             }
 
             if session.messages.isEmpty {
-                if RoutineStore.shared.routine(forSession: session.id) != nil {
-                    keptSessions.append(session)
-                    continue
-                }
                 if keptEmptySession {
                     removedSessionIDs.append(session.id)
                     continue
@@ -2223,6 +2220,7 @@ final class ChatViewModel: ObservableObject {
 
         storedSessions = keptSessions
         for sessionID in removedSessionIDs {
+            RoutineStore.shared.detachSession(sessionID)
             sessionStore.deleteSession(id: sessionID)
         }
     }

@@ -275,13 +275,7 @@ struct ScheduledTasksView: View {
 
     private func save(_ task: Routine) {
         enableNewKits(in: task)
-        let linkedTask = ScheduledTaskChatLinker.ensureChat(
-            for: task,
-            runs: store.runs(forRoutine: task.id),
-            sessionStore: ChatSessionStore()
-        )
-        store.upsert(linkedTask)
-        NotificationCenter.default.post(name: .routineDidSaveChatSession, object: nil)
+        store.upsert(task)
     }
 
     private func enableNewKits(in task: Routine) {
