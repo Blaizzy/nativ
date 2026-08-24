@@ -10,18 +10,45 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         XCTAssertEqual(
             attachment(filename: "report.pdf", mimeType: "application/octet-stream")
                 .chatAttachmentKind,
-            .pdf
+            .document(.pdf)
         )
         XCTAssertEqual(
             attachment(filename: "photo.png", mimeType: "application/pdf").chatAttachmentKind,
-            .pdf
+            .document(.pdf)
         )
         XCTAssertEqual(
             attachment(filename: "report.pdf", mimeType: "text/plain").chatAttachmentKind,
-            .unsupported
+            .document(.plainText)
         )
         XCTAssertEqual(
             attachment(filename: "notes.txt", mimeType: "text/plain").chatAttachmentKind,
+            .document(.plainText)
+        )
+        XCTAssertEqual(
+            attachment(filename: "data.csv", mimeType: "text/csv").chatAttachmentKind,
+            .document(.csv)
+        )
+        XCTAssertEqual(
+            attachment(filename: "slides.pptx", mimeType: "application/octet-stream")
+                .chatAttachmentKind,
+            .document(.presentation)
+        )
+        for filename in ["notes.md", "data.json", "page.html", "config.xml", "main.swift"] {
+            XCTAssertEqual(
+                attachment(filename: filename, mimeType: "application/octet-stream")
+                    .chatAttachmentKind,
+                .document(.plainText),
+                filename
+            )
+        }
+        XCTAssertEqual(
+            attachment(filename: "draft.docx", mimeType: "application/octet-stream")
+                .chatAttachmentKind,
+            .document(.wordProcessing)
+        )
+        XCTAssertEqual(
+            attachment(filename: "legacy.ppt", mimeType: "application/octet-stream")
+                .chatAttachmentKind,
             .unsupported
         )
     }
@@ -68,7 +95,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     func testPDFWithoutEmbeddedTextExplainsOCRLimitation() async throws {
         let validator = validator(result: .failure(.noExtractableText))
 
-        let validation = try await validator.validatePDF(attachment(filename: "scan.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "scan.pdf"))
 
         guard case .blocked(let message) = validation else {
             return XCTFail("Expected scanned PDF to be blocked")
@@ -80,7 +107,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     func testPasswordProtectedPDFExplainsHowToProceed() async throws {
         let validator = validator(result: .failure(.passwordProtected))
 
-        let validation = try await validator.validatePDF(attachment(filename: "private.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "private.pdf"))
 
         guard case .blocked(let message) = validation else {
             return XCTFail("Expected password-protected PDF to be blocked")
@@ -93,12 +120,12 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         let content = ExtractedDocumentContent(
             filename: "long.pdf",
             mimeType: "application/pdf",
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: "123456")]
+            sourceSectionCount: 1,
+            sections: [ExtractedDocumentSection(location: .page(1), text: "123456")]
         )
         let validator = validator(result: .success(content))
 
-        let validation = try await validator.validatePDF(attachment(filename: "long.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "long.pdf"))
 
         XCTAssertFalse(validation.preventsSending)
         XCTAssertEqual(validation, .ready)
@@ -108,12 +135,12 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         let content = ExtractedDocumentContent(
             filename: "report.pdf",
             mimeType: "application/pdf",
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: "Report text")]
+            sourceSectionCount: 1,
+            sections: [ExtractedDocumentSection(location: .page(1), text: "Report text")]
         )
         let validator = validator(result: .success(content))
 
-        let validation = try await validator.validatePDF(attachment(filename: "report.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "report.pdf"))
 
         XCTAssertEqual(validation, .ready)
     }
@@ -123,7 +150,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         let pdf = attachment(filename: "report.pdf")
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await validator.validatePDF(pdf)
+            return try await validator.validateDocument(pdf)
         }
 
         do {
@@ -150,7 +177,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     private func validator(
         result: Result<ExtractedDocumentContent, DocumentTextExtractionError>
     ) -> ChatAttachmentValidator {
-        let cache = ChatDocumentExtractionCache { _, _, _ in
+        let cache = ChatDocumentExtractionCache { _, _, _, _ in
             try result.get()
         }
         return ChatAttachmentValidator(extractionCache: cache)

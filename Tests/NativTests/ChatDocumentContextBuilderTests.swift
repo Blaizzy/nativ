@@ -12,10 +12,10 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             "report.pdf": ExtractedDocumentContent(
                 filename: "report.pdf",
                 mimeType: "application/pdf",
-                pageCount: 3,
+                sourceSectionCount: 3,
                 sections: [
-                    ExtractedDocumentSection(pageNumber: 1, text: "First page"),
-                    ExtractedDocumentSection(pageNumber: 3, text: "Third page"),
+                    ExtractedDocumentSection(location: .page(1), text: "First page"),
+                    ExtractedDocumentSection(location: .page(3), text: "Third page"),
                 ]
             )
         ])
@@ -98,6 +98,33 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
 
         XCTAssertTrue(context.contains("[Page 4]"))
         XCTAssertTrue(context.contains("Unique content for section 4."))
+    }
+
+    func testExplicitSlideReferenceWinsWithoutMatchingSlideText() async throws {
+        let attachment = attachment(
+            filename: "briefing.pptx",
+            mimeType: "application/octet-stream"
+        )
+        let message = userMessage(content: "Explain slide 3.", attachments: [attachment])
+        let content = ExtractedDocumentContent(
+            filename: "briefing.pptx",
+            mimeType: "application/octet-stream",
+            sourceSectionCount: 4,
+            sections: (1...4).map {
+                ExtractedDocumentSection(location: .slide($0), text: "Content \($0)")
+            }
+        )
+        let builder = builder(
+            contents: ["briefing.pptx": content],
+            maximumCharactersPerDocument: 30,
+            maximumCharactersPerRequest: 30
+        )
+
+        let contexts = try await builder.contexts(for: [message])
+        let context = try XCTUnwrap(contexts[message.id])
+
+        XCTAssertTrue(context.contains("[Slide 3]"))
+        XCTAssertTrue(context.contains("Content 3"))
     }
 
     func testFallbackSamplesAcrossDocumentWhenTheQueryHasNoMatchingTerms() async throws {
@@ -291,7 +318,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             maximumCharactersPerDocument: 24
         )
 
-        let validation = try await validator.validatePDF(attachment)
+        let validation = try await validator.validateDocument(attachment)
         let contexts = try await builder.contexts(for: [message])
         let extractionCount = await extractor.extractionCount
 
@@ -332,9 +359,9 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         ExtractedDocumentContent(
             filename: filename,
             mimeType: "application/pdf",
-            pageCount: pages.count,
+            sourceSectionCount: pages.count,
             sections: pages.enumerated().map {
-                ExtractedDocumentSection(pageNumber: $0.offset + 1, text: $0.element)
+                ExtractedDocumentSection(location: .page($0.offset + 1), text: $0.element)
             }
         )
     }
@@ -347,7 +374,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         builder(
             maximumCharactersPerDocument: maximumCharactersPerDocument,
             maximumCharactersPerRequest: maximumCharactersPerRequest
-        ) { _, filename, _ in
+        ) { _, filename, _, _ in
             guard let content = contents[filename] else {
                 throw DocumentTextExtractionError.invalidDocument
             }
@@ -375,14 +402,15 @@ private actor RecordingDocumentTextExtractor {
     func extract(
         data: Data,
         filename: String,
-        mimeType: String
+        mimeType: String,
+        format: ChatDocumentFormat
     ) async throws -> ExtractedDocumentContent {
         filenames.append(filename)
         return ExtractedDocumentContent(
             filename: filename,
             mimeType: mimeType,
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: filename)]
+            sourceSectionCount: 1,
+            sections: [ExtractedDocumentSection(location: .page(1), text: filename)]
         )
     }
 }
@@ -398,7 +426,8 @@ private actor CountingDocumentTextExtractor {
     func extract(
         data: Data,
         filename: String,
-        mimeType: String
+        mimeType: String,
+        format: ChatDocumentFormat
     ) async throws -> ExtractedDocumentContent {
         extractionCount += 1
         return content

@@ -3,7 +3,7 @@ import Foundation
 /// Builds bounded request-only context from documents attached to chat messages.
 ///
 /// Complete extraction results stay in the shared cache. When a document does not fit, this
-/// builder selects relevant pages for the latest user request instead of keeping only the start.
+/// builder selects relevant sections for the latest request instead of keeping only the start.
 struct ChatDocumentContextBuilder: Sendable {
     static let defaultMaximumCharactersPerDocument = 24_000
     static let defaultMaximumCharactersPerRequest = 48_000
@@ -34,7 +34,8 @@ struct ChatDocumentContextBuilder: Sendable {
         for message in messages.reversed() where message.role == .user {
             try Task.checkCancellation()
 
-            for attachment in message.imageAttachments where attachment.chatAttachmentKind == .pdf {
+            for attachment in message.imageAttachments
+            where attachment.chatAttachmentKind.documentFormat != nil {
                 guard remainingRequestCharacters > 0 else { break }
 
                 let document: IndexedChatDocument
@@ -79,11 +80,11 @@ struct ChatDocumentContextBuilder: Sendable {
 
         let queryTokens = IndexedChatDocument.tokens(in: query)
         let queryTerms = Set(queryTokens)
-        let pageReferences = referencedPages(in: queryTokens)
+        let references = explicitReferences(in: queryTokens)
         let sectionIndexes = prioritizedSectionIndexes(
             in: document,
             queryTerms: queryTerms,
-            pageReferences: pageReferences
+            references: references
         )
         let maximumExcerptCharacters = content.characterCount > characterLimit
             ? max(1, characterLimit / min(3, sectionIndexes.count))
@@ -110,16 +111,16 @@ struct ChatDocumentContextBuilder: Sendable {
 
         var parts: [String] = []
         if extractedCharacterCount < content.characterCount {
-            let selectedPageCount = excerpts.count
-            let totalPageCount = content.pageCount ?? content.sections.count
+            let selectedCount = excerpts.count
+            let totalCount = content.sourceSectionCount
             parts.append(
-                "[Selected relevant excerpts from \(selectedPageCount) of \(totalPageCount) pages.]"
+                "[Selected relevant excerpts from \(selectedCount) of "
+                    + "\(totalCount) \(content.sectionName).]"
             )
         }
         for excerpt in excerpts.sorted(by: { $0.index < $1.index }) {
             let section = content.sections[excerpt.index]
-            let label = section.pageNumber.map { "[Page \($0)]\n" } ?? ""
-            parts.append(label + excerpt.text)
+            parts.append("[\(section.location.label)]\n" + excerpt.text)
         }
 
         let filename = sanitizedFilename(content.filename)
@@ -136,7 +137,7 @@ struct ChatDocumentContextBuilder: Sendable {
     private static func prioritizedSectionIndexes(
         in document: IndexedChatDocument,
         queryTerms: Set<String>,
-        pageReferences: Set<Int>
+        references: ExplicitReferences
     ) -> [Int] {
         let sections = document.content.sections
         guard !sections.isEmpty else { return [] }
@@ -150,7 +151,11 @@ struct ChatDocumentContextBuilder: Sendable {
         var matches: [(index: Int, referenced: Bool, score: Int)] = []
         matches.reserveCapacity(sections.count)
         for (index, section) in sections.enumerated() {
-            let referenced = section.pageNumber.map(pageReferences.contains) ?? false
+            let referenced = section.location.matches(
+                pages: references.pages,
+                slides: references.slides,
+                lines: references.lines
+            )
             let score = weights.reduce(0) { result, term in
                 result + (document.termsBySection[index].contains(term.key) ? term.value : 0)
             }
@@ -208,19 +213,36 @@ struct ChatDocumentContextBuilder: Sendable {
         return (prefix + String(text[start..<end]) + suffix, characterLimit)
     }
 
-    private static func referencedPages(in tokens: [String]) -> Set<Int> {
-        var pageNumbers: Set<Int> = []
+    private struct ExplicitReferences {
+        let pages: Set<Int>
+        let slides: Set<Int>
+        let lines: Set<Int>
+    }
+
+    private static func explicitReferences(in tokens: [String]) -> ExplicitReferences {
+        ExplicitReferences(
+            pages: referencedNumbers(after: ["page", "pages"], in: tokens),
+            slides: referencedNumbers(after: ["slide", "slides"], in: tokens),
+            lines: referencedNumbers(after: ["line", "lines"], in: tokens)
+        )
+    }
+
+    private static func referencedNumbers(
+        after labels: Set<String>,
+        in tokens: [String]
+    ) -> Set<Int> {
+        var numbers: Set<Int> = []
         for (index, token) in tokens.enumerated()
-        where token == "page" || token == "pages" {
+        where labels.contains(token) {
             for candidate in tokens.dropFirst(index + 1).prefix(4) {
-                if let pageNumber = Int(candidate) {
-                    pageNumbers.insert(pageNumber)
+                if let number = Int(candidate) {
+                    numbers.insert(number)
                 } else if candidate != "and" {
                     break
                 }
             }
         }
-        return pageNumbers
+        return numbers
     }
 
     private static func sanitizedFilename(_ filename: String) -> String {
@@ -228,6 +250,6 @@ struct ChatDocumentContextBuilder: Sendable {
             .replacing("\r", with: " ")
             .replacing("\n", with: " ")
             .trimmingCharacters(in: .whitespaces)
-        return sanitized.isEmpty ? "Untitled PDF" : sanitized
+        return sanitized.isEmpty ? "Untitled document" : sanitized
     }
 }

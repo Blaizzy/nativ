@@ -16,12 +16,13 @@ struct IndexedChatDocument: Sendable {
     }
 }
 
-/// Shares complete PDF extraction results between attachment validation and request construction.
+/// Shares complete document extraction results between validation and request construction.
 actor ChatDocumentExtractionCache {
     typealias Extraction = @Sendable (
         _ data: Data,
         _ filename: String,
-        _ mimeType: String
+        _ mimeType: String,
+        _ format: ChatDocumentFormat
     ) async throws -> ExtractedDocumentContent
 
     private let extract: Extraction
@@ -29,9 +30,14 @@ actor ChatDocumentExtractionCache {
     private var extractionTasks: [UUID: Task<IndexedChatDocument, Error>] = [:]
 
     init() {
-        let extractor = PDFDocumentTextExtractor()
-        self.extract = { data, filename, mimeType in
-            try await extractor.extract(data: data, filename: filename, mimeType: mimeType)
+        let router = DocumentTextExtractionRouter()
+        self.extract = { data, filename, mimeType, format in
+            try await router.extract(
+                data: data,
+                filename: filename,
+                mimeType: mimeType,
+                format: format
+            )
         }
     }
 
@@ -49,7 +55,7 @@ actor ChatDocumentExtractionCache {
             try Task.checkCancellation()
             return document
         }
-        guard attachment.chatAttachmentKind == .pdf,
+        guard let format = attachment.chatAttachmentKind.documentFormat,
               let data = Data(base64Encoded: attachment.base64Data)
         else {
             throw DocumentTextExtractionError.invalidDocument
@@ -57,7 +63,7 @@ actor ChatDocumentExtractionCache {
 
         let task = Task {
             try await IndexedChatDocument(
-                extract(data, attachment.filename, attachment.mimeType)
+                extract(data, attachment.filename, attachment.mimeType, format)
             )
         }
         extractionTasks[attachment.id] = task

@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import NativServerKit
+import UniformTypeIdentifiers
 
 struct ChatQueuedPrompt: Identifiable, Equatable {
     let id: UUID
@@ -896,7 +897,8 @@ final class ChatViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image, .movie, .pdf, .plainText, .rtf, .spreadsheet, .presentation]
+        panel.allowedContentTypes = [.image, .pdf, .text, .rtf, .commaSeparatedText] +
+            ["doc", "docx", "pptx"].compactMap { UTType(filenameExtension: $0) }
 
         guard panel.runModal() == .OK else {
             return
@@ -1024,7 +1026,7 @@ final class ChatViewModel: ObservableObject {
                     return
                 }
                 do {
-                    let validation = try await attachmentValidator.validatePDF(attachment)
+                    let validation = try await attachmentValidator.validateDocument(attachment)
                     try Task.checkCancellation()
                     guard pendingImageAttachments.contains(where: { $0.id == attachmentID }) else {
                         return

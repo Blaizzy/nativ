@@ -1564,7 +1564,7 @@ struct ChatComposerActionPanel: View {
                 section("Add") {
                     ChatComposerActionRow(
                         title: "Upload file",
-                        detail: "Choose an image or PDF from your Mac",
+                        detail: "Choose an image or document from your Mac",
                         systemName: "doc.badge.plus",
                         action: onAttachImages
                     )
@@ -2159,8 +2159,8 @@ struct ChatPendingImageAttachmentView: View {
             case .processing:
                 ProgressView()
                     .controlSize(.small)
-                    .help("Reading PDF")
-                    .accessibilityLabel("Reading PDF")
+                    .help("Reading document")
+                    .accessibilityLabel("Reading document")
             case .blocked(let message):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Color.orange)
