@@ -59,7 +59,7 @@ struct DevHubView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
-        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .controlPanelDetailHeaderTopPadding()
         .padding(.bottom, 12)
         .frame(width: 188)
     }

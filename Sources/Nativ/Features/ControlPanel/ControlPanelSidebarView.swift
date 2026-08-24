@@ -11,7 +11,7 @@ extension ControlPanelView {
             Color.clear
                 .frame(
                     height: isFullScreen
-                        ? ControlPanelLayout.fullScreenSidebarTopClearance
+                        ? ControlPanelLayout.fullScreenTopClearance
                         : 0
                 )
 
