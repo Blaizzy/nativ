@@ -440,7 +440,7 @@ private struct IntegrationCatalogView: View {
             }
             .padding(.horizontal, 22)
             .padding(.leading, titleLeadingInset)
-            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .controlPanelDetailHeaderTopPadding()
             .padding(.bottom, 16)
 
             Divider()
@@ -561,7 +561,7 @@ private struct IntegrationDetailView: View {
             }
             .padding(.horizontal, 24)
             .padding(.leading, titleLeadingInset)
-            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .controlPanelDetailHeaderTopPadding()
             .padding(.bottom, 18)
 
             Divider()

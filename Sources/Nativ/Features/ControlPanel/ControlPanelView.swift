@@ -109,6 +109,10 @@ struct ControlPanelView: View {
                         maxWidth: .infinity,
                         maxHeight: .infinity
                     )
+                    .ignoresSafeArea(
+                        .container,
+                        edges: isSidebarVisible ? .top : []
+                    )
             }
 
             resizableSidebar
@@ -128,6 +132,7 @@ struct ControlPanelView: View {
         .toolbar(removing: .title)
         .frame(minWidth: 1040, minHeight: 600)
         .environment(\.controlPanelIsFullScreen, isFullScreen)
+        .environment(\.controlPanelIsSidebarVisible, isSidebarVisible)
         .environment(\.openExtensionsHubSection) { section in
             selectedExtensionsHubSection = section
             Task { @MainActor in

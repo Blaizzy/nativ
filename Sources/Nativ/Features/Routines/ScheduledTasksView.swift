@@ -131,7 +131,7 @@ struct ScheduledTasksView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .controlPanelDetailHeaderTopPadding()
         .padding(.bottom, 16)
     }
 
