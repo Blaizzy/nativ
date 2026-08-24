@@ -1030,23 +1030,27 @@ struct AudioView: View {
 
     private var speechModelMenu: some View {
         Menu {
-            speechModelMenuButton(title: "Automatic", modelID: "")
+            if model.inferenceActivityInProgress {
+                Text("Models can’t be changed while a response is being generated.")
+            } else {
+                speechModelMenuButton(title: "Automatic", modelID: "")
 
-            if let selectedModelID,
-               !speechModels.contains(where: { $0.repoID == selectedModelID })
-            {
-                speechModelMenuButton(title: selectedModelID, modelID: selectedModelID)
-            }
+                if let selectedModelID,
+                   !speechModels.contains(where: { $0.repoID == selectedModelID })
+                {
+                    speechModelMenuButton(title: selectedModelID, modelID: selectedModelID)
+                }
 
-            if !speechModels.isEmpty {
-                Divider()
-            }
+                if !speechModels.isEmpty {
+                    Divider()
+                }
 
-            ForEach(speechModels) { localModel in
-                speechModelMenuButton(
-                    title: localModel.displayName,
-                    modelID: localModel.repoID
-                )
+                ForEach(speechModels) { localModel in
+                    speechModelMenuButton(
+                        title: localModel.displayName,
+                        modelID: localModel.repoID
+                    )
+                }
             }
         } label: {
             HStack(spacing: 10) {

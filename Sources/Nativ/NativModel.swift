@@ -73,7 +73,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
 
     @Published private(set) var modelSwitchInProgress = false
     @Published private(set) var modelSwitchTargetID: String?
+    @Published private(set) var inferenceActivityInProgress = false
     private var modelSwitchWatchdog: Task<Void, Never>?
+    private var inferenceActivityCancellable: AnyCancellable?
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var modelLoadFailure: ModelLoadFailure?
     @Published private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
@@ -119,6 +121,16 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         refreshAllTimeStats()
         resolveHuggingFaceEnvironmentFromLoginShell()
         migrateCustomHuggingFaceCredentialIfNeeded()
+    }
+
+    func observeInferenceActivity(_ coordinator: InferenceActivityCoordinator) {
+        inferenceActivityInProgress = coordinator.hasActiveOperations
+        inferenceActivityCancellable = coordinator.activityDidChange
+            .sink { [weak self, weak coordinator] in
+                guard let self, let coordinator else { return }
+                inferenceActivityInProgress = coordinator.hasActiveOperations
+                notifyMenuStateChanged()
+            }
     }
 
     /// GUI apps inherit launchd's environment, which excludes exports from
@@ -586,7 +598,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         availableModels: [LocalModel],
         onSelectionAccepted: @escaping () -> Void = {}
     ) -> Bool {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return false
         }
 
@@ -610,6 +622,9 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
     }
 
     func confirmPendingModelPreloadSwitch() {
+        guard !inferenceActivityInProgress else {
+            return
+        }
         guard let pendingModelPreloadSwitch else {
             modelPreloadMemoryWarning = nil
             return
@@ -633,7 +648,7 @@ final class NativModel: ObservableObject, ChatModelSwitchingSurface {
         to modelID: String?,
         for slot: ModelPreloadSlot
     ) {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return
         }
         clearModelLoadFailure()

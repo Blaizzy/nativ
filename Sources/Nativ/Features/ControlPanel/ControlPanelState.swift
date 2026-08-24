@@ -6,18 +6,51 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
+final class ControlPanelSharedDependencies {
+    let mcpHost = MCPHostManager()
+    let systemMonitor = SystemMonitorStore()
+    let launchAtLogin = LaunchAtLoginController()
+    let persistedDataChanges = PersistedDataChangeHub()
+    let inferenceActivity = InferenceActivityCoordinator()
+}
+
+@MainActor
 final class ControlPanelDependencies: ObservableObject {
-    lazy var chat = ChatViewModel()
-    lazy var mcpHost = MCPHostManager()
-    lazy var imageGeneration = ImageGenerationViewModel()
+    let mcpHost: MCPHostManager
+    let systemMonitor: SystemMonitorStore
+    let launchAtLogin: LaunchAtLoginController
+    private let windowID: UUID
+    private let persistedDataChanges: PersistedDataChangeHub
+    private let inferenceActivity: InferenceActivityCoordinator
+
+    lazy var chat = ChatViewModel(
+        windowID: windowID,
+        persistedDataChanges: persistedDataChanges,
+        inferenceActivity: inferenceActivity
+    )
+    lazy var imageGeneration = ImageGenerationViewModel(
+        windowID: windowID,
+        persistedDataChanges: persistedDataChanges,
+        inferenceActivity: inferenceActivity
+    )
     lazy var artifacts = ArtifactStore()
     lazy var dashboard = DashboardViewModel()
-    lazy var systemMonitor = SystemMonitorStore()
-    lazy var launchAtLogin = LaunchAtLoginController()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
     lazy var routineStore = RoutineStore.shared
     lazy var routineModelLibrary = LocalModelLibrary()
+
+    init(
+        shared: ControlPanelSharedDependencies = .init(),
+        windowID: UUID = UUID()
+    ) {
+        mcpHost = shared.mcpHost
+        systemMonitor = shared.systemMonitor
+        launchAtLogin = shared.launchAtLogin
+        self.windowID = windowID
+        persistedDataChanges = shared.persistedDataChanges
+        inferenceActivity = shared.inferenceActivity
+    }
 }
 
 /// Filters `NativModel` down to values that can change control-panel chrome.

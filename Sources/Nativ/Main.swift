@@ -120,8 +120,8 @@ private struct NativApplication: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("Nativ", id: "main") {
-            NativRootView(appDelegate: appDelegate)
+        WindowGroup("Nativ", id: "main") {
+            NativWindowRoot(appDelegate: appDelegate)
         }
         .defaultSize(width: 1240, height: 720)
         .defaultPosition(.center)
@@ -129,64 +129,35 @@ private struct NativApplication: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowBackgroundDragBehavior(.enabled)
         .commands {
-            CommandGroup(after: .appInfo) {
-                CheckForUpdatesCommand(updater: appDelegate.softwareUpdater.updater)
-            }
-
-            CommandGroup(replacing: .newItem) {
-                Button("New Chat") {
-                    appDelegate.createNewChat()
-                }
-                .keyboardShortcut("n")
-            }
-
-            CommandGroup(replacing: .sidebar) {
-                Button("Toggle Sidebar") {
-                    appDelegate.toggleSidebar()
-                }
-                .keyboardShortcut("s", modifiers: [.control, .command])
-            }
-
-            CommandGroup(after: .sidebar) {
-                Button("Collapse All Sections") {
-                    appDelegate.toggleAllSidebarSections()
-                }
-                .keyboardShortcut(".", modifiers: [.command, .option])
-
-                Button("Increase Chat Font Size") {
-                    appDelegate.increaseChatFontSize()
-                }
-                .keyboardShortcut("+", modifiers: .command)
-                Button("Decrease Chat Font Size") {
-                    appDelegate.decreaseChatFontSize()
-                }
-                .keyboardShortcut("-", modifiers: .command)
-                Button("Reset Chat Font Size") {
-                    appDelegate.resetChatFontSize()
-                }
-                .keyboardShortcut("0", modifiers: .command)
-            }
-
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
-                    appDelegate.openSettings()
-                }
-                .keyboardShortcut(",")
-            }
+            NativApplicationCommands(appDelegate: appDelegate)
         }
     }
 }
 
-private struct NativRootView: View {
+private struct NativWindowRoot: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
+    @StateObject private var windowState: NativWindowState
     let appDelegate: AppDelegate
 
+    init(appDelegate: AppDelegate) {
+        self.appDelegate = appDelegate
+        _windowState = StateObject(wrappedValue: appDelegate.makeWindowState())
+    }
+
     var body: some View {
-        appDelegate.rootView
+        appDelegate.rootView(for: windowState)
+            .focusedSceneValue(\.nativWindowState, windowState)
+            .background {
+                NativWindowRegistryReader(
+                    state: windowState,
+                    registry: appDelegate.windowRegistry
+                )
+                .frame(width: 0, height: 0)
+            }
             .onAppear {
                 applyAppearance(appearance)
-                appDelegate.registerMainWindowOpener {
+                appDelegate.registerWindowOpener {
                     openWindow(id: "main")
                 }
             }

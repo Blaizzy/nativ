@@ -420,7 +420,8 @@ struct ChatComposer: View {
             secondarySection: reasoningPickerSection,
             isModelLoading: model.isModelLoading,
             modelLoadingPercentage: model.modelLoadingPercentage,
-            isDisabled: model.isModelLoading || viewModel.hasPendingRequests,
+            isDisabled: model.isModelLoading,
+            selectionUnavailableReason: modelSelectionUnavailableReason,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
@@ -467,7 +468,9 @@ struct ChatComposer: View {
     }
 
     private var effectiveCanSend: Bool {
-        canSend && !hasVisionRejectedAttachment
+        canSend
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
+            && !hasVisionRejectedAttachment
     }
 
     private var attachmentNotices: [ChatAttachmentNotice] {
@@ -639,13 +642,20 @@ struct ChatComposer: View {
     }
 
     private var modelPickerHelp: String {
-        if viewModel.hasPendingRequests {
-            return "Model switching is unavailable while requests are active or queued"
+        if let modelSelectionUnavailableReason {
+            return modelSelectionUnavailableReason
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(selectedModelLabel)"
         }
         return "Change model"
+    }
+
+    private var modelSelectionUnavailableReason: String? {
+        guard viewModel.hasPendingRequests || model.inferenceActivityInProgress else {
+            return nil
+        }
+        return "Models can’t be changed while a response is being generated."
     }
 
     private func modelMenuLabel(_ modelID: String) -> String {
@@ -888,6 +898,7 @@ struct ComposerModelPicker: View {
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
     let isDisabled: Bool
+    let selectionUnavailableReason: String?
     let statusLabel: String
     let helpText: String
     let accessibilityValue: String
@@ -909,6 +920,7 @@ struct ComposerModelPicker: View {
                 selectedModelProvider: selectedModelProvider,
                 secondarySection: secondarySection,
                 isEnabled: !isDisabled,
+                selectionUnavailableReason: selectionUnavailableReason,
                 usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
                 emptyStateActionTitle: emptyStateActionTitle,
@@ -939,7 +951,9 @@ struct ComposerModelPicker: View {
             if isPickerHovered && !isMenuOpen {
                 ComposerModelPickerTooltip(
                     title: pickerTooltip,
-                    shortcutLabel: isDisabled ? nil : shortcutLabel
+                    shortcutLabel: isDisabled || selectionUnavailableReason != nil
+                        ? nil
+                        : shortcutLabel
                 )
                     .offset(y: -50)
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
@@ -968,7 +982,10 @@ struct ComposerModelPicker: View {
     }
 
     private var pickerTooltip: String {
-        isDisabled ? helpText : "Select model"
+        if isDisabled || selectionUnavailableReason != nil {
+            return helpText
+        }
+        return "Select model"
     }
 
     private var isPickerActive: Bool {
@@ -994,6 +1011,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let selectedModelProvider: LocalModelProvider?
     let secondarySection: ComposerModelPickerSecondarySection?
     let isEnabled: Bool
+    let selectionUnavailableReason: String?
     let usesSelectModelShortcut: Bool
     let statusLabel: String
     let emptyStateActionTitle: String?
@@ -1098,6 +1116,13 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         private func makeModelMenu() -> NSMenu {
             let menu = NSMenu()
             menu.autoenablesItems = false
+
+            if let reason = parent.selectionUnavailableReason {
+                let item = NSMenuItem(title: reason, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+                return menu
+            }
 
             if let selectedModelID = parent.selectedModelID,
                !parent.models.contains(where: { $0.repoID == selectedModelID }) {

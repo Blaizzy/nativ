@@ -166,17 +166,29 @@ final class ImageGenerationViewModel: ObservableObject {
     @Published private(set) var scrollToken = 0
 
     private let sessionStore = ImageGenerationSessionStore()
+    private let windowID: UUID
+    private let persistedDataChanges: PersistedDataChangeHub
+    private let inferenceActivity: InferenceActivityCoordinator
     private var activeTask: Task<Void, Never>?
     private var activeTurnID: UUID?
     private var storedSessions: [ImageGenerationSession] = []
     private var currentSession: ImageGenerationSession?
+    private var persistedDataChangeCancellable: AnyCancellable?
+    private var inferenceActivityCancellable: AnyCancellable?
 
     private let imageSizeMultiple = 16
     private let minImageDimension = 64
     private let maxRequestDimension = 4_096
     private let maxAutoEditLongestSide = 2_048
 
-    init() {
+    init(
+        windowID: UUID = UUID(),
+        persistedDataChanges: PersistedDataChangeHub = .init(),
+        inferenceActivity: InferenceActivityCoordinator = .init()
+    ) {
+        self.windowID = windowID
+        self.persistedDataChanges = persistedDataChanges
+        self.inferenceActivity = inferenceActivity
         storedSessions = sessionStore.loadSessions().map { session in
             var repaired = session
             for index in repaired.turns.indices where repaired.turns[index].status == .inProgress {
@@ -187,6 +199,14 @@ final class ImageGenerationViewModel: ObservableObject {
         }
 
         refreshSessionList()
+        persistedDataChangeCancellable = persistedDataChanges.changes
+            .sink { [weak self] change in
+                self?.handlePersistedDataChange(change)
+            }
+        inferenceActivityCancellable = inferenceActivity.activityDidChange
+            .sink { [weak self] in
+                self?.objectWillChange.send()
+            }
     }
 
     deinit {
@@ -212,6 +232,11 @@ final class ImageGenerationViewModel: ObservableObject {
         !effectiveReferenceImages.isEmpty
     }
 
+    var isCurrentSessionActiveInAnotherWindow: Bool {
+        guard let currentSessionID else { return false }
+        return !canModifySession(currentSessionID)
+    }
+
     func applyDefaultModel(
         _ selectedModelID: String?,
         installedImageModelIDs: [String] = []
@@ -219,7 +244,9 @@ final class ImageGenerationViewModel: ObservableObject {
         let resolvedModelID = normalized(selectedModelID)
             ?? installedImageModelIDs.lazy.compactMap(normalized).first
             ?? Self.fallbackModelID
-        guard modelID != resolvedModelID else {
+        guard !isCurrentSessionActiveInAnotherWindow,
+              modelID != resolvedModelID
+        else {
             return
         }
         modelID = resolvedModelID
@@ -251,6 +278,9 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func applyLongestSide(_ longestSide: Int) {
+        guard !isCurrentSessionActiveInAnotherWindow else {
+            return
+        }
         let size = aspectFitSize(
             for: ImageGenerationPixelSize(
                 width: requestSettings.width,
@@ -303,12 +333,17 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func deleteSession(_ sessionID: UUID) {
-        guard !isGenerating else {
+        guard !isGenerating,
+              !inferenceActivity.isOwnedByAnotherWindow(
+                  .imageGeneration(sessionID),
+                  windowID: windowID
+              )
+        else {
             return
         }
 
         storedSessions.removeAll { $0.id == sessionID }
-        sessionStore.deleteSession(id: sessionID)
+        deletePersistedSession(sessionID)
 
         guard sessionID == currentSessionID else {
             refreshSessionList()
@@ -348,7 +383,28 @@ final class ImageGenerationViewModel: ObservableObject {
         else {
             return
         }
+        if let currentSessionID,
+           inferenceActivity.isOwnedByAnotherWindow(
+               .imageGeneration(currentSessionID),
+               windowID: windowID
+           ) {
+            statusText = "This image session is already generating in another window."
+            return
+        }
         materializeDraftSession(modelID: requestModelID)
+        guard let currentSessionID else { return }
+        let operationID = UUID()
+        let activityResource = InferenceActivityCoordinator.Resource.imageGeneration(
+            currentSessionID
+        )
+        guard inferenceActivity.begin(
+            resource: activityResource,
+            windowID: windowID,
+            operationID: operationID
+        ) else {
+            statusText = "This image session is already generating in another window."
+            return
+        }
         appModel.clearModelLoadFailure(for: requestModelID)
 
         var settings = requestSettings
@@ -399,7 +455,14 @@ final class ImageGenerationViewModel: ObservableObject {
         let serverAPIKey = serverSettings.serverAPIKey
         let modelSearchPath = serverSettings.modelSearchPath
         let huggingFaceToken = appModel.effectiveHuggingFaceToken
-        activeTask = Task { @MainActor [weak self, weak appModel] in
+        activeTask = Task { @MainActor [weak self, weak appModel, inferenceActivity] in
+            defer {
+                inferenceActivity.end(
+                    resource: activityResource,
+                    operationID: operationID
+                )
+            }
+
             guard let self else {
                 return
             }
@@ -473,7 +536,7 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func chooseImageAttachments() {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return
         }
 
@@ -491,7 +554,7 @@ final class ImageGenerationViewModel: ObservableObject {
 
     @discardableResult
     func attachImages(from pasteboard: NSPasteboard) -> Bool {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return false
         }
         let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
@@ -507,7 +570,7 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func captureScreenshot() {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return
         }
         let fileURL = FileManager.default.temporaryDirectory
@@ -525,7 +588,7 @@ final class ImageGenerationViewModel: ObservableObject {
 
     @discardableResult
     func loadImageAttachments(from providers: [NSItemProvider]) -> Bool {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return false
         }
 
@@ -569,11 +632,14 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func removePendingImageAttachment(_ id: UUID) {
+        guard !isCurrentSessionActiveInAnotherWindow else {
+            return
+        }
         pendingImageAttachments.removeAll { $0.id == id }
     }
 
     func clearActiveReference() {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return
         }
         activeReference = nil
@@ -582,14 +648,14 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func useAsReference(_ result: GeneratedImage) {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return
         }
         setActiveReference(result.attachment)
     }
 
     func useAsReference(_ attachment: ChatImageAttachment) {
-        guard !isGenerating else {
+        guard !isGenerating, !isCurrentSessionActiveInAnotherWindow else {
             return
         }
         setActiveReference(attachment)
@@ -705,6 +771,9 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) {
+        guard canModifySession(sessionID) else {
+            return
+        }
         if sessionID == currentSessionID {
             for turnIndex in turns.indices where turns[turnIndex].id == turnID {
                 turns[turnIndex].outputs.removeAll { $0.id == outputID }
@@ -722,12 +791,14 @@ final class ImageGenerationViewModel: ObservableObject {
             session.turns[turnIndex].outputs.removeAll { $0.id == outputID }
         }
         upsertStoredSession(session)
-        sessionStore.saveSession(session)
+        saveSession(session)
         refreshSessionList()
     }
 
     private func persistCurrentSession(updateTimestamp: Bool) {
-        guard var session = currentSession else {
+        guard var session = currentSession,
+              canModifySession(session.id)
+        else {
             return
         }
         session.modelKind = .imageGeneration
@@ -746,7 +817,7 @@ final class ImageGenerationViewModel: ObservableObject {
 
         currentSession = session
         upsertStoredSession(session)
-        sessionStore.saveSession(session)
+        saveSession(session)
         refreshSessionList()
     }
 
@@ -762,6 +833,63 @@ final class ImageGenerationViewModel: ObservableObject {
         sessions = storedSessions
             .map(\.summary)
             .sorted(by: ImageGenerationSessionSummary.recencySort)
+    }
+
+    private func handlePersistedDataChange(_ change: PersistedDataChange) {
+        guard change.originWindowID != windowID else { return }
+        guard case .imageGenerationSession = change.kind else { return }
+
+        storedSessions = sessionStore.loadSessions()
+        if let currentSession {
+            if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
+                if !isGenerating, fresh != currentSession {
+                    applyCurrentSession(fresh)
+                }
+            } else if !isGenerating {
+                prompt = ""
+                pendingImageAttachments.removeAll()
+                if let replacement = storedSessions.sorted(
+                    by: ImageGenerationSession.recencySort
+                ).first {
+                    applyCurrentSession(replacement)
+                } else {
+                    self.currentSession = nil
+                    currentSessionID = nil
+                    turns = []
+                    activeReference = nil
+                    statusText = nil
+                }
+            } else {
+                upsertStoredSession(currentSession)
+            }
+        }
+        refreshSessionList()
+    }
+
+    private func saveSession(_ session: ImageGenerationSession) {
+        guard canModifySession(session.id) else {
+            return
+        }
+        sessionStore.saveSession(session)
+        persistedDataChanges.send(
+            .imageGenerationSession(session.id),
+            originWindowID: windowID
+        )
+    }
+
+    private func canModifySession(_ sessionID: UUID) -> Bool {
+        !inferenceActivity.isOwnedByAnotherWindow(
+            .imageGeneration(sessionID),
+            windowID: windowID
+        )
+    }
+
+    private func deletePersistedSession(_ sessionID: UUID) {
+        sessionStore.deleteSession(id: sessionID)
+        persistedDataChanges.send(
+            .imageGenerationSession(sessionID),
+            originWindowID: windowID
+        )
     }
 
     private func bumpScroll() {

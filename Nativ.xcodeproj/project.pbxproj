@@ -134,6 +134,7 @@
 		62CAD81D603FF4AC296279CB /* ChatToolRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D10F9AFCCD57FA0625CA24 /* ChatToolRegistry.swift */; };
 		63D4D3774994EAE5F5ABB7E9 /* AudioInputVolumeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A118DF27AE0EF852DC458BB7 /* AudioInputVolumeController.swift */; };
 		657DFF151F7E54EA66CC36F8 /* SystemSensorSampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653E58FFA38742CD4D5D41F5 /* SystemSensorSampler.swift */; };
+		66714AD9AF65A2AB9575EE5E /* Windowing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E5D688B2CD65DEF471A59E8 /* Windowing.swift */; };
 		66745D5BB4D1454479FF6C9C /* RoutineScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C1220F03EC60874920E0CE /* RoutineScheduler.swift */; };
 		67560D2323090F583CCC39C6 /* NotificationAppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 6ABC782FB29B8C76EC8B60E6 /* NotificationAppIcon.icns */; };
 		686A83AD1E07A381F56F6D05 /* ChatDocumentContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A176708720937F2AEF36812 /* ChatDocumentContextBuilder.swift */; };
@@ -181,6 +182,7 @@
 		90A91F19C53567C017E37E28 /* RoutineRunCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50843C4D4ABCEC290EE626AF /* RoutineRunCoordinator.swift */; };
 		90EE7AA87400E84D947CBBF3 /* NativSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594711E024396C78703CE05A /* NativSettings.swift */; };
 		94504A0DB46777F5DA8CDBD6 /* Parallel.png in Resources */ = {isa = PBXBuildFile; fileRef = 530CA8743FEBF843F79321A7 /* Parallel.png */; };
+		95597E32B22781024B41DDB9 /* MultiWindowCoordinationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F34907A00518C8DD16B7D4D /* MultiWindowCoordinationTests.swift */; };
 		95711758521BCF469B48481E /* PerplexityBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F316824C4C3D36A94717A62 /* PerplexityBrowsingProvider.swift */; };
 		96AE764D2F938395E9B76C9E /* ChatServerStatsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068ED8143814678E688A3A62 /* ChatServerStatsTool.swift */; };
 		97EEA29CCD874048A8CE9D54 /* VoiceShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7405BB62742DE08EB640A2C5 /* VoiceShortcut.swift */; };
@@ -398,6 +400,7 @@
 		1C30476FCFDB8FC736643EEB /* NativAnalyticsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativAnalyticsStore.swift; sourceTree = "<group>"; };
 		1C695753548A6C1F2F37C602 /* WebReadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebReadService.swift; sourceTree = "<group>"; };
 		1D4B44C59153CB242FE92D3A /* ImageGenerationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageGenerationView.swift; sourceTree = "<group>"; };
+		1F34907A00518C8DD16B7D4D /* MultiWindowCoordinationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiWindowCoordinationTests.swift; sourceTree = "<group>"; };
 		20EE1CE9AAE5A3B9A2D4669C /* NativComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativComponents.swift; sourceTree = "<group>"; };
 		219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
 		23155DB5E733D8887D83AFD0 /* VoiceTranscriptInserter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriptInserter.swift; sourceTree = "<group>"; };
@@ -410,6 +413,7 @@
 		2BDBC269531FA6C6DA9F5DDC /* ModelPrimaryTaskResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolverTests.swift; sourceTree = "<group>"; };
 		2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatConfigurationView.swift; sourceTree = "<group>"; };
 		2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceModelReadmeTests.swift; sourceTree = "<group>"; };
+		2E5D688B2CD65DEF471A59E8 /* Windowing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Windowing.swift; sourceTree = "<group>"; };
 		30D9C81870FB504D03D2A1D5 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
 		30E2A903D604A57696674510 /* NativSystemPermissionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativSystemPermissionController.swift; sourceTree = "<group>"; };
 		31D10F9AFCCD57FA0625CA24 /* ChatToolRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatToolRegistry.swift; sourceTree = "<group>"; };
@@ -819,6 +823,14 @@
 			path = Browsing;
 			sourceTree = "<group>";
 		};
+		4E64FE039B20155736A6E708 /* Windowing */ = {
+			isa = PBXGroup;
+			children = (
+				2E5D688B2CD65DEF471A59E8 /* Windowing.swift */,
+			);
+			path = Windowing;
+			sourceTree = "<group>";
+		};
 		52ECEB1EB0B83451B1DE3C20 /* SystemMonitor */ = {
 			isa = PBXGroup;
 			children = (
@@ -947,6 +959,7 @@
 				EF0B01F9E49FE8776F139EC9 /* Shared */,
 				52ECEB1EB0B83451B1DE3C20 /* SystemMonitor */,
 				4879D4C4839E304DF0C779DC /* VoiceCapture */,
+				4E64FE039B20155736A6E708 /* Windowing */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -1146,6 +1159,7 @@
 				B1DC9B27547E82B74589D6B5 /* MCPServerCatalogTests.swift */,
 				3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */,
 				2BDBC269531FA6C6DA9F5DDC /* ModelPrimaryTaskResolverTests.swift */,
+				1F34907A00518C8DD16B7D4D /* MultiWindowCoordinationTests.swift */,
 				E0DA5C4D0B6B5A094E13CCC8 /* NativExtensionTests.swift */,
 				982F3BB563023885587DC860 /* NativNotificationTests.swift */,
 				E4EE3654E8AF5B3D6513FF62 /* NativSettingsTests.swift */,
@@ -1312,11 +1326,11 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				465C23BB3ADA415A5004AAD9 /* Nativ */,
 				ED4CB78AB93E015D0BE21F7B /* NativExtensionSDK */,
 				1622B274F4DF5A85C2FDB081 /* NativServerKit */,
-				51AD42FA29E71F2450386688 /* NativTests */,
+				465C23BB3ADA415A5004AAD9 /* Nativ */,
 				7082E254E8272A5E8D13E6F0 /* VoiceDictationExtensionRuntime */,
+				51AD42FA29E71F2450386688 /* NativTests */,
 			);
 		};
 /* End PBXProject section */
@@ -1523,6 +1537,7 @@
 				ED1F61AA671F9F65A2F34ADB /* NativSettings.swift in Sources */,
 				B6FAA495B9166FE42AAD9478 /* NativSkill.swift in Sources */,
 				B580FFA54780AE54DFC27957 /* NativSystemPermissionController.swift in Sources */,
+				66714AD9AF65A2AB9575EE5E /* Windowing.swift in Sources */,
 				7AF5260E8044A3AED5B705A6 /* NimbleBrowsingProvider.swift in Sources */,
 				28197A70541BE1F1F482BCF4 /* PDFDocumentTextExtractor.swift in Sources */,
 				C4A766A43FD62815D056BD93 /* ParallelBrowsingProvider.swift in Sources */,
@@ -1641,6 +1656,7 @@
 				D94A6B329A8D7D3285147914 /* MarkdownFormattingTests.swift in Sources */,
 				F3148D435BE180A3EB75EAC7 /* ModelPrimaryTaskResolver.swift in Sources */,
 				D8838254D03112C2EABE37AC /* ModelPrimaryTaskResolverTests.swift in Sources */,
+				95597E32B22781024B41DDB9 /* MultiWindowCoordinationTests.swift in Sources */,
 				252ABC474FF17BAFE5BFD3CE /* NativAnalyticsStore.swift in Sources */,
 				ABB0814F3990772A1BEF7D0C /* NativExtensionStateStore.swift in Sources */,
 				0E326825AE5A1A5EEA33D928 /* NativExtensionTests.swift in Sources */,

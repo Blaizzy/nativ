@@ -69,7 +69,9 @@ extension ControlPanelView {
     }
 
     func createFolderForRecent(_ recent: ControlPanelRecentSession) {
-        guard case .chat(let sessionID) = recent.selection else {
+        guard case .chat(let sessionID) = recent.selection,
+              chat.canModifySession(sessionID)
+        else {
             return
         }
         let folderID = chat.createFolder(name: "New Folder")

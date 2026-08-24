@@ -171,6 +171,33 @@ struct SystemMonitorSnapshot: Equatable, Sendable {
     var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 }
 
+struct SystemMonitorObservationPolicy {
+    private var observerIDs: Set<UUID> = []
+    private(set) var isPaused = false
+
+    mutating func begin(_ observerID: UUID) -> Bool {
+        let inserted = observerIDs.insert(observerID).inserted
+        return inserted && observerIDs.count == 1 && !isPaused
+    }
+
+    mutating func end(_ observerID: UUID) -> Bool {
+        guard observerIDs.remove(observerID) != nil else { return false }
+        return observerIDs.isEmpty && !isPaused
+    }
+
+    mutating func pause() -> Bool {
+        guard !isPaused else { return false }
+        isPaused = true
+        return !observerIDs.isEmpty
+    }
+
+    mutating func resume() -> Bool {
+        guard isPaused else { return false }
+        isPaused = false
+        return !observerIDs.isEmpty
+    }
+}
+
 @MainActor
 final class SystemMonitorStore: ObservableObject {
     @Published private(set) var snapshot = SystemMonitorSnapshot()
@@ -190,13 +217,34 @@ final class SystemMonitorStore: ObservableObject {
     private let displayFPSSampler = SystemDisplayFPSSampler()
     private let aneSampler = SystemANEUtilizationSampler()
     private var samplingTask: Task<Void, Never>?
+    private var observationPolicy = SystemMonitorObservationPolicy()
     private let historyLimit = 300
 
     deinit {
         samplingTask?.cancel()
     }
 
-    func start() {
+    func beginObservation(_ observerID: UUID) {
+        guard observationPolicy.begin(observerID) else { return }
+        startSampling()
+    }
+
+    func endObservation(_ observerID: UUID) {
+        guard observationPolicy.end(observerID) else { return }
+        stopSampling()
+    }
+
+    func pause() {
+        guard observationPolicy.pause() else { return }
+        stopSampling()
+    }
+
+    func resume() {
+        guard observationPolicy.resume() else { return }
+        startSampling()
+    }
+
+    private func startSampling() {
         guard samplingTask == nil else { return }
         isSampling = true
         displayFPSSampler.start()
@@ -218,7 +266,7 @@ final class SystemMonitorStore: ObservableObject {
         }
     }
 
-    func stop() {
+    private func stopSampling() {
         samplingTask?.cancel()
         samplingTask = nil
         displayFPSSampler.stop()

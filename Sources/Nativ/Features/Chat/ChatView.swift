@@ -311,7 +311,8 @@ private struct ChatComposerContainer: View {
                 ?? model.settings.structuredOutputValidationError,
             canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
-                && model.settings.structuredOutputValidationError == nil,
+                && model.settings.structuredOutputValidationError == nil
+                && !chat.isCurrentSessionActiveInAnotherWindow,
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),

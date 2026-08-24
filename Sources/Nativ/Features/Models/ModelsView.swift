@@ -71,6 +71,7 @@ private final class ModelsNativState: ObservableObject {
     @Published private(set) var settings: NativSettings
     @Published private(set) var isRunning: Bool
     @Published private(set) var modelSwitchInProgress: Bool
+    @Published private(set) var inferenceActivityInProgress: Bool
     @Published private(set) var modelSwitchTargetID: String?
     @Published private(set) var modelLoadingProgress: Double?
     @Published private(set) var metricsLoading: Bool
@@ -84,6 +85,7 @@ private final class ModelsNativState: ObservableObject {
         settings = model.settings
         isRunning = model.isRunning
         modelSwitchInProgress = model.modelSwitchInProgress
+        inferenceActivityInProgress = model.inferenceActivityInProgress
         modelSwitchTargetID = model.modelSwitchTargetID
         modelLoadingProgress = model.modelLoadingProgress
         metricsLoading = model.metricsLoading
@@ -102,6 +104,10 @@ private final class ModelsNativState: ObservableObject {
         model.$modelSwitchInProgress
             .removeDuplicates()
             .sink { [weak self] in self?.modelSwitchInProgress = $0 }
+            .store(in: &cancellables)
+        model.$inferenceActivityInProgress
+            .removeDuplicates()
+            .sink { [weak self] in self?.inferenceActivityInProgress = $0 }
             .store(in: &cancellables)
         model.$modelSwitchTargetID
             .removeDuplicates()
@@ -528,7 +534,8 @@ struct ModelsView: View {
                     preferredPreloadSlot: preferredPreloadSlot(
                         among: preloadSlots
                     ),
-                    isSelectionDisabled: modelState.modelSwitchInProgress,
+                    isSelectionDisabled: modelState.modelSwitchInProgress
+                        || modelState.inferenceActivityInProgress,
                     isModelLoading: modelState.modelLoadingID
                         == localModel.repoID,
                     modelLoadingPercentage: modelState.modelLoadingPercentage,

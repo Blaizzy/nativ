@@ -217,6 +217,7 @@ private struct ImageGenerationComposer: View {
                     }
                     .buttonStyle(.plain)
                     .help("Image settings")
+                    .disabled(viewModel.isCurrentSessionActiveInAnotherWindow)
                     .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
                         ImageGenerationSettingsView(viewModel: viewModel)
                     }
@@ -291,11 +292,13 @@ private struct ImageGenerationComposer: View {
         model.isRunning
             && selectedModelID != nil
             && !viewModel.isGenerating
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
     }
 
     private var canSubmit: Bool {
         selectedModelID != nil
             && viewModel.canSubmit(isRunning: model.isRunning)
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
             && (!selectedModelIsEditOnly || viewModel.nextRequestIsEdit)
     }
 
@@ -332,7 +335,8 @@ private struct ImageGenerationComposer: View {
             modelLoadingPercentage: isSelectedModelLoading
                 ? model.modelLoadingPercentage
                 : nil,
-            isDisabled: model.isModelLoading || viewModel.isGenerating,
+            isDisabled: model.isModelLoading,
+            selectionUnavailableReason: modelSelectionUnavailableReason,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelLabel,
@@ -387,8 +391,8 @@ private struct ImageGenerationComposer: View {
     }
 
     private var modelPickerHelp: String {
-        if viewModel.isGenerating {
-            return "Model switching is unavailable while generating"
+        if let modelSelectionUnavailableReason {
+            return modelSelectionUnavailableReason
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(modelLabel)"
@@ -399,9 +403,19 @@ private struct ImageGenerationComposer: View {
         return "Change image model"
     }
 
+    private var modelSelectionUnavailableReason: String? {
+        guard viewModel.isGenerating || model.inferenceActivityInProgress else {
+            return nil
+        }
+        return "Models can’t be changed while a response is being generated."
+    }
+
     private var unavailableReason: String? {
         if !model.isRunning {
             return "Server is stopped."
+        }
+        if viewModel.isCurrentSessionActiveInAnotherWindow {
+            return "This image session is active in another window."
         }
         return nil
     }
