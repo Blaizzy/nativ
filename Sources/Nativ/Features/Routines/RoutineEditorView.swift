@@ -21,6 +21,9 @@ struct RoutineEditor: View {
     @State private var capabilities: Set<ScheduledCapability>
     @State private var notifyOnFinish: Bool
     @State private var isSelectingCapabilities = false
+    @State private var isSelectingModel = false
+    @State private var isSelectingTime = false
+    @State private var modelSearch = ""
 
     init(
         draft: RoutineDraft,
@@ -331,38 +334,92 @@ struct RoutineEditor: View {
 
     private var modelPicker: some View {
         settingRow("Model") {
-            HStack(spacing: 8) {
-                Menu {
-                    ForEach(availableModelIDs, id: \.self) { id in
-                        Button {
-                            modelID = id
-                        } label: {
-                            if modelID == id {
-                                Label(
-                                    NativFormatting.truncateModelName(id, maxLength: 52),
-                                    systemImage: "checkmark"
-                                )
-                            } else {
-                                Text(NativFormatting.truncateModelName(id, maxLength: 52))
-                            }
-                        }
-                    }
-                } label: {
+            Button {
+                isSelectingModel.toggle()
+            } label: {
+                HStack(spacing: 8) {
                     Text(
                         modelID.isEmpty
                             ? "Select a model"
                             : NativFormatting.truncateModelName(modelID, maxLength: 40)
                     )
+                    menuChevron
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .disabled(availableModelIDs.isEmpty)
-
-                menuChevron
-                    .opacity(availableModelIDs.isEmpty ? 0.35 : 1)
             }
-            .fixedSize()
+            .buttonStyle(.plain)
+            .disabled(availableModelIDs.isEmpty)
+            .popover(isPresented: $isSelectingModel, arrowEdge: .trailing) {
+                modelSelectionPopover
+            }
+        }
+    }
+
+    private var filteredModelIDs: [String] {
+        let query = modelSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return availableModelIDs }
+        return availableModelIDs.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var modelSelectionPopover: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search models", text: $modelSearch)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+
+            Divider()
+
+            if filteredModelIDs.isEmpty {
+                ContentUnavailableView.search(text: modelSearch)
+                    .frame(height: 240)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(filteredModelIDs, id: \.self) { id in
+                                Button {
+                                    modelID = id
+                                    isSelectingModel = false
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Text(id)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                        Spacer(minLength: 12)
+                                        if modelID == id {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(Color.accentColor)
+                                        }
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 32)
+                                    .contentShape(Rectangle())
+                                    .background(
+                                        modelID == id ? Color.accentColor.opacity(0.12) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .id(id)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(height: 320)
+                    .onAppear {
+                        proxy.scrollTo(modelID, anchor: .center)
+                    }
+                }
+            }
+        }
+        .frame(width: 420)
+        .onDisappear {
+            modelSearch = ""
         }
     }
 
@@ -402,31 +459,73 @@ struct RoutineEditor: View {
 
     private var timePicker: some View {
         settingRow("At") {
-            HStack(spacing: 8) {
-                Menu {
-                    ForEach(timeOptions, id: \.self) { minutes in
-                        Button {
-                            time = date(forMinutesSinceMidnight: minutes)
-                        } label: {
-                            if selectedTimeMinutes == minutes {
-                                Label(timeLabel(forMinutesSinceMidnight: minutes), systemImage: "checkmark")
-                            } else {
-                                Text(timeLabel(forMinutesSinceMidnight: minutes))
-                            }
-                        }
-                    }
-                } label: {
+            Button {
+                isSelectingTime.toggle()
+            } label: {
+                HStack(spacing: 8) {
                     Text(time.formatted(date: .omitted, time: .shortened))
                         .monospacedDigit()
+                    menuChevron
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-
-                menuChevron
             }
-            .fixedSize()
+            .buttonStyle(.plain)
+            .popover(isPresented: $isSelectingTime, arrowEdge: .trailing) {
+                timeSelectionPopover
+            }
         }
+    }
+
+    private var timeSelectionPopover: some View {
+        VStack(spacing: 0) {
+            Text("Time")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+
+            Divider()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(timeOptions, id: \.self) { minutes in
+                            Button {
+                                time = date(forMinutesSinceMidnight: minutes)
+                                isSelectingTime = false
+                            } label: {
+                                HStack {
+                                    Text(timeLabel(forMinutesSinceMidnight: minutes))
+                                        .monospacedDigit()
+                                    Spacer()
+                                    if selectedTimeMinutes == minutes {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .frame(height: 30)
+                                .contentShape(Rectangle())
+                                .background(
+                                    selectedTimeMinutes == minutes
+                                        ? Color.accentColor.opacity(0.12)
+                                        : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .id(minutes)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(height: 320)
+                .onAppear {
+                    proxy.scrollTo(selectedTimeMinutes, anchor: .center)
+                }
+            }
+        }
+        .frame(width: 180)
     }
 
     private var menuChevron: some View {
