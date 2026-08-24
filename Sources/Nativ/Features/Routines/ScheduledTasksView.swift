@@ -304,6 +304,7 @@ struct ScheduledTasksView: View {
             [task.sourceSessionID].compactMap { $0 }
                 + store.runs(forRoutine: task.id).compactMap(\.sessionID)
         )
+        RoutineRunCoordinator.shared.cancel(routineID: task.id)
         store.delete(id: task.id)
         if draft?.id == task.id {
             draft = nil

@@ -4,6 +4,21 @@ import Testing
 @Suite("Scheduled task chats")
 @MainActor
 struct ScheduledTaskChatLinkerTests {
+    @Test("Deleting a task removes its schedule and history")
+    func deletingTaskRemovesPersistedStateAndNotifiesScheduler() {
+        let routine = Routine(name: "Daily brief")
+        let run = RoutineRun(routineID: routine.id, source: .scheduled)
+        let store = RoutineStore(routines: [routine], runs: [run])
+        var didNotifyScheduler = false
+        store.onRoutinesChanged = { didNotifyScheduler = true }
+
+        store.delete(id: routine.id)
+
+        #expect(store.routine(id: routine.id) == nil)
+        #expect(store.runs(forRoutine: routine.id).isEmpty)
+        #expect(didNotifyScheduler)
+    }
+
     @Test("Deleting a chat keeps its task and run record")
     func deletingChatOnlyDetachesItsReference() {
         let sourceSessionID = UUID()
