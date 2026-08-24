@@ -22,6 +22,7 @@ struct RoutineEditor: View {
     @State private var notifyOnFinish: Bool
     @State private var isSelectingCapabilities = false
     @State private var isSelectingModel = false
+    @State private var isSelectingRepeat = false
     @State private var isSelectingTime = false
     @State private var modelSearch = ""
 
@@ -425,36 +426,100 @@ struct RoutineEditor: View {
 
     private var repeatPicker: some View {
         settingRow("Repeat") {
-            HStack(spacing: 8) {
-                Menu {
-                    repeatPreset("Daily", weekdays: [])
-                    repeatPreset("Weekdays", weekdays: Set(2...6))
-                    repeatPreset("Weekends", weekdays: Set([1, 7]))
-
-                    Divider()
-
-                    ForEach(1...7, id: \.self) { weekday in
-                        Button {
-                            toggleWeekday(weekday)
-                        } label: {
-                            if weekdays.contains(weekday) {
-                                Label(Calendar.current.weekdaySymbols[weekday - 1], systemImage: "checkmark")
-                            } else {
-                                Text(Calendar.current.weekdaySymbols[weekday - 1])
-                            }
-                        }
-                    }
-                } label: {
+            Button {
+                isSelectingRepeat.toggle()
+            } label: {
+                HStack(spacing: 8) {
                     Text(repeatSummary)
+                    menuChevron
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-
-                menuChevron
             }
-            .fixedSize()
+            .buttonStyle(.plain)
+            .popover(isPresented: $isSelectingRepeat, arrowEdge: .trailing) {
+                repeatSelectionPopover
+            }
         }
+    }
+
+    private var repeatSelectionPopover: some View {
+        VStack(spacing: 0) {
+            Text("Repeat")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+
+            Divider()
+
+            VStack(spacing: 2) {
+                repeatChoice("Daily", isSelected: weekdays.isEmpty) {
+                    weekdays = []
+                    isSelectingRepeat = false
+                }
+                repeatChoice("Weekdays", isSelected: weekdays == Set(2...6)) {
+                    weekdays = Set(2...6)
+                    isSelectingRepeat = false
+                }
+                repeatChoice("Weekends", isSelected: weekdays == Set([1, 7])) {
+                    weekdays = Set([1, 7])
+                    isSelectingRepeat = false
+                }
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                ForEach(1...7, id: \.self) { weekday in
+                    repeatChoice(
+                        Calendar.current.weekdaySymbols[weekday - 1],
+                        isSelected: weekdays.contains(weekday)
+                    ) {
+                        toggleWeekday(weekday)
+                    }
+                }
+            }
+            .padding(6)
+
+            Divider()
+
+            HStack {
+                Text("Select one or more days")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Done") {
+                    isSelectingRepeat = false
+                }
+                .controlSize(.small)
+            }
+            .padding(10)
+        }
+        .frame(width: 230)
+    }
+
+    private func repeatChoice(
+        _ title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .contentShape(Rectangle())
+            .background(
+                isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var timePicker: some View {
@@ -561,18 +626,6 @@ struct RoutineEditor: View {
     private func timeLabel(forMinutesSinceMidnight minutes: Int) -> String {
         date(forMinutesSinceMidnight: minutes)
             .formatted(date: .omitted, time: .shortened)
-    }
-
-    private func repeatPreset(_ title: String, weekdays preset: Set<Int>) -> some View {
-        Button {
-            weekdays = preset
-        } label: {
-            if weekdays == preset {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
-        }
     }
 
     private func toggleWeekday(_ weekday: Int) {
