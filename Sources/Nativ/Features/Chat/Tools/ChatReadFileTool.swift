@@ -626,7 +626,7 @@ private enum FileReadContentPolicy {
         if data.starts(with: [0xFE, 0xFF]) {
             return String(data: data.dropFirst(2), encoding: .utf16BigEndian)
         }
-        guard !hasSuspiciousNULs(data) else { return nil }
+        guard !hasNULBytePrefix(data) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -647,7 +647,7 @@ private enum FileReadContentPolicy {
             || data.starts(with: Data("SQLite format 3\0".utf8))
     }
 
-    private static func hasSuspiciousNULs(_ data: Data) -> Bool {
+    private static func hasNULBytePrefix(_ data: Data) -> Bool {
         data.prefix(8_192).contains(0)
     }
 }
