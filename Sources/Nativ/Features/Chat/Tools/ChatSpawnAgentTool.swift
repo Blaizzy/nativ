@@ -272,6 +272,7 @@ struct ChatSpawnAgentToolExecutor {
                 settings: prepared.settings,
                 canEditImage: prepared.canEditImage,
                 context: prepared.subAgentContext,
+                agentID: prepared.agentID,
                 onUpdate: prepared.onUpdate
             )
             await prepared.registry?.complete(prepared.agentID, result: completion.content)

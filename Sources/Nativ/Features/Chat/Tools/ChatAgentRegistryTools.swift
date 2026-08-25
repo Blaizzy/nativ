@@ -191,3 +191,90 @@ struct ChatCheckAgentToolExecutor {
         return String(decoding: try encoder.encode(payload), as: UTF8.self)
     }
 }
+
+enum ChatSteerAgentToolRegistry {
+    static let toolName = "steer_agent"
+
+    static func definitions() -> [MLXChatToolDefinition] {
+        [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+            name: toolName,
+            description: "Queue a message into a running sub-agent, delivered at its next turn.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([
+                    "agent_id": .object([
+                        "type": .string("string"),
+                        "description": .string("The agent_id from spawn_agent or list_agents.")
+                    ]),
+                    "message": .object([
+                        "type": .string("string"),
+                        "description": .string("The message to deliver as the sub-agent's next turn.")
+                    ])
+                ]),
+                "required": .array([.string("agent_id"), .string("message")])
+            ])
+        ))]
+    }
+}
+
+struct ChatSteerAgentToolArguments: Decodable {
+    let agentID: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case agentID = "agent_id"
+        case message
+    }
+}
+
+struct ChatSteerAgentToolResultPayload: Encodable {
+    let ok: Bool
+    let error: String?
+}
+
+enum ChatSteerAgentToolError: LocalizedError {
+    case invalidArguments
+    case emptyMessage
+    case unknownOrFinishedAgent(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArguments:
+            return "The steer_agent arguments were not valid JSON."
+        case .emptyMessage:
+            return "steer_agent requires a non-empty message."
+        case .unknownOrFinishedAgent(let agentID):
+            return "\(agentID) isn't a running or queued agent, so it can't be steered."
+        }
+    }
+}
+
+struct ChatSteerAgentToolExecutor {
+    @MainActor
+    func execute(call: MLXChatToolCall, registry: ChatAgentRegistry?) throws -> String {
+        guard let argumentsData = call.function?.arguments?.data(using: .utf8),
+              let arguments = try? JSONDecoder().decode(ChatSteerAgentToolArguments.self, from: argumentsData)
+        else {
+            throw ChatSteerAgentToolError.invalidArguments
+        }
+        guard !arguments.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ChatSteerAgentToolError.emptyMessage
+        }
+        guard let registry, registry.queueSteerMessage(arguments.message, for: arguments.agentID) else {
+            throw ChatSteerAgentToolError.unknownOrFinishedAgent(arguments.agentID)
+        }
+        return try encodedPayload(ChatSteerAgentToolResultPayload(ok: true, error: nil))
+    }
+
+    func failurePayload(error: Error) -> String {
+        let payload = ChatSteerAgentToolResultPayload(ok: false, error: error.localizedDescription)
+        return (try? encodedPayload(payload)) ?? #"{"ok":false,"error":"steer_agent failed."}"#
+    }
+
+    private func encodedPayload(_ payload: ChatSteerAgentToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
+    }
+}

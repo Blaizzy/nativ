@@ -13,6 +13,7 @@ private let nativeToolNames = [
     ChatSpawnAgentToolRegistry.toolName,
     ChatListAgentsToolRegistry.toolName,
     ChatCheckAgentToolRegistry.toolName,
+    ChatSteerAgentToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -95,6 +96,7 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatSpawnAgentToolRegistry.toolName,
             ChatListAgentsToolRegistry.toolName,
             ChatCheckAgentToolRegistry.toolName,
+            ChatSteerAgentToolRegistry.toolName,
         ])
     }
 
@@ -2034,6 +2036,89 @@ final class ChatCheckAgentToolTests: XCTestCase {
 
     func testFailurePayloadShape() throws {
         let payload = try decode(ChatCheckAgentToolExecutor().failurePayload(error: FakeToolError()))
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["error"] as? String, "fake failure")
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+final class ChatSteerAgentToolTests: XCTestCase {
+    func testDefinitionRequiresAgentIDAndMessage() throws {
+        let definitions = ChatSteerAgentToolRegistry.definitions()
+        XCTAssertEqual(definitions.count, 1)
+        let function = definitions[0].function
+        XCTAssertEqual(function.name, "steer_agent")
+        guard case .object(let parameters) = function.parameters,
+              case .array(let required)? = parameters["required"]
+        else {
+            return XCTFail("expected an object schema with required")
+        }
+        XCTAssertEqual(required, [.string("agent_id"), .string("message")])
+    }
+
+    @MainActor
+    func testExecuteQueuesMessageOnRunningAgent() throws {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        registry.markRunning(id)
+
+        let payload = try decode(try ChatSteerAgentToolExecutor().execute(
+            call: makeCall(name: ChatSteerAgentToolRegistry.toolName, arguments: #"{"agent_id":"\#(id)","message":"also check the sources"}"#),
+            registry: registry
+        ))
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(registry.drainSteerMessages(for: id), ["also check the sources"])
+    }
+
+    @MainActor
+    func testExecuteOnFinishedAgentThrows() {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        registry.complete(id, result: "done")
+
+        do {
+            _ = try ChatSteerAgentToolExecutor().execute(
+                call: makeCall(name: ChatSteerAgentToolRegistry.toolName, arguments: #"{"agent_id":"\#(id)","message":"too late"}"#),
+                registry: registry
+            )
+            XCTFail("steering a finished agent must throw")
+        } catch let error as ChatSteerAgentToolError {
+            guard case .unknownOrFinishedAgent(let steeredID) = error else {
+                return XCTFail("expected .unknownOrFinishedAgent, got \(error)")
+            }
+            XCTAssertEqual(steeredID, id)
+        } catch {
+            XCTFail("expected ChatSteerAgentToolError, got \(error)")
+        }
+    }
+
+    @MainActor
+    func testEmptyMessageThrows() {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        registry.markRunning(id)
+
+        do {
+            _ = try ChatSteerAgentToolExecutor().execute(
+                call: makeCall(name: ChatSteerAgentToolRegistry.toolName, arguments: #"{"agent_id":"\#(id)","message":"   "}"#),
+                registry: registry
+            )
+            XCTFail("a blank message must throw")
+        } catch let error as ChatSteerAgentToolError {
+            guard case .emptyMessage = error else {
+                return XCTFail("expected .emptyMessage, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSteerAgentToolError, got \(error)")
+        }
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = try decode(ChatSteerAgentToolExecutor().failurePayload(error: FakeToolError()))
         XCTAssertEqual(payload["ok"] as? Bool, false)
         XCTAssertEqual(payload["error"] as? String, "fake failure")
     }

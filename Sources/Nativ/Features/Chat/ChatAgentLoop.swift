@@ -17,6 +17,7 @@ enum ChatAgentLoop {
         settings: NativSettings,
         canEditImage: Bool,
         context: ChatToolExecutionContext,
+        agentID: String? = nil,
         onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)? = nil
     ) async throws -> MLXChatCompletion {
         let client = NativChatClient(baseURL: context.baseURL, apiKey: context.apiKey)
@@ -33,6 +34,15 @@ enum ChatAgentLoop {
         var round = 0
         while true {
             try Task.checkCancellation()
+
+            if let agentID, let steerMessages = context.agentRegistry?.drainSteerMessages(for: agentID),
+               !steerMessages.isEmpty {
+                for steerMessage in steerMessages {
+                    messages.append(MLXChatMessage(role: "user", content: steerMessage))
+                    transcript.appendSteerMessage(steerMessage)
+                }
+            }
+
             let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: round) && !toolDefinitions.isEmpty
             let request = MLXChatCompletionRequest(
                 model: modelID,
@@ -126,6 +136,7 @@ enum ChatAgentLoop {
                 || $0.function.name == ChatSpawnAgentToolRegistry.toolName
                 || $0.function.name == ChatListAgentsToolRegistry.toolName
                 || $0.function.name == ChatCheckAgentToolRegistry.toolName
+                || $0.function.name == ChatSteerAgentToolRegistry.toolName
                 || !settings.isToolEnabled($0.function.name)
                 || ($0.function.name == ChatWebSearchToolRegistry.toolName && !webSearchIsConfigured)
                 || ($0.function.name == ChatWebReadToolRegistry.toolName && !webReadIsConfigured)
@@ -169,6 +180,11 @@ private final class ChatAgentDisplayTranscript {
 
     init(onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?) {
         self.onUpdate = onUpdate
+    }
+
+    func appendSteerMessage(_ content: String) {
+        messages.append(ChatTranscriptMessage(role: .user, content: content))
+        onUpdate?(messages)
     }
 
     func appendAssistantPlaceholder() -> UUID {

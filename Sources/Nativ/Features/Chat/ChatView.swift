@@ -1047,6 +1047,10 @@ private struct ChatSpawnAgentSubTranscriptView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(subMessages) { subMessage in
                 switch subMessage.role {
+                case .user:
+                    Text("Steered: \(subMessage.content)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
                 case .assistant:
                     if !subMessage.content.isEmpty {
                         Text(subMessage.content)

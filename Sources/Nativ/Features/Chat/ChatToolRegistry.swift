@@ -215,6 +215,13 @@ enum ChatToolRegistry {
                 configuration: nil
             )
         }
+        tools += ChatSteerAgentToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Send a running sub-agent an additional message.",
+                configuration: nil
+            )
+        }
         return tools
     }
 }
@@ -272,6 +279,10 @@ enum ChatToolDispatcher {
             let content = try await ChatCheckAgentToolExecutor().execute(call: call, registry: context.agentRegistry)
             return ChatToolExecutionOutcome(content: content, attachments: [])
         },
+        ChatSteerAgentToolRegistry.toolName: { call, context in
+            let content = try await ChatSteerAgentToolExecutor().execute(call: call, registry: context.agentRegistry)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -319,6 +330,9 @@ enum ChatToolDispatcher {
         },
         ChatCheckAgentToolRegistry.toolName: { _, error in
             ChatCheckAgentToolExecutor().failurePayload(error: error)
+        },
+        ChatSteerAgentToolRegistry.toolName: { _, error in
+            ChatSteerAgentToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -560,6 +574,8 @@ enum ChatToolPresentation {
             return listAgentsTitle(status: status)
         case ChatCheckAgentToolRegistry.toolName:
             return checkAgentTitle(status: status)
+        case ChatSteerAgentToolRegistry.toolName:
+            return steerAgentTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -607,6 +623,8 @@ enum ChatToolPresentation {
                 return "list.bullet"
             case ChatCheckAgentToolRegistry.toolName:
                 return "checkmark.circle"
+            case ChatSteerAgentToolRegistry.toolName:
+                return "arrow.turn.up.right"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -798,6 +816,19 @@ enum ChatToolPresentation {
             return "Check sub-agent"
         case nil:
             return "Check sub-agent tool"
+        }
+    }
+
+    private static func steerAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Steering sub-agent…"
+        case .succeeded:
+            return "Steered sub-agent"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Steer sub-agent"
+        case nil:
+            return "Steer sub-agent tool"
         }
     }
 
