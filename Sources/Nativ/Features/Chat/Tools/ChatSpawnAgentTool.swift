@@ -30,6 +30,12 @@ enum ChatSpawnAgentToolRegistry {
                     "model": .object([
                         "type": .string("string"),
                         "description": .string("A downloaded model ID, e.g. 'mlx-community/Qwen3-4B-4bit'. Omit to use the current model.")
+                    ]),
+                    "run_in_background": .object([
+                        "type": .string("boolean"),
+                        "description": .string(
+                            "If true, returns an agent_id immediately instead of waiting. Check via check_agent/list_agents. Defaults to false."
+                        )
                     ])
                 ]),
                 "required": .array([.string("task")])
@@ -52,12 +58,14 @@ struct ChatSpawnAgentToolArguments: Decodable {
     let mode: ChatSpawnAgentMode
     let context: String?
     let modelID: String?
+    let runInBackground: Bool
 
     enum CodingKeys: String, CodingKey {
         case task
         case mode
         case context
         case modelID = "model"
+        case runInBackground = "run_in_background"
     }
 
     init(from decoder: Decoder) throws {
@@ -66,13 +74,33 @@ struct ChatSpawnAgentToolArguments: Decodable {
         mode = try container.decodeIfPresent(ChatSpawnAgentMode.self, forKey: .mode) ?? .fresh
         context = try container.decodeIfPresent(String.self, forKey: .context)
         modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
+        runInBackground = try container.decodeIfPresent(Bool.self, forKey: .runInBackground) ?? false
+    }
+
+    static func runsInBackground(_ argumentsJSON: String?) -> Bool {
+        guard let data = argumentsJSON?.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return false
+        }
+        return (object["run_in_background"] as? Bool) ?? false
     }
 }
 
 struct ChatSpawnAgentToolResultPayload: Encodable {
     let ok: Bool
+    let agentID: String?
+    let status: String?
     let answer: String?
     let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case agentID = "agent_id"
+        case status
+        case answer
+        case error
+    }
 }
 
 enum ChatSpawnAgentToolError: LocalizedError {
@@ -155,8 +183,24 @@ enum ChatSpawnAgentTranscriptBuilder {
     }
 }
 
+struct ChatSpawnAgentPreparedCall {
+    let agentID: String
+    let modelID: String
+    let messages: [MLXChatMessage]
+    let settings: NativSettings
+    let canEditImage: Bool
+    let subAgentContext: ChatToolExecutionContext
+    let onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?
+    let registry: ChatAgentRegistry?
+}
+
 struct ChatSpawnAgentToolExecutor {
     func execute(call: MLXChatToolCall, context: ChatToolExecutionContext) async throws -> String {
+        let prepared = try await prepare(call: call, context: context)
+        return await run(prepared)
+    }
+
+    func prepare(call: MLXChatToolCall, context: ChatToolExecutionContext) async throws -> ChatSpawnAgentPreparedCall {
         guard call.function?.name == ChatSpawnAgentToolRegistry.toolName else {
             throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
         }
@@ -196,32 +240,73 @@ struct ChatSpawnAgentToolExecutor {
             modelSearchPath: context.modelSearchPath,
             additionalModelSearchPaths: context.additionalModelSearchPaths,
             huggingFaceToken: context.huggingFaceToken,
-            mcpHost: context.mcpHost
+            mcpHost: context.mcpHost,
+            agentRegistry: context.agentRegistry
         )
         subAgentContext.fileReadRootPath = context.fileReadRootPath
         subAgentContext.fileReadTracker = context.fileReadTracker
         subAgentContext.fileReadMaximumResultCharacters = context.fileReadMaximumResultCharacters
         subAgentContext.fileReadToolDependencies = context.fileReadToolDependencies
 
-        let completion = try await ChatAgentLoop.run(
-            messages: messages,
+        let agentID = await context.agentRegistry?.register(task: arguments.task, modelID: modelID)
+            ?? UUID().uuidString
+
+        return ChatSpawnAgentPreparedCall(
+            agentID: agentID,
             modelID: modelID,
+            messages: messages,
             settings: settings,
             canEditImage: !parentImages.isEmpty,
-            context: subAgentContext,
-            onUpdate: context.spawnAgentUpdate
+            subAgentContext: subAgentContext,
+            onUpdate: context.spawnAgentUpdate,
+            registry: context.agentRegistry
         )
+    }
 
-        return try encodedPayload(ChatSpawnAgentToolResultPayload(
+    func run(_ prepared: ChatSpawnAgentPreparedCall) async -> String {
+        await prepared.registry?.markRunning(prepared.agentID)
+        do {
+            let completion = try await ChatAgentLoop.run(
+                messages: prepared.messages,
+                modelID: prepared.modelID,
+                settings: prepared.settings,
+                canEditImage: prepared.canEditImage,
+                context: prepared.subAgentContext,
+                onUpdate: prepared.onUpdate
+            )
+            await prepared.registry?.complete(prepared.agentID, result: completion.content)
+            return (try? encodedPayload(ChatSpawnAgentToolResultPayload(
+                ok: true,
+                agentID: prepared.agentID,
+                status: ChatSpawnedAgentStatus.completed.rawValue,
+                answer: completion.content,
+                error: nil
+            ))) ?? #"{"ok":true}"#
+        } catch {
+            await prepared.registry?.fail(prepared.agentID, error: error.localizedDescription)
+            return failurePayload(agentID: prepared.agentID, error: error)
+        }
+    }
+
+    func handlePayload(agentID: String) -> String {
+        (try? encodedPayload(ChatSpawnAgentToolResultPayload(
             ok: true,
-            answer: completion.content,
+            agentID: agentID,
+            status: ChatSpawnedAgentStatus.queued.rawValue,
+            answer: nil,
             error: nil
-        ))
+        ))) ?? #"{"ok":true,"status":"queued"}"#
     }
 
     func failurePayload(error: Error) -> String {
+        failurePayload(agentID: nil, error: error)
+    }
+
+    func failurePayload(agentID: String?, error: Error) -> String {
         let payload = ChatSpawnAgentToolResultPayload(
             ok: false,
+            agentID: agentID,
+            status: agentID == nil ? nil : ChatSpawnedAgentStatus.error.rawValue,
             answer: nil,
             error: error.localizedDescription
         )

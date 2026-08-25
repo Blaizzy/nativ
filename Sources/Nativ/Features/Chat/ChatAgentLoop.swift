@@ -124,6 +124,8 @@ enum ChatAgentLoop {
         definitions.removeAll {
             $0.function.name == ChatSwitchModelToolRegistry.toolName
                 || $0.function.name == ChatSpawnAgentToolRegistry.toolName
+                || $0.function.name == ChatListAgentsToolRegistry.toolName
+                || $0.function.name == ChatCheckAgentToolRegistry.toolName
                 || !settings.isToolEnabled($0.function.name)
                 || ($0.function.name == ChatWebSearchToolRegistry.toolName && !webSearchIsConfigured)
                 || ($0.function.name == ChatWebReadToolRegistry.toolName && !webReadIsConfigured)

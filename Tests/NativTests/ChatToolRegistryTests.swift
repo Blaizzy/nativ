@@ -11,6 +11,8 @@ private let nativeToolNames = [
     ChatFileWriteToolRegistry.writeToolName,
     ChatFileWriteToolRegistry.patchToolName,
     ChatSpawnAgentToolRegistry.toolName,
+    ChatListAgentsToolRegistry.toolName,
+    ChatCheckAgentToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -91,6 +93,8 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
             ChatSpawnAgentToolRegistry.toolName,
+            ChatListAgentsToolRegistry.toolName,
+            ChatCheckAgentToolRegistry.toolName,
         ])
     }
 
@@ -1705,6 +1709,333 @@ final class ChatSpawnAgentToolExecutorTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "fake failure")
         XCTAssertNil(object["answer"])
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+@MainActor
+final class ChatAgentRegistryTests: XCTestCase {
+    func testRegisterAssignsSequentialIDsStartingQueued() {
+        let registry = ChatAgentRegistry()
+        let first = registry.register(task: "task one", modelID: "org/model")
+        let second = registry.register(task: "task two", modelID: "org/model")
+
+        XCTAssertEqual(first, "agent_1")
+        XCTAssertEqual(second, "agent_2")
+        XCTAssertEqual(registry.record(for: first)?.status, .queued)
+        XCTAssertEqual(registry.record(for: first)?.task, "task one")
+    }
+
+    func testStatusTransitionsThroughRunningToCompleted() {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+
+        registry.markRunning(id)
+        XCTAssertEqual(registry.record(for: id)?.status, .running)
+
+        registry.complete(id, result: "the answer")
+        let record = registry.record(for: id)
+        XCTAssertEqual(record?.status, .completed)
+        XCTAssertEqual(record?.result, "the answer")
+        XCTAssertNotNil(record?.finishedAt)
+    }
+
+    func testFailAndStopSetDistinctTerminalState() {
+        let registry = ChatAgentRegistry()
+        let failedID = registry.register(task: "a", modelID: nil)
+        registry.fail(failedID, error: "boom")
+        XCTAssertEqual(registry.record(for: failedID)?.status, .error)
+        XCTAssertEqual(registry.record(for: failedID)?.error, "boom")
+
+        let stoppedID = registry.register(task: "b", modelID: nil)
+        registry.stop(stoppedID, reason: .turnLimit, partialResult: "partial")
+        let stopped = registry.record(for: stoppedID)
+        XCTAssertEqual(stopped?.status, .stopped)
+        XCTAssertEqual(stopped?.stopReason, .turnLimit)
+        XCTAssertEqual(stopped?.result, "partial")
+    }
+
+    func testCancelCancelsTheTrackedTask() {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        let task = Task<Void, Never> {}
+        registry.setTask(task, for: id)
+
+        XCTAssertFalse(task.isCancelled)
+        registry.cancel(id)
+        XCTAssertTrue(task.isCancelled)
+    }
+
+    func testCancelOnUnknownAgentDoesNothing() {
+        let registry = ChatAgentRegistry()
+        registry.cancel("agent_does_not_exist")
+    }
+
+    func testAllRecordsPreservesRegistrationOrder() {
+        let registry = ChatAgentRegistry()
+        let ids = (1...3).map { registry.register(task: "task \($0)", modelID: nil) }
+        XCTAssertEqual(registry.allRecords().map(\.id), ids)
+    }
+
+    func testUnknownAgentIDReturnsNilRecord() {
+        let registry = ChatAgentRegistry()
+        XCTAssertNil(registry.record(for: "agent_999"))
+    }
+
+    func testSteerMessagesQueueOnlyForTrackedRunningOrQueuedAgents() {
+        let registry = ChatAgentRegistry()
+        let runningID = registry.register(task: "task", modelID: nil)
+        registry.markRunning(runningID)
+        XCTAssertTrue(registry.queueSteerMessage("keep going", for: runningID))
+
+        let finishedID = registry.register(task: "task", modelID: nil)
+        registry.complete(finishedID, result: "done")
+        XCTAssertFalse(registry.queueSteerMessage("too late", for: finishedID))
+
+        XCTAssertFalse(registry.queueSteerMessage("nope", for: "agent_unknown"))
+    }
+
+    func testDrainSteerMessagesReturnsInOrderAndClears() {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        registry.markRunning(id)
+        XCTAssertTrue(registry.queueSteerMessage("first", for: id))
+        XCTAssertTrue(registry.queueSteerMessage("second", for: id))
+
+        XCTAssertEqual(registry.drainSteerMessages(for: id), ["first", "second"])
+        XCTAssertEqual(registry.drainSteerMessages(for: id), [])
+    }
+
+    func testEvictsOldestTerminalAgentsPastFifty() {
+        let registry = ChatAgentRegistry()
+        var ids: [String] = []
+        for index in 1...55 {
+            let id = registry.register(task: "task \(index)", modelID: nil)
+            registry.complete(id, result: "done")
+            ids.append(id)
+        }
+        XCTAssertEqual(registry.allRecords().count, 50)
+        XCTAssertNil(registry.record(for: ids[0]))
+        XCTAssertNotNil(registry.record(for: ids.last!))
+    }
+
+    func testRunningAgentsAreNeverEvictedEvenPastFifty() {
+        let registry = ChatAgentRegistry()
+        for index in 1...55 {
+            let id = registry.register(task: "task \(index)", modelID: nil)
+            registry.markRunning(id)
+        }
+        XCTAssertEqual(registry.allRecords().count, 55)
+    }
+}
+
+final class ChatSpawnAgentBackgroundArgumentsTests: XCTestCase {
+    func testRunInBackgroundDefaultsFalse() throws {
+        let arguments = try JSONDecoder().decode(
+            ChatSpawnAgentToolArguments.self,
+            from: XCTUnwrap(#"{"task":"do it"}"#.data(using: .utf8))
+        )
+        XCTAssertFalse(arguments.runInBackground)
+    }
+
+    func testRunInBackgroundDecodesTrue() throws {
+        let arguments = try JSONDecoder().decode(
+            ChatSpawnAgentToolArguments.self,
+            from: XCTUnwrap(#"{"task":"do it","run_in_background":true}"#.data(using: .utf8))
+        )
+        XCTAssertTrue(arguments.runInBackground)
+    }
+
+    func testRunsInBackgroundPeekMatchesFullDecode() {
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x"}"#))
+        XCTAssertTrue(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x","run_in_background":true}"#))
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x","run_in_background":false}"#))
+    }
+
+    func testRunsInBackgroundPeekIsFalseOnMalformedJSON() {
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground("not json"))
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(nil))
+    }
+}
+
+@MainActor
+final class ChatSpawnAgentToolExecutorBackgroundTests: XCTestCase {
+    func testPrepareRegistersAgentAndReturnsHandlePayload() async throws {
+        let registry = ChatAgentRegistry()
+        var context = makeContext(modelSearchPath: "")
+        context.settings = NativSettings(languageModelID: "org/model")
+        context.agentRegistry = registry
+
+        let executor = ChatSpawnAgentToolExecutor()
+        let prepared = try await executor.prepare(
+            call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize"}"#),
+            context: context
+        )
+
+        XCTAssertEqual(registry.record(for: prepared.agentID)?.status, .queued)
+        XCTAssertEqual(registry.record(for: prepared.agentID)?.task, "summarize")
+
+        let handle = try decode(executor.handlePayload(agentID: prepared.agentID))
+        XCTAssertEqual(handle["ok"] as? Bool, true)
+        XCTAssertEqual(handle["agent_id"] as? String, prepared.agentID)
+        XCTAssertEqual(handle["status"] as? String, "queued")
+    }
+
+    func testPrepareCarriesFileReadConfigurationToTheSubAgent() async throws {
+        var context = makeContext(modelSearchPath: "")
+        context.settings = NativSettings(languageModelID: "org/model")
+        context.fileReadRootPath = "/tmp/some-authorized-folder"
+
+        let prepared = try await ChatSpawnAgentToolExecutor().prepare(
+            call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize"}"#),
+            context: context
+        )
+
+        XCTAssertEqual(prepared.subAgentContext.fileReadRootPath, "/tmp/some-authorized-folder")
+    }
+
+    func testPrepareThrowsBeforeRegisteringOnInvalidArguments() async throws {
+        let registry = ChatAgentRegistry()
+        var context = makeContext(modelSearchPath: "")
+        context.settings = NativSettings(languageModelID: "org/model")
+        context.agentRegistry = registry
+
+        let executor = ChatSpawnAgentToolExecutor()
+        do {
+            _ = try await executor.prepare(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: "not json"),
+                context: context
+            )
+            XCTFail("invalid arguments must throw before registering")
+        } catch is ChatSpawnAgentToolError {
+            XCTAssertTrue(registry.allRecords().isEmpty)
+        }
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+final class ChatListAgentsToolTests: XCTestCase {
+    func testDefinitionHasNoParameters() throws {
+        let definitions = ChatListAgentsToolRegistry.definitions()
+        XCTAssertEqual(definitions.count, 1)
+        XCTAssertEqual(definitions[0].function.name, "list_agents")
+    }
+
+    @MainActor
+    func testExecuteReturnsAllTrackedAgentsInOrder() async throws {
+        let registry = ChatAgentRegistry()
+        let first = registry.register(task: "task one", modelID: nil)
+        registry.markRunning(first)
+        let second = registry.register(task: "task two", modelID: nil)
+        registry.complete(second, result: "done")
+
+        let payload = try decode(ChatListAgentsToolExecutor().execute(registry: registry))
+        let agents = try XCTUnwrap(payload["agents"] as? [[String: Any]])
+        XCTAssertEqual(agents.count, 2)
+        XCTAssertEqual(agents[0]["agent_id"] as? String, first)
+        XCTAssertEqual(agents[0]["status"] as? String, "running")
+        XCTAssertEqual(agents[1]["agent_id"] as? String, second)
+        XCTAssertEqual(agents[1]["status"] as? String, "completed")
+    }
+
+    @MainActor
+    func testExecuteWithNoRegistryReturnsEmptyList() throws {
+        let payload = try decode(ChatListAgentsToolExecutor().execute(registry: nil))
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual((payload["agents"] as? [[String: Any]])?.count, 0)
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = try decode(ChatListAgentsToolExecutor().failurePayload(error: FakeToolError()))
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["error"] as? String, "fake failure")
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+final class ChatCheckAgentToolTests: XCTestCase {
+    func testDefinitionRequiresAgentIDOnly() throws {
+        let definitions = ChatCheckAgentToolRegistry.definitions()
+        XCTAssertEqual(definitions.count, 1)
+        let function = definitions[0].function
+        XCTAssertEqual(function.name, "check_agent")
+        guard case .object(let parameters) = function.parameters,
+              case .array(let required)? = parameters["required"]
+        else {
+            return XCTFail("expected an object schema with required")
+        }
+        XCTAssertEqual(required, [.string("agent_id")])
+    }
+
+    @MainActor
+    func testExecuteReturnsCurrentStatusWithoutWaitingByDefault() async throws {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        registry.markRunning(id)
+
+        let payload = try decode(try await ChatCheckAgentToolExecutor().execute(
+            call: makeCall(name: ChatCheckAgentToolRegistry.toolName, arguments: #"{"agent_id":"\#(id)"}"#),
+            registry: registry
+        ))
+        XCTAssertEqual(payload["status"] as? String, "running")
+        XCTAssertNil(payload["answer"])
+    }
+
+    @MainActor
+    func testExecuteWithWaitBlocksUntilTerminal() async throws {
+        let registry = ChatAgentRegistry()
+        let id = registry.register(task: "task", modelID: nil)
+        registry.markRunning(id)
+
+        let checkTask = Task {
+            try await ChatCheckAgentToolExecutor().execute(
+                call: makeCall(name: ChatCheckAgentToolRegistry.toolName, arguments: #"{"agent_id":"\#(id)","wait":true}"#),
+                registry: registry
+            )
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        registry.complete(id, result: "final answer")
+
+        let payload = try decode(try await checkTask.value)
+        XCTAssertEqual(payload["status"] as? String, "completed")
+        XCTAssertEqual(payload["answer"] as? String, "final answer")
+    }
+
+    @MainActor
+    func testUnknownAgentThrows() async {
+        let registry = ChatAgentRegistry()
+        do {
+            _ = try await ChatCheckAgentToolExecutor().execute(
+                call: makeCall(name: ChatCheckAgentToolRegistry.toolName, arguments: #"{"agent_id":"agent_999"}"#),
+                registry: registry
+            )
+            XCTFail("unknown agent id must throw")
+        } catch let error as ChatCheckAgentToolError {
+            guard case .unknownAgent(let id) = error else {
+                return XCTFail("expected .unknownAgent, got \(error)")
+            }
+            XCTAssertEqual(id, "agent_999")
+        } catch {
+            XCTFail("expected ChatCheckAgentToolError, got \(error)")
+        }
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = try decode(ChatCheckAgentToolExecutor().failurePayload(error: FakeToolError()))
+        XCTAssertEqual(payload["ok"] as? Bool, false)
+        XCTAssertEqual(payload["error"] as? String, "fake failure")
     }
 
     private func decode(_ json: String) throws -> [String: Any] {

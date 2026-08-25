@@ -35,6 +35,7 @@ struct ChatToolExecutionContext: Sendable {
     var settings: NativSettings? = nil
     var spawnAgentParentMessages: [ChatTranscriptMessage] = []
     var spawnAgentUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)? = nil
+    var agentRegistry: ChatAgentRegistry? = nil
 }
 
 struct ChatToolExecutionOutcome: Sendable {
@@ -200,6 +201,20 @@ enum ChatToolRegistry {
                 configuration: nil
             )
         }
+        tools += ChatListAgentsToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "See every spawned sub-agent and its status.",
+                configuration: nil
+            )
+        }
+        tools += ChatCheckAgentToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Check a spawned sub-agent's status and result.",
+                configuration: nil
+            )
+        }
         return tools
     }
 }
@@ -249,6 +264,14 @@ enum ChatToolDispatcher {
         ChatSpawnAgentToolRegistry.toolName: { call, context in
             try await executeSpawnAgentTool(call: call, context: context)
         },
+        ChatListAgentsToolRegistry.toolName: { _, context in
+            let content = await ChatListAgentsToolExecutor().execute(registry: context.agentRegistry)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        },
+        ChatCheckAgentToolRegistry.toolName: { call, context in
+            let content = try await ChatCheckAgentToolExecutor().execute(call: call, registry: context.agentRegistry)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -290,6 +313,12 @@ enum ChatToolDispatcher {
         },
         ChatSpawnAgentToolRegistry.toolName: { _, error in
             ChatSpawnAgentToolExecutor().failurePayload(error: error)
+        },
+        ChatListAgentsToolRegistry.toolName: { _, error in
+            ChatListAgentsToolExecutor().failurePayload(error: error)
+        },
+        ChatCheckAgentToolRegistry.toolName: { _, error in
+            ChatCheckAgentToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -527,6 +556,10 @@ enum ChatToolPresentation {
             return fileWriteTitle(isPatch: true, status: status)
         case ChatSpawnAgentToolRegistry.toolName:
             return spawnAgentTitle(status: status)
+        case ChatListAgentsToolRegistry.toolName:
+            return listAgentsTitle(status: status)
+        case ChatCheckAgentToolRegistry.toolName:
+            return checkAgentTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -570,6 +603,10 @@ enum ChatToolPresentation {
                 return "square.and.pencil"
             case ChatSpawnAgentToolRegistry.toolName:
                 return "person.2.wave.2"
+            case ChatListAgentsToolRegistry.toolName:
+                return "list.bullet"
+            case ChatCheckAgentToolRegistry.toolName:
+                return "checkmark.circle"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -735,6 +772,32 @@ enum ChatToolPresentation {
             return "Sub-agent"
         case nil:
             return "Sub-agent tool"
+        }
+    }
+
+    private static func listAgentsTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Listing sub-agents…"
+        case .succeeded:
+            return "Listed sub-agents"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "List sub-agents"
+        case nil:
+            return "List sub-agents tool"
+        }
+    }
+
+    private static func checkAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Checking sub-agent…"
+        case .succeeded:
+            return "Checked sub-agent"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Check sub-agent"
+        case nil:
+            return "Check sub-agent tool"
         }
     }
 
