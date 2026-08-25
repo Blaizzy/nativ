@@ -74,3 +74,48 @@ final class MCPServerCatalogTests: XCTestCase {
         )
     }
 }
+
+final class MCPLaunchCommandTests: XCTestCase {
+    func testParsesSingleExecutablePath() throws {
+        let launchCommand = try MCPLaunchCommand(
+            parsing: "/Applications/Humla.app/Contents/MacOS/humla-mcp"
+        )
+
+        XCTAssertEqual(
+            launchCommand.executable,
+            "/Applications/Humla.app/Contents/MacOS/humla-mcp"
+        )
+        XCTAssertEqual(launchCommand.arguments, [])
+        XCTAssertEqual(launchCommand.suggestedName, "humla-mcp")
+    }
+
+    func testParsesQuotedExecutableAndArguments() throws {
+        let launchCommand = try MCPLaunchCommand(
+            parsing: #""/Applications/My MCP/server" --label "Team Notes" --empty """#
+        )
+
+        XCTAssertEqual(launchCommand.executable, "/Applications/My MCP/server")
+        XCTAssertEqual(
+            launchCommand.arguments,
+            ["--label", "Team Notes", "--empty", ""]
+        )
+    }
+
+    func testRenderedCommandRoundTripsWithoutLosingWords() throws {
+        let original = MCPLaunchCommand(
+            executable: "/Applications/My MCP/server",
+            arguments: ["plain", "a user's notes", #"quote\"and\\slash"#, ""]
+        )
+
+        XCTAssertEqual(try MCPLaunchCommand(parsing: original.rendered), original)
+    }
+
+    func testRejectsEmptyAndUnfinishedCommands() {
+        XCTAssertThrowsError(try MCPLaunchCommand(parsing: "   ")) { error in
+            XCTAssertEqual(error as? MCPLaunchCommandError, .empty)
+        }
+        XCTAssertThrowsError(try MCPLaunchCommand(parsing: #"server "unfinished"#)) { error in
+            XCTAssertEqual(error as? MCPLaunchCommandError, .unfinishedQuoteOrEscape)
+        }
+    }
+}
