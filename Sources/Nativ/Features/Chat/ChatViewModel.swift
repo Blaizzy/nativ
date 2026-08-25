@@ -48,6 +48,11 @@ final class ChatViewModel: ObservableObject {
         let huggingFaceToken: String?
     }
 
+    private struct PreparedDocumentContext {
+        var result: ChatDocumentContextResult
+        var characterLimit: Int
+    }
+
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
@@ -62,6 +67,7 @@ final class ChatViewModel: ObservableObject {
     }
     @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
     @Published private(set) var attachmentImportError: String?
+    @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
     @Published var draft = ""
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
@@ -206,6 +212,15 @@ final class ChatViewModel: ObservableObject {
 
     func clearAttachmentImportError() {
         attachmentImportError = nil
+    }
+
+    var currentDocumentContextOmissions: [ChatDocumentOmission] {
+        currentSessionID.flatMap { documentOmissionsBySessionID[$0] } ?? []
+    }
+
+    func clearDocumentContextOmissions() {
+        guard let currentSessionID else { return }
+        documentOmissionsBySessionID[currentSessionID] = nil
     }
 
     func canEditUserMessage(_ messageID: UUID) -> Bool {
@@ -673,6 +688,7 @@ final class ChatViewModel: ObservableObject {
             appModel.clearModelLoadFailure(for: modelID)
         }
         self.appModel = appModel
+        documentOmissionsBySessionID[sessionID] = nil
         requestQueue.append(QueuedChatRequest(
             id: UUID(),
             sessionID: sessionID,
@@ -1157,19 +1173,43 @@ final class ChatViewModel: ObservableObject {
         else {
             throw NativChatError.invalidResponse
         }
-        let documentContexts = try await documentContextBuilder.contexts(
-            for: Array(initialMessages[..<initialAssistantIndex])
+        let documentMessages = Array(initialMessages[..<initialAssistantIndex])
+        var documentContext = PreparedDocumentContext(
+            result: try await documentContextBuilder.contexts(for: documentMessages),
+            characterLimit: ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
         )
+        var effectiveContextLimit: Int?
+        if !documentContext.result.contexts.isEmpty {
+            effectiveContextLimit = try? await NativMetricsClient(
+                baseURL: queuedRequest.settings.serverBaseURL
+            )
+                .fetchMetrics(apiKey: queuedRequest.settings.serverAPIKey)
+                .server.effectiveContextLimit
+        }
 
         while true {
             try Task.checkCancellation()
             let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
+            documentContext = try await fittedDocumentContext(
+                documentContext,
+                messages: documentMessages,
+                for: queuedRequest,
+                before: assistantMessageID,
+                advertisesTools: advertisesTools,
+                settings: activeSettings,
+                effectiveContextLimit: effectiveContextLimit,
+                client: client
+            )
+            setDocumentContextOmissions(
+                documentContext.result.omittedDocuments,
+                for: queuedRequest.sessionID
+            )
             guard let request = makeCompletionRequest(
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
                 settings: activeSettings,
-                documentContexts: documentContexts
+                documentContexts: documentContext.result.contexts
             ) else {
                 throw NativChatError.invalidResponse
             }
@@ -1468,6 +1508,88 @@ final class ChatViewModel: ObservableObject {
             ) else {
                 throw NativChatError.invalidResponse
             }
+        }
+    }
+
+    private func fittedDocumentContext(
+        _ current: PreparedDocumentContext,
+        messages: [ChatTranscriptMessage],
+        for queuedRequest: QueuedChatRequest,
+        before assistantMessageID: UUID,
+        advertisesTools: Bool,
+        settings: NativSettings,
+        effectiveContextLimit: Int?,
+        client: NativChatClient
+    ) async throws -> PreparedDocumentContext {
+        guard !current.result.contexts.isEmpty,
+              let effectiveContextLimit,
+              effectiveContextLimit > 0
+        else { return current }
+
+        var prepared = current
+        var measuredBasePromptTokens: Int?
+        do {
+            for _ in 0..<3 {
+                guard let request = makeCompletionRequest(
+                    for: queuedRequest,
+                    before: assistantMessageID,
+                    advertisesTools: advertisesTools,
+                    settings: settings,
+                    documentContexts: prepared.result.contexts
+                ) else { return prepared }
+                let promptTokens = try await client.countPromptTokens(for: request).inputTokens
+                let promptLimit = max(
+                    0,
+                    effectiveContextLimit - request.maxTokens - ChatDocumentTokenBudget.safetyMargin
+                )
+                guard promptTokens > promptLimit else { return prepared }
+
+                if measuredBasePromptTokens == nil {
+                    guard let baseRequest = makeCompletionRequest(
+                        for: queuedRequest,
+                        before: assistantMessageID,
+                        advertisesTools: advertisesTools,
+                        settings: settings,
+                        documentContexts: [:]
+                    ) else { return prepared }
+                    measuredBasePromptTokens = try await client.countPromptTokens(
+                        for: baseRequest
+                    ).inputTokens
+                }
+                guard let basePromptTokens = measuredBasePromptTokens else { return prepared }
+                var nextLimit = ChatDocumentTokenBudget.characterLimit(
+                    currentLimit: prepared.characterLimit,
+                    basePromptTokens: basePromptTokens,
+                    documentPromptTokens: promptTokens,
+                    contextLimit: effectiveContextLimit,
+                    maximumOutputTokens: request.maxTokens
+                )
+                if nextLimit >= prepared.characterLimit {
+                    nextLimit = max(0, prepared.characterLimit - 1)
+                }
+                prepared = PreparedDocumentContext(
+                    result: try await documentContextBuilder.contexts(
+                        for: messages,
+                        maximumCharactersPerRequest: nextLimit
+                    ),
+                    characterLimit: nextLimit
+                )
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Preserve the character-bounded path if token preflight is unavailable.
+        }
+        return prepared
+    }
+
+    private func setDocumentContextOmissions(
+        _ omissions: [ChatDocumentOmission],
+        for sessionID: UUID
+    ) {
+        let contextLimited = omissions.filter { $0.reason == .contextLimit }
+        if documentOmissionsBySessionID[sessionID] != contextLimited {
+            documentOmissionsBySessionID[sessionID] = contextLimited.isEmpty ? nil : contextLimited
         }
     }
 

@@ -534,7 +534,29 @@ struct ChatComposer: View {
                 isDismissible: true
             ))
         }
+        let omittedDocuments = viewModel.currentDocumentContextOmissions
+        if !omittedDocuments.isEmpty {
+            notices.append(ChatAttachmentNotice(
+                id: "document-context-limit",
+                severity: .warning,
+                title: "Some documents weren’t included",
+                message: documentContextWarningMessage(for: omittedDocuments),
+                systemImage: "doc.badge.ellipsis",
+                isDismissible: true
+            ))
+        }
         return notices
+    }
+
+    private func documentContextWarningMessage(
+        for omissions: [ChatDocumentOmission]
+    ) -> String {
+        if omissions.count == 1, let filename = omissions.first?.filename {
+            return "The model’s context is full, so “\(filename)” wasn’t included."
+        }
+        let filenames = omissions.prefix(3).map { "“\($0.filename)”" }.joined(separator: ", ")
+        let suffix = omissions.count > 3 ? ", and \(omissions.count - 3) more" : ""
+        return "The model’s context is full, so \(filenames)\(suffix) weren’t included."
     }
 
     private func visionModelWarningMessage(
@@ -779,10 +801,14 @@ struct ChatComposer: View {
     }
 
     private func dismissAttachmentNotice(_ noticeID: String) {
-        guard noticeID == "attachment-import-error" else {
-            return
+        switch noticeID {
+        case "attachment-import-error":
+            viewModel.clearAttachmentImportError()
+        case "document-context-limit":
+            viewModel.clearDocumentContextOmissions()
+        default:
+            break
         }
-        viewModel.clearAttachmentImportError()
     }
 
     private var editorHeight: CGFloat {

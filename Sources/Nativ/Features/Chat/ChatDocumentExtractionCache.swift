@@ -1,23 +1,55 @@
 import Foundation
+import OSLog
 
 struct IndexedChatDocument: Sendable {
     let content: ExtractedDocumentContent
-    let termsBySection: [Set<String>]
+    let format: ChatDocumentFormat
+    let sectionIndexesByTerm: [String: [Int]]
 
-    init(_ content: ExtractedDocumentContent) {
+    init(_ content: ExtractedDocumentContent, format: ChatDocumentFormat) {
         self.content = content
-        termsBySection = content.sections.map { Set(Self.tokens(in: $0.text)) }
+        self.format = format
+
+        var sectionIndexesByTerm: [String: [Int]] = [:]
+        for (index, section) in content.sections.enumerated() {
+            let terms = Set(Self.tokens(in: section.text))
+            for term in terms {
+                sectionIndexesByTerm[term, default: []].append(index)
+            }
+        }
+        self.sectionIndexesByTerm = sectionIndexesByTerm
     }
 
     static func tokens(in text: String) -> [String] {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
+        var tokens: [String] = []
+        text.enumerateSubstrings(
+            in: text.startIndex..<text.endIndex,
+            options: [.byWords, .localized]
+        ) { substring, _, _, _ in
+            guard let substring else { return }
+            let token = normalized(substring)
+            if token.contains(where: { $0.isLetter || $0.isNumber }) {
+                tokens.append(token)
+            }
+        }
+        return tokens
+    }
+
+    static func normalized(_ token: String) -> String {
+        token.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
     }
 }
 
 /// Shares complete document extraction results between validation and request construction.
 actor ChatDocumentExtractionCache {
+    private static let signposter = OSSignposter(
+        subsystem: "com.nativ.app",
+        category: "DocumentExtraction"
+    )
+
     typealias Extraction = @Sendable (
         _ data: Data,
         _ filename: String,
@@ -61,10 +93,20 @@ actor ChatDocumentExtractionCache {
             throw DocumentTextExtractionError.invalidDocument
         }
 
-        let task = Task {
-            try await IndexedChatDocument(
-                extract(data, attachment.filename, attachment.mimeType, format)
+        let task = Task { [extract] in
+            let signpostID = Self.signposter.makeSignpostID()
+            let state = Self.signposter.beginInterval(
+                "Extract and index document",
+                id: signpostID
             )
+            defer { Self.signposter.endInterval("Extract and index document", state) }
+            let content = try await extract(
+                data,
+                attachment.filename,
+                attachment.mimeType,
+                format
+            )
+            return IndexedChatDocument(content, format: format)
         }
         extractionTasks[attachment.id] = task
 
