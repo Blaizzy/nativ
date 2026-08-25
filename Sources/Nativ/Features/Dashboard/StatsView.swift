@@ -1204,15 +1204,6 @@ private struct SuccessRateModelSummary: Identifiable {
 }
 
 private struct TokenUsagePanel: View {
-    struct HistogramSegment: Identifiable {
-        let modelID: String
-        let bucketStart: Date
-        let yStart: Int
-        let yEnd: Int
-
-        var id: String { "\(modelID):\(bucketStart.timeIntervalSince1970)" }
-    }
-
     struct RequestHistogramSegment: Identifiable {
         let bucketStart: Date
         let status: String
@@ -1232,20 +1223,12 @@ private struct TokenUsagePanel: View {
         var id: String { "\(modelID):\(bucketStart.timeIntervalSince1970)" }
     }
 
-    enum AllModelsDisplay: String, CaseIterable, Identifiable {
-        case lines = "Lines"
-        case stacked = "Histogram"
-
-        var id: String { rawValue }
-    }
-
     let metric: DashboardOverviewMetric
     let points: [DashboardViewModel.BucketPoint]
     let modelPoints: [DashboardViewModel.ModelTokenPoint]
     let range: DashboardViewModel.RangeOption
     let showsAllModels: Bool
     @State private var hoveredPointID: Date?
-    @State private var allModelsDisplay: AllModelsDisplay = .lines
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1255,19 +1238,12 @@ private struct TokenUsagePanel: View {
                     subtitle: chartSubtitle
                 )
                 Spacer()
-                if metric == .tokens && showsAllModels {
-                    Picker("Chart display", selection: $allModelsDisplay) {
-                        ForEach(AllModelsDisplay.allCases) { display in
-                            Text(display.rawValue).tag(display)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 190)
-                } else if !showsAllModels || metric == .requests {
+                if showsChartLegend {
                     chartLegend
                 }
             }
+
+            Spacer(minLength: 0)
 
             if points.isEmpty {
                 DashboardEmptyChart()
@@ -1360,14 +1336,7 @@ private struct TokenUsagePanel: View {
                                    geometry: geometry
                                ) {
                                 Group {
-                                    if metric == .tokens && showsAllModels {
-                                        ModelTokenUsageTooltip(
-                                            date: hoveredPoint.bucketStart,
-                                            points: modelValues(at: hoveredPoint.bucketStart),
-                                            modelColorDomain: modelColorDomain,
-                                            granularity: granularity
-                                        )
-                                    } else if showsAllModels {
+                                    if showsModelBreakdown {
                                         ModelOverviewTooltip(
                                             metric: metric,
                                             date: hoveredPoint.bucketStart,
@@ -1420,7 +1389,15 @@ private struct TokenUsagePanel: View {
     }
 
     private var showsScrollableModelLegend: Bool {
-        showsAllModels && !points.isEmpty && !usesSuccessRateComparison
+        showsModelBreakdown && !points.isEmpty && !usesSuccessRateComparison
+    }
+
+    private var showsChartLegend: Bool {
+        metric == .tokens || metric == .requests || !showsAllModels
+    }
+
+    private var showsModelBreakdown: Bool {
+        showsAllModels && metric != .tokens
     }
 
     private var chartTitle: String {
@@ -1439,7 +1416,7 @@ private struct TokenUsagePanel: View {
     private var chartSubtitle: String {
         switch metric {
         case .tokens:
-            showsAllModels ? "Total tokens by model over time" : "Input and output tokens over time"
+            showsAllModels ? "Input and output tokens across all models" : "Input and output tokens over time"
         case .requests:
             showsAllModels
                 ? "Request volume by model with average TTFT"
@@ -1487,11 +1464,7 @@ private struct TokenUsagePanel: View {
     private var usageMarks: some ChartContent {
         switch metric {
         case .tokens:
-            if showsAllModels {
-                allModelMarks
-            } else {
-                inputOutputMarks
-            }
+            inputOutputMarks
         case .requests:
             if showsAllModels {
                 allModelRequestMarks
@@ -1510,33 +1483,6 @@ private struct TokenUsagePanel: View {
                 allModelDecodeSpeedMarks
             } else {
                 decodeSpeedMarks
-            }
-        }
-    }
-
-    @ChartContentBuilder
-    private var allModelMarks: some ChartContent {
-        if allModelsDisplay == .lines {
-            ForEach(modelPoints) { point in
-                LineMark(
-                    x: .value("Time", point.bucketStart),
-                    y: .value("Total tokens", Double(point.totalTokens)),
-                    series: .value("Model", point.modelID)
-                )
-                .foregroundStyle(by: .value("Model", point.modelID))
-                .lineStyle(StrokeStyle(lineWidth: 2))
-                .interpolationMethod(.monotone)
-            }
-        } else {
-            ForEach(histogramSegments) { segment in
-                RectangleMark(
-                    xStart: .value("Bucket start", segment.bucketStart),
-                    xEnd: .value("Bucket end", bucketEnd(after: segment.bucketStart)),
-                    yStart: .value("Token start", Double(segment.yStart)),
-                    yEnd: .value("Token end", Double(segment.yEnd))
-                )
-                .foregroundStyle(by: .value("Model", segment.modelID))
-                .opacity(0.9)
             }
         }
     }
@@ -1759,30 +1705,19 @@ private struct TokenUsagePanel: View {
 
             switch metric {
             case .tokens:
-                if showsAllModels {
-                    ForEach(modelValues(at: hoveredPoint.bucketStart)) { modelPoint in
-                        PointMark(
-                            x: .value("Selected time", modelPoint.bucketStart),
-                            y: .value("Total tokens", Double(modelPoint.totalTokens))
-                        )
-                        .foregroundStyle(by: .value("Model", modelPoint.modelID))
-                        .symbolSize(42)
-                    }
-                } else {
-                    PointMark(
-                        x: .value("Selected time", hoveredPoint.bucketStart),
-                        y: .value("Input tokens", Double(hoveredPoint.promptTokensTotal))
-                    )
-                    .foregroundStyle(DashboardPalette.accent)
-                    .symbolSize(48)
+                PointMark(
+                    x: .value("Selected time", hoveredPoint.bucketStart),
+                    y: .value("Input tokens", Double(hoveredPoint.promptTokensTotal))
+                )
+                .foregroundStyle(DashboardPalette.accent)
+                .symbolSize(48)
 
-                    PointMark(
-                        x: .value("Selected time", hoveredPoint.bucketStart),
-                        y: .value("Output tokens", Double(hoveredPoint.generatedTokensTotal))
-                    )
-                    .foregroundStyle(DashboardPalette.indigo)
-                    .symbolSize(48)
-                }
+                PointMark(
+                    x: .value("Selected time", hoveredPoint.bucketStart),
+                    y: .value("Output tokens", Double(hoveredPoint.generatedTokensTotal))
+                )
+                .foregroundStyle(DashboardPalette.indigo)
+                .symbolSize(48)
             case .requests:
                 if showsAllModels {
                     ForEach(modelRequestSegments(at: hoveredPoint.bucketStart)) { segment in
@@ -1919,13 +1854,6 @@ private struct TokenUsagePanel: View {
 
         let maximum: Double
         switch metric {
-        case .tokens where showsAllModels && allModelsDisplay == .stacked:
-            maximum = Dictionary(grouping: modelPoints, by: \.bucketStart)
-                .values
-                .map { points in Double(points.reduce(0) { $0 + $1.totalTokens }) }
-                .max() ?? 0
-        case .tokens where showsAllModels:
-            maximum = Double(modelPoints.map(\.totalTokens).max() ?? 0)
         case .tokens:
             maximum = Double(points.map { max($0.promptTokensTotal, $0.generatedTokensTotal) }.max() ?? 0)
         case .requests:
@@ -2019,29 +1947,6 @@ private struct TokenUsagePanel: View {
         case .decodeSpeed:
             point.decodeSpeed ?? 0
         }
-    }
-
-    private var histogramSegments: [HistogramSegment] {
-        Dictionary(grouping: modelPoints, by: \.bucketStart)
-            .flatMap { bucketStart, bucketPoints in
-                var cumulative = 0
-                return bucketPoints
-                    .sorted { $0.modelID.localizedCaseInsensitiveCompare($1.modelID) == .orderedAscending }
-                    .map { point in
-                        let segment = HistogramSegment(
-                            modelID: point.modelID,
-                            bucketStart: bucketStart,
-                            yStart: cumulative,
-                            yEnd: cumulative + point.totalTokens
-                        )
-                        cumulative += point.totalTokens
-                        return segment
-                    }
-            }
-            .sorted {
-                if $0.bucketStart == $1.bucketStart { return $0.yStart < $1.yStart }
-                return $0.bucketStart < $1.bucketStart
-            }
     }
 
     private var requestHistogramSegments: [RequestHistogramSegment] {
@@ -2174,8 +2079,8 @@ private struct TokenUsagePanel: View {
         let plotFrame = geometry[plotFrameAnchor]
         let anchor = CGPoint(x: plotFrame.minX + plotX, y: plotFrame.minY + plotY)
         let tooltipSize = CGSize(
-            width: showsAllModels ? 230 : 210,
-            height: showsAllModels
+            width: showsModelBreakdown ? 230 : 210,
+            height: showsModelBreakdown
                 ? min(
                     CGFloat(tooltipModelValues(at: point.bucketStart).count) * 25
                         + 72
@@ -2222,12 +2127,6 @@ private struct TokenUsagePanel: View {
 
     private func tooltipAnchorValue(for point: DashboardViewModel.BucketPoint) -> Double {
         switch metric {
-        case .tokens where showsAllModels:
-            let values = modelValues(at: point.bucketStart).map(\.totalTokens)
-            if allModelsDisplay == .stacked {
-                return Double(values.reduce(0, +))
-            }
-            return Double(values.max() ?? 0)
         case .tokens:
             return Double(max(point.promptTokensTotal, point.generatedTokensTotal))
         case .requests:
@@ -2961,73 +2860,6 @@ private struct SuccessRateHealthTooltip: View {
                 .monospacedDigit()
         }
         .font(.caption)
-    }
-}
-
-private struct ModelTokenUsageTooltip: View {
-    let date: Date
-    let points: [DashboardViewModel.ModelTokenPoint]
-    let modelColorDomain: [String]
-    let granularity: NativAnalyticsGranularity
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(dateLabel)
-                .font(.caption.weight(.semibold))
-
-            ScrollView {
-                VStack(spacing: 7) {
-                    ForEach(points) { point in
-                        HStack(spacing: 10) {
-                            Circle()
-                                .fill(DashboardModelColorScale.color(for: point.modelID, in: modelColorDomain))
-                                .frame(width: 7, height: 7)
-                            Text(point.modelID)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 12)
-                            Text(NativFormatting.integer(point.totalTokens))
-                                .fontWeight(.medium)
-                                .monospacedDigit()
-                        }
-                        .font(.caption)
-                    }
-                }
-            }
-            .frame(maxHeight: 190)
-
-            Divider()
-
-            HStack {
-                Text("All models")
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 16)
-                Text(NativFormatting.integer(totalTokens))
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-            }
-            .font(.caption)
-        }
-        .padding(12)
-        .frame(width: 230)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(DashboardPalette.panelStroke, lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
-    }
-
-    private var totalTokens: Int {
-        points.reduce(0) { $0 + $1.totalTokens }
-    }
-
-    private var dateLabel: String {
-        if granularity == .hour {
-            return date.formatted(date: .abbreviated, time: .shortened)
-        }
-        return date.formatted(date: .long, time: .omitted)
     }
 }
 
