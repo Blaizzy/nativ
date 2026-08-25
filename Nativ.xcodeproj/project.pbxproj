@@ -102,6 +102,7 @@
 		455662EBEFC2C805F0223541 /* ControlPanelSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885B9207F7063BEC112E5CAB /* ControlPanelSidebarView.swift */; };
 		4572BDBE09CB7D688B8838CA /* MCPServerCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B352835BEC2B00D50C0F89D2 /* MCPServerCatalog.swift */; };
 		463870509178CCD59287E1BE /* VoiceTranscriptInserter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23155DB5E733D8887D83AFD0 /* VoiceTranscriptInserter.swift */; };
+		467A79817882057E60D2E4ED /* PhosphorSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 4982A746353A5B9FD44CD63C /* PhosphorSwift */; };
 		4681766DBDD49200E3A90BF0 /* ScheduledTasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5C104E12EEB90C4108DD86 /* ScheduledTasksView.swift */; };
 		4751D7C9F392C341E8921F58 /* ChatPromptRevision.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3B8F25491BDEED4717A5D23 /* ChatPromptRevision.swift */; };
 		482E08D2A8EFADD566FFDC4D /* LocalModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CD53CDD71732DE956F55DC /* LocalModelProvider.swift */; };
@@ -660,6 +661,7 @@
 				4882FE7E8C689152D428AB2E /* Sparkle in Frameworks */,
 				D76DC0072E523E6409DF1176 /* Textual in Frameworks */,
 				9A57C70528785257DF9CEAAE /* ZIPFoundation in Frameworks */,
+				467A79817882057E60D2E4ED /* PhosphorSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1276,6 +1278,7 @@
 				0D3574097911A448F62ED273 /* Sparkle */,
 				730B64747E8A780CD14AF88F /* Textual */,
 				66E307AA0AD0D089ED4F2AB5 /* ZIPFoundation */,
+				4982A746353A5B9FD44CD63C /* PhosphorSwift */,
 			);
 			productName = Nativ;
 			productReference = DE575DB2DCD07A1864311714 /* Nativ.app */;
@@ -1379,6 +1382,7 @@
 			mainGroup = 78E0E819BEDF0A48F9ED67A5;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				C6AD40D1885CEB6611EBC877 /* XCRemoteSwiftPackageReference "swift" */,
 				0FB7E2D2B22FC46D3462C47A /* XCRemoteSwiftPackageReference "Sparkle" */,
 				5409D05039F3337AF74DB4F3 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				4AEDB4F2A39BE67B1DF710AE /* XCRemoteSwiftPackageReference "swift-sdk" */,
@@ -2277,6 +2281,14 @@
 				version = 0.9.20;
 			};
 		};
+		C6AD40D1885CEB6611EBC877 /* XCRemoteSwiftPackageReference "swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/phosphor-icons/swift";
+			requirement = {
+				kind = exactVersion;
+				version = 2.1.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -2284,6 +2296,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0FB7E2D2B22FC46D3462C47A /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		4982A746353A5B9FD44CD63C /* PhosphorSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C6AD40D1885CEB6611EBC877 /* XCRemoteSwiftPackageReference "swift" */;
+			productName = PhosphorSwift;
 		};
 		66E307AA0AD0D089ED4F2AB5 /* ZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
