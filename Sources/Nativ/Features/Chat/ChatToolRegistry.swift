@@ -34,6 +34,7 @@ struct ChatToolExecutionContext: Sendable {
     var mcpHost: MCPHostManager? = nil
     var settings: NativSettings? = nil
     var spawnAgentParentMessages: [ChatTranscriptMessage] = []
+    var spawnAgentUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)? = nil
 }
 
 struct ChatToolExecutionOutcome: Sendable {
@@ -524,6 +525,8 @@ enum ChatToolPresentation {
             return fileWriteTitle(isPatch: false, status: status)
         case ChatFileWriteToolRegistry.patchToolName:
             return fileWriteTitle(isPatch: true, status: status)
+        case ChatSpawnAgentToolRegistry.toolName:
+            return spawnAgentTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -565,6 +568,8 @@ enum ChatToolPresentation {
             case ChatFileWriteToolRegistry.writeToolName,
                 ChatFileWriteToolRegistry.patchToolName:
                 return "square.and.pencil"
+            case ChatSpawnAgentToolRegistry.toolName:
+                return "person.2.wave.2"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -717,6 +722,19 @@ enum ChatToolPresentation {
             return isPatch ? "File patch" : "File write"
         case nil:
             return isPatch ? "File patch" : "File write"
+        }
+    }
+
+    private static func spawnAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Sub-agent working…"
+        case .succeeded:
+            return "Sub-agent finished"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Sub-agent"
+        case nil:
+            return "Sub-agent tool"
         }
     }
 

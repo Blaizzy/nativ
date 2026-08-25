@@ -16,12 +16,14 @@ enum ChatAgentLoop {
         modelID: String,
         settings: NativSettings,
         canEditImage: Bool,
-        context: ChatToolExecutionContext
+        context: ChatToolExecutionContext,
+        onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)? = nil
     ) async throws -> MLXChatCompletion {
         let client = NativChatClient(baseURL: context.baseURL, apiKey: context.apiKey)
         let toolDefinitions = subAgentToolDefinitions(settings: settings, canEditImage: canEditImage, context: context)
         let systemPrompt = subAgentSystemPrompt(settings: settings, hasTools: !toolDefinitions.isEmpty)
         let customTools = settings.customTools.filter { $0.kind != .script }
+        let transcript = ChatAgentDisplayTranscript(onUpdate: onUpdate)
 
         var messages = initialMessages
         if let systemPrompt {
@@ -46,9 +48,14 @@ enum ChatAgentLoop {
                 tools: advertisesTools ? toolDefinitions : nil,
                 toolChoice: advertisesTools ? "auto" : nil
             )
-            let completion = try await client.completeChat(request)
-            let toolCalls = normalizedToolCalls(completion.toolCalls)
 
+            let assistantDisplayID = transcript.appendAssistantPlaceholder()
+            let completion = try await client.streamChat(request, onEvent: { event in
+                await transcript.appendDelta(event, to: assistantDisplayID)
+            })
+            transcript.finishAssistant(assistantDisplayID, completion: completion)
+
+            let toolCalls = normalizedToolCalls(completion.toolCalls)
             guard advertisesTools, !toolCalls.isEmpty else {
                 return completion
             }
@@ -62,11 +69,13 @@ enum ChatAgentLoop {
 
             for toolCall in toolCalls {
                 try Task.checkCancellation()
-                let content = await executeToolCall(
+                let toolDisplayID = transcript.appendToolPlaceholder(for: toolCall)
+                let (content, succeeded) = await executeToolCall(
                     toolCall,
                     customTools: customTools,
                     context: context
                 )
+                transcript.finishTool(toolDisplayID, content: content, succeeded: succeeded)
                 messages.append(MLXChatMessage(
                     role: "tool",
                     content: content,
@@ -82,23 +91,23 @@ enum ChatAgentLoop {
         _ toolCall: MLXChatToolCall,
         customTools: [CustomTool],
         context: ChatToolExecutionContext
-    ) async -> String {
+    ) async -> (content: String, succeeded: Bool) {
         let name = toolCall.function?.name
         if name == ChatSpawnAgentToolRegistry.toolName {
-            return ChatSpawnAgentToolExecutor().failurePayload(error: ChatAgentLoopError.recursiveSpawnNotAllowed)
+            return (ChatSpawnAgentToolExecutor().failurePayload(error: ChatAgentLoopError.recursiveSpawnNotAllowed), false)
         }
         do {
             if let customTool = name.flatMap({ toolName in customTools.first { $0.toolName == toolName } }) {
                 let result = try await CustomToolExecutor.execute(customTool, argumentsJSON: toolCall.function?.arguments)
-                return result
+                return (result, true)
             }
             if let host = context.mcpHost, let name, host.handlesTool(named: name) {
-                return try await host.callTool(named: name, argumentsJSON: toolCall.function?.arguments)
+                return (try await host.callTool(named: name, argumentsJSON: toolCall.function?.arguments), true)
             }
             let outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
-            return outcome.content
+            return (outcome.content, true)
         } catch {
-            return ChatToolDispatcher.failurePayload(toolName: name, error: error)
+            return (ChatToolDispatcher.failurePayload(toolName: name, error: error), false)
         }
     }
 
@@ -148,5 +157,67 @@ enum ChatAgentLoop {
             }
             return normalized
         }
+    }
+}
+
+@MainActor
+private final class ChatAgentDisplayTranscript {
+    private var messages: [ChatTranscriptMessage] = []
+    private let onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?
+
+    init(onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?) {
+        self.onUpdate = onUpdate
+    }
+
+    func appendAssistantPlaceholder() -> UUID {
+        let id = UUID()
+        messages.append(ChatTranscriptMessage(id: id, role: .assistant, content: "", isStreaming: true))
+        onUpdate?(messages)
+        return id
+    }
+
+    func appendDelta(_ event: MLXChatStreamDelta, to id: UUID) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        messages[index].content += event.content ?? ""
+        messages[index].reasoningContent += event.reasoningContent ?? ""
+        onUpdate?(messages)
+    }
+
+    func finishAssistant(_ id: UUID, completion: MLXChatCompletion) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        messages[index].content = completion.content
+        messages[index].reasoningContent = completion.reasoningContent ?? ""
+        messages[index].isStreaming = false
+        onUpdate?(messages)
+    }
+
+    func appendToolPlaceholder(for call: MLXChatToolCall) -> UUID {
+        let id = UUID()
+        messages.append(ChatTranscriptMessage(
+            id: id,
+            role: .tool,
+            content: "",
+            isStreaming: true,
+            toolCallID: call.id,
+            toolName: call.function?.name,
+            toolStatus: .running,
+            toolArguments: call.function?.arguments
+        ))
+        onUpdate?(messages)
+        return id
+    }
+
+    func finishTool(_ id: UUID, content: String, succeeded: Bool) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        messages[index].content = content
+        messages[index].isStreaming = false
+        messages[index].toolStatus = succeeded ? .succeeded : .failed
+        onUpdate?(messages)
     }
 }

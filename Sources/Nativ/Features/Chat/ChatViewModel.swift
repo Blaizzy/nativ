@@ -1964,8 +1964,12 @@ final class ChatViewModel: ObservableObject {
                     guard let self else {
                         return
                     }
+                    var callContext = context
+                    callContext.spawnAgentUpdate = { [weak self] subMessages in
+                        _ = self?.updateMessage(toolMessageID, in: sessionID) { $0.subMessages = subMessages }
+                    }
                     do {
-                        let content = try await ChatSpawnAgentToolExecutor().execute(call: call, context: context)
+                        let content = try await ChatSpawnAgentToolExecutor().execute(call: call, context: callContext)
                         await self.updateToolMessage(
                             toolMessageID,
                             in: sessionID,

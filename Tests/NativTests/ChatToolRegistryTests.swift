@@ -1367,6 +1367,60 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
         XCTAssertEqual(decoded, original)
     }
+
+    func testSubMessagesDefaultEmptyWhenAbsentFromLegacyData() throws {
+        let legacyJSON = #"{"id":"\#(UUID().uuidString)","role":"tool","content":"{}"}"#
+        let decoded = try JSONDecoder().decode(
+            ChatTranscriptMessage.self,
+            from: XCTUnwrap(legacyJSON.data(using: .utf8))
+        )
+        XCTAssertEqual(decoded.subMessages, [])
+    }
+
+    func testSubMessagesRoundTrip() throws {
+        let original = ChatTranscriptMessage(
+            role: .tool,
+            content: #"{"ok":true,"answer":"done"}"#,
+            toolCallID: "call_1",
+            toolName: ChatSpawnAgentToolRegistry.toolName,
+            toolStatus: .succeeded,
+            toolArguments: #"{"task":"summarize"}"#,
+            subMessages: [
+                ChatTranscriptMessage(role: .assistant, content: "working on it"),
+                ChatTranscriptMessage(
+                    role: .tool,
+                    content: #"{"ok":true}"#,
+                    toolCallID: "sub_call_1",
+                    toolName: ChatSystemMonitorToolRegistry.toolName,
+                    toolStatus: .succeeded
+                ),
+            ]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.subMessages.count, 2)
+    }
+}
+
+final class ChatToolPresentationSpawnAgentTests: XCTestCase {
+    func testTitleReflectsStatus() {
+        XCTAssertEqual(
+            ChatToolPresentation.title(toolName: ChatSpawnAgentToolRegistry.toolName, status: .running),
+            "Sub-agent working…"
+        )
+        XCTAssertEqual(
+            ChatToolPresentation.title(toolName: ChatSpawnAgentToolRegistry.toolName, status: .succeeded),
+            "Sub-agent finished"
+        )
+    }
+
+    func testSymbolNameIsDistinctFromGenericTool() {
+        XCTAssertEqual(
+            ChatToolPresentation.symbolName(toolName: ChatSpawnAgentToolRegistry.toolName, status: .succeeded),
+            "person.2.wave.2"
+        )
+    }
 }
 
 final class ChatConcurrentSpawnGateTests: XCTestCase {

@@ -208,7 +208,8 @@ struct ChatSpawnAgentToolExecutor {
             modelID: modelID,
             settings: settings,
             canEditImage: !parentImages.isEmpty,
-            context: subAgentContext
+            context: subAgentContext,
+            onUpdate: context.spawnAgentUpdate
         )
 
         return try encodedPayload(ChatSpawnAgentToolResultPayload(

@@ -162,6 +162,7 @@ private struct ChatTranscriptView: View {
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
                             onCancelImageModelSelection: chat.cancelImageModelSelection,
+                            onCancelAgent: chat.cancelSpawnedAgent,
                             onExploreImageModels: onExploreImageModels,
                             onPreviewAttachment: onPreviewAttachment
                         )
@@ -368,6 +369,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onCancelAgent: (String) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var didCopyMessage = false
@@ -399,6 +401,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     onDeny: onDenyToolConsent,
                     onSelectImageModel: onSelectImageModel,
                     onCancelImageModelSelection: onCancelImageModelSelection,
+                    onCancelAgent: onCancelAgent,
                     onExploreImageModels: onExploreImageModels
                 )
             }
@@ -687,11 +690,27 @@ private struct ChatAgentStepCell: View {
     let onDeny: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onCancelAgent: (String) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isExpanded = false
 
     private var isAwaitingConsent: Bool {
         message.toolStatus == .awaitingConsent
+    }
+
+    /// Non-nil only for spawn_agent's own cell while it's actually running --
+    /// parsed from the tool result JSON since that's the only place agent_id
+    /// lives on this message.
+    private var runningSpawnAgentID: String? {
+        guard message.toolName == ChatSpawnAgentToolRegistry.toolName,
+              message.toolStatus == .running,
+              let data = message.content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let agentID = object["agent_id"] as? String
+        else {
+            return nil
+        }
+        return agentID
     }
 
     private var isAwaitingImageModelSelection: Bool {
@@ -756,6 +775,18 @@ private struct ChatAgentStepCell: View {
                 statusBadge
 
                 Spacer(minLength: 12)
+
+                if let runningSpawnAgentID {
+                    Button {
+                        onCancelAgent(runningSpawnAgentID)
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop this agent")
+                }
 
                 if !isAwaitingConsent && !isAwaitingImageModelSelection {
                     Image(systemName: "chevron.right")
@@ -909,6 +940,14 @@ private struct ChatAgentStepCell: View {
                     .foregroundStyle(.secondary)
                 NativCodeBlock(raw: formattedArguments)
             }
+            if !message.subMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sub-agent")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    ChatSpawnAgentSubTranscriptView(subMessages: message.subMessages, onCancelAgent: onCancelAgent)
+                }
+            }
             if !message.content.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Result")
@@ -997,6 +1036,45 @@ private struct ChatAgentStepCell: View {
             return nil
         }
         return object["error"] as? String
+    }
+}
+
+private struct ChatSpawnAgentSubTranscriptView: View {
+    let subMessages: [ChatTranscriptMessage]
+    let onCancelAgent: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(subMessages) { subMessage in
+                switch subMessage.role {
+                case .assistant:
+                    if !subMessage.content.isEmpty {
+                        Text(subMessage.content)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    } else if subMessage.isStreaming {
+                        Text(subMessage.reasoningContent.isEmpty ? "Thinking…" : subMessage.reasoningContent)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .italic()
+                    }
+                case .tool:
+                    ChatAgentStepCell(
+                        message: subMessage,
+                        imageModelSelectionRequest: nil,
+                        onConfirm: { _ in },
+                        onDeny: { _ in },
+                        onSelectImageModel: { _, _ in },
+                        onCancelImageModelSelection: { _ in },
+                        onCancelAgent: onCancelAgent,
+                        onExploreImageModels: { _ in }
+                    )
+                default:
+                    EmptyView()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
