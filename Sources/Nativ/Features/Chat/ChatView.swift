@@ -1466,7 +1466,9 @@ private struct ChatImageAttachmentView: View {
             .help("Open \(attachment.filename)")
             .accessibilityLabel("Open \(attachment.filename)")
 
-            if showsSaveButton, attachment.imageData != nil {
+            if showsSaveButton,
+               attachment.chatAttachmentKind == .image,
+               attachment.imageData != nil {
                 Button(action: saveImage) {
                     Image(systemName: "square.and.arrow.down")
                         .foregroundStyle(
@@ -1516,8 +1518,7 @@ private struct ChatImageAttachmentView: View {
                     .background(Color.white)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
-                        .font(.title2)
+                    FileTypeIcon(fileExtension: attachment.fileExtension, size: 48)
                     Text(attachment.filename)
                         .font(.caption)
                         .lineLimit(2)
@@ -1536,7 +1537,8 @@ private struct ChatImageAttachmentView: View {
     }
 
     private var image: NSImage? {
-        guard let data = attachment.imageData else {
+        guard attachment.chatAttachmentKind == .image,
+              let data = attachment.imageData else {
             return nil
         }
         return NSImage(data: data)

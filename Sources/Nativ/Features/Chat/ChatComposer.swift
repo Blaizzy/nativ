@@ -2,41 +2,29 @@ import AppKit
 import Foundation
 import SwiftUI
 
-private struct ChatImageThumbnail: View {
+private struct ChatAttachmentThumbnail: View {
     let attachment: ChatImageAttachment
-    let isUserMessage: Bool
     var width: CGFloat = 120
     var height: CGFloat = 90
 
     var body: some View {
         Group {
-            if let data = attachment.imageData,
+            if attachment.chatAttachmentKind == .image,
+               let data = attachment.imageData,
                let image = NSImage(data: data) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
                     .background(Color.white)
             } else {
-                VStack(spacing: 6) {
-                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
-                        .font(.title3)
-                    Text(attachment.filename)
-                        .font(.caption2)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                }
-                .foregroundStyle(isUserMessage ? Color.white.opacity(0.82) : Color(nsColor: .secondaryLabelColor))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                FileTypeIcon(fileExtension: attachment.fileExtension, size: 26)
             }
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(
-                    isUserMessage ? Color.white.opacity(0.3) : Color(nsColor: .separatorColor),
-                    lineWidth: 0.5
-                )
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
         .help(attachment.filename)
     }
@@ -2138,9 +2126,8 @@ struct ChatPendingImageAttachmentView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ChatImageThumbnail(
+            ChatAttachmentThumbnail(
                 attachment: attachment,
-                isUserMessage: false,
                 width: 42,
                 height: 32
             )

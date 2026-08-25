@@ -63,6 +63,10 @@ struct ChatAttachmentPreviewFile: Sendable {
 }
 
 extension ChatImageAttachment {
+    var fileExtension: String {
+        filename.pathExtension
+    }
+
     var chatAttachmentKind: ChatAttachmentKind {
         let normalizedMIMEType = mimeType
             .trimmingCharacters(in: .whitespacesAndNewlines)
