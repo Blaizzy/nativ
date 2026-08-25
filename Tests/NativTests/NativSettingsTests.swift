@@ -2,6 +2,19 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testFileReadRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileReadRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileReadRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileReadRootPath, directory.path)
+    }
+
     func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
         var settings = NativSettings()
 

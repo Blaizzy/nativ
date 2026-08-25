@@ -38,12 +38,28 @@ A tool-calling model can invoke host capabilities mid-conversation. The registry
 | Model library | List installed models or switch the active model. |
 | Server stats | Report server and request statistics. |
 | System monitor | Report live CPU, GPU, and memory readings. |
+| File Read | Read bounded, numbered text from a user-authorized local folder. |
 
 Tools are advertised to the model only when the active model reports tool-calling support
-and the tool is enabled. Each invocation passes through a consent gate
-(`ChatToolConsentGate`) before it runs, so a tool call surfaces a prompt rather than
-executing silently. MCP servers contribute additional tools through the same path — see
-[Integrations](integrations.md).
+and the tool is enabled and configured. Tools that change app state or execute custom scripts
+use explicit consent gates; bounded read-only tools execute directly. MCP servers contribute
+additional tools through the same path — see [Integrations](integrations.md).
+
+### File Read
+
+The built-in `read_file` tool is local to the Mac running Nativ, including when the model
+server is remote. It remains unavailable until the user chooses one authorized folder in
+**Extensions → Tools → File Read**.
+
+- Relative paths resolve inside that folder. Absolute paths and symlinks are accepted only
+  when their canonical target remains inside it.
+- Results use one-based `LINE|CONTENT` numbering and bounded line/character pagination.
+- Binary and special files, credential stores, private-key paths, and oversized files are
+  blocked. High-confidence secret values in otherwise readable text are replaced with
+  `<redacted>` without hiding the rest of the file.
+- Text-layer PDFs use Nativ's existing PDF extraction.
+- Scheduled routines may use File Read only when the user explicitly selects the capability;
+  every run is restricted to a snapshot of the same configured folder.
 
 ## Image generation
 

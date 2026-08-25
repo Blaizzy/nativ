@@ -407,6 +407,7 @@ struct NativSettings: Codable, Equatable {
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
     var disabledToolNames: [String]
+    var fileReadRootPath: String?
     var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
@@ -458,6 +459,7 @@ struct NativSettings: Codable, Equatable {
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
         disabledToolNames: [String] = [],
+        fileReadRootPath: String? = nil,
         skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
@@ -508,6 +510,7 @@ struct NativSettings: Codable, Equatable {
         self.mcpServers = mcpServers
         self.customTools = customTools
         self.disabledToolNames = disabledToolNames
+        self.fileReadRootPath = fileReadRootPath
         self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
@@ -560,6 +563,7 @@ struct NativSettings: Codable, Equatable {
         case mcpServers
         case customTools
         case disabledToolNames
+        case fileReadRootPath
         case skills
         case imageGenerationModelID
         case textToSpeechModelID
@@ -617,6 +621,7 @@ struct NativSettings: Codable, Equatable {
         mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
         customTools = try container.decodeIfPresent([CustomTool].self, forKey: .customTools) ?? defaults.customTools
         disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
+        fileReadRootPath = try container.decodeIfPresent(String.self, forKey: .fileReadRootPath) ?? defaults.fileReadRootPath
         skills = try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
@@ -670,6 +675,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
         try container.encode(disabledToolNames, forKey: .disabledToolNames)
+        try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
         try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
@@ -846,6 +852,11 @@ struct NativSettings: Codable, Equatable {
         settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
+        let trimmedFileReadRoot = settings.fileReadRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        settings.fileReadRootPath = trimmedFileReadRoot.isEmpty
+            ? nil
+            : NSString(string: trimmedFileReadRoot).expandingTildeInPath
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         if let imageModelID = settings.imageGenerationModelID,
