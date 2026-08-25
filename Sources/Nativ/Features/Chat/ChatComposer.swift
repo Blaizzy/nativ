@@ -2,40 +2,29 @@ import AppKit
 import Foundation
 import SwiftUI
 
-private struct ChatImageThumbnail: View {
+private struct ChatAttachmentThumbnail: View {
     let attachment: ChatImageAttachment
-    let isUserMessage: Bool
     var width: CGFloat = 120
     var height: CGFloat = 90
 
     var body: some View {
         Group {
-            if let data = attachment.imageData,
+            if attachment.chatAttachmentKind == .image,
+               let data = attachment.imageData,
                let image = NSImage(data: data) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
+                    .background(Color.white)
             } else {
-                VStack(spacing: 6) {
-                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
-                        .font(.title3)
-                    Text(attachment.filename)
-                        .font(.caption2)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                }
-                .foregroundStyle(isUserMessage ? Color.white.opacity(0.82) : Color(nsColor: .secondaryLabelColor))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                FileTypeIcon(fileExtension: attachment.fileExtension, size: 26)
             }
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(
-                    isUserMessage ? Color.white.opacity(0.3) : Color(nsColor: .separatorColor),
-                    lineWidth: 0.5
-                )
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
         .help(attachment.filename)
     }
@@ -501,13 +490,6 @@ struct ChatComposer: View {
                     severity: .progress,
                     message: message
                 ))
-            case .warning(let message, _):
-                notices.append(ChatAttachmentNotice(
-                    id: "attachment-\(attachment.id.uuidString)",
-                    severity: .warning,
-                    title: "PDF will be shortened",
-                    message: message
-                ))
             case .blocked(let message):
                 notices.append(ChatAttachmentNotice(
                     id: "attachment-\(attachment.id.uuidString)",
@@ -518,22 +500,6 @@ struct ChatComposer: View {
             case .ready:
                 break
             }
-        }
-
-        let pendingPDFCount = viewModel.pendingImageAttachments.count {
-            $0.chatAttachmentKind == .pdf
-        }
-        if pendingPDFCount > 1,
-           viewModel.pendingPDFCharacterCount
-            > ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest {
-            notices.append(ChatAttachmentNotice(
-                id: "pdf-request-limit",
-                severity: .warning,
-                title: "PDF context limit reached",
-                message: "These PDFs exceed the "
-                    + "\(ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest.formatted())"
-                    + "-character request limit. Newer documents will be prioritized."
-            ))
         }
 
         if modelLacksVision,
@@ -557,7 +523,29 @@ struct ChatComposer: View {
                 isDismissible: true
             ))
         }
+        let omittedDocuments = viewModel.currentDocumentContextOmissions
+        if !omittedDocuments.isEmpty {
+            notices.append(ChatAttachmentNotice(
+                id: "document-context-limit",
+                severity: .warning,
+                title: "Some documents weren’t included",
+                message: documentContextWarningMessage(for: omittedDocuments),
+                systemImage: "doc.badge.ellipsis",
+                isDismissible: true
+            ))
+        }
         return notices
+    }
+
+    private func documentContextWarningMessage(
+        for omissions: [ChatDocumentOmission]
+    ) -> String {
+        if omissions.count == 1, let filename = omissions.first?.filename {
+            return "The model’s context is full, so “\(filename)” wasn’t included."
+        }
+        let filenames = omissions.prefix(3).map { "“\($0.filename)”" }.joined(separator: ", ")
+        let suffix = omissions.count > 3 ? ", and \(omissions.count - 3) more" : ""
+        return "The model’s context is full, so \(filenames)\(suffix) weren’t included."
     }
 
     private func visionModelWarningMessage(
@@ -802,10 +790,14 @@ struct ChatComposer: View {
     }
 
     private func dismissAttachmentNotice(_ noticeID: String) {
-        guard noticeID == "attachment-import-error" else {
-            return
+        switch noticeID {
+        case "attachment-import-error":
+            viewModel.clearAttachmentImportError()
+        case "document-context-limit":
+            viewModel.clearDocumentContextOmissions()
+        default:
+            break
         }
-        viewModel.clearAttachmentImportError()
     }
 
     private var editorHeight: CGFloat {
@@ -1587,7 +1579,7 @@ struct ChatComposerActionPanel: View {
                 section("Add") {
                     ChatComposerActionRow(
                         title: "Upload file",
-                        detail: "Choose an image or PDF from your Mac",
+                        detail: "Choose an image or document from your Mac",
                         systemName: "doc.badge.plus",
                         action: onAttachImages
                     )
@@ -2134,9 +2126,8 @@ struct ChatPendingImageAttachmentView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ChatImageThumbnail(
+            ChatAttachmentThumbnail(
                 attachment: attachment,
-                isUserMessage: false,
                 width: 42,
                 height: 32
             )
@@ -2182,13 +2173,8 @@ struct ChatPendingImageAttachmentView: View {
             case .processing:
                 ProgressView()
                     .controlSize(.small)
-                    .help("Reading PDF")
-                    .accessibilityLabel("Reading PDF")
-            case .warning(let message, _):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help(message)
-                    .accessibilityLabel("Attachment warning")
+                    .help("Reading document")
+                    .accessibilityLabel("Reading document")
             case .blocked(let message):
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Color.orange)
@@ -2208,7 +2194,7 @@ struct ChatPendingImageAttachmentView: View {
             return false
         }
         switch validation {
-        case .warning, .blocked:
+        case .blocked:
             return true
         case .processing, .ready:
             return false

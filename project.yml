@@ -21,6 +21,12 @@ packages:
   mcp-swift-sdk:
     url: https://github.com/modelcontextprotocol/swift-sdk
     exactVersion: 0.12.1
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    exactVersion: 0.9.20
+  PhosphorSwift:
+    url: https://github.com/phosphor-icons/swift
+    exactVersion: 2.1.0
 schemes:
   Nativ:
     build:
@@ -112,6 +118,10 @@ targets:
         product: Sparkle
       - package: textual
         product: Textual
+      - package: ZIPFoundation
+        product: ZIPFoundation
+      - package: PhosphorSwift
+        product: PhosphorSwift
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
@@ -245,6 +255,8 @@ targets:
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
+      - package: ZIPFoundation
+        product: ZIPFoundation
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests
