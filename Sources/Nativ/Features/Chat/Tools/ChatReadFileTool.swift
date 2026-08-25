@@ -380,13 +380,10 @@ struct ChatReadFileToolExecutor {
             do {
                 let document = try await dependencies.extractPDF(snapshot.data, url.lastPathComponent)
                 let rendered = document.sections.map { section in
-                    if let page = section.pageNumber {
-                        return "[Page \(page)]\n\(section.text)"
-                    }
-                    return section.text
+                    "[\(section.location.label)]\n\(section.text)"
                 }.joined(separator: "\n\n")
                 var warnings: [String] = []
-                if let pageCount = document.pageCount, document.sections.count < pageCount {
+                if document.sections.count < document.sourceSectionCount {
                     warnings.append(
                         "Some PDF pages had no extractable text; scanned pages are not OCRed."
                     )

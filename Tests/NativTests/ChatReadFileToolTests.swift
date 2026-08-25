@@ -175,8 +175,10 @@ final class ChatReadFileToolTests: XCTestCase {
                 ExtractedDocumentContent(
                     filename: filename,
                     mimeType: "application/pdf",
-                    pageCount: 2,
-                    sections: [ExtractedDocumentSection(pageNumber: 1, text: "PDF text")]
+                    sourceSectionCount: 2,
+                    sections: [
+                        ExtractedDocumentSection(location: .page(1), text: "PDF text")
+                    ]
                 )
             }
         )
