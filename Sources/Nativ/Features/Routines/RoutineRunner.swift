@@ -187,6 +187,7 @@ final class RoutineRunner {
         var transcript = [ChatTranscriptMessage(role: .user, content: routine.instructions)]
         var toolRound = 0
         let fileReadTracker = ChatReadFileTracker()
+        let fileOperationRunID = UUID()
 
         while true {
             try Task.checkCancellation()
@@ -260,7 +261,8 @@ final class RoutineRunner {
                     capabilities: capabilities,
                     settings: settings,
                     baseURL: baseURL,
-                    fileReadTracker: fileReadTracker
+                    fileReadTracker: fileReadTracker,
+                    fileOperationRunID: fileOperationRunID
                 )
                 requestMessages.append(MLXChatMessage(
                     role: "tool",
@@ -287,7 +289,8 @@ final class RoutineRunner {
         capabilities: ResolvedCapabilities,
         settings: NativSettings,
         baseURL: URL,
-        fileReadTracker: ChatReadFileTracker
+        fileReadTracker: ChatReadFileTracker,
+        fileOperationRunID: UUID
     ) async throws -> ScheduledToolResult {
         do {
             try Task.checkCancellation()
@@ -327,7 +330,8 @@ final class RoutineRunner {
                     additionalModelSearchPaths: settings.additionalModelSearchPaths,
                     huggingFaceToken: model.effectiveHuggingFaceToken,
                     fileReadRootPath: settings.fileReadRootPath,
-                    fileReadTracker: fileReadTracker
+                    fileReadTracker: fileReadTracker,
+                    fileOperationRunID: fileOperationRunID
                 )
                 outcome = try await ChatToolDispatcher.execute(call: call, context: context)
             }
@@ -556,6 +560,7 @@ final class RoutineRunner {
         }
 
         let nativeDefinitions = ChatToolRegistry.descriptors(canEditImage: false)
+            .filter { $0.configuration != .fileWrite }
             .map(\.definition)
             .filter { $0.function.name != ChatSwitchModelToolRegistry.toolName }
         for tool in selectedTools {
@@ -564,6 +569,7 @@ final class RoutineRunner {
                 if let definition = nativeDefinitions.first(where: {
                     $0.function.name == tool.name
                 }), !settings.disabledToolNames.contains(tool.name),
+                   !ChatFileWriteToolRegistry.toolNames.contains(tool.name),
                    (tool.name != ChatWebSearchToolRegistry.toolName
                     || ChatWebSearchToolRegistry.isConfigured()),
                    (tool.name != ChatReadFileToolRegistry.toolName

@@ -102,6 +102,7 @@ struct RoutineEditor: View {
         options += ChatToolRegistry.descriptors(canEditImage: false)
             .filter {
                 $0.definition.function.name != ChatSwitchModelToolRegistry.toolName
+                    && $0.configuration != .fileWrite
                     && !disabledNames.contains($0.definition.function.name)
                     && ($0.configuration != .webSearch || ChatWebSearchToolRegistry.isConfigured())
                     && ($0.configuration != .fileRead

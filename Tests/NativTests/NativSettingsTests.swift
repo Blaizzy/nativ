@@ -15,6 +15,19 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.fileReadRootPath, directory.path)
     }
 
+    func testFileWriteRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileWriteRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileWriteRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileWriteRootPath, directory.path)
+    }
+
     func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
         var settings = NativSettings()
 

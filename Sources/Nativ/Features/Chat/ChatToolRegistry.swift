@@ -19,6 +19,11 @@ struct ChatToolExecutionContext: Sendable {
     var fileReadTracker: ChatReadFileTracker? = nil
     var fileReadMaximumResultCharacters = ChatReadFileToolRegistry.defaultMaximumResultCharacters
     var fileReadToolDependencies = ChatReadFileToolDependencies.live
+    var fileWriteRootPath: String? = nil
+    var fileWriteApprovalGranted = false
+    var fileOperationRunID = UUID()
+    var fileMutationState = FileMutationState.shared
+    var fileWriteToolDependencies = ChatFileWriteToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -36,10 +41,11 @@ enum ChatToolRoundGate {
     }
 }
 
-enum ChatNativeToolConfiguration: Equatable {
+enum ChatNativeToolConfiguration: Hashable {
     case webSearch
     case webRead
     case fileRead
+    case fileWrite
 
     var displayName: String {
         switch self {
@@ -49,6 +55,8 @@ enum ChatNativeToolConfiguration: Equatable {
             "Web Read"
         case .fileRead:
             "File Read"
+        case .fileWrite:
+            "File Write"
         }
     }
 
@@ -62,6 +70,10 @@ enum ChatNativeToolConfiguration: Equatable {
             FileReadAccessPolicy.isConfigured(
                 rootPath: NativSettings.load().fileReadRootPath
             )
+        case .fileWrite:
+            FileWriteAccessPolicy.isConfigured(
+                rootPath: NativSettings.load().fileWriteRootPath
+            )
         }
     }
 
@@ -73,6 +85,8 @@ enum ChatNativeToolConfiguration: Equatable {
             "doc.text.magnifyingglass"
         case .fileRead:
             "doc.text"
+        case .fileWrite:
+            "square.and.pencil"
         }
     }
 }
@@ -131,6 +145,13 @@ enum ChatToolRegistry {
             displayDescription: "Read content from the folder you authorize.",
             configuration: .fileRead
         ))
+        tools += ChatFileWriteToolRegistry.definitions.map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Create and edit files in the folder you authorize.",
+                configuration: .fileWrite
+            )
+        }
         tools.append(ChatNativeToolDescriptor(
             definition: ChatWebSearchToolRegistry.definition,
             displayDescription: "Search the web for current information and sources.",
@@ -177,6 +198,12 @@ enum ChatToolDispatcher {
         ChatReadFileToolRegistry.toolName: { call, context in
             try await executeReadFileTool(call: call, context: context)
         },
+        ChatFileWriteToolRegistry.writeToolName: { call, context in
+            try await executeFileWriteTool(call: call, context: context)
+        },
+        ChatFileWriteToolRegistry.patchToolName: { call, context in
+            try await executeFileWriteTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -206,6 +233,12 @@ enum ChatToolDispatcher {
         },
         ChatReadFileToolRegistry.toolName: { _, error in
             ChatReadFileToolExecutor().failurePayload(error: error)
+        },
+        ChatFileWriteToolRegistry.writeToolName: { _, error in
+            ChatFileWriteToolExecutor().failurePayload(error: error)
+        },
+        ChatFileWriteToolRegistry.patchToolName: { _, error in
+            ChatFileWriteToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -329,6 +362,14 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeFileWriteTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatFileWriteToolExecutor().execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -405,6 +446,10 @@ enum ChatToolPresentation {
             return webReadTitle(status: status)
         case ChatReadFileToolRegistry.toolName:
             return readFileTitle(status: status)
+        case ChatFileWriteToolRegistry.writeToolName:
+            return fileWriteTitle(isPatch: false, status: status)
+        case ChatFileWriteToolRegistry.patchToolName:
+            return fileWriteTitle(isPatch: true, status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -441,6 +486,9 @@ enum ChatToolPresentation {
                 return "doc.text.magnifyingglass"
             case ChatReadFileToolRegistry.toolName:
                 return "doc.text"
+            case ChatFileWriteToolRegistry.writeToolName,
+                 ChatFileWriteToolRegistry.patchToolName:
+                return "square.and.pencil"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -558,6 +606,26 @@ enum ChatToolPresentation {
             return "File read"
         case nil:
             return "File read"
+        }
+    }
+
+    private static func fileWriteTitle(
+        isPatch: Bool,
+        status: ChatTranscriptMessage.ToolStatus?
+    ) -> String {
+        switch status {
+        case .awaitingConsent:
+            return isPatch ? "Patch protected file?" : "Write protected file?"
+        case .preparing, .running:
+            return isPatch ? "Patching files…" : "Writing file…"
+        case .succeeded:
+            return isPatch ? "Patched files" : "Wrote file"
+        case .declined:
+            return isPatch ? "Patch declined" : "File write declined"
+        case .failed, .cancelled, .awaitingImageModelSelection:
+            return isPatch ? "File patch" : "File write"
+        case nil:
+            return isPatch ? "File patch" : "File write"
         }
     }
 

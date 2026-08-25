@@ -15,7 +15,7 @@ private enum GlobalChatCapabilityKind: Int, CaseIterable {
 }
 
 private enum GlobalChatCapabilityTarget: Hashable {
-    case nativeTool(String)
+    case nativeTools([String])
     case customTool(String)
     case skill(UUID)
     case mcpServer(UUID)
@@ -104,12 +104,20 @@ struct ChatCapabilitiesSheet: View {
     }
 
     private var nativeToolItems: [GlobalChatCapabilityItem] {
-        ChatToolRegistry.descriptors(canEditImage: false).map { descriptor in
+        var seenConfigurations = Set<ChatNativeToolConfiguration>()
+        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
+            if configuration == .fileWrite,
+               !seenConfigurations.insert(.fileWrite).inserted {
+                return nil
+            }
+            let toolNames = configuration == .fileWrite
+                ? ChatFileWriteToolRegistry.toolNames
+                : [toolName]
             return GlobalChatCapabilityItem(
                 id: "native-tool-\(toolName)",
-                target: .nativeTool(toolName),
+                target: .nativeTools(toolNames),
                 title: configuration?.displayName ?? humanized(toolName),
                 detail: "Tool · Built-in",
                 kind: .tool,
@@ -236,7 +244,9 @@ struct ChatCapabilitiesSheet: View {
     private func isEnabled(_ item: GlobalChatCapabilityItem) -> Bool {
         guard item.isAvailable else { return false }
         switch item.target {
-        case .nativeTool(let toolName), .customTool(let toolName):
+        case .nativeTools(let toolNames):
+            return toolNames.allSatisfy(model.settings.isToolEnabled)
+        case .customTool(let toolName):
             return model.settings.isToolEnabled(toolName)
         case .skill(let id):
             return model.settings.skills.first { $0.id == id }?.isEnabled == true
@@ -247,7 +257,12 @@ struct ChatCapabilitiesSheet: View {
 
     private func toggle(_ item: GlobalChatCapabilityItem) {
         switch item.target {
-        case .nativeTool(let toolName), .customTool(let toolName):
+        case .nativeTools(let toolNames):
+            let enabled = !toolNames.allSatisfy(model.settings.isToolEnabled)
+            for toolName in toolNames {
+                model.settings.setToolEnabled(enabled, toolName: toolName)
+            }
+        case .customTool(let toolName):
             model.settings.setToolEnabled(
                 !model.settings.isToolEnabled(toolName),
                 toolName: toolName

@@ -1199,6 +1199,7 @@ final class ChatViewModel: ObservableObject {
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
         let fileReadTracker = ChatReadFileTracker()
+        let fileOperationRunID = UUID()
 
         guard let initialMessages = sessionMessages(for: queuedRequest.sessionID),
               let initialAssistantIndex = initialMessages.firstIndex(where: {
@@ -1299,6 +1300,7 @@ final class ChatViewModel: ObservableObject {
                 let customTool = toolCall.function?.name.flatMap { toolName in
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
+                var fileWriteApprovalGranted = false
                 if customTool?.kind == .script {
                     updateToolMessage(
                         toolMessageID,
@@ -1328,6 +1330,54 @@ final class ChatViewModel: ObservableObject {
                         )
                         continue
                     case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                }
+
+                if customTool == nil,
+                   !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false),
+                   ChatFileWriteApprovalPolicy.requiresApproval(
+                       call: toolCall,
+                       rootPath: queuedRequest.settings.fileWriteRootPath
+                   ) {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(
+                        approved: approved,
+                        isCancelled: Task.isCancelled
+                    ) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatFileWriteToolExecutor().declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        fileWriteApprovalGranted = true
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1434,6 +1484,9 @@ final class ChatViewModel: ObservableObject {
                         huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
                         fileReadRootPath: queuedRequest.settings.fileReadRootPath,
                         fileReadTracker: fileReadTracker,
+                        fileWriteRootPath: queuedRequest.settings.fileWriteRootPath,
+                        fileWriteApprovalGranted: fileWriteApprovalGranted,
+                        fileOperationRunID: fileOperationRunID,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
@@ -1667,6 +1720,9 @@ final class ChatViewModel: ObservableObject {
             let fileReadIsConfigured = FileReadAccessPolicy.isConfigured(
                 rootPath: settings.fileReadRootPath
             )
+            let fileWriteIsConfigured = FileWriteAccessPolicy.isConfigured(
+                rootPath: settings.fileWriteRootPath
+            )
             toolDefinitions.removeAll {
                 !settings.isToolEnabled($0.function.name)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
@@ -1675,6 +1731,8 @@ final class ChatViewModel: ObservableObject {
                         && !webReadIsConfigured)
                     || ($0.function.name == ChatReadFileToolRegistry.toolName
                         && !fileReadIsConfigured)
+                    || (ChatFileWriteToolRegistry.toolNames.contains($0.function.name)
+                        && !fileWriteIsConfigured)
             }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions

@@ -47,6 +47,9 @@ struct ToolsSectionView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fileReadConfigurationDidChange)) { _ in
             synchronizeConfiguredToolAvailability()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .fileWriteConfigurationDidChange)) { _ in
+            synchronizeConfiguredToolAvailability()
+        }
         .sheet(item: $inspecting, onDismiss: finishToolConfiguration) { tool in
             switch tool.configuration {
             case .webSearch:
@@ -67,6 +70,13 @@ struct ToolsSectionView: View {
                 )
             case .fileRead:
                 FileReadConfigurationView(
+                    model: model,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case .fileWrite:
+                FileWriteConfigurationView(
                     model: model,
                     onConfigurationChanged: { _ in
                         reconcileConfiguredTool(tool)
@@ -146,25 +156,25 @@ struct ToolsSectionView: View {
         guard tool.isBuiltIn else { return nil }
         return Binding(
             get: {
-                model.settings.isToolEnabled(tool.name)
+                tool.toolNames.allSatisfy(model.settings.isToolEnabled)
                     && (tool.configuration?.isConfigured ?? true)
             },
             set: { enabled in
                 guard enabled else {
-                    model.settings.setToolEnabled(false, toolName: tool.name)
+                    setEnabled(false, for: tool)
                     return
                 }
                 guard let configuration = tool.configuration else {
-                    model.settings.setToolEnabled(true, toolName: tool.name)
+                    setEnabled(true, for: tool)
                     return
                 }
                 guard configuration.isConfigured else {
-                    model.settings.setToolEnabled(false, toolName: tool.name)
+                    setEnabled(false, for: tool)
                     configurationPendingEnablement = tool.name
                     inspecting = tool
                     return
                 }
-                model.settings.setToolEnabled(true, toolName: tool.name)
+                setEnabled(true, for: tool)
             }
         )
     }
@@ -172,7 +182,7 @@ struct ToolsSectionView: View {
     private func inspect(_ tool: ToolItem) {
         if let configuration = tool.configuration,
            configuration.isConfigured,
-           model.settings.isToolEnabled(tool.name) {
+           tool.toolNames.allSatisfy(model.settings.isToolEnabled) {
             configurationPendingEnablement = tool.name
         }
         inspecting = tool
@@ -182,7 +192,7 @@ struct ToolsSectionView: View {
         guard let configuration = tool.configuration else { return }
         let isConfigured = configuration.isConfigured
         if !isConfigured || configurationPendingEnablement == tool.name {
-            model.settings.setToolEnabled(isConfigured, toolName: tool.name)
+            setEnabled(isConfigured, for: tool)
         }
     }
 
@@ -194,30 +204,43 @@ struct ToolsSectionView: View {
 
     private func finishToolConfiguration() {
         guard let toolName = configurationPendingEnablement,
-              let tool = nativeTools.first(where: { $0.name == toolName }),
+              let tool = nativeTools.first(where: { $0.toolNames.contains(toolName) }),
               let configuration = tool.configuration
         else {
             configurationPendingEnablement = nil
             return
         }
-        model.settings.setToolEnabled(
-            configuration.isConfigured,
-            toolName: tool.name
-        )
+        setEnabled(configuration.isConfigured, for: tool)
         configurationPendingEnablement = nil
     }
 
     private var nativeTools: [ToolItem] {
-        ChatToolRegistry.descriptors(canEditImage: false).map {
-            ToolItem(
-                name: $0.definition.function.name,
-                title: $0.configuration?.displayName ?? humanized($0.definition.function.name),
-                detail: $0.displayDescription,
-                parameters: $0.definition.function.parameters,
+        var seenConfigurations = Set<ChatNativeToolConfiguration>()
+        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+            let configuration = descriptor.configuration
+            if configuration == .fileWrite,
+               !seenConfigurations.insert(.fileWrite).inserted {
+                return nil
+            }
+            let name = descriptor.definition.function.name
+            return ToolItem(
+                name: name,
+                toolNames: configuration == .fileWrite
+                    ? ChatFileWriteToolRegistry.toolNames
+                    : [name],
+                title: configuration?.displayName ?? humanized(name),
+                detail: descriptor.displayDescription,
+                parameters: descriptor.definition.function.parameters,
                 isRunnable: false,
                 isBuiltIn: true,
-                configuration: $0.configuration
+                configuration: configuration
             )
+        }
+    }
+
+    private func setEnabled(_ enabled: Bool, for tool: ToolItem) {
+        for toolName in tool.toolNames {
+            model.settings.setToolEnabled(enabled, toolName: toolName)
         }
     }
 
@@ -287,6 +310,7 @@ struct ToolsSectionView: View {
 struct ToolItem: Identifiable {
     var id: String { name }
     let name: String
+    var toolNames: [String] = []
     let title: String
     let detail: String
     var parameters: MLXJSONValue?

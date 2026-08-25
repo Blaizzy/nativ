@@ -7,6 +7,8 @@ private let nativeToolNames = [
     ChatServerStatsToolRegistry.toolName,
     ChatSwitchModelToolRegistry.toolName,
     ChatReadFileToolRegistry.toolName,
+    ChatFileWriteToolRegistry.writeToolName,
+    ChatFileWriteToolRegistry.patchToolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -80,9 +82,11 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatSwitchModelToolRegistry.toolName,
             ChatSystemMonitorToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
+            ChatFileWriteToolRegistry.writeToolName,
+            ChatFileWriteToolRegistry.patchToolName,
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
-            ChatReadFileToolRegistry.toolName,
         ])
     }
 
@@ -132,6 +136,16 @@ final class ChatToolRegistryTests: XCTestCase {
 
         XCTAssertEqual(descriptor?.configuration, .fileRead)
         XCTAssertEqual(descriptor?.configuration?.displayName, "File Read")
+    }
+
+    func testFileWriteOperationsShareConfigurationMetadata() {
+        let descriptors = ChatToolRegistry.descriptors(canEditImage: false).filter {
+            ChatFileWriteToolRegistry.toolNames.contains($0.definition.function.name)
+        }
+
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration == .fileWrite })
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration?.displayName == "File Write" })
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
@@ -981,6 +995,20 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "File read",
                 .awaitingConsent: "File read", .declined: "File read",
             ],
+            ChatFileWriteToolRegistry.writeToolName: [
+                nil: "File write", .preparing: "Writing file…",
+                .running: "Writing file…", .succeeded: "Wrote file",
+                .failed: "File write", .cancelled: "File write",
+                .awaitingImageModelSelection: "File write",
+                .awaitingConsent: "Write protected file?", .declined: "File write declined",
+            ],
+            ChatFileWriteToolRegistry.patchToolName: [
+                nil: "File patch", .preparing: "Patching files…",
+                .running: "Patching files…", .succeeded: "Patched files",
+                .failed: "File patch", .cancelled: "File patch",
+                .awaitingImageModelSelection: "File patch",
+                .awaitingConsent: "Patch protected file?", .declined: "Patch declined",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -1012,6 +1040,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
             ChatReadFileToolRegistry.toolName,
+            ChatFileWriteToolRegistry.writeToolName, ChatFileWriteToolRegistry.patchToolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -1022,6 +1051,8 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
             ChatReadFileToolRegistry.toolName: "doc.text",
+            ChatFileWriteToolRegistry.writeToolName: "square.and.pencil",
+            ChatFileWriteToolRegistry.patchToolName: "square.and.pencil",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 

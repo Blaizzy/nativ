@@ -129,6 +129,15 @@ actor ChatReadFileTracker {
             expiresAt: now.addingTimeInterval(5)
         )
     }
+
+    func invalidate(path: String) {
+        stamps = stamps.filter { $0.key.path != path }
+        negativeEntries[path] = nil
+        if lastWindow?.path == path {
+            lastWindow = nil
+            consecutiveRepeatCount = 0
+        }
+    }
 }
 
 enum ChatReadFileToolError: Error, Equatable, Sendable {
@@ -282,6 +291,11 @@ struct ChatReadFileToolExecutor {
         guard opened.url == resolved.url else {
             throw ChatReadFileToolError.changedDuringRead
         }
+        await context.fileMutationState.recordRead(
+            path: resolved.url.path,
+            stamp: snapshot.stamp,
+            runID: context.fileOperationRunID
+        )
 
         let extracted = try await extractedText(
             snapshot: snapshot,

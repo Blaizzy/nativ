@@ -39,6 +39,7 @@ A tool-calling model can invoke host capabilities mid-conversation. The registry
 | Server stats | Report server and request statistics. |
 | System monitor | Report live CPU, GPU, and memory readings. |
 | File Read | Read bounded, numbered text from a user-authorized local folder. |
+| File Write | Create, overwrite, and patch text files in a user-authorized local folder. |
 
 Tools are advertised to the model only when the active model reports tool-calling support
 and the tool is enabled and configured. Tools that change app state or execute custom scripts
@@ -60,6 +61,25 @@ server is remote. It remains unavailable until the user chooses one authorized f
 - Text-layer PDFs use Nativ's existing PDF extraction.
 - Scheduled routines may use File Read only when the user explicitly selects the capability;
   every run is restricted to a snapshot of the same configured folder.
+
+### File Write
+
+The built-in `write_file` and `patch` operations appear as one **File Write** capability in
+**Extensions → Tools** and share one authorized folder and enabled state. `write_file` replaces
+an entire UTF-8 text file (creating parent folders as needed), while `patch` supports a
+single-file fuzzy replacement and V4A multi-file add, update, delete, and move patches.
+
+- Canonical path checks and descriptor-relative, no-symlink-following I/O keep every mutation
+  inside the authorized folder. Sensitive system and key-material paths and binary document
+  formats are blocked.
+- Protected instruction and credential configuration files require confirmation in the chat.
+- Per-path locks serialize mutations. Writes report a SHA-256 verification hash, unified diff,
+  staleness warning when applicable, and only newly introduced syntax errors for supported
+  formats.
+- Content that looks like numbered `read_file` output or an unchanged-read response is rejected
+  to prevent accidental tool-output echoing.
+- File Write is not offered to scheduled routines because routines have no interactive approval
+  surface.
 
 ## Image generation
 
