@@ -1,34 +1,43 @@
+import PhosphorSwift
 import SwiftUI
 
 struct FileTypeStyle {
-    let glyph: String
+    let icon: Ph
     let tint: Color
     let label: String
 
     static func resolve(fileExtension: String) -> FileTypeStyle {
-        switch fileExtension.lowercased() {
+        let normalized = fileExtension.lowercased()
+        switch normalized {
         case "pdf":
-            return FileTypeStyle(glyph: "doc.richtext.fill", tint: .red, label: "PDF")
-        case "md", "markdown", "mdown", "mkd":
-            return FileTypeStyle(glyph: "text.alignleft", tint: Color(red: 0.36, green: 0.42, blue: 0.5), label: "MD")
-        case "txt", "text", "log":
-            return FileTypeStyle(glyph: "doc.plaintext.fill", tint: .gray, label: "TXT")
-        case "rtf", "doc", "docx", "pages":
-            return FileTypeStyle(glyph: "doc.text.fill", tint: .blue, label: fileExtension.uppercased())
-        case "csv", "tsv", "xls", "xlsx", "numbers":
-            return FileTypeStyle(glyph: "tablecells.fill", tint: .green, label: fileExtension.uppercased())
+            return FileTypeStyle(icon: .filePdf, tint: .red, label: "PDF")
+        case "doc", "docx", "rtf", "pages":
+            return FileTypeStyle(icon: .fileDoc, tint: .blue, label: normalized.uppercased())
         case "ppt", "pptx", "key":
-            return FileTypeStyle(glyph: "rectangle.on.rectangle.angled.fill", tint: .orange, label: fileExtension.uppercased())
+            return FileTypeStyle(icon: .filePpt, tint: .yellow, label: normalized.uppercased())
+        case "csv", "tsv", "xls", "xlsx", "numbers":
+            return FileTypeStyle(icon: .fileCsv, tint: .green, label: normalized.uppercased())
+        case "md", "markdown", "mdown", "mkd":
+            return FileTypeStyle(icon: .fileText, tint: .secondary, label: "MD")
+        case "txt", "text", "log":
+            return FileTypeStyle(icon: .fileText, tint: .secondary, label: "TXT")
+        case "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp":
+            return FileTypeStyle(icon: .fileImage, tint: .pink, label: normalized.uppercased())
+        case "mp4", "mov", "m4v", "avi", "mkv":
+            return FileTypeStyle(icon: .fileVideo, tint: .indigo, label: normalized.uppercased())
+        case "wav", "mp3", "m4a", "aac", "flac", "aiff":
+            return FileTypeStyle(icon: .fileAudio, tint: .teal, label: normalized.uppercased())
         case "json", "js", "ts", "jsx", "tsx", "py", "swift", "java", "kt", "c", "cpp", "cc", "h", "hpp",
-             "rb", "go", "rs", "sh", "bash", "zsh", "php", "html", "htm", "css", "scss", "xml", "yaml", "yml", "toml":
-            return FileTypeStyle(glyph: "chevron.left.forwardslash.chevron.right", tint: .purple, label: fileExtension.uppercased())
+             "rb", "go", "rs", "sh", "bash", "zsh", "php", "html", "htm", "css", "scss", "xml", "yaml",
+             "yml", "toml", "sql", "ini", "cfg", "conf", "env":
+            return FileTypeStyle(icon: .fileCode, tint: .purple, label: normalized.uppercased())
         case "zip", "tar", "gz", "tgz", "rar", "7z", "bz2":
-            return FileTypeStyle(glyph: "archivebox.fill", tint: .brown, label: fileExtension.uppercased())
+            return FileTypeStyle(icon: .fileZip, tint: .brown, label: normalized.uppercased())
         default:
             return FileTypeStyle(
-                glyph: "doc.fill",
-                tint: Color(red: 0.42, green: 0.45, blue: 0.5),
-                label: fileExtension.isEmpty ? "FILE" : fileExtension.uppercased()
+                icon: .fileDashed,
+                tint: .secondary,
+                label: normalized.isEmpty ? "FILE" : normalized.uppercased()
             )
         }
     }
@@ -40,14 +49,11 @@ struct FileTypeIcon: View {
 
     var body: some View {
         let style = FileTypeStyle.resolve(fileExtension: fileExtension)
-        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-            .fill(style.tint.gradient)
+        style.icon.regular
+            .renderingMode(.template)
+            .scaledToFit()
             .frame(width: size, height: size)
-            .overlay {
-                Image(systemName: style.glyph)
-                    .font(.system(size: size * 0.44, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
+            .foregroundStyle(style.tint)
             .accessibilityLabel(style.label)
     }
 }

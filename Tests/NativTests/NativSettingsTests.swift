@@ -416,6 +416,33 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
+    func testPromptTokenCountRequestUsesServerTokenizerEndpoint() throws {
+        let client = NativChatClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_chat_token"
+        )
+        let payload = MLXChatCompletionRequest(
+            model: "org/model",
+            messages: [MLXChatMessage(role: "user", content: "Hello")],
+            maxTokens: 512,
+            temperature: 0,
+            topK: 0,
+            topP: 1,
+            minP: 0,
+            enableThinking: true
+        )
+
+        let request = try client.makePromptTokenCountURLRequest(for: payload)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+
+        XCTAssertEqual(request.url?.path, "/v1/responses/input_tokens")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer nativ_chat_token")
+        XCTAssertEqual(json["model"] as? String, "org/model")
+        XCTAssertEqual(json["enable_thinking"] as? Bool, true)
+        XCTAssertNil(json["max_tokens"])
+    }
+
     func testImageClientAddsServerAuthorization() throws {
         let client = NativImageClient(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
