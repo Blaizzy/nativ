@@ -15,6 +15,10 @@ struct ChatToolExecutionContext: Sendable {
     var huggingFaceToken: String? = nil
     var analyticsDatabaseURL: URL? = nil
     var imageToolDependencies = ChatImageToolDependencies.live
+    var fileReadRootPath: String? = nil
+    var fileReadTracker: ChatReadFileTracker? = nil
+    var fileReadMaximumResultCharacters = ChatReadFileToolRegistry.defaultMaximumResultCharacters
+    var fileReadToolDependencies = ChatReadFileToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -35,6 +39,7 @@ enum ChatToolRoundGate {
 enum ChatNativeToolConfiguration: Equatable {
     case webSearch
     case webRead
+    case fileRead
 
     var displayName: String {
         switch self {
@@ -42,6 +47,8 @@ enum ChatNativeToolConfiguration: Equatable {
             "Web Search"
         case .webRead:
             "Web Read"
+        case .fileRead:
+            "File Read"
         }
     }
 
@@ -51,6 +58,10 @@ enum ChatNativeToolConfiguration: Equatable {
             ChatWebSearchToolRegistry.isConfigured()
         case .webRead:
             ChatWebReadToolRegistry.isConfigured()
+        case .fileRead:
+            FileReadAccessPolicy.isConfigured(
+                rootPath: NativSettings.load().fileReadRootPath
+            )
         }
     }
 
@@ -60,6 +71,8 @@ enum ChatNativeToolConfiguration: Equatable {
             "globe"
         case .webRead:
             "doc.text.magnifyingglass"
+        case .fileRead:
+            "doc.text"
         }
     }
 }
@@ -114,6 +127,11 @@ enum ChatToolRegistry {
             )
         }
         tools.append(ChatNativeToolDescriptor(
+            definition: ChatReadFileToolRegistry.definition,
+            displayDescription: "Read content from the folder you authorize.",
+            configuration: .fileRead
+        ))
+        tools.append(ChatNativeToolDescriptor(
             definition: ChatWebSearchToolRegistry.definition,
             displayDescription: "Search the web for current information and sources.",
             configuration: .webSearch
@@ -156,6 +174,9 @@ enum ChatToolDispatcher {
         ChatWebReadToolRegistry.toolName: { call, context in
             try await executeWebReadTool(call: call, context: context)
         },
+        ChatReadFileToolRegistry.toolName: { call, context in
+            try await executeReadFileTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -182,6 +203,9 @@ enum ChatToolDispatcher {
         },
         ChatWebReadToolRegistry.toolName: { _, error in
             ChatWebReadToolExecutor().failurePayload(error: error)
+        },
+        ChatReadFileToolRegistry.toolName: { _, error in
+            ChatReadFileToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -294,6 +318,17 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeReadFileTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatReadFileToolExecutor().execute(
+            call: call,
+            context: context
+        )
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -368,6 +403,8 @@ enum ChatToolPresentation {
             return webSearchTitle(status: status)
         case ChatWebReadToolRegistry.toolName:
             return webReadTitle(status: status)
+        case ChatReadFileToolRegistry.toolName:
+            return readFileTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -402,6 +439,8 @@ enum ChatToolPresentation {
                 return "globe"
             case ChatWebReadToolRegistry.toolName:
                 return "doc.text.magnifyingglass"
+            case ChatReadFileToolRegistry.toolName:
+                return "doc.text"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -506,6 +545,19 @@ enum ChatToolPresentation {
             return "Web read"
         case nil:
             return "Web read"
+        }
+    }
+
+    private static func readFileTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Reading file…"
+        case .succeeded:
+            return "Read file"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "File read"
+        case nil:
+            return "File read"
         }
     }
 

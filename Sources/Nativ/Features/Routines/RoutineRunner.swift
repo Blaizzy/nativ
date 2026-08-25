@@ -186,6 +186,7 @@ final class RoutineRunner {
 
         var transcript = [ChatTranscriptMessage(role: .user, content: routine.instructions)]
         var toolRound = 0
+        let fileReadTracker = ChatReadFileTracker()
 
         while true {
             try Task.checkCancellation()
@@ -258,7 +259,8 @@ final class RoutineRunner {
                     call,
                     capabilities: capabilities,
                     settings: settings,
-                    baseURL: baseURL
+                    baseURL: baseURL,
+                    fileReadTracker: fileReadTracker
                 )
                 requestMessages.append(MLXChatMessage(
                     role: "tool",
@@ -284,7 +286,8 @@ final class RoutineRunner {
         _ call: MLXChatToolCall,
         capabilities: ResolvedCapabilities,
         settings: NativSettings,
-        baseURL: URL
+        baseURL: URL,
+        fileReadTracker: ChatReadFileTracker
     ) async throws -> ScheduledToolResult {
         do {
             try Task.checkCancellation()
@@ -322,7 +325,9 @@ final class RoutineRunner {
                     imageReferences: [],
                     modelSearchPath: settings.expandedModelSearchPath,
                     additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                    huggingFaceToken: model.effectiveHuggingFaceToken
+                    huggingFaceToken: model.effectiveHuggingFaceToken,
+                    fileReadRootPath: settings.fileReadRootPath,
+                    fileReadTracker: fileReadTracker
                 )
                 outcome = try await ChatToolDispatcher.execute(call: call, context: context)
             }
@@ -560,7 +565,9 @@ final class RoutineRunner {
                     $0.function.name == tool.name
                 }), !settings.disabledToolNames.contains(tool.name),
                    (tool.name != ChatWebSearchToolRegistry.toolName
-                    || ChatWebSearchToolRegistry.isConfigured()) {
+                    || ChatWebSearchToolRegistry.isConfigured()),
+                   (tool.name != ChatReadFileToolRegistry.toolName
+                    || FileReadAccessPolicy.isConfigured(rootPath: settings.fileReadRootPath)) {
                     registerTool(definition, provider: .builtIn)
                 } else {
                     unavailable.append(

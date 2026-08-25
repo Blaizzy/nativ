@@ -104,6 +104,10 @@ struct RoutineEditor: View {
                 $0.definition.function.name != ChatSwitchModelToolRegistry.toolName
                     && !disabledNames.contains($0.definition.function.name)
                     && ($0.configuration != .webSearch || ChatWebSearchToolRegistry.isConfigured())
+                    && ($0.configuration != .fileRead
+                        || FileReadAccessPolicy.isConfigured(
+                            rootPath: model.settings.fileReadRootPath
+                        ))
             }
             .map { descriptor in
                 let definition = descriptor.definition.function
@@ -111,7 +115,9 @@ struct RoutineEditor: View {
                     capability: .tool(ScheduledTool(provider: .builtIn, name: definition.name)),
                     section: .tools,
                     title: descriptor.configuration?.displayName ?? humanized(definition.name),
-                    detail: definition.description,
+                    detail: definition.name == ChatReadFileToolRegistry.toolName
+                        ? "Reads only within \(model.settings.fileReadRootPath ?? "the configured File Read folder"). Runs without confirmation in scheduled tasks."
+                        : definition.description,
                     systemImage: "hammer"
                 )
             }

@@ -9,7 +9,7 @@ struct ToolsSectionView: View {
     @State private var editingTool: CustomTool?
     @State private var toolPendingRemoval: CustomTool?
     @State private var toolManagementError: String?
-    @State private var browsingToolPendingEnablement: String?
+    @State private var configurationPendingEnablement: String?
 
     var body: some View {
         HubSectionScaffold(
@@ -39,19 +39,22 @@ struct ToolsSectionView: View {
             }
         }
         .onAppear {
-            synchronizeBrowsingToolAvailability()
+            synchronizeConfiguredToolAvailability()
         }
         .onReceive(NotificationCenter.default.publisher(for: .webBrowsingConfigurationDidChange)) { _ in
-            synchronizeBrowsingToolAvailability()
+            synchronizeConfiguredToolAvailability()
         }
-        .sheet(item: $inspecting, onDismiss: finishBrowsingToolConfiguration) { tool in
+        .onReceive(NotificationCenter.default.publisher(for: .fileReadConfigurationDidChange)) { _ in
+            synchronizeConfiguredToolAvailability()
+        }
+        .sheet(item: $inspecting, onDismiss: finishToolConfiguration) { tool in
             switch tool.configuration {
             case .webSearch:
                 BrowsingToolConfigurationView(
                     toolName: tool.title,
                     capability: .search,
                     onConfigurationChanged: { _ in
-                        reconcileBrowsingTool(tool)
+                        reconcileConfiguredTool(tool)
                     }
                 )
             case .webRead:
@@ -59,7 +62,14 @@ struct ToolsSectionView: View {
                     toolName: tool.title,
                     capability: .read,
                     onConfigurationChanged: { _ in
-                        reconcileBrowsingTool(tool)
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case .fileRead:
+                FileReadConfigurationView(
+                    model: model,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
                     }
                 )
             case nil:
@@ -150,7 +160,7 @@ struct ToolsSectionView: View {
                 }
                 guard configuration.isConfigured else {
                     model.settings.setToolEnabled(false, toolName: tool.name)
-                    browsingToolPendingEnablement = tool.name
+                    configurationPendingEnablement = tool.name
                     inspecting = tool
                     return
                 }
@@ -163,38 +173,38 @@ struct ToolsSectionView: View {
         if let configuration = tool.configuration,
            configuration.isConfigured,
            model.settings.isToolEnabled(tool.name) {
-            browsingToolPendingEnablement = tool.name
+            configurationPendingEnablement = tool.name
         }
         inspecting = tool
     }
 
-    private func reconcileBrowsingTool(_ tool: ToolItem) {
+    private func reconcileConfiguredTool(_ tool: ToolItem) {
         guard let configuration = tool.configuration else { return }
         let isConfigured = configuration.isConfigured
-        if !isConfigured || browsingToolPendingEnablement == tool.name {
+        if !isConfigured || configurationPendingEnablement == tool.name {
             model.settings.setToolEnabled(isConfigured, toolName: tool.name)
         }
     }
 
-    private func synchronizeBrowsingToolAvailability() {
+    private func synchronizeConfiguredToolAvailability() {
         for tool in nativeTools where tool.configuration != nil {
-            reconcileBrowsingTool(tool)
+            reconcileConfiguredTool(tool)
         }
     }
 
-    private func finishBrowsingToolConfiguration() {
-        guard let toolName = browsingToolPendingEnablement,
+    private func finishToolConfiguration() {
+        guard let toolName = configurationPendingEnablement,
               let tool = nativeTools.first(where: { $0.name == toolName }),
               let configuration = tool.configuration
         else {
-            browsingToolPendingEnablement = nil
+            configurationPendingEnablement = nil
             return
         }
         model.settings.setToolEnabled(
             configuration.isConfigured,
             toolName: tool.name
         )
-        browsingToolPendingEnablement = nil
+        configurationPendingEnablement = nil
     }
 
     private var nativeTools: [ToolItem] {
