@@ -677,16 +677,7 @@ private enum SystemDeviceArtworkProvider {
         let machineName = identity.computerName.lowercased()
 
         if machineName.contains("macbook pro") {
-            let sixteenInchModels: Set<String> = [
-                "MacBookPro16,1", "MacBookPro16,4",
-                "MacBookPro18,1", "MacBookPro18,2",
-                "Mac14,6", "Mac14,10",
-                "Mac15,7", "Mac15,9", "Mac15,11",
-            ]
-            let size = sixteenInchModels.contains(identity.modelIdentifier)
-                ? "16"
-                : "14"
-            return "com.apple.macbookpro-\(size)-2021-space-gray"
+            return "com.apple.macbookpro-\(laptopScreenSize(for: identity))-2021-space-gray"
         }
         if machineName.contains("macbook air") {
             return "com.apple.macbookair-13-2022-midnight"
@@ -702,6 +693,31 @@ private enum SystemDeviceArtworkProvider {
         }
         if machineName.contains("mac pro") {
             return "com.apple.macpro-2019"
+        }
+        return nil
+    }
+
+    private static func laptopScreenSize(for identity: SystemMonitorIdentity) -> String {
+        if let diagonal = builtInDisplayDiagonalInches() {
+            return diagonal >= 15 ? "16" : "14"
+        }
+        let sixteenInchModels: Set<String> = [
+            "MacBookPro16,1", "MacBookPro16,4",
+            "MacBookPro18,1", "MacBookPro18,2",
+            "Mac14,6", "Mac14,10",
+            "Mac15,7", "Mac15,9", "Mac15,11",
+        ]
+        return sixteenInchModels.contains(identity.modelIdentifier) ? "16" : "14"
+    }
+
+    private static func builtInDisplayDiagonalInches() -> Double? {
+        var displays = [CGDirectDisplayID](repeating: 0, count: 8)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(8, &displays, &count) == .success else { return nil }
+        for display in displays.prefix(Int(count)) where CGDisplayIsBuiltin(display) != 0 {
+            let size = CGDisplayScreenSize(display)
+            guard size.width > 0, size.height > 0 else { continue }
+            return (size.width * size.width + size.height * size.height).squareRoot() / 25.4
         }
         return nil
     }
