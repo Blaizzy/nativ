@@ -26,7 +26,7 @@ struct FileReadConfigurationView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("File Read")
                         .font(.title2.weight(.semibold))
-                    Text("Choose the only folder Nativ tools may read.")
+                    Text("Choose the folder where Nativ tools may read.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
