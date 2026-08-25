@@ -428,23 +428,23 @@ private struct MCPServerJSON: Codable {
         case isEnabled
     }
 
-    init(name: String, command: String, arguments: [String], environment: [String: String], isEnabled: Bool) {
-        self.name = name
-        self.command = command
-        self.arguments = arguments
-        self.environment = environment
-        self.isEnabled = isEnabled
+    init(server: MCPServerConfig) {
+        name = server.name
+        command = server.command
+        arguments = server.arguments
+        environment = server.environment
+        isEnabled = server.isEnabled
     }
 
     // Lenient: the scaffold and pasted standard mcp.json entries may omit name
     // and isEnabled.
     init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        name = (try? c.decode(String.self, forKey: .name)) ?? ""
-        command = (try? c.decode(String.self, forKey: .command)) ?? ""
-        arguments = (try? c.decode([String].self, forKey: .arguments)) ?? []
-        environment = (try? c.decode([String: String].self, forKey: .environment)) ?? [:]
-        isEnabled = (try? c.decode(Bool.self, forKey: .isEnabled)) ?? true
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        command = try container.decode(String.self, forKey: .command)
+        arguments = try container.decodeIfPresent([String].self, forKey: .arguments) ?? []
+        environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
     }
 }
 
@@ -462,20 +462,24 @@ private struct MCPServerEditor: View {
     let onCancel: () -> Void
 
     @State private var server: MCPServerConfig
-    @State private var editingJSON: Bool
-    @State private var jsonText: String
+    @State private var launchCommandText: String
+    @State private var launchCommandError: String?
+    @State private var editingJSON = false
+    @State private var jsonText = ""
     @State private var jsonError: String?
 
     init(server: MCPServerConfig, onSave: @escaping (MCPServerConfig) -> Void, onCancel: @escaping () -> Void) {
         _server = State(initialValue: server)
+        _launchCommandText = State(
+            initialValue: server.command.isEmpty
+                ? ""
+                : MCPLaunchCommand(
+                    executable: server.command,
+                    arguments: server.arguments
+                ).rendered
+        )
         self.onSave = onSave
         self.onCancel = onCancel
-        // A brand-new server (nothing filled in) opens straight into a
-        // pre-bracketed JSON scaffold so you can just type — or paste a
-        // standard mcp.json entry.
-        let isNew = server.name.isEmpty && server.command.isEmpty && server.arguments.isEmpty
-        _editingJSON = State(initialValue: isNew)
-        _jsonText = State(initialValue: isNew ? mcpJSONScaffold : "")
     }
 
     var body: some View {
@@ -487,8 +491,8 @@ private struct MCPServerEditor: View {
                 Toggle("Edit as JSON", isOn: $editingJSON)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .onChange(of: editingJSON) { _, on in
-                        if on { jsonText = currentJSON() } else { applyJSON() }
+                    .onChange(of: editingJSON) { _, isEditingJSON in
+                        switchEditorMode(isEditingJSON: isEditingJSON)
                     }
             }
 
@@ -500,28 +504,35 @@ private struct MCPServerEditor: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
                     )
+                    .onChange(of: jsonText) { _, _ in
+                        validateJSON()
+                    }
                 if let jsonError {
                     Text(jsonError)
                         .font(.system(size: 11))
                         .foregroundStyle(.red)
                 }
             } else {
-                field("Name") {
-                    TextField("e.g. filesystem", text: $server.name)
+                field("Name (optional)") {
+                    TextField("Derived from the command if left empty", text: $server.name)
                         .textFieldStyle(.roundedBorder)
                 }
-                field("Command") {
-                    TextField("e.g. npx", text: $server.command)
-                        .textFieldStyle(.roundedBorder)
-                }
-                field("Arguments (one per line)") {
-                    TextEditor(text: argumentsText)
+                field("Launch command") {
+                    TextField(
+                        "/Applications/Humla.app/Contents/MacOS/humla-mcp",
+                        text: $launchCommandText
+                    )
                         .font(.system(size: 12, design: .monospaced))
-                        .frame(height: 70)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-                        )
+                        .textFieldStyle(.roundedBorder)
+                    Text("Paste the executable and any arguments on one line. Nativ launches it directly over stdio without invoking a shell.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let launchCommandError {
+                        Text(launchCommandError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                    }
                 }
                 field("Environment (KEY=VALUE per line)") {
                     TextEditor(text: environmentText)
@@ -538,15 +549,15 @@ private struct MCPServerEditor: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                 Button("Save") {
-                    if editingJSON { applyJSON() }
-                    guard jsonError == nil else { return }
+                    if editingJSON {
+                        guard applyJSON() else { return }
+                    } else {
+                        guard applyLaunchCommand() else { return }
+                    }
                     onSave(server)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(
-                    server.name.trimmingCharacters(in: .whitespaces).isEmpty
-                        || server.command.trimmingCharacters(in: .whitespaces).isEmpty
-                )
+                .disabled(!canSave)
             }
         }
         .padding(20)
@@ -559,13 +570,6 @@ private struct MCPServerEditor: View {
             Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
             content()
         }
-    }
-
-    private var argumentsText: Binding<String> {
-        Binding(
-            get: { server.arguments.joined(separator: "\n") },
-            set: { server.arguments = $0.split(separator: "\n", omittingEmptySubsequences: true).map(String.init) }
-        )
     }
 
     private var environmentText: Binding<String> {
@@ -584,34 +588,91 @@ private struct MCPServerEditor: View {
         )
     }
 
+    private var canSave: Bool {
+        if editingJSON {
+            return decodedJSONServer() != nil
+        }
+        return (try? MCPLaunchCommand(parsing: launchCommandText)) != nil
+    }
+
+    private func switchEditorMode(isEditingJSON: Bool) {
+        if isEditingJSON {
+            _ = applyLaunchCommand()
+            jsonText = server.command.isEmpty ? mcpJSONScaffold : currentJSON()
+            validateJSON()
+        } else if applyJSON() {
+            launchCommandText = MCPLaunchCommand(
+                executable: server.command,
+                arguments: server.arguments
+            ).rendered
+        }
+    }
+
+    @discardableResult
+    private func applyLaunchCommand() -> Bool {
+        do {
+            let launchCommand = try MCPLaunchCommand(parsing: launchCommandText)
+            server.command = launchCommand.executable
+            server.arguments = launchCommand.arguments
+            if server.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                server.name = launchCommand.suggestedName
+            }
+            launchCommandError = nil
+            return true
+        } catch {
+            launchCommandError = error.localizedDescription
+            return false
+        }
+    }
+
     private func currentJSON() -> String {
-        let payload = MCPServerJSON(
-            name: server.name,
-            command: server.command,
-            arguments: server.arguments,
-            environment: server.environment,
-            isEnabled: server.isEnabled
-        )
+        let payload = MCPServerJSON(server: server)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(payload), let text = String(data: data, encoding: .utf8) else {
+        guard let data = try? encoder.encode(payload),
+              let text = String(data: data, encoding: .utf8)
+        else {
             return "{}"
         }
         return text
     }
 
-    private func applyJSON() {
-        guard let data = jsonText.data(using: .utf8) else { return }
-        do {
-            let payload = try JSONDecoder().decode(MCPServerJSON.self, from: data)
-            server.name = payload.name
-            server.command = payload.command
-            server.arguments = payload.arguments
-            server.environment = payload.environment
-            server.isEnabled = payload.isEnabled
+    private func validateJSON() {
+        if decodedJSONServer() == nil {
+            jsonError = "Enter a valid Nativ MCP server JSON object."
+        } else {
             jsonError = nil
-        } catch {
-            jsonError = "Invalid JSON: \(error.localizedDescription)"
         }
+    }
+
+    @discardableResult
+    private func applyJSON() -> Bool {
+        guard let decoded = decodedJSONServer() else {
+            validateJSON()
+            return false
+        }
+        server = decoded
+        jsonError = nil
+        return true
+    }
+
+    private func decodedJSONServer() -> MCPServerConfig? {
+        guard let data = jsonText.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(MCPServerJSON.self, from: data),
+              !payload.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+
+        var decoded = server
+        decoded.name = payload.name
+        decoded.command = payload.command
+        decoded.arguments = payload.arguments
+        decoded.environment = payload.environment
+        decoded.isEnabled = payload.isEnabled
+        if decoded.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            decoded.name = MCPLaunchCommand(executable: decoded.command).suggestedName
+        }
+        return decoded
     }
 }
