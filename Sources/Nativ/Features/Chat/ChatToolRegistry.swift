@@ -31,6 +31,9 @@ struct ChatToolExecutionContext: Sendable {
     var fileWriteToolDependencies = ChatFileWriteToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
+    var mcpHost: MCPHostManager? = nil
+    var settings: NativSettings? = nil
+    var spawnAgentParentMessages: [ChatTranscriptMessage] = []
 }
 
 struct ChatToolExecutionOutcome: Sendable {
@@ -189,6 +192,13 @@ enum ChatToolRegistry {
                 displayDescription: "Read and find relevant information on public web pages.",
                 configuration: .webRead
             ))
+        tools += ChatSpawnAgentToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Delegate a focused sub-task to a separate agent.",
+                configuration: nil
+            )
+        }
         return tools
     }
 }
@@ -235,6 +245,9 @@ enum ChatToolDispatcher {
         ChatFileWriteToolRegistry.patchToolName: { call, context in
             try await executeFileWriteTool(call: call, context: context)
         },
+        ChatSpawnAgentToolRegistry.toolName: { call, context in
+            try await executeSpawnAgentTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -273,6 +286,9 @@ enum ChatToolDispatcher {
         },
         ChatFileWriteToolRegistry.patchToolName: { _, error in
             ChatFileWriteToolExecutor().failurePayload(error: error)
+        },
+        ChatSpawnAgentToolRegistry.toolName: { _, error in
+            ChatSpawnAgentToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -415,6 +431,14 @@ enum ChatToolDispatcher {
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         let content = try await ChatFileWriteToolExecutor().execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeSpawnAgentTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatSpawnAgentToolExecutor().execute(call: call, context: context)
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 

@@ -205,6 +205,7 @@ targets:
         buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
+      - path: Sources/Nativ/Features/Chat/ChatAgentLoop.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
       - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
       - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
@@ -214,6 +215,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatListModelsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatServerStatsTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatSpawnAgentTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatReadFileTool.swift

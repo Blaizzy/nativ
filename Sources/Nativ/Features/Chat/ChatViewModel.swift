@@ -1559,7 +1559,10 @@ final class ChatViewModel: ObservableObject {
                                 modelID: selectedModelID,
                                 in: queuedRequest.sessionID
                             )
-                        }
+                        },
+                        mcpHost: mcpHost,
+                        settings: activeSettings,
+                        spawnAgentParentMessages: sessionMessages(for: queuedRequest.sessionID) ?? []
                     )
                     let outcome: ChatToolExecutionOutcome
                     if let customTool {

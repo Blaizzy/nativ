@@ -10,6 +10,7 @@ private let nativeToolNames = [
     ChatSearchFilesToolRegistry.toolName,
     ChatFileWriteToolRegistry.writeToolName,
     ChatFileWriteToolRegistry.patchToolName,
+    ChatSpawnAgentToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -89,6 +90,7 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatFileWriteToolRegistry.patchToolName,
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
+            ChatSpawnAgentToolRegistry.toolName,
         ])
     }
 
@@ -1364,5 +1366,289 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
         XCTAssertEqual(decoded, original)
+    }
+}
+
+final class ChatSpawnAgentToolRegistryTests: XCTestCase {
+    func testDefinitionRequiresTaskAndOffersModeContextModel() throws {
+        let definitions = ChatSpawnAgentToolRegistry.definitions()
+        XCTAssertEqual(definitions.count, 1)
+        let function = try XCTUnwrap(definitions.first).function
+        XCTAssertEqual(function.name, "spawn_agent")
+        guard case .object(let parameters) = function.parameters,
+              case .array(let required)? = parameters["required"],
+              case .object(let properties)? = parameters["properties"]
+        else {
+            return XCTFail("expected an object schema with properties/required")
+        }
+        XCTAssertEqual(required, [.string("task")])
+        XCTAssertNotNil(properties["task"])
+        XCTAssertNotNil(properties["mode"])
+        XCTAssertNotNil(properties["context"])
+        XCTAssertNotNil(properties["model"])
+    }
+
+    func testIsAdvertisedAlongsideBuiltInTools() {
+        let names = ChatToolRegistry.definitions(canEditImage: false).map(\.function.name)
+        XCTAssertTrue(names.contains(ChatSpawnAgentToolRegistry.toolName))
+    }
+}
+
+final class ChatSpawnAgentToolArgumentsTests: XCTestCase {
+    func testModeDefaultsToFresh() throws {
+        let arguments = try decodeArguments(#"{"task":"do the thing"}"#)
+        XCTAssertEqual(arguments.mode, .fresh)
+        XCTAssertNil(arguments.context)
+        XCTAssertNil(arguments.modelID)
+    }
+
+    func testDecodesAllFields() throws {
+        let arguments = try decodeArguments(#"{"task":"do it","mode":"branch","context":"facts","model":"org/model"}"#)
+        XCTAssertEqual(arguments.task, "do it")
+        XCTAssertEqual(arguments.mode, .branch)
+        XCTAssertEqual(arguments.context, "facts")
+        XCTAssertEqual(arguments.modelID, "org/model")
+    }
+
+    func testMissingTaskFailsToDecode() {
+        XCTAssertThrowsError(try decodeArguments(#"{"mode":"fresh"}"#))
+    }
+
+    private func decodeArguments(_ json: String) throws -> ChatSpawnAgentToolArguments {
+        try JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: XCTUnwrap(json.data(using: .utf8)))
+    }
+}
+
+final class ChatSpawnAgentModelKindTests: XCTestCase {
+    func testTextCapableModelIsTextGeneration() {
+        XCTAssertEqual(ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.text])), .textGeneration)
+    }
+
+    func testVisionOnlyChatModelIsTextGeneration() {
+        XCTAssertEqual(ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.vision])), .textGeneration)
+    }
+
+    func testImageGenerationOnlyModelIsUnsupported() {
+        XCTAssertEqual(ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.imageGeneration])), .unsupported)
+    }
+
+    func testVisionModelThatIsAlsoImageGenerationIsUnsupported() {
+        XCTAssertEqual(
+            ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.vision, .imageGeneration])),
+            .unsupported
+        )
+    }
+
+    func testDrafterModelIsUnsupportedEvenWithText() {
+        XCTAssertEqual(ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.text, .drafter])), .unsupported)
+    }
+
+    private func makeModel(capabilities: Set<LocalModelCapability>) -> LocalModel {
+        LocalModel(
+            repoID: "org/model",
+            snapshotURL: nil,
+            modifiedAt: nil,
+            sizeBytes: nil,
+            parameterCount: nil,
+            quantizationBits: nil,
+            quantizationGroupSize: nil,
+            contextSize: nil,
+            provider: nil,
+            capabilities: capabilities,
+            drafterKind: nil,
+            hiddenSize: nil
+        )
+    }
+}
+
+final class ChatSpawnAgentModelResolverTests: XCTestCase {
+    func testNoRequestedModelFallsBackToCurrentModel() async throws {
+        let resolved = try await ChatSpawnAgentModelResolver.resolve(
+            requestedModelID: nil,
+            fallbackModelID: "org/current",
+            searchPaths: LocalModelSearchPaths(primary: temporaryEmptyDirectory())
+        )
+        XCTAssertEqual(resolved, "org/current")
+    }
+
+    func testNoRequestedModelAndNoFallbackThrowsModelUnavailable() async {
+        do {
+            _ = try await ChatSpawnAgentModelResolver.resolve(
+                requestedModelID: nil,
+                fallbackModelID: nil,
+                searchPaths: LocalModelSearchPaths(primary: temporaryEmptyDirectory())
+            )
+            XCTFail("must throw without a requested or fallback model")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .modelUnavailable(let modelID) = error else {
+                return XCTFail("expected .modelUnavailable, got \(error)")
+            }
+            XCTAssertNil(modelID)
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testUndownloadedRequestedModelThrowsModelUnavailable() async {
+        do {
+            _ = try await ChatSpawnAgentModelResolver.resolve(
+                requestedModelID: "org/not-downloaded",
+                fallbackModelID: "org/current",
+                searchPaths: LocalModelSearchPaths(primary: temporaryEmptyDirectory())
+            )
+            XCTFail("must throw for a model that isn't downloaded")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .modelUnavailable(let modelID) = error else {
+                return XCTFail("expected .modelUnavailable, got \(error)")
+            }
+            XCTAssertEqual(modelID, "org/not-downloaded")
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    private func temporaryEmptyDirectory() -> String {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.path
+    }
+}
+
+final class ChatSpawnAgentTranscriptBuilderTests: XCTestCase {
+    func testFreshModeWithoutContextUsesTaskAsTheOnlyMessage() throws {
+        let messages = try ChatSpawnAgentTranscriptBuilder.initialMessages(
+            arguments: makeArguments(task: "summarize this", mode: .fresh),
+            parentMessages: []
+        )
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0].role, "user")
+        XCTAssertEqual(messages[0].textContent, "summarize this")
+    }
+
+    func testFreshModeWithContextPrependsIt() throws {
+        let messages = try ChatSpawnAgentTranscriptBuilder.initialMessages(
+            arguments: makeArguments(task: "summarize this", mode: .fresh, context: "the doc is about X"),
+            parentMessages: []
+        )
+        XCTAssertEqual(messages.count, 1)
+        let text = try XCTUnwrap(messages[0].textContent)
+        XCTAssertTrue(text.contains("the doc is about X"))
+        XCTAssertTrue(text.contains("summarize this"))
+    }
+
+    func testBranchModeClonesParentHistoryAndAppendsTask() throws {
+        let parent = [
+            ChatTranscriptMessage(role: .user, content: "hello"),
+            ChatTranscriptMessage(role: .assistant, content: "hi there"),
+        ]
+        let messages = try ChatSpawnAgentTranscriptBuilder.initialMessages(
+            arguments: makeArguments(task: "continue", mode: .branch),
+            parentMessages: parent
+        )
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[0].textContent, "hello")
+        XCTAssertEqual(messages[1].textContent, "hi there")
+        XCTAssertEqual(messages[2].role, "user")
+        XCTAssertEqual(messages[2].textContent, "continue")
+    }
+
+    func testBranchModeIgnoresContext() throws {
+        let parent = [ChatTranscriptMessage(role: .user, content: "hello")]
+        let messages = try ChatSpawnAgentTranscriptBuilder.initialMessages(
+            arguments: makeArguments(task: "continue", mode: .branch, context: "should be ignored"),
+            parentMessages: parent
+        )
+        XCTAssertFalse(messages.contains { $0.textContent?.contains("should be ignored") == true })
+    }
+
+    func testBranchModeWithNoParentHistoryThrows() {
+        XCTAssertThrowsError(try ChatSpawnAgentTranscriptBuilder.initialMessages(
+            arguments: makeArguments(task: "continue", mode: .branch),
+            parentMessages: []
+        )) { error in
+            guard case ChatSpawnAgentToolError.noParentHistory = error else {
+                return XCTFail("expected .noParentHistory, got \(error)")
+            }
+        }
+    }
+
+    private func makeArguments(
+        task: String,
+        mode: ChatSpawnAgentMode,
+        context: String? = nil,
+        modelID: String? = nil
+    ) -> ChatSpawnAgentToolArguments {
+        var json = "{\"task\":\"\(task)\",\"mode\":\"\(mode.rawValue)\""
+        if let context {
+            json += ",\"context\":\"\(context)\""
+        }
+        if let modelID {
+            json += ",\"model\":\"\(modelID)\""
+        }
+        json += "}"
+        return try! JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: Data(json.utf8))
+    }
+}
+
+final class ChatSpawnAgentToolExecutorTests: XCTestCase {
+    func testInvalidJSONArgumentsThrowsInvalidArguments() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: "not json"),
+                context: makeContext()
+            )
+            XCTFail("malformed JSON arguments must throw")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .invalidArguments = error else {
+                return XCTFail("expected .invalidArguments, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testBlankTaskThrowsEmptyTask() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"   "}"#),
+                context: makeContext()
+            )
+            XCTFail("a blank task must throw")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .emptyTask = error else {
+                return XCTFail("expected .emptyTask, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testMissingSettingsThrowsModelUnavailable() async {
+        do {
+            _ = try await ChatSpawnAgentToolExecutor().execute(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"do it"}"#),
+                context: makeContext()
+            )
+            XCTFail("a context without settings must throw")
+        } catch let error as ChatSpawnAgentToolError {
+            guard case .modelUnavailable = error else {
+                return XCTFail("expected .modelUnavailable, got \(error)")
+            }
+        } catch {
+            XCTFail("expected ChatSpawnAgentToolError, got \(error)")
+        }
+    }
+
+    func testFailurePayloadShape() throws {
+        let payload = ChatSpawnAgentToolExecutor().failurePayload(error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "fake failure")
+        XCTAssertNil(object["answer"])
+    }
+
+    private func decode(_ json: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
