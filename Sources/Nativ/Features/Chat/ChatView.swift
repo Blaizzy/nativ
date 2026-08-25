@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NativServerKit
+import QuickLookThumbnailing
 import SwiftUI
 import Textual
 import UniformTypeIdentifiers
@@ -15,6 +16,7 @@ struct ChatView: View {
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
+    @State private var previewedAttachment: ChatImageAttachment?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -27,7 +29,8 @@ struct ChatView: View {
                 extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
-                onExploreImageModels: onExploreImageModels
+                onExploreImageModels: onExploreImageModels,
+                onPreviewAttachment: { previewedAttachment = $0 }
             )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachFiles(fromURLs: urls)
@@ -42,6 +45,14 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .overlay {
+            if let previewedAttachment {
+                ChatAttachmentPreview(
+                    attachment: previewedAttachment,
+                    onClose: { self.previewedAttachment = nil }
+                )
+            }
+        }
         .onAppear {
             chat.mcpHost = mcpHost
             mcpHost.reload(servers: model.settings.mcpServers)
@@ -100,6 +111,7 @@ private struct ChatTranscriptView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
@@ -150,7 +162,8 @@ private struct ChatTranscriptView: View {
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
                             onCancelImageModelSelection: chat.cancelImageModelSelection,
-                            onExploreImageModels: onExploreImageModels
+                            onExploreImageModels: onExploreImageModels,
+                            onPreviewAttachment: onPreviewAttachment
                         )
                         .equatable()
                         .id(message.id)
@@ -356,6 +369,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -394,7 +408,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     ChatImageAttachmentStack(
                         attachments: message.imageAttachments,
                         isUserMessage: message.role == .user,
-                        showsSaveButton: message.role == .tool
+                        showsSaveButton: message.role == .tool,
+                        onPreview: onPreviewAttachment
                     )
                 }
 
@@ -1420,13 +1435,15 @@ private struct ChatImageAttachmentStack: View {
     let attachments: [ChatImageAttachment]
     let isUserMessage: Bool
     let showsSaveButton: Bool
+    let onPreview: (ChatImageAttachment) -> Void
 
     var body: some View {
         VStack(alignment: isUserMessage ? .trailing : .leading, spacing: 6) {
             ForEach(attachments) { attachment in
                 ChatImageAttachmentView(
                     attachment: attachment,
-                    showsSaveButton: showsSaveButton
+                    showsSaveButton: showsSaveButton,
+                    onPreview: { onPreview(attachment) }
                 )
             }
         }
@@ -1436,17 +1453,26 @@ private struct ChatImageAttachmentStack: View {
 private struct ChatImageAttachmentView: View {
     let attachment: ChatImageAttachment
     let showsSaveButton: Bool
+    let onPreview: () -> Void
     @State private var saveErrorMessage: String?
     @State private var showsSaveError = false
     @State private var isSaveButtonHovered = false
+    @State private var documentThumbnail: NSImage?
 
     private let maximumSideLength: CGFloat = 300
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            preview
+            Button(action: onPreview) {
+                preview
+            }
+            .buttonStyle(.plain)
+            .help("Open \(attachment.filename)")
+            .accessibilityLabel("Open \(attachment.filename)")
 
-            if showsSaveButton, attachment.imageData != nil {
+            if showsSaveButton,
+               attachment.chatAttachmentKind == .image,
+               attachment.imageData != nil {
                 Button(action: saveImage) {
                     Image(systemName: "square.and.arrow.down")
                         .foregroundStyle(
@@ -1481,22 +1507,25 @@ private struct ChatImageAttachmentView: View {
         } message: {
             Text(saveErrorMessage ?? "The image could not be saved.")
         }
+        .task(id: attachment.id) {
+            await loadDocumentThumbnail()
+        }
     }
 
     @ViewBuilder
     private var preview: some View {
         Group {
-            if let image {
+            if let image = image ?? documentThumbnail {
                 let size = displaySize(for: image)
 
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(width: size.width, height: size.height)
+                    .background(Color.white)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
-                        .font(.title2)
+                    FileTypeIcon(fileExtension: attachment.fileExtension, size: 48)
                     Text(attachment.filename)
                         .font(.caption)
                         .lineLimit(2)
@@ -1515,10 +1544,34 @@ private struct ChatImageAttachmentView: View {
     }
 
     private var image: NSImage? {
-        guard let data = attachment.imageData else {
+        guard attachment.chatAttachmentKind == .image,
+              let data = attachment.imageData else {
             return nil
         }
         return NSImage(data: data)
+    }
+
+    private func loadDocumentThumbnail() async {
+        documentThumbnail = nil
+        guard attachment.chatAttachmentKind != .image,
+              let file = try? await ChatAttachmentPreviewFile.create(for: attachment) else {
+            return
+        }
+        defer { file.remove() }
+
+        let size = CGSize(width: maximumSideLength, height: maximumSideLength)
+        let request = QLThumbnailGenerator.Request(
+            fileAt: file.url,
+            size: size,
+            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail
+        )
+        guard let representation = try? await QLThumbnailGenerator.shared
+            .generateBestRepresentation(for: request),
+              !Task.isCancelled else {
+            return
+        }
+        documentThumbnail = NSImage(cgImage: representation.cgImage, size: .zero)
     }
 
     private func displaySize(for image: NSImage) -> CGSize {

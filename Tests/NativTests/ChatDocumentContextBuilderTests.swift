@@ -12,10 +12,10 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             "report.pdf": ExtractedDocumentContent(
                 filename: "report.pdf",
                 mimeType: "application/pdf",
-                pageCount: 3,
+                sourceSectionCount: 3,
                 sections: [
-                    ExtractedDocumentSection(pageNumber: 1, text: "First page"),
-                    ExtractedDocumentSection(pageNumber: 3, text: "Third page"),
+                    ExtractedDocumentSection(location: .page(1), text: "First page"),
+                    ExtractedDocumentSection(location: .page(3), text: "Third page"),
                 ]
             )
         ])
@@ -29,7 +29,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         XCTAssertTrue(context.contains("--- End attached document: report.pdf ---"))
     }
 
-    func testAppliesPerDocumentLimitAndMarksTruncatedContent() async throws {
+    func testAppliesPerDocumentLimitAndMarksSelectedExcerpts() async throws {
         let message = userMessage(attachments: [attachment(filename: "long.pdf")])
         let builder = builder(
             contents: [
@@ -44,7 +44,111 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
 
         XCTAssertTrue(context.contains("[Page 1]\nabcd"))
         XCTAssertFalse(context.contains("abcde"))
-        XCTAssertTrue(context.contains("[Document truncated to fit the chat context limit.]"))
+        XCTAssertTrue(context.contains("[Selected relevant excerpts from 1 of 1 pages.]"))
+    }
+
+    func testSelectsARelevantPageNearTheEndInsteadOfTheDocumentPrefix() async throws {
+        let attachmentMessage = userMessage(
+            content: "Read this report.",
+            attachments: [attachment(filename: "long.pdf")]
+        )
+        let queryMessage = userMessage(content: "What changed about zephyr pricing?")
+        let builder = builder(
+            contents: [
+                "long.pdf": content(filename: "long.pdf", pages: [
+                    "Opening overview and agenda.",
+                    "Background information.",
+                    "Earlier pricing history.",
+                    "Context immediately before the change.",
+                    "Zephyr pricing increased by twelve percent.",
+                    "Closing implementation notes.",
+                ])
+            ],
+            maximumCharactersPerDocument: 90,
+            maximumCharactersPerRequest: 90
+        )
+
+        let contexts = try await builder.contexts(for: [attachmentMessage, queryMessage])
+        let context = try XCTUnwrap(contexts[attachmentMessage.id])
+
+        XCTAssertTrue(context.contains("[Page 5]"))
+        XCTAssertTrue(context.localizedCaseInsensitiveContains("zephyr pricing"))
+        XCTAssertTrue(context.contains("[Page 4]") || context.contains("[Page 6]"))
+        XCTAssertFalse(context.contains("Opening overview and agenda."))
+    }
+
+    func testExplicitPageReferenceWinsWithoutMatchingPageText() async throws {
+        let message = userMessage(
+            content: "Explain page 4.",
+            attachments: [attachment(filename: "pages.pdf")]
+        )
+        let builder = builder(
+            contents: [
+                "pages.pdf": content(
+                    filename: "pages.pdf",
+                    pages: (1...6).map { "Unique content for section \($0)." }
+                )
+            ],
+            maximumCharactersPerDocument: 90,
+            maximumCharactersPerRequest: 90
+        )
+
+        let contexts = try await builder.contexts(for: [message])
+        let context = try XCTUnwrap(contexts[message.id])
+
+        XCTAssertTrue(context.contains("[Page 4]"))
+        XCTAssertTrue(context.contains("Unique content for section 4."))
+    }
+
+    func testExplicitSlideReferenceWinsWithoutMatchingSlideText() async throws {
+        let attachment = attachment(
+            filename: "briefing.pptx",
+            mimeType: "application/octet-stream"
+        )
+        let message = userMessage(content: "Explain slide 3.", attachments: [attachment])
+        let content = ExtractedDocumentContent(
+            filename: "briefing.pptx",
+            mimeType: "application/octet-stream",
+            sourceSectionCount: 4,
+            sections: (1...4).map {
+                ExtractedDocumentSection(location: .slide($0), text: "Content \($0)")
+            }
+        )
+        let builder = builder(
+            contents: ["briefing.pptx": content],
+            maximumCharactersPerDocument: 30,
+            maximumCharactersPerRequest: 30
+        )
+
+        let contexts = try await builder.contexts(for: [message])
+        let context = try XCTUnwrap(contexts[message.id])
+
+        XCTAssertTrue(context.contains("[Slide 3]"))
+        XCTAssertTrue(context.contains("Content 3"))
+    }
+
+    func testFallbackSamplesAcrossDocumentWhenTheQueryHasNoMatchingTerms() async throws {
+        let message = userMessage(
+            content: "Summarize this PDF.",
+            attachments: [attachment(filename: "pages.pdf")]
+        )
+        let builder = builder(
+            contents: [
+                "pages.pdf": content(
+                    filename: "pages.pdf",
+                    pages: (1...9).map { "Section \($0) has supporting details." }
+                )
+            ],
+            maximumCharactersPerDocument: 75,
+            maximumCharactersPerRequest: 75
+        )
+
+        let contexts = try await builder.contexts(for: [message])
+        let context = try XCTUnwrap(contexts[message.id])
+
+        XCTAssertTrue(context.contains("[Page 1]"))
+        XCTAssertTrue(context.contains("[Page 9]"))
+        XCTAssertTrue(context.contains("[Page 5]"))
     }
 
     func testRequestLimitPrioritizesNewestMessages() async throws {
@@ -197,22 +301,204 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
     func testValidationAndRequestConstructionShareOneExtraction() async throws {
         let attachment = attachment(filename: "report.pdf")
         let message = userMessage(
-            content: "Summarize this report.",
+            content: "Where is the omega result?",
             attachments: [attachment]
         )
+        let extractedContent = content(filename: "report.pdf", pages: [
+            "A long introduction that fills the opening page.",
+            "The omega result is forty-two.",
+        ])
         let extractor = CountingDocumentTextExtractor(
-            content: content(filename: "report.pdf", text: "Report contents")
+            content: extractedContent
         )
         let extractionCache = ChatDocumentExtractionCache(extract: extractor.extract)
         let validator = ChatAttachmentValidator(extractionCache: extractionCache)
-        let builder = ChatDocumentContextBuilder(extractionCache: extractionCache)
+        let builder = ChatDocumentContextBuilder(
+            extractionCache: extractionCache,
+            maximumCharactersPerDocument: 24
+        )
 
-        _ = try await validator.validatePDF(attachment)
+        let validation = try await validator.validateDocument(attachment)
         let contexts = try await builder.contexts(for: [message])
         let extractionCount = await extractor.extractionCount
 
         XCTAssertEqual(extractionCount, 1)
-        XCTAssertTrue(try XCTUnwrap(contexts[message.id]).contains("Report contents"))
+        XCTAssertEqual(validation, .ready)
+        XCTAssertTrue(
+            try XCTUnwrap(contexts[message.id]).localizedCaseInsensitiveContains("omega")
+        )
+    }
+
+    func testLocalizedTokenizationRetrievesChineseSectionNearEnd() async throws {
+        let attachmentMessage = userMessage(
+            attachments: [attachment(filename: "research.txt", mimeType: "text/plain")]
+        )
+        let queryMessage = userMessage(content: "哈尔滨阵列的校准常数是多少？")
+        let builder = builder(
+            contents: [
+                "research.txt": content(filename: "research.txt", pages: [
+                    "项目背景和一般说明。",
+                    "早期实验没有最终结果。",
+                    "技术附录说明哈尔滨阵列的校准常数是 ZETA-42。",
+                ])
+            ],
+            maximumCharactersPerDocument: 48,
+            maximumCharactersPerRequest: 48
+        )
+
+        let result = try await builder.contexts(for: [attachmentMessage, queryMessage])
+
+        XCTAssertTrue(try XCTUnwrap(result[attachmentMessage.id]).contains("ZETA-42"))
+    }
+
+    func testLocalizedTokenizationSegmentsUnspacedLanguages() {
+        let samples = [
+            "哈尔滨阵列的校准常数是多少",
+            "配列の校正定数はいくつですか",
+            "ค่าคงที่การสอบเทียบของอาร์เรย์คือเท่าใด",
+        ]
+
+        for sample in samples {
+            XCTAssertGreaterThan(IndexedChatDocument.tokens(in: sample).count, 1, sample)
+        }
+    }
+
+    func testIndexStoresOnlySectionsContainingEachTerm() {
+        let document = IndexedChatDocument(
+            content(filename: "facts.pdf", pages: [
+                "alpha shared",
+                "beta shared",
+                "alpha gamma shared",
+            ]),
+            format: .pdf
+        )
+
+        XCTAssertEqual(document.sectionIndexesByTerm["alpha"], [0, 2])
+        XCTAssertEqual(document.sectionIndexesByTerm["beta"], [1])
+        XCTAssertEqual(document.sectionIndexesByTerm["shared"], [0, 1, 2])
+    }
+
+    func testRanksAllDirectMatchesBeforeTheirNeighbors() async throws {
+        let attachmentMessage = userMessage(attachments: [attachment(filename: "facts.pdf")])
+        let queryMessage = userMessage(content: "alpha beta")
+        let builder = builder(
+            contents: [
+                "facts.pdf": content(filename: "facts.pdf", pages: [
+                    "neighbor zero",
+                    "alpha DIRECT-A",
+                    "neighbor two",
+                    "middle filler",
+                    "neighbor four",
+                    "beta DIRECT-B",
+                    "neighbor six",
+                ])
+            ],
+            maximumCharactersPerDocument: 45,
+            maximumCharactersPerRequest: 45
+        )
+
+        let result = try await builder.contexts(for: [attachmentMessage, queryMessage])
+        let context = try XCTUnwrap(result[attachmentMessage.id])
+
+        XCTAssertTrue(context.contains("DIRECT-A"))
+        XCTAssertTrue(context.contains("DIRECT-B"))
+    }
+
+    func testExcerptCentersOnDensestQueryTermCluster() async throws {
+        let earlyStopword = "This is background. " + String(repeating: "filler ", count: 80)
+        let answer = "Halden calibration constant ZETA-99"
+        let message = userMessage(
+            content: "What is the Halden calibration constant?",
+            attachments: [attachment(filename: "dense.pdf")]
+        )
+        let builder = builder(
+            contents: [
+                "dense.pdf": content(filename: "dense.pdf", text: earlyStopword + answer)
+            ],
+            maximumCharactersPerDocument: 100,
+            maximumCharactersPerRequest: 100
+        )
+
+        let result = try await builder.contexts(for: [message])
+
+        XCTAssertTrue(try XCTUnwrap(result[message.id]).contains("ZETA-99"))
+    }
+
+    func testCSVHeaderIsPinnedBeforeRelevantRows() async throws {
+        let document = attachment(filename: "sales.csv", mimeType: "text/csv")
+        let message = userMessage(content: "Find zephyr revenue.", attachments: [document])
+        let csv = ExtractedDocumentContent(
+            filename: "sales.csv",
+            mimeType: "text/csv",
+            sourceSectionCount: 5,
+            sections: [
+                ExtractedDocumentSection(location: .lines(1, 1), text: "product,revenue"),
+                ExtractedDocumentSection(location: .lines(2, 2), text: "atlas,10,regional filler"),
+                ExtractedDocumentSection(location: .lines(3, 3), text: "nova,20,regional filler"),
+                ExtractedDocumentSection(location: .lines(4, 4), text: "zephyr,42"),
+                ExtractedDocumentSection(location: .lines(5, 5), text: "orion,30,regional filler"),
+            ]
+        )
+        let builder = builder(
+            contents: ["sales.csv": csv],
+            maximumCharactersPerDocument: 48,
+            maximumCharactersPerRequest: 48
+        )
+
+        let result = try await builder.contexts(for: [message])
+        let context = try XCTUnwrap(result[message.id])
+
+        XCTAssertTrue(context.contains("product,revenue"))
+        XCTAssertTrue(context.contains("zephyr,42"))
+    }
+
+    func testReportsDocumentsOmittedByRequestLimit() async throws {
+        let older = attachment(filename: "older.pdf")
+        let newer = attachment(filename: "newer.pdf")
+        let message = userMessage(attachments: [older, newer])
+        let builder = builder(
+            contents: [
+                "older.pdf": content(filename: "older.pdf", text: "older"),
+                "newer.pdf": content(filename: "newer.pdf", text: "newer"),
+            ],
+            maximumCharactersPerDocument: 5,
+            maximumCharactersPerRequest: 5
+        )
+
+        let result = try await builder.contexts(for: [message])
+
+        XCTAssertEqual(
+            result.omittedDocuments,
+            [ChatDocumentOmission(
+                attachmentID: newer.id,
+                filename: "newer.pdf",
+                reason: .contextLimit
+            )]
+        )
+    }
+
+    func testTokenBudgetScalesCharactersUsingMeasuredDocumentTokens() {
+        let limit = ChatDocumentTokenBudget.characterLimit(
+            currentLimit: 48_000,
+            basePromptTokens: 4_000,
+            documentPromptTokens: 44_000,
+            contextLimit: 32_000,
+            maximumOutputTokens: 4_000
+        )
+
+        XCTAssertEqual(limit, 28_492)
+    }
+
+    func testTokenBudgetDropsDocumentsWhenBasePromptUsesAvailableContext() {
+        let limit = ChatDocumentTokenBudget.characterLimit(
+            currentLimit: 48_000,
+            basePromptTokens: 30_000,
+            documentPromptTokens: 40_000,
+            contextLimit: 32_000,
+            maximumOutputTokens: 4_000
+        )
+
+        XCTAssertEqual(limit, 0)
     }
 
     private func userMessage(
@@ -238,11 +524,17 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
     }
 
     private func content(filename: String, text: String) -> ExtractedDocumentContent {
+        content(filename: filename, pages: [text])
+    }
+
+    private func content(filename: String, pages: [String]) -> ExtractedDocumentContent {
         ExtractedDocumentContent(
             filename: filename,
             mimeType: "application/pdf",
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: text)]
+            sourceSectionCount: pages.count,
+            sections: pages.enumerated().map {
+                ExtractedDocumentSection(location: .page($0.offset + 1), text: $0.element)
+            }
         )
     }
 
@@ -254,7 +546,7 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         builder(
             maximumCharactersPerDocument: maximumCharactersPerDocument,
             maximumCharactersPerRequest: maximumCharactersPerRequest
-        ) { _, filename, _ in
+        ) { _, filename, _, _ in
             guard let content = contents[filename] else {
                 throw DocumentTextExtractionError.invalidDocument
             }
@@ -267,12 +559,10 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         maximumCharactersPerRequest: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest,
         extract: @escaping ChatDocumentExtractionCache.Extraction
     ) -> ChatDocumentContextBuilder {
-        let cache = ChatDocumentExtractionCache(
-            maximumCharactersPerDocument: maximumCharactersPerDocument,
-            extract: extract
-        )
+        let cache = ChatDocumentExtractionCache(extract: extract)
         return ChatDocumentContextBuilder(
             extractionCache: cache,
+            maximumCharactersPerDocument: maximumCharactersPerDocument,
             maximumCharactersPerRequest: maximumCharactersPerRequest
         )
     }
@@ -284,14 +574,15 @@ private actor RecordingDocumentTextExtractor {
     func extract(
         data: Data,
         filename: String,
-        mimeType: String
+        mimeType: String,
+        format: ChatDocumentFormat
     ) async throws -> ExtractedDocumentContent {
         filenames.append(filename)
         return ExtractedDocumentContent(
             filename: filename,
             mimeType: mimeType,
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: filename)]
+            sourceSectionCount: 1,
+            sections: [ExtractedDocumentSection(location: .page(1), text: filename)]
         )
     }
 }
@@ -307,7 +598,8 @@ private actor CountingDocumentTextExtractor {
     func extract(
         data: Data,
         filename: String,
-        mimeType: String
+        mimeType: String,
+        format: ChatDocumentFormat
     ) async throws -> ExtractedDocumentContent {
         extractionCount += 1
         return content

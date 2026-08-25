@@ -10,20 +10,81 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         XCTAssertEqual(
             attachment(filename: "report.pdf", mimeType: "application/octet-stream")
                 .chatAttachmentKind,
-            .pdf
+            .document(.pdf)
         )
         XCTAssertEqual(
             attachment(filename: "photo.png", mimeType: "application/pdf").chatAttachmentKind,
-            .pdf
+            .document(.pdf)
         )
         XCTAssertEqual(
             attachment(filename: "report.pdf", mimeType: "text/plain").chatAttachmentKind,
-            .unsupported
+            .document(.plainText)
         )
         XCTAssertEqual(
             attachment(filename: "notes.txt", mimeType: "text/plain").chatAttachmentKind,
+            .document(.plainText)
+        )
+        XCTAssertEqual(
+            attachment(filename: "data.csv", mimeType: "text/csv").chatAttachmentKind,
+            .document(.csv)
+        )
+        XCTAssertEqual(
+            attachment(filename: "slides.pptx", mimeType: "application/octet-stream")
+                .chatAttachmentKind,
+            .document(.presentation)
+        )
+        for filename in ["notes.md", "data.json", "page.html", "config.xml", "main.swift"] {
+            XCTAssertEqual(
+                attachment(filename: filename, mimeType: "application/octet-stream")
+                    .chatAttachmentKind,
+                .document(.plainText),
+                filename
+            )
+        }
+        XCTAssertEqual(
+            attachment(filename: "draft.docx", mimeType: "application/octet-stream")
+                .chatAttachmentKind,
+            .document(.wordProcessing)
+        )
+        XCTAssertEqual(
+            attachment(filename: "legacy.ppt", mimeType: "application/octet-stream")
+                .chatAttachmentKind,
             .unsupported
         )
+    }
+
+    func testPreviewFilePreservesBytesAndRemovesOnlyItsDirectory() async throws {
+        let root = URL.temporaryDirectory.appending(
+            path: "NativPreviewTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bytes = Data("preview-data".utf8)
+        let attachment = ChatImageAttachment(
+            filename: "../report.pdf",
+            mimeType: "application/pdf",
+            base64Data: bytes.base64EncodedString()
+        )
+
+        let previewFile = try await ChatAttachmentPreviewFile.create(
+            for: attachment,
+            in: root
+        )
+
+        XCTAssertEqual(previewFile.url.lastPathComponent, "report.pdf")
+        XCTAssertEqual(try Data(contentsOf: previewFile.url), bytes)
+        previewFile.remove()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: previewFile.directoryURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    func testPreviewFilenameFallsBackForUnsafeNames() {
+        for filename in ["", ".", "..", "  "] {
+            XCTAssertEqual(ChatAttachmentPreviewFile.safeFilename(filename), "Attachment")
+        }
     }
 
     func testImagesAreImmediatelyReady() {
@@ -31,7 +92,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
 
         XCTAssertEqual(
             ChatAttachmentValidator.immediateValidation(for: image),
-            .ready(extractedCharacterCount: nil)
+            .ready
         )
     }
 
@@ -68,7 +129,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     func testPDFWithoutEmbeddedTextExplainsOCRLimitation() async throws {
         let validator = validator(result: .failure(.noExtractableText))
 
-        let validation = try await validator.validatePDF(attachment(filename: "scan.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "scan.pdf"))
 
         guard case .blocked(let message) = validation else {
             return XCTFail("Expected scanned PDF to be blocked")
@@ -80,7 +141,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     func testPasswordProtectedPDFExplainsHowToProceed() async throws {
         let validator = validator(result: .failure(.passwordProtected))
 
-        let validation = try await validator.validatePDF(attachment(filename: "private.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "private.pdf"))
 
         guard case .blocked(let message) = validation else {
             return XCTFail("Expected password-protected PDF to be blocked")
@@ -89,43 +150,33 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         XCTAssertTrue(message.contains("Unlock it"))
     }
 
-    func testLongPDFWarnsWithoutBlockingSending() async throws {
+    func testLongPDFIsReadyBecauseContextSelectionHappensAtRequestTime() async throws {
         let content = ExtractedDocumentContent(
             filename: "long.pdf",
             mimeType: "application/pdf",
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: "123456")]
-        )
-        let validator = validator(
-            result: .success(content),
-            maximumCharactersPerDocument: 5
-        )
-
-        let validation = try await validator.validatePDF(attachment(filename: "long.pdf"))
-
-        XCTAssertFalse(validation.preventsSending)
-        XCTAssertEqual(validation.extractedCharacterCount, 6)
-        guard case .warning(let message, _) = validation else {
-            return XCTFail("Expected long PDF warning")
-        }
-        XCTAssertTrue(message.contains("Only the first 5 characters"))
-    }
-
-    func testReadablePDFIsReadyWithExtractedCharacterCount() async throws {
-        let content = ExtractedDocumentContent(
-            filename: "report.pdf",
-            mimeType: "application/pdf",
-            pageCount: 1,
-            sections: [ExtractedDocumentSection(pageNumber: 1, text: "Report text")]
+            sourceSectionCount: 1,
+            sections: [ExtractedDocumentSection(location: .page(1), text: "123456")]
         )
         let validator = validator(result: .success(content))
 
-        let validation = try await validator.validatePDF(attachment(filename: "report.pdf"))
+        let validation = try await validator.validateDocument(attachment(filename: "long.pdf"))
 
-        XCTAssertEqual(
-            validation,
-            .ready(extractedCharacterCount: "Report text".count)
+        XCTAssertFalse(validation.preventsSending)
+        XCTAssertEqual(validation, .ready)
+    }
+
+    func testReadablePDFIsReady() async throws {
+        let content = ExtractedDocumentContent(
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+            sourceSectionCount: 1,
+            sections: [ExtractedDocumentSection(location: .page(1), text: "Report text")]
         )
+        let validator = validator(result: .success(content))
+
+        let validation = try await validator.validateDocument(attachment(filename: "report.pdf"))
+
+        XCTAssertEqual(validation, .ready)
     }
 
     func testValidationPropagatesCancellation() async throws {
@@ -133,7 +184,7 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         let pdf = attachment(filename: "report.pdf")
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await validator.validatePDF(pdf)
+            return try await validator.validateDocument(pdf)
         }
 
         do {
@@ -158,12 +209,9 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     }
 
     private func validator(
-        result: Result<ExtractedDocumentContent, DocumentTextExtractionError>,
-        maximumCharactersPerDocument: Int = ChatDocumentContextBuilder.defaultMaximumCharactersPerDocument
+        result: Result<ExtractedDocumentContent, DocumentTextExtractionError>
     ) -> ChatAttachmentValidator {
-        let cache = ChatDocumentExtractionCache(
-            maximumCharactersPerDocument: maximumCharactersPerDocument
-        ) { _, _, _ in
+        let cache = ChatDocumentExtractionCache { _, _, _, _ in
             try result.get()
         }
         return ChatAttachmentValidator(extractionCache: cache)
