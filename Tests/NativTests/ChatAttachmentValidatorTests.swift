@@ -53,6 +53,40 @@ final class ChatAttachmentValidatorTests: XCTestCase {
         )
     }
 
+    func testPreviewFilePreservesBytesAndRemovesOnlyItsDirectory() async throws {
+        let root = URL.temporaryDirectory.appending(
+            path: "NativPreviewTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bytes = Data("preview-data".utf8)
+        let attachment = ChatImageAttachment(
+            filename: "../report.pdf",
+            mimeType: "application/pdf",
+            base64Data: bytes.base64EncodedString()
+        )
+
+        let previewFile = try await ChatAttachmentPreviewFile.create(
+            for: attachment,
+            in: root
+        )
+
+        XCTAssertEqual(previewFile.url.lastPathComponent, "report.pdf")
+        XCTAssertEqual(try Data(contentsOf: previewFile.url), bytes)
+        previewFile.remove()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: previewFile.directoryURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    func testPreviewFilenameFallsBackForUnsafeNames() {
+        for filename in ["", ".", "..", "  "] {
+            XCTAssertEqual(ChatAttachmentPreviewFile.safeFilename(filename), "Attachment")
+        }
+    }
+
     func testImagesAreImmediatelyReady() {
         let image = attachment(filename: "photo.png", mimeType: "image/png")
 

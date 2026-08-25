@@ -12,6 +12,56 @@ enum ChatAttachmentKind: Equatable, Sendable {
     }
 }
 
+struct ChatAttachmentPreviewFile: Sendable {
+    let url: URL
+    let directoryURL: URL
+
+    @concurrent
+    static func create(
+        for attachment: ChatImageAttachment,
+        in temporaryDirectory: URL = .temporaryDirectory
+    ) async throws -> Self {
+        guard let data = Data(base64Encoded: attachment.base64Data) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+
+        try Task.checkCancellation()
+
+        let directoryURL = temporaryDirectory
+            .appending(path: "NativChatPreviews", directoryHint: .isDirectory)
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let url = directoryURL.appending(
+            path: safeFilename(attachment.filename),
+            directoryHint: .notDirectory
+        )
+
+        do {
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+            try Task.checkCancellation()
+            return Self(url: url, directoryURL: directoryURL)
+        } catch {
+            try? FileManager.default.removeItem(at: directoryURL)
+            throw error
+        }
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: directoryURL)
+    }
+
+    static func safeFilename(_ filename: String) -> String {
+        let filename = (filename as NSString).lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return filename.isEmpty || filename == "." || filename == ".."
+            ? "Attachment"
+            : filename
+    }
+}
+
 extension ChatImageAttachment {
     var chatAttachmentKind: ChatAttachmentKind {
         let normalizedMIMEType = mimeType

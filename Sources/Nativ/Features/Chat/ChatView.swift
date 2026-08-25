@@ -15,6 +15,7 @@ struct ChatView: View {
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
+    @State private var previewedAttachment: ChatImageAttachment?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -27,7 +28,8 @@ struct ChatView: View {
                 extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
-                onExploreImageModels: onExploreImageModels
+                onExploreImageModels: onExploreImageModels,
+                onPreviewAttachment: { previewedAttachment = $0 }
             )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachFiles(fromURLs: urls)
@@ -42,6 +44,14 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .overlay {
+            if let previewedAttachment {
+                ChatAttachmentPreview(
+                    attachment: previewedAttachment,
+                    onClose: { self.previewedAttachment = nil }
+                )
+            }
+        }
         .onAppear {
             chat.mcpHost = mcpHost
             mcpHost.reload(servers: model.settings.mcpServers)
@@ -99,6 +109,7 @@ private struct ChatTranscriptView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
@@ -149,7 +160,8 @@ private struct ChatTranscriptView: View {
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
                             onCancelImageModelSelection: chat.cancelImageModelSelection,
-                            onExploreImageModels: onExploreImageModels
+                            onExploreImageModels: onExploreImageModels,
+                            onPreviewAttachment: onPreviewAttachment
                         )
                         .equatable()
                         .id(message.id)
@@ -354,6 +366,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -392,7 +405,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     ChatImageAttachmentStack(
                         attachments: message.imageAttachments,
                         isUserMessage: message.role == .user,
-                        showsSaveButton: message.role == .tool
+                        showsSaveButton: message.role == .tool,
+                        onPreview: onPreviewAttachment
                     )
                 }
 
@@ -1418,13 +1432,15 @@ private struct ChatImageAttachmentStack: View {
     let attachments: [ChatImageAttachment]
     let isUserMessage: Bool
     let showsSaveButton: Bool
+    let onPreview: (ChatImageAttachment) -> Void
 
     var body: some View {
         VStack(alignment: isUserMessage ? .trailing : .leading, spacing: 6) {
             ForEach(attachments) { attachment in
                 ChatImageAttachmentView(
                     attachment: attachment,
-                    showsSaveButton: showsSaveButton
+                    showsSaveButton: showsSaveButton,
+                    onPreview: { onPreview(attachment) }
                 )
             }
         }
@@ -1434,6 +1450,7 @@ private struct ChatImageAttachmentStack: View {
 private struct ChatImageAttachmentView: View {
     let attachment: ChatImageAttachment
     let showsSaveButton: Bool
+    let onPreview: () -> Void
     @State private var saveErrorMessage: String?
     @State private var showsSaveError = false
     @State private var isSaveButtonHovered = false
@@ -1442,7 +1459,12 @@ private struct ChatImageAttachmentView: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            preview
+            Button(action: onPreview) {
+                preview
+            }
+            .buttonStyle(.plain)
+            .help("Open \(attachment.filename)")
+            .accessibilityLabel("Open \(attachment.filename)")
 
             if showsSaveButton, attachment.imageData != nil {
                 Button(action: saveImage) {
@@ -1491,6 +1513,7 @@ private struct ChatImageAttachmentView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: size.width, height: size.height)
+                    .background(Color.white)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)

@@ -15,6 +15,7 @@ private struct ChatImageThumbnail: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
+                    .background(Color.white)
             } else {
                 VStack(spacing: 6) {
                     Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
