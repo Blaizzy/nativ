@@ -1296,8 +1296,53 @@ final class ChatViewModel: ObservableObject {
             }
 
             var insertionAnchor = assistantMessageID
+            var handledSpawnAgentIndices = Set<Int>()
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
+                if handledSpawnAgentIndices.contains(index) {
+                    continue
+                }
+
+                if toolCall.function?.name == ChatSpawnAgentToolRegistry.toolName {
+                    let batch = toolCalls[index...].prefix {
+                        $0.function?.name == ChatSpawnAgentToolRegistry.toolName
+                    }
+                    var batchMessageIDs: [UUID] = []
+                    for (offset, call) in batch.enumerated() {
+                        let toolMessageID = UUID()
+                        guard insertToolMessage(
+                            id: toolMessageID,
+                            call: call,
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        ) else {
+                            throw NativChatError.invalidResponse
+                        }
+                        insertionAnchor = toolMessageID
+                        batchMessageIDs.append(toolMessageID)
+                        handledSpawnAgentIndices.insert(index + offset)
+                    }
+                    await runConcurrentSpawnAgentBatch(
+                        calls: Array(batch),
+                        messageIDs: batchMessageIDs,
+                        context: ChatToolExecutionContext(
+                            imageGenerationModelID: activeImageModelID,
+                            baseURL: queuedRequest.settings.serverBaseURL,
+                            apiKey: queuedRequest.settings.serverAPIKey,
+                            imageReferences: [],
+                            modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                            additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                            huggingFaceToken: appModel?.effectiveHuggingFaceToken,
+                            mcpHost: mcpHost,
+                            settings: activeSettings,
+                            spawnAgentParentMessages: sessionMessages(for: queuedRequest.sessionID) ?? []
+                        ),
+                        in: queuedRequest.sessionID
+                    )
+                    appModel?.refreshMetricsIfRunning(force: true)
+                    continue
+                }
+
                 let toolMessageID = UUID()
                 let initialToolStatus: ChatTranscriptMessage.ToolStatus =
                     switch toolCall.function?.name {
@@ -1901,6 +1946,51 @@ final class ChatViewModel: ObservableObject {
         }
         storedSessions[sessionIndex].messages.insert(message, at: anchorIndex + 1)
         return true
+    }
+
+    private func runConcurrentSpawnAgentBatch(
+        calls: [MLXChatToolCall],
+        messageIDs: [UUID],
+        context: ChatToolExecutionContext,
+        in sessionID: UUID
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            var remaining = zip(calls, messageIDs).makeIterator()
+            func addNext() {
+                guard let (call, toolMessageID) = remaining.next() else {
+                    return
+                }
+                group.addTask { [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    do {
+                        let content = try await ChatSpawnAgentToolExecutor().execute(call: call, context: context)
+                        await self.updateToolMessage(
+                            toolMessageID,
+                            in: sessionID,
+                            status: .succeeded,
+                            content: content,
+                            attachments: []
+                        )
+                    } catch {
+                        await self.updateToolMessage(
+                            toolMessageID,
+                            in: sessionID,
+                            status: .failed,
+                            content: ChatSpawnAgentToolExecutor().failurePayload(error: error),
+                            attachments: []
+                        )
+                    }
+                }
+            }
+            for _ in 0..<min(ChatConcurrentSpawnGate.maximumConcurrent, calls.count) {
+                addNext()
+            }
+            while await group.next() != nil {
+                addNext()
+            }
+        }
     }
 
     private func normalizedToolCalls(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {

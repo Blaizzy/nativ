@@ -1369,6 +1369,12 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
     }
 }
 
+final class ChatConcurrentSpawnGateTests: XCTestCase {
+    func testCapsConcurrentSpawnsAtFive() {
+        XCTAssertEqual(ChatConcurrentSpawnGate.maximumConcurrent, 5)
+    }
+}
+
 final class ChatSpawnAgentToolRegistryTests: XCTestCase {
     func testDefinitionRequiresTaskAndOffersModeContextModel() throws {
         let definitions = ChatSpawnAgentToolRegistry.definitions()

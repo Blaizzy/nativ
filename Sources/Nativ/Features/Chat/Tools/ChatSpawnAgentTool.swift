@@ -38,6 +38,10 @@ enum ChatSpawnAgentToolRegistry {
     }
 }
 
+enum ChatConcurrentSpawnGate {
+    static let maximumConcurrent = 5
+}
+
 enum ChatSpawnAgentMode: String, Decodable {
     case fresh
     case branch
