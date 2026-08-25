@@ -7,6 +7,7 @@ private let nativeToolNames = [
     ChatServerStatsToolRegistry.toolName,
     ChatSwitchModelToolRegistry.toolName,
     ChatReadFileToolRegistry.toolName,
+    ChatSearchFilesToolRegistry.toolName,
     ChatFileWriteToolRegistry.writeToolName,
     ChatFileWriteToolRegistry.patchToolName,
 ]
@@ -83,6 +84,7 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatSystemMonitorToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName,
             ChatReadFileToolRegistry.toolName,
+            ChatSearchFilesToolRegistry.toolName,
             ChatFileWriteToolRegistry.writeToolName,
             ChatFileWriteToolRegistry.patchToolName,
             ChatWebSearchToolRegistry.toolName,
@@ -129,13 +131,15 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(descriptor?.configuration?.displayName, "Web Read")
     }
 
-    func testFileReadCarriesConfigurationMetadata() {
-        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
-            $0.definition.function.name == ChatReadFileToolRegistry.toolName
+    func testFileReadOperationsShareConfigurationMetadata() {
+        let descriptors = ChatToolRegistry.descriptors(canEditImage: false).filter {
+            ChatReadFileToolRegistry.toolNames.contains($0.definition.function.name)
         }
 
-        XCTAssertEqual(descriptor?.configuration, .fileRead)
-        XCTAssertEqual(descriptor?.configuration?.displayName, "File Read")
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration == .fileRead })
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration?.displayName == "File Read" })
+        XCTAssertEqual(ChatNativeToolConfiguration.fileRead.toolNames, ["read_file", "search_files"])
     }
 
     func testFileWriteOperationsShareConfigurationMetadata() {
@@ -995,6 +999,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "File read",
                 .awaitingConsent: "File read", .declined: "File read",
             ],
+            ChatSearchFilesToolRegistry.toolName: [
+                nil: "File search", .preparing: "Searching files…",
+                .running: "Searching files…", .succeeded: "Searched files",
+                .failed: "File search", .cancelled: "File search",
+                .awaitingImageModelSelection: "File search",
+                .awaitingConsent: "File search", .declined: "File search",
+            ],
             ChatFileWriteToolRegistry.writeToolName: [
                 nil: "File write", .preparing: "Writing file…",
                 .running: "Writing file…", .succeeded: "Wrote file",
@@ -1040,6 +1051,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
             ChatReadFileToolRegistry.toolName,
+            ChatSearchFilesToolRegistry.toolName,
             ChatFileWriteToolRegistry.writeToolName, ChatFileWriteToolRegistry.patchToolName,
             "some_unknown_tool",
         ]
@@ -1051,6 +1063,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
             ChatReadFileToolRegistry.toolName: "doc.text",
+            ChatSearchFilesToolRegistry.toolName: "doc.text.magnifyingglass",
             ChatFileWriteToolRegistry.writeToolName: "square.and.pencil",
             ChatFileWriteToolRegistry.patchToolName: "square.and.pencil",
             "some_unknown_tool": "wrench.and.screwdriver",

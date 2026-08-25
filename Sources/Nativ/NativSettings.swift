@@ -868,6 +868,11 @@ struct NativSettings: Codable, Equatable {
         settings.fileWriteRootPath = trimmedFileWriteRoot.isEmpty
             ? nil
             : NSString(string: trimmedFileWriteRoot).expandingTildeInPath
+        if settings.disabledToolNames.contains("read_file"),
+            !settings.disabledToolNames.contains("search_files")
+        {
+            settings.disabledToolNames.append("search_files")
+        }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         if let imageModelID = settings.imageGenerationModelID,

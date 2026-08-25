@@ -81,7 +81,8 @@ struct ChatCapabilitiesSheet: View {
                 let entry = MCPServerCatalog.bundled.entry(matching: server)
                 let requiredEnvironment = entry?.requiredEnvironment ?? []
                 let hasRequiredEnvironment = requiredEnvironment.allSatisfy {
-                    server.environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    server.environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        == false
                 }
                 return GlobalChatCapabilityItem(
                     id: "mcp-\(server.id.uuidString)",
@@ -108,13 +109,13 @@ struct ChatCapabilitiesSheet: View {
         return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
-            if configuration == .fileWrite,
-               !seenConfigurations.insert(.fileWrite).inserted {
+            if let configuration,
+                configuration.toolNames.count > 1,
+                !seenConfigurations.insert(configuration).inserted
+            {
                 return nil
             }
-            let toolNames = configuration == .fileWrite
-                ? ChatFileWriteToolRegistry.toolNames
-                : [toolName]
+            let toolNames = configuration?.toolNames ?? [toolName]
             return GlobalChatCapabilityItem(
                 id: "native-tool-\(toolName)",
                 target: .nativeTools(toolNames),
@@ -147,11 +148,14 @@ struct ChatCapabilitiesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     if filteredItems.isEmpty {
-                        Text(query.isEmpty ? "No capabilities are available." : "No matching capabilities.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 44)
+                        Text(
+                            query.isEmpty
+                                ? "No capabilities are available." : "No matching capabilities."
+                        )
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 44)
                     } else {
                         ForEach(GlobalChatCapabilityKind.allCases, id: \.rawValue) { kind in
                             capabilitySection(kind)
@@ -268,10 +272,14 @@ struct ChatCapabilitiesSheet: View {
                 toolName: toolName
             )
         case .skill(let id):
-            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else {
+                return
+            }
             model.settings.skills[index].isEnabled.toggle()
         case .mcpServer(let id):
-            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else {
+                return
+            }
             model.settings.mcpServers[index].isEnabled.toggle()
         }
     }
@@ -382,9 +390,11 @@ private struct GlobalCapabilitySetupDetail: View {
         .font(.system(size: 11))
         .multilineTextAlignment(.leading)
         .buttonStyle(.plain)
-        .environment(\.openURL, OpenURLAction { _ in
-            action()
-            return .handled
-        })
+        .environment(
+            \.openURL,
+            OpenURLAction { _ in
+                action()
+                return .handled
+            })
     }
 }

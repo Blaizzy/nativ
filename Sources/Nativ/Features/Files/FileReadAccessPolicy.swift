@@ -15,6 +15,18 @@ struct ResolvedFileReadPath: Equatable, Sendable {
 }
 
 struct FileReadAccessPolicy: Sendable {
+    static let searchExclusionGlobs: [String] = [
+        "!**/.ssh/**", "!**/.gnupg/**", "!**/.aws/**", "!**/.azure/**",
+        "!**/.docker/**", "!**/.git/**", "!**/.kube/config", "!**/keychains/**",
+        "!**/gcloud/**", "!**/.env", "!**/.env.*", "!**/.netrc", "!**/.npmrc",
+        "!**/.pypirc", "!**/.git-credentials", "!**/.gitconfig", "!**/credentials",
+        "!**/credentials.json", "!**/application_default_credentials.json",
+        "!**/id_rsa", "!**/id_dsa", "!**/id_ecdsa", "!**/id_ed25519",
+        "!**/known_hosts", "!**/token", "!**/stored_tokens", "!**/auth.json",
+        "!**/*.key", "!**/*.pem", "!**/*.p12", "!**/*.pfx", "!**/*.jks",
+        "!**/Library/Application Support/Nativ/**",
+    ]
+
     let rootURL: URL
 
     init(rootPath: String?) throws {
@@ -39,8 +51,9 @@ struct FileReadAccessPolicy: Sendable {
         )
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
-              isDirectory.boolValue,
-              FileManager.default.isReadableFile(atPath: root.path) else {
+            isDirectory.boolValue,
+            FileManager.default.isReadableFile(atPath: root.path)
+        else {
             return nil
         }
         return root
@@ -93,7 +106,8 @@ struct FileReadAccessPolicy: Sendable {
         let rootComponents = rootURL.pathComponents
         let targetComponents = url.pathComponents
         guard targetComponents.count >= rootComponents.count,
-              zip(rootComponents, targetComponents).allSatisfy({ $0 == $1 }) else {
+            zip(rootComponents, targetComponents).allSatisfy({ $0 == $1 })
+        else {
             return url.lastPathComponent
         }
         let relative = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
@@ -103,8 +117,9 @@ struct FileReadAccessPolicy: Sendable {
     func suggestions(for missingURL: URL, maximumCount: Int = 3) -> [String] {
         let parent = Self.canonicalURL(missingURL.deletingLastPathComponent())
         guard contains(parent), maximumCount > 0,
-              (try? Self.rejectBlockedPath(parent)) != nil,
-              let names = try? FileManager.default.contentsOfDirectory(atPath: parent.path) else {
+            (try? Self.rejectBlockedPath(parent)) != nil,
+            let names = try? FileManager.default.contentsOfDirectory(atPath: parent.path)
+        else {
             return []
         }
 
@@ -117,7 +132,8 @@ struct FileReadAccessPolicy: Sendable {
             let score = Self.suggestionScore(name: name, needle: needle)
             return score == nil ? nil : (name, score!)
         }
-        return ranked
+        return
+            ranked
             .sorted {
                 $0.1 == $1.1
                     ? $0.0.localizedStandardCompare($1.0) == .orderedAscending
@@ -150,7 +166,8 @@ struct FileReadAccessPolicy: Sendable {
             throw FileReadAccessError.blockedPath
         }
         if lowercasePath.contains("/library/application support/nativ/")
-            || lowercasePath.hasSuffix("/library/application support/nativ") {
+            || lowercasePath.hasSuffix("/library/application support/nativ")
+        {
             throw FileReadAccessError.blockedPath
         }
 
@@ -195,8 +212,10 @@ struct FileReadAccessPolicy: Sendable {
     }
 
     private static func suggestionScore(name: String, needle: String) -> Int? {
-        let lhs = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        let rhs = needle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let lhs = name.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let rhs = needle.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         if lhs == rhs { return 0 }
         if lhs.contains(rhs) || rhs.contains(lhs) { return 1 }
         let distance = boundedEditDistance(lhs, rhs, limit: 3)
@@ -207,7 +226,7 @@ struct FileReadAccessPolicy: Sendable {
         let left = Array(lhs)
         let right = Array(rhs)
         guard abs(left.count - right.count) <= limit else { return limit + 1 }
-        var previous = Array(0...right.count)
+        var previous = Array(0 ... right.count)
         for (leftIndex, leftCharacter) in left.enumerated() {
             var current = [leftIndex + 1]
             current.reserveCapacity(right.count + 1)
@@ -227,11 +246,11 @@ struct FileReadAccessPolicy: Sendable {
     }
 }
 
-private extension Array {
-    func windows(ofCount count: Int) -> [ArraySlice<Element>] {
+extension Array {
+    fileprivate func windows(ofCount count: Int) -> [ArraySlice<Element>] {
         guard count > 0, self.count >= count else { return [] }
         return indices.dropLast(count - 1).map { start in
-            self[start..<index(start, offsetBy: count)]
+            self[start ..< index(start, offsetBy: count)]
         }
     }
 }

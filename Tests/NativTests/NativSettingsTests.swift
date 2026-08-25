@@ -2,6 +2,13 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
+        let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
+
+        XCTAssertFalse(settings.isToolEnabled("read_file"))
+        XCTAssertFalse(settings.isToolEnabled("search_files"))
+    }
+
     func testFileReadRootRoundTripsAndNormalizesWhitespace() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
