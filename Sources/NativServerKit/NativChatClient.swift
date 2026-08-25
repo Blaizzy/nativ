@@ -542,11 +542,8 @@ public final class NativChatClient {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
-    /// How long a streaming response may go without delivering any bytes before
-    /// the request fails. `timeoutIntervalForRequest` is an inactivity timer that
-    /// URLSession resets whenever new data arrives, so this bounds a stalled
-    /// stream without limiting a healthy one.
-    public static let defaultIdleTimeout: TimeInterval = 120
+
+    public static let defaultIdleTimeout: TimeInterval = 600
 
     /// Total budget for one request. Long generations legitimately run for many
     /// minutes, so this only exists to stop a connection leaking forever; stalls

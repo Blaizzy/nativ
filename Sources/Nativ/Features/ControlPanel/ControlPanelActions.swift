@@ -161,19 +161,7 @@ extension ControlPanelView {
     }
 
     func deleteChatSession(_ sessionID: UUID) {
-        guard let routine = routineStore.routine(forSession: sessionID) else {
-            chat.deleteSession(sessionID)
-            return
-        }
-
-        let sessionIDs = Set(
-            [routine.sourceSessionID].compactMap { $0 }
-                + routineStore.runs(forRoutine: routine.id).compactMap(\.sessionID)
-        )
-        routineStore.delete(id: routine.id)
-        for linkedSessionID in sessionIDs {
-            chat.deleteSession(linkedSessionID)
-        }
+        chat.deleteSession(sessionID)
     }
 
     func adjacentRecentSelection(

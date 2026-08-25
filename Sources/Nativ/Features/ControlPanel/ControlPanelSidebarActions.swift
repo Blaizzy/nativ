@@ -173,28 +173,14 @@ extension ControlPanelView {
         recentSessions.filter { $0.isChat && selectedRecentIDs.contains($0.id) }
     }
 
-    var selectedScheduledTaskCount: Int {
-        selectedChats.reduce(into: 0) { count, recent in
-            guard let sessionID = recent.chatID,
-                routineStore.routine(forSession: sessionID) != nil
-            else {
-                return
-            }
-            count += 1
-        }
-    }
-
     var bulkDeleteDescription: String {
         let base = "The selected chats are permanently deleted."
         let folders = "Selected folders are removed but their chats are kept."
-        guard selectedScheduledTaskCount > 0 else {
+        let includesScheduledRun = selectedChats.contains { $0.scheduledTaskID != nil }
+        guard includesScheduledRun else {
             return "\(base) \(folders)"
         }
-        let scheduledData =
-            selectedScheduledTaskCount == 1
-            ? "1 linked scheduled task and its run history"
-            : "\(selectedScheduledTaskCount) linked scheduled tasks and their run history"
-        return "\(base) This also deletes \(scheduledData). \(folders)"
+        return "\(base) Linked scheduled tasks and their run records are kept. \(folders)"
     }
 
     var hasSelectedChats: Bool {

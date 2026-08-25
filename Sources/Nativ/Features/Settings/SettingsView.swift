@@ -62,7 +62,7 @@ struct SettingsView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 28)
-            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .controlPanelDetailHeaderTopPadding()
             .padding(.bottom, 26)
         }
         .background(Color.nativMainContentBackground)

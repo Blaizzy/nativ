@@ -21,8 +21,10 @@ enum ControlPanelLayout {
     static let sidebarBrandHeight: CGFloat = 40
     static let sidebarBrandIconSize: CGFloat = 24
     static let sidebarBrandBottomClearance: CGFloat = 8
-    static let fullScreenSidebarTopClearance: CGFloat = 32
-    static let detailHeaderTopInset = (sidebarBrandHeight - sidebarBrandIconSize) / 2
+    static let fullScreenTopClearance: CGFloat = 32
+    static let detailHeaderTopInset: CGFloat = 16
+    static let hiddenSidebarDetailHeaderTopInset =
+        (sidebarBrandHeight - sidebarBrandIconSize) / 2
     static let topControlSize: CGFloat = 30
     static let topControlsLeadingPadding: CGFloat = 80
     static let topControlsLeadingPaddingFullScreen: CGFloat = 12
@@ -39,10 +41,47 @@ private struct ControlPanelFullScreenKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct ControlPanelSidebarVisibleKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 extension EnvironmentValues {
     var controlPanelIsFullScreen: Bool {
         get { self[ControlPanelFullScreenKey.self] }
         set { self[ControlPanelFullScreenKey.self] = newValue }
+    }
+
+    var controlPanelIsSidebarVisible: Bool {
+        get { self[ControlPanelSidebarVisibleKey.self] }
+        set { self[ControlPanelSidebarVisibleKey.self] = newValue }
+    }
+}
+
+private struct ControlPanelDetailHeaderTopPadding: ViewModifier {
+    @Environment(\.controlPanelIsFullScreen) private var isFullScreen
+    @Environment(\.controlPanelIsSidebarVisible) private var isSidebarVisible
+
+    func body(content: Content) -> some View {
+        content.padding(.top, topInset)
+    }
+
+    private var topInset: CGFloat {
+        if isSidebarVisible {
+            return ControlPanelLayout.detailHeaderTopInset
+        }
+
+        if isFullScreen {
+            return ControlPanelLayout.hiddenSidebarDetailHeaderTopInset
+                + ControlPanelLayout.fullScreenTopClearance
+        }
+
+        return ControlPanelLayout.hiddenSidebarDetailHeaderTopInset
+    }
+}
+
+extension View {
+    func controlPanelDetailHeaderTopPadding() -> some View {
+        modifier(ControlPanelDetailHeaderTopPadding())
     }
 }
 
@@ -167,6 +206,10 @@ struct ControlPanelSidebarMaterial: NSViewRepresentable {
 }
 
 extension Color {
+    static func nativMaterialOverlay(for colorScheme: ColorScheme) -> Color {
+        (colorScheme == .dark ? Color.black : Color.white).opacity(0.1)
+    }
+
     static let nativMainContentBackground = Color(
         nsColor: NSColor(name: NSColor.Name("NativMainContentBackground")) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {

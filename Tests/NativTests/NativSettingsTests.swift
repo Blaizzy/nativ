@@ -392,7 +392,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
     }
 
-    func testChatClientAddsServerAuthorization() throws {
+    func testChatClientConfiguresRequest() throws {
         let client = NativChatClient(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
             apiKey: "nativ_chat_token"
@@ -409,6 +409,7 @@ final class NativSettingsTests: XCTestCase {
 
         let request = try client.makeURLRequest(payload: payload, accepts: "application/json")
 
+        XCTAssertEqual(request.timeoutInterval, 600)
         XCTAssertEqual(
             request.value(forHTTPHeaderField: "Authorization"),
             "Bearer nativ_chat_token"

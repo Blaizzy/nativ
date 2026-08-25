@@ -75,7 +75,7 @@ struct ExtensionsHubView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
-        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .controlPanelDetailHeaderTopPadding()
         .padding(.bottom, 12)
         .frame(width: 188)
     }
@@ -137,7 +137,7 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 content()
             }
             .padding(.horizontal, 28)
-            .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+            .controlPanelDetailHeaderTopPadding()
             .padding(.bottom, 24)
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -89,6 +89,7 @@ private enum ChatTranscriptLayout {
     static let messageHorizontalInset: CGFloat = 32
     static let composerClearance: CGFloat = 48
     static let composerFadeExtension: CGFloat = 40
+    static let scrollIndicatorClearance: CGFloat = 17
 }
 
 private struct ChatTranscriptView: View {
@@ -259,6 +260,7 @@ private struct ChatTranscriptView: View {
             Color.nativMainContentBackground
                 .frame(height: max(72, composerBackdropHeight))
         }
+        .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -1569,10 +1571,9 @@ private struct ChatMessageText: View {
     @ViewBuilder
     var body: some View {
         if isUserPrompt {
-            ChatSelectablePromptText(
-                content: content,
-                fontScale: chatFontScale
-            )
+            Text(verbatim: content)
+                .textSelection(.enabled)
+                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else if rendersMarkdown && isStreaming {
             ChatStreamingMarkdownText(
                 content: content,
@@ -1652,73 +1653,6 @@ private struct ChatStreamingMarkdownChunk: View, Equatable {
             syntaxExtensions: [.math]
         )
         .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct ChatSelectablePromptText: NSViewRepresentable {
-    let content: String
-    let fontScale: Double
-
-    func makeNSView(context: Context) -> NSTextView {
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.heightTracksTextView = false
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        update(textView)
-        return textView
-    }
-
-    func updateNSView(_ textView: NSTextView, context: Context) {
-        update(textView)
-    }
-
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        nsView textView: NSTextView,
-        context: Context
-    ) -> CGSize? {
-        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
-        let bounds = (content as NSString).boundingRect(
-            with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: textAttributes(font: font)
-        )
-        let measuredWidth = max(1, ceil(bounds.width))
-        let width = proposal.width.map { min($0, measuredWidth) } ?? measuredWidth
-        return CGSize(width: width, height: max(1, ceil(bounds.height)))
-    }
-
-    private func update(_ textView: NSTextView) {
-        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        if textView.string != content || textView.font != font {
-            textView.textStorage?.setAttributedString(NSAttributedString(
-                string: content,
-                attributes: textAttributes(font: font)
-            ))
-        }
-        textView.setAccessibilityLabel(content)
-    }
-
-    private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.lineSpacing = 2
-        return [
-            .font: font,
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraphStyle
-        ]
     }
 }
 

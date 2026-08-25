@@ -122,7 +122,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
             VStack(spacing: 0) {
                 pageHeader
                     .padding(.horizontal, 22)
-                    .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+                    .controlPanelDetailHeaderTopPadding()
                     .padding(.bottom, 16)
 
                 Divider()

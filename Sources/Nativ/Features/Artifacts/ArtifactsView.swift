@@ -730,7 +730,7 @@ struct ArtifactsView: View {
         }
         .padding(.horizontal, 24)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, ControlPanelLayout.detailHeaderTopInset)
+        .controlPanelDetailHeaderTopPadding()
         .padding(.bottom, 12)
     }
 
