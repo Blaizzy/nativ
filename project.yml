@@ -98,7 +98,11 @@ targets:
       - path: Sources/Nativ
         excludes:
           - ModelProviderIcons
+          - FileTypeIcons
       - path: Sources/Nativ/ModelProviderIcons
+        type: folder
+        buildPhase: resources
+      - path: Sources/Nativ/FileTypeIcons
         type: folder
         buildPhase: resources
       - path: Extensions/VoiceDictation/Manifest.json
