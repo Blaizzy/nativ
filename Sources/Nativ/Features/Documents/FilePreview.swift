@@ -18,6 +18,7 @@ struct ChatAttachmentPreview: View {
             controls
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding([.horizontal, .bottom])
         }
         .background(Color.black.opacity(0.9).ignoresSafeArea())
@@ -41,9 +42,15 @@ struct ChatAttachmentPreview: View {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.16), in: Circle())
+                        .overlay {
+                            Circle()
+                                .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                        }
                 }
-                .buttonStyle(.bordered)
-                .tint(.white)
+                .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
                 .help("Close preview")
                 .accessibilityLabel("Close preview")

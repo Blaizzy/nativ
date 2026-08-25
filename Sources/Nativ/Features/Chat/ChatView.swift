@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NativServerKit
+import QuickLookThumbnailing
 import SwiftUI
 import Textual
 import UniformTypeIdentifiers
@@ -1454,6 +1455,7 @@ private struct ChatImageAttachmentView: View {
     @State private var saveErrorMessage: String?
     @State private var showsSaveError = false
     @State private var isSaveButtonHovered = false
+    @State private var documentThumbnail: NSImage?
 
     private let maximumSideLength: CGFloat = 300
 
@@ -1503,12 +1505,15 @@ private struct ChatImageAttachmentView: View {
         } message: {
             Text(saveErrorMessage ?? "The image could not be saved.")
         }
+        .task(id: attachment.id) {
+            await loadDocumentThumbnail()
+        }
     }
 
     @ViewBuilder
     private var preview: some View {
         Group {
-            if let image {
+            if let image = image ?? documentThumbnail {
                 let size = displaySize(for: image)
 
                 Image(nsImage: image)
@@ -1542,6 +1547,29 @@ private struct ChatImageAttachmentView: View {
             return nil
         }
         return NSImage(data: data)
+    }
+
+    private func loadDocumentThumbnail() async {
+        documentThumbnail = nil
+        guard attachment.chatAttachmentKind != .image,
+              let file = try? await ChatAttachmentPreviewFile.create(for: attachment) else {
+            return
+        }
+        defer { file.remove() }
+
+        let size = CGSize(width: maximumSideLength, height: maximumSideLength)
+        let request = QLThumbnailGenerator.Request(
+            fileAt: file.url,
+            size: size,
+            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail
+        )
+        guard let representation = try? await QLThumbnailGenerator.shared
+            .generateBestRepresentation(for: request),
+              !Task.isCancelled else {
+            return
+        }
+        documentThumbnail = NSImage(cgImage: representation.cgImage, size: .zero)
     }
 
     private func displaySize(for image: NSImage) -> CGSize {
