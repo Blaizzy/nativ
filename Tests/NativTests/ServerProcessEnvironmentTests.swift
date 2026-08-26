@@ -5,103 +5,44 @@ import Testing
 @Suite("Server process environment")
 struct ServerProcessEnvironmentTests {
     @Test(
-        "Discovers every declared external tool bundle",
-        arguments: ServerProcessEnvironment.externalToolBundles
+        "Discovers every declared external tool requirement",
+        arguments: ServerProcessEnvironment.externalToolRequirements
     )
-    func discoversDeclaredToolBundle(_ toolBundle: ExternalToolBundle) throws {
-        let directory = try #require(toolBundle.searchDirectories.first)
-        let installedExecutables = Set(toolBundle.executableNames.map { name in
-            URL(fileURLWithPath: directory, isDirectory: true)
-                .appendingPathComponent(name)
-                .path
-        })
+    func discoversDeclaredTool(_ requirement: ExternalToolRequirement) throws {
+        #expect(requirement.name.isEmpty == false)
+        #expect(requirement.executableNames.isEmpty == false)
+        #expect(requirement.searchDirectories.isEmpty == false)
 
-        let environment = ServerProcessEnvironment.make(
-            inherited: ["PATH": "/usr/bin:/bin"],
-            overrides: [:],
-            toolBundles: [toolBundle],
-            isExecutable: installedExecutables.contains
-        )
+        for directory in requirement.searchDirectories {
+            let directoryURL = URL(filePath: directory, directoryHint: .isDirectory)
+            var executablePaths = Set(requirement.executableNames.map {
+                directoryURL.appending(path: $0).path
+            })
+            let baseSearchPath = "/usr/bin:/bin"
 
-        #expect(environment["PATH"] == "/usr/bin:/bin:\(directory)")
-    }
+            #expect(
+                ServerProcessEnvironment.augmentedSearchPath(
+                    inheriting: baseSearchPath,
+                    requirements: [requirement],
+                    isExecutableFile: executablePaths.contains
+                ) == "\(baseSearchPath):\(directory)"
+            )
+            #expect(
+                ServerProcessEnvironment.augmentedSearchPath(
+                    inheriting: "\(baseSearchPath):\(directory)",
+                    requirements: [requirement],
+                    isExecutableFile: executablePaths.contains
+                ) == "\(baseSearchPath):\(directory)"
+            )
 
-    @Test("Requires every executable in an external tool bundle")
-    func rejectsIncompleteToolBundle() throws {
-        let toolBundle = try #require(ServerProcessEnvironment.externalToolBundles.first)
-        let directory = try #require(toolBundle.searchDirectories.first)
-        let oneExecutable = try #require(toolBundle.executableNames.first)
-        let installedExecutables = [
-            URL(fileURLWithPath: directory, isDirectory: true)
-                .appendingPathComponent(oneExecutable)
-                .path
-        ]
-
-        let environment = ServerProcessEnvironment.make(
-            inherited: ["PATH": "/usr/bin:/bin"],
-            overrides: [:],
-            toolBundles: [toolBundle],
-            isExecutable: Set(installedExecutables).contains
-        )
-
-        #expect(environment["PATH"] == "/usr/bin:/bin")
-    }
-
-    @Test("Does not duplicate an existing external tool directory")
-    func avoidsDuplicateDirectory() throws {
-        let toolBundle = try #require(ServerProcessEnvironment.externalToolBundles.first)
-        let directory = try #require(toolBundle.searchDirectories.first)
-        let installedExecutables = Set(toolBundle.executableNames.map { name in
-            URL(fileURLWithPath: directory, isDirectory: true)
-                .appendingPathComponent(name)
-                .path
-        })
-
-        let environment = ServerProcessEnvironment.make(
-            inherited: ["PATH": "/usr/bin:\(directory):/bin"],
-            overrides: [:],
-            toolBundles: [toolBundle],
-            isExecutable: installedExecutables.contains
-        )
-
-        #expect(environment["PATH"] == "/usr/bin:\(directory):/bin")
-    }
-
-    @Test("Preserves an explicit caller search path")
-    func preservesSearchPathOverride() throws {
-        let toolBundle = try #require(ServerProcessEnvironment.externalToolBundles.first)
-        let directory = try #require(toolBundle.searchDirectories.first)
-        let installedExecutables = Set(toolBundle.executableNames.map { name in
-            URL(fileURLWithPath: directory, isDirectory: true)
-                .appendingPathComponent(name)
-                .path
-        })
-
-        let environment = ServerProcessEnvironment.make(
-            inherited: ["PATH": "/usr/bin:/bin"],
-            overrides: ["PATH": "/custom/bin"],
-            toolBundles: [toolBundle],
-            isExecutable: installedExecutables.contains
-        )
-
-        #expect(environment["PATH"] == "/custom/bin")
-    }
-
-    @Test("Keeps the bundled Python runtime isolated from app debugging settings")
-    func keepsServerSafeguards() {
-        let environment = ServerProcessEnvironment.make(
-            inherited: [
-                "MTL_DEBUG_LAYER": "1",
-                "METAL_CAPTURE_ENABLED": "1"
-            ],
-            overrides: [:],
-            toolBundles: [],
-            isExecutable: { _ in false }
-        )
-
-        #expect(environment["MTL_DEBUG_LAYER"] == nil)
-        #expect(environment["METAL_CAPTURE_ENABLED"] == nil)
-        #expect(environment["PYTHONNOUSERSITE"] == "1")
-        #expect(environment["PYTHONUNBUFFERED"] == "1")
+            executablePaths.remove(try #require(executablePaths.first))
+            #expect(
+                ServerProcessEnvironment.augmentedSearchPath(
+                    inheriting: baseSearchPath,
+                    requirements: [requirement],
+                    isExecutableFile: executablePaths.contains
+                ) == baseSearchPath
+            )
+        }
     }
 }

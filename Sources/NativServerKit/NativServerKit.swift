@@ -176,10 +176,29 @@ public enum Nativ {
         let process = Process()
         process.executableURL = try executableURL()
         process.arguments = arguments
-        process.environment = ServerProcessEnvironment.make(
-            inherited: ProcessInfo.processInfo.environment,
-            overrides: environment
+        var processEnvironment = ProcessInfo.processInfo.environment
+        processEnvironment["PATH"] = ServerProcessEnvironment.augmentedSearchPath(
+            inheriting: processEnvironment["PATH"]
         )
+        processEnvironment.merge(environment) { _, newValue in newValue }
+        // Xcode enables Metal API validation for the app process and exports
+        // these variables to children. The inference server creates and
+        // releases many Metal buffers during chunked prefill; running that
+        // workload through MetalTools can make cache cleanup take minutes.
+        // Keep debugger validation scoped to Nativ itself, not the server.
+        for key in [
+            "MTL_DEBUG_LAYER",
+            "METAL_DEVICE_WRAPPER_TYPE",
+            "METAL_DEBUG_ERROR_MODE",
+            "METAL_DEBUG_ENFORCE_VALIDATION",
+            "METAL_CAPTURE_ENABLED",
+            "MTL_CAPTURE_ENABLED"
+        ] {
+            processEnvironment.removeValue(forKey: key)
+        }
+        processEnvironment["PYTHONNOUSERSITE"] = "1"
+        processEnvironment["PYTHONUNBUFFERED"] = "1"
+        process.environment = processEnvironment
         return process
     }
 
