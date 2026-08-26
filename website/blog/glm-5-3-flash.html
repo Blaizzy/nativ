@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Day-0 support for GLM-5.3-Flash on Nativ, powered by mlx-vlm — a 320B sparse-MoE vision-language model with a hybrid linear/sparse-attention backbone and a 1M-token context."
+    />
+    <meta name="theme-color" content="#f1f0e8" />
+    <meta property="og:title" content="GLM-5.3-Flash on Nativ — Day-0 support" />
+    <meta
+      property="og:description"
+      content="A 320B sparse-MoE vision-language model, running out of the box on Nativ via mlx-vlm."
+    />
+    <meta property="og:type" content="article" />
+    <link rel="icon" href="../assets/app-icon.png" />
+    <link rel="apple-touch-icon" href="../assets/app-icon.png" />
+    <link rel="stylesheet" href="../styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+    />
+    <title>GLM-5.3-Flash on Nativ — Day-0 support</title>
+
+    <style>
+      /* ---- blog / long-form (page-scoped; folds into styles.css when finalized) ---- */
+      .article { padding: 128px clamp(20px, 5vw, 40px) 40px; }
+      .article-hero { max-width: 760px; margin: 0 auto; }
+      .article-kicker { display: flex; align-items: center; gap: 10px; margin: 0 0 26px; font: 400 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+      .article-kicker b { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 20px; font-weight: 500; color: var(--ink); }
+      .article-kicker b img { width: 14px; height: 14px; }
+      .article-hero h1 { margin: 0; font-size: clamp(38px, 6vw, 68px); font-weight: 700; line-height: .98; letter-spacing: -.045em; }
+      .article-hero h1 em { font-family: var(--serif); font-weight: 400; letter-spacing: -.01em; }
+      .article-dek { max-width: 640px; margin: 26px 0 0; font-size: 19px; line-height: 1.55; letter-spacing: -.02em; color: #3a3b34; }
+      .article-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 30px 0 0; padding-top: 22px; border-top: 1px solid var(--line); font: 400 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+      .article-meta span { color: var(--ink); }
+
+      .article-body { max-width: 720px; margin: 56px auto 0; }
+      .article-body > * { max-width: 680px; }
+      .article-body p { margin: 22px 0; color: #26271f; font-size: 18px; line-height: 1.75; letter-spacing: -.01em; }
+      .article-body h2 { margin: 64px 0 4px; font-size: 30px; font-weight: 700; letter-spacing: -.03em; }
+      .article-body h2 em { font-family: var(--serif); font-weight: 400; }
+      .article-body h3 { margin: 40px 0 4px; font-size: 19px; font-weight: 700; letter-spacing: -.02em; }
+      .section-kicker { margin: 64px 0 0; font: 400 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+      .section-kicker + h2 { margin-top: 8px; }
+      .article-body ul { margin: 22px 0; padding-left: 0; list-style: none; }
+      .article-body ul li { position: relative; margin: 12px 0; padding-left: 26px; color: #26271f; font-size: 17px; line-height: 1.65; }
+      .article-body ul li::before { content: "→"; position: absolute; left: 0; top: 1px; color: var(--muted); font: 400 14px var(--mono); }
+      .article-body ul li strong { font-weight: 700; }
+      .article-body a { border-bottom: 1px solid var(--line); transition: border-color .2s; word-break: break-word; }
+      .article-body a:hover { border-color: var(--ink); background: var(--acid); }
+      .article-body strong { font-weight: 700; }
+
+      .tldr { margin: 40px 0; padding: 24px 26px; background: var(--paper-2); border: 1px solid var(--line); }
+      .tldr .label { margin: 0 0 6px; font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+      .tldr ul { margin: 12px 0 0; }
+
+      pre { margin: 26px 0; padding: 22px 24px; background: var(--ink); color: #e7e6db; border: 1px solid #2a2b27; border-radius: 12px; overflow-x: auto; box-shadow: 6px 6px 0 rgba(17,18,16,.08); }
+      pre code { font: 400 13px/1.7 var(--mono); background: none; padding: 0; color: inherit; }
+      :not(pre) > code { padding: 2px 6px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 5px; font: 400 .86em var(--mono); }
+      pre code .kw { color: var(--acid); }
+
+      blockquote { margin: 30px 0; padding: 4px 0 4px 22px; border-left: 2px solid var(--ink); font-family: var(--serif); font-size: 22px; font-style: italic; line-height: 1.4; color: #3a3b34; }
+
+      .katex-display { margin: 30px 0; overflow-x: auto; overflow-y: hidden; padding: 8px 0; }
+
+
+      .article-figure { margin: 34px 0; }
+      .article-figure figcaption { margin-top: 10px; font: 400 11px/1.5 var(--mono); color: var(--muted); }
+
+      @media (max-width: 720px) {
+        .article { padding-top: 104px; }
+        .article-hero h1 { font-size: 34px; }
+        .article-body p, .article-body ul li { font-size: 16px; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-header>
+      <a class="brand" href="../index.html#top" aria-label="Nativ home">
+        <img class="brand-logo" src="../assets/app-icon.png" alt="" />
+        <span>Nativ</span>
+      </a>
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="../index.html#models">Models</a>
+        <a href="../index.html#integrations">Integrations</a>
+        <a href="https://github.com/Blaizzy/nativ">Docs</a>
+        <a href="../index.html#manifesto">Manifesto</a>
+        <a href="glm-5-3-flash.html">Blog</a>
+        <a href="../downloads.html">Downloads</a>
+      </nav>
+      <div class="header-actions">
+        <a
+          class="github-link"
+          href="https://github.com/Blaizzy/nativ"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="View Nativ on GitHub"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 .7a11.6 11.6 0 0 0-3.7 22.5c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.3 3 .1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.6 11.6 0 0 0 12 .7Z" /></svg>
+          <span>★ <span data-stars>Open source</span></span>
+        </a>
+        <a
+          class="mini-download"
+          href="https://github.com/Blaizzy/nativ/releases/latest"
+          data-download
+        >Download</a>
+        <button class="menu-button" type="button" aria-label="Open menu" aria-expanded="false" data-menu-button>
+          <span></span><span></span>
+        </button>
+      </div>
+      <div class="mobile-menu" data-mobile-menu>
+        <a href="../index.html#models">Models</a>
+        <a href="../index.html#integrations">Integrations</a>
+        <a href="https://github.com/Blaizzy/nativ">Docs</a>
+        <a href="../index.html#manifesto">Manifesto</a>
+        <a href="glm-5-3-flash.html">Blog</a>
+        <a href="../downloads.html">Downloads</a>
+      </div>
+    </header>
+
+    <main id="main" class="article">
+      <div class="article-hero">
+        <p class="article-kicker">
+          <b><img src="../assets/partners/zai.svg" alt="" />Z.ai</b>
+          Announcement · Powered by mlx-vlm
+        </p>
+        <h1>Day-0 support for <em>GLM-5.3-Flash</em> on Nativ.</h1>
+        <p class="article-dek">
+          A 320-billion-parameter sparse-MoE vision-language model, running on
+          your Mac out of the box — powered by mlx-vlm.
+        </p>
+        <div class="article-meta">
+          <span>GLM-5-Next</span> · 320B params · 288 experts · 1M context · <span>Day-0</span>
+        </div>
+      </div>
+
+      <article class="article-body">
+        <p>
+          Today, we'd love to announce Nativ's Day-0 support for
+          <strong>GLM-5.3-Flash</strong>, powered by mlx-vlm. GLM-5.3-Flash is
+          built on the GLM-5-Next architecture and runs on Nativ out of the box.
+        </p>
+
+        <p>
+          As a 320-billion-parameter sparse MoE — and a built-in
+          vision-language model — it pairs <strong>288 experts</strong> (top-8,
+          plus one shared expert) to activate ~16B parameters per token. Its
+          45-layer hybrid backbone applies DeepSeek Sparse Attention at every
+          4th layer while the remaining 34 layers run Kimi-delta linear
+          attention, carrying mHC hyper-connection residual streams across a
+          <strong>1M-token context</strong>. As a frontier open-weight model,
+          running it in MLX takes a high-memory Mac: a 256&nbsp;GB Mac Studio
+          (M3 Ultra) for the 4-bit / MXFP4 builds, or a single 128&nbsp;GB Mac
+          for the 2-bit-expert version.
+        </p>
+
+        <p>
+          Earlier this year we got GLM-5, GLM-5.2, and GLM-5.3 — and now
+          GLM-5.3-Flash. Safe to say, the people at Z.ai have long been busy
+          pushing the frontier of open source.
+        </p>
+
+        <p>
+          This 320B-sized behemoth — while not the boldest or biggest we've seen
+          from Z.ai — certainly carries weight, and packs a punch. With the end
+          of dense models, it's one of many recent sparse MoEs the open-source
+          community has been blessed with. Unsurprisingly, like many of its
+          predecessors, GLM-5-Next builds on open research spanning labs and
+          research groups across academia and industry.
+        </p>
+
+        <div class="tldr">
+          <p class="label">TL;DR</p>
+          <ul>
+            <li><strong>Day-0 support:</strong> GLM-5.3-Flash reuses the GLM-5-Next architecture and runs on mlx-vlm from day one, with specific optimizations across prefill and decode.</li>
+            <li><strong>MTP support:</strong> day-0 support with the MTP draft model released at <a href="https://huggingface.co/zai-org/GLM-5.3-Flash">zai-org/GLM-5.3-Flash</a> and <a href="https://huggingface.co/zai-org/GLM-5.3-Flash-BF16">zai-org/GLM-5.3-Flash-BF16</a>.</li>
+          </ul>
+        </div>
+
+        <p class="section-kicker">/ Architecture</p>
+        <h2>GLM-5-Next's architecture, and how Nativ <em>serves it.</em></h2>
+
+        <p>
+          <strong>New approach.</strong> GLM-5-Next takes a bolder, different
+          tack — arguably a design much closer to the recently released Kimi K3.
+          For its size — about half of the previous GLM-5 and 5.2 — it still
+          holds 288 experts, roughly 32 more than either predecessor. Like a
+          mini Kimi K3, GLM moves from pure sparse to a hybrid-linear recipe,
+          becoming the first to pair linear with sparse attention.
+        </p>
+
+        <p class="section-kicker">/ Performance optimizations</p>
+        <h2>Performance optimizations.</h2>
+
+        <h3>Parallel linear attention</h3>
+        <p>
+          The 34 Kimi-delta layers are the bulk of the model, and their
+          inherently sequential nature (token <em>i</em> depends on token
+          <em>i−1</em>) is obviously not ideal for our parallel, throughput-hungry
+          GPUs. The chunked-prefill scan naturally follows a design similar to
+          FlashKDA, expressed through our <code>gated_delta_update</code>:
+        </p>
+
+        <pre><code>out, state = gated_delta_update(
+            q,
+            k,
+            v,
+            a,
+            b_o,
+            fg.A_log.reshape(self.num_heads, 1),
+            fg.dt_bias.reshape(self.num_heads, self.head_dim),
+            state=state,
+            lower_bound=fg.safe_gate_lower_bound,
+)</code></pre>
+
+        <h3>Memory-safe sparse indexer</h3>
+        <p>
+          Sparse attention, pioneered by DeepSeek, avoids a full lookup between
+          every token and all of its predecessors by employing a
+          <em>lightning indexer</em> that scores an earlier position
+          <em>s</em> for the current position <em>t</em> as:
+        </p>
+
+        <p>$$ I_{t,s} = \sum_{j=1}^{H^{I}} w_{t,j}\, \mathrm{ReLU}\!\left(q_{t,j} \cdot k_{s}\right). $$</p>
+
+        <p>
+          With its own <em>k</em> and <em>v</em> projections, it compresses the
+          history into small pools (groups of a few tokens squashed together),
+          then scores the current query against those pools to rank them.
+        </p>
+
+        <p>
+          In our preliminary testing, a 64K context was enough to force mlx-vlm
+          to allocate 137&nbsp;GB and essentially crash. Since the indexer must
+          score all <em>S</em> queries against all <em>S</em>/4 key-pools across
+          its 32 scoring heads to rank them, the score matrix grows
+          quadratically with context — a 64K prefill materializes
+          65,536 × 32 × 16,384 × 4 bytes ≈ 137&nbsp;GB at once. Sound familiar?
+          That's because it mirrors softmax attention's $O(S^2)$ memory.
+          Mitigating it requires knowing that each top-k is independent, so we
+          never need all <em>S</em> queries' scores resident together. Dropping
+          the query axis yields $O(\text{chunk} \cdot P)$ — linear in <em>S</em> —
+          about 1&nbsp;GB per chunk, for a max of 6&nbsp;GB, drastically lower
+          than 137&nbsp;GB.
+        </p>
+
+        <p class="section-kicker">/ Batching</p>
+        <h2>Maximizing &amp; distributing intelligence.</h2>
+
+        <p>
+          With the recent release of the M6 and M5 Pro, saturating the GPU has
+          never been more important — and under a single-batch scenario, that
+          doesn't happen. Static single-batching does not use the GPU
+          efficiently: for <em>N</em> requests it waits until the entire batch
+          is finished, wasting compute that could have run in the meantime. With
+          <code>BatchGenerator</code> in mlx-vlm, we run dynamically managed
+          batches — new requests admitted and finished ones evicted mid-flight —
+          so each expensive weight read is amortized across every active
+          sequence. That easily took us from 34 tok/s single-stream to
+          <strong>191 tok/s at 32 concurrent requests</strong> — almost 5.5× —
+          with prefill up 3.3×, and peak memory barely moving (179 → 188&nbsp;GB).
+        </p>
+      </article>
+    </main>
+
+    <footer>
+      <div class="footer-brand">Nativ</div>
+      <p>Built for Apple Silicon. 100% open source. A tribute to the hackers and ML researchers building a private, hackable future.</p>
+      <div class="footer-links">
+        <div><strong>CODE</strong><a href="https://github.com/Blaizzy/nativ">GitHub</a><a href="https://github.com/Blaizzy/nativ/issues">Issues</a><a href="https://github.com/Blaizzy/nativ/blob/main/LICENSE">License</a></div>
+        <div><strong>GET IT</strong><a href="https://github.com/Blaizzy/nativ/releases/latest" data-download>Download</a><a href="../downloads.html">Download stats</a><a href="https://github.com/Blaizzy/nativ/releases">Releases</a><a href="https://github.com/Blaizzy/nativ#build-from-source">Install docs</a></div>
+        <div><strong>COMMUNITY</strong><a href="https://discord.gg/MFsUTjzyKP" target="_blank" rel="noreferrer">Discord</a><a href="https://github.com/Blaizzy/nativ/pulls">Contribute</a></div>
+      </div>
+      <div class="footer-bottom"><span>Nativ is MIT licensed · Free forever</span><span>Printed from the local cache</span><button type="button" data-to-top>Back to top ↑</button></div>
+    </footer>
+
+    <script src="../script.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+      onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:false});"
+    ></script>
+  </body>
+</html>
