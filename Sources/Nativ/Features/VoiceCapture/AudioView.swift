@@ -311,7 +311,7 @@ struct AudioView: View {
             }
         case .model:
             AudioPage(
-                title: "Speech-to-text model",
+                title: "Speech-to-Text Model",
                 subtitle: "Choose which installed model handles voice transcription"
             ) {
                 modelConfigurationPanel
