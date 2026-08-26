@@ -9,6 +9,11 @@ enum ChatAgentLoopError: LocalizedError {
     }
 }
 
+struct ChatAgentLoopResult {
+    let completion: MLXChatCompletion
+    let stopReason: ChatSpawnedAgentStopReason?
+}
+
 @MainActor
 enum ChatAgentLoop {
     static func run(
@@ -18,13 +23,15 @@ enum ChatAgentLoop {
         canEditImage: Bool,
         context: ChatToolExecutionContext,
         agentID: String? = nil,
+        limits: ChatSpawnAgentResourceLimits = .default,
         onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)? = nil
-    ) async throws -> MLXChatCompletion {
+    ) async throws -> ChatAgentLoopResult {
         let client = NativChatClient(baseURL: context.baseURL, apiKey: context.apiKey)
         let toolDefinitions = subAgentToolDefinitions(settings: settings, canEditImage: canEditImage, context: context)
         let systemPrompt = subAgentSystemPrompt(settings: settings, hasTools: !toolDefinitions.isEmpty)
         let customTools = settings.customTools.filter { $0.kind != .script }
         let transcript = ChatAgentDisplayTranscript(onUpdate: onUpdate)
+        let startedAt = Date()
 
         var messages = initialMessages
         if let systemPrompt {
@@ -32,6 +39,7 @@ enum ChatAgentLoop {
         }
 
         var round = 0
+        var totalTokensUsed = 0
         while true {
             try Task.checkCancellation()
 
@@ -43,7 +51,13 @@ enum ChatAgentLoop {
                 }
             }
 
-            let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: round) && !toolDefinitions.isEmpty
+            let stopReason: ChatSpawnedAgentStopReason? =
+                if round >= limits.maxTurns { .turnLimit }
+                else if totalTokensUsed >= limits.maxTokens { .tokenLimit }
+                else if Date().timeIntervalSince(startedAt) >= limits.maxWallTimeSeconds { .timeout }
+                else { nil }
+            let advertisesTools = stopReason == nil && !toolDefinitions.isEmpty
+
             let request = MLXChatCompletionRequest(
                 model: modelID,
                 messages: messages,
@@ -64,10 +78,11 @@ enum ChatAgentLoop {
                 await transcript.appendDelta(event, to: assistantDisplayID)
             })
             transcript.finishAssistant(assistantDisplayID, completion: completion)
+            totalTokensUsed += completion.usage?.totalTokens ?? 0
 
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             guard advertisesTools, !toolCalls.isEmpty else {
-                return completion
+                return ChatAgentLoopResult(completion: completion, stopReason: stopReason)
             }
 
             messages.append(MLXChatMessage(

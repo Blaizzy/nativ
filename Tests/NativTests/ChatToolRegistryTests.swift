@@ -1028,6 +1028,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "File patch",
                 .awaitingConsent: "Patch protected file?", .declined: "Patch declined",
             ],
+            ChatSpawnAgentToolRegistry.toolName: [
+                nil: "Sub-agent tool", .preparing: "Sub-agent working…",
+                .running: "Sub-agent working…", .succeeded: "Sub-agent finished",
+                .failed: "Sub-agent", .cancelled: "Sub-agent",
+                .awaitingImageModelSelection: "Sub-agent",
+                .awaitingConsent: "Sub-agent", .declined: "Sub-agent",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -1061,6 +1068,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatReadFileToolRegistry.toolName,
             ChatSearchFilesToolRegistry.toolName,
             ChatFileWriteToolRegistry.writeToolName, ChatFileWriteToolRegistry.patchToolName,
+            ChatSpawnAgentToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -1074,6 +1082,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatSearchFilesToolRegistry.toolName: "doc.text.magnifyingglass",
             ChatFileWriteToolRegistry.writeToolName: "square.and.pencil",
             ChatFileWriteToolRegistry.patchToolName: "square.and.pencil",
+            ChatSpawnAgentToolRegistry.toolName: "person.2.wave.2",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -1409,33 +1418,12 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
     }
 }
 
-final class ChatToolPresentationSpawnAgentTests: XCTestCase {
-    func testTitleReflectsStatus() {
-        XCTAssertEqual(
-            ChatToolPresentation.title(toolName: ChatSpawnAgentToolRegistry.toolName, status: .running),
-            "Sub-agent working…"
-        )
-        XCTAssertEqual(
-            ChatToolPresentation.title(toolName: ChatSpawnAgentToolRegistry.toolName, status: .succeeded),
-            "Sub-agent finished"
-        )
-    }
-
-    func testSymbolNameIsDistinctFromGenericTool() {
-        XCTAssertEqual(
-            ChatToolPresentation.symbolName(toolName: ChatSpawnAgentToolRegistry.toolName, status: .succeeded),
-            "person.2.wave.2"
-        )
-    }
-}
-
-final class ChatConcurrentSpawnGateTests: XCTestCase {
+@MainActor
+final class ChatSpawnAgentToolTests: XCTestCase {
     func testCapsConcurrentSpawnsAtFive() {
         XCTAssertEqual(ChatConcurrentSpawnGate.maximumConcurrent, 5)
     }
-}
 
-final class ChatSpawnAgentToolRegistryTests: XCTestCase {
     func testDefinitionRequiresTaskAndOffersModeContextModel() throws {
         let definitions = ChatSpawnAgentToolRegistry.definitions()
         XCTAssertEqual(definitions.count, 1)
@@ -1458,9 +1446,7 @@ final class ChatSpawnAgentToolRegistryTests: XCTestCase {
         let names = ChatToolRegistry.definitions(canEditImage: false).map(\.function.name)
         XCTAssertTrue(names.contains(ChatSpawnAgentToolRegistry.toolName))
     }
-}
 
-final class ChatSpawnAgentToolArgumentsTests: XCTestCase {
     func testModeDefaultsToFresh() throws {
         let arguments = try decodeArguments(#"{"task":"do the thing"}"#)
         XCTAssertEqual(arguments.mode, .fresh)
@@ -1480,12 +1466,6 @@ final class ChatSpawnAgentToolArgumentsTests: XCTestCase {
         XCTAssertThrowsError(try decodeArguments(#"{"mode":"fresh"}"#))
     }
 
-    private func decodeArguments(_ json: String) throws -> ChatSpawnAgentToolArguments {
-        try JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: XCTUnwrap(json.data(using: .utf8)))
-    }
-}
-
-final class ChatSpawnAgentModelKindTests: XCTestCase {
     func testTextCapableModelIsTextGeneration() {
         XCTAssertEqual(ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.text])), .textGeneration)
     }
@@ -1509,25 +1489,6 @@ final class ChatSpawnAgentModelKindTests: XCTestCase {
         XCTAssertEqual(ChatSpawnAgentModelKind.resolve(makeModel(capabilities: [.text, .drafter])), .unsupported)
     }
 
-    private func makeModel(capabilities: Set<LocalModelCapability>) -> LocalModel {
-        LocalModel(
-            repoID: "org/model",
-            snapshotURL: nil,
-            modifiedAt: nil,
-            sizeBytes: nil,
-            parameterCount: nil,
-            quantizationBits: nil,
-            quantizationGroupSize: nil,
-            contextSize: nil,
-            provider: nil,
-            capabilities: capabilities,
-            drafterKind: nil,
-            hiddenSize: nil
-        )
-    }
-}
-
-final class ChatSpawnAgentModelResolverTests: XCTestCase {
     func testNoRequestedModelFallsBackToCurrentModel() async throws {
         let resolved = try await ChatSpawnAgentModelResolver.resolve(
             requestedModelID: nil,
@@ -1573,14 +1534,6 @@ final class ChatSpawnAgentModelResolverTests: XCTestCase {
         }
     }
 
-    private func temporaryEmptyDirectory() -> String {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url.path
-    }
-}
-
-final class ChatSpawnAgentTranscriptBuilderTests: XCTestCase {
     func testFreshModeWithoutContextUsesTaskAsTheOnlyMessage() throws {
         let messages = try ChatSpawnAgentTranscriptBuilder.initialMessages(
             arguments: makeArguments(task: "summarize this", mode: .fresh),
@@ -1638,25 +1591,6 @@ final class ChatSpawnAgentTranscriptBuilderTests: XCTestCase {
         }
     }
 
-    private func makeArguments(
-        task: String,
-        mode: ChatSpawnAgentMode,
-        context: String? = nil,
-        modelID: String? = nil
-    ) -> ChatSpawnAgentToolArguments {
-        var json = "{\"task\":\"\(task)\",\"mode\":\"\(mode.rawValue)\""
-        if let context {
-            json += ",\"context\":\"\(context)\""
-        }
-        if let modelID {
-            json += ",\"model\":\"\(modelID)\""
-        }
-        json += "}"
-        return try! JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: Data(json.utf8))
-    }
-}
-
-final class ChatSpawnAgentToolExecutorTests: XCTestCase {
     func testInvalidJSONArgumentsThrowsInvalidArguments() async {
         do {
             _ = try await ChatSpawnAgentToolExecutor().execute(
@@ -1711,6 +1645,159 @@ final class ChatSpawnAgentToolExecutorTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "fake failure")
         XCTAssertNil(object["answer"])
+    }
+
+    func testRunInBackgroundDefaultsFalse() throws {
+        let arguments = try JSONDecoder().decode(
+            ChatSpawnAgentToolArguments.self,
+            from: XCTUnwrap(#"{"task":"do it"}"#.data(using: .utf8))
+        )
+        XCTAssertFalse(arguments.runInBackground)
+    }
+
+    func testRunInBackgroundDecodesTrue() throws {
+        let arguments = try JSONDecoder().decode(
+            ChatSpawnAgentToolArguments.self,
+            from: XCTUnwrap(#"{"task":"do it","run_in_background":true}"#.data(using: .utf8))
+        )
+        XCTAssertTrue(arguments.runInBackground)
+    }
+
+    func testRunsInBackgroundPeekMatchesFullDecode() {
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x"}"#))
+        XCTAssertTrue(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x","run_in_background":true}"#))
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x","run_in_background":false}"#))
+    }
+
+    func testRunsInBackgroundPeekIsFalseOnMalformedJSON() {
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground("not json"))
+        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(nil))
+    }
+
+    func testDefaultsMatchDocumentedValues() {
+        XCTAssertEqual(ChatSpawnAgentResourceLimits.default.maxTurns, 50)
+        XCTAssertEqual(ChatSpawnAgentResourceLimits.default.maxTokens, 8_000)
+        XCTAssertEqual(ChatSpawnAgentResourceLimits.default.maxWallTimeSeconds, 600)
+    }
+
+    func testClampsNonPositiveValuesToOne() {
+        let limits = ChatSpawnAgentResourceLimits(maxTurns: 0, maxTokens: -5, maxWallTimeSeconds: -1)
+        XCTAssertEqual(limits.maxTurns, 1)
+        XCTAssertEqual(limits.maxTokens, 1)
+        XCTAssertEqual(limits.maxWallTimeSeconds, 1)
+    }
+
+    func testArgumentsDefaultToStandardLimits() throws {
+        let arguments = try JSONDecoder().decode(
+            ChatSpawnAgentToolArguments.self,
+            from: XCTUnwrap(#"{"task":"do it"}"#.data(using: .utf8))
+        )
+        XCTAssertEqual(arguments.resourceLimits, .default)
+    }
+
+    func testArgumentsIgnoreLimitOverridesInInput() throws {
+        let arguments = try JSONDecoder().decode(
+            ChatSpawnAgentToolArguments.self,
+            from: XCTUnwrap(#"{"task":"do it","max_turns":2,"max_tokens":500,"max_wall_time_seconds":30}"#.data(using: .utf8))
+        )
+        XCTAssertEqual(arguments.resourceLimits, .default)
+    }
+
+    func testPrepareRegistersAgentAndReturnsHandlePayload() async throws {
+        let registry = ChatAgentRegistry()
+        var context = makeContext(modelSearchPath: "")
+        context.settings = NativSettings(languageModelID: "org/model")
+        context.agentRegistry = registry
+
+        let executor = ChatSpawnAgentToolExecutor()
+        let prepared = try await executor.prepare(
+            call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize"}"#),
+            context: context
+        )
+
+        XCTAssertEqual(registry.record(for: prepared.agentID)?.status, .queued)
+        XCTAssertEqual(registry.record(for: prepared.agentID)?.task, "summarize")
+
+        let handle = try decode(executor.handlePayload(agentID: prepared.agentID))
+        XCTAssertEqual(handle["ok"] as? Bool, true)
+        XCTAssertEqual(handle["agent_id"] as? String, prepared.agentID)
+        XCTAssertEqual(handle["status"] as? String, "queued")
+        XCTAssertEqual(prepared.limits, .default)
+    }
+
+    func testPrepareCarriesFileReadConfigurationToTheSubAgent() async throws {
+        var context = makeContext(modelSearchPath: "")
+        context.settings = NativSettings(languageModelID: "org/model")
+        context.fileReadRootPath = "/tmp/some-authorized-folder"
+
+        let prepared = try await ChatSpawnAgentToolExecutor().prepare(
+            call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize"}"#),
+            context: context
+        )
+
+        XCTAssertEqual(prepared.subAgentContext.fileReadRootPath, "/tmp/some-authorized-folder")
+    }
+
+    func testPrepareThrowsBeforeRegisteringOnInvalidArguments() async throws {
+        let registry = ChatAgentRegistry()
+        var context = makeContext(modelSearchPath: "")
+        context.settings = NativSettings(languageModelID: "org/model")
+        context.agentRegistry = registry
+
+        let executor = ChatSpawnAgentToolExecutor()
+        do {
+            _ = try await executor.prepare(
+                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: "not json"),
+                context: context
+            )
+            XCTFail("invalid arguments must throw before registering")
+        } catch is ChatSpawnAgentToolError {
+            XCTAssertTrue(registry.allRecords().isEmpty)
+        }
+    }
+
+    private func decodeArguments(_ json: String) throws -> ChatSpawnAgentToolArguments {
+        try JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: XCTUnwrap(json.data(using: .utf8)))
+    }
+
+    private func makeModel(capabilities: Set<LocalModelCapability>) -> LocalModel {
+        LocalModel(
+            repoID: "org/model",
+            snapshotURL: nil,
+            modifiedAt: nil,
+            sizeBytes: nil,
+            parameterCount: nil,
+            quantizationBits: nil,
+            quantizationGroupSize: nil,
+            contextSize: nil,
+            provider: nil,
+            capabilities: capabilities,
+            drafterKind: nil,
+            hiddenSize: nil
+        )
+    }
+
+    private func temporaryEmptyDirectory() -> String {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.path
+    }
+
+    private func makeArguments(
+        task: String,
+        mode: ChatSpawnAgentMode,
+        context: String? = nil,
+        modelID: String? = nil
+    ) -> ChatSpawnAgentToolArguments {
+        var json = "{\"task\":\"\(task)\",\"mode\":\"\(mode.rawValue)\""
+        if let context {
+            json += ",\"context\":\"\(context)\""
+        }
+        if let modelID {
+            json += ",\"model\":\"\(modelID)\""
+        }
+        json += "}"
+        return try! JSONDecoder().decode(ChatSpawnAgentToolArguments.self, from: Data(json.utf8))
     }
 
     private func decode(_ json: String) throws -> [String: Any] {
@@ -1832,95 +1919,6 @@ final class ChatAgentRegistryTests: XCTestCase {
             registry.markRunning(id)
         }
         XCTAssertEqual(registry.allRecords().count, 55)
-    }
-}
-
-final class ChatSpawnAgentBackgroundArgumentsTests: XCTestCase {
-    func testRunInBackgroundDefaultsFalse() throws {
-        let arguments = try JSONDecoder().decode(
-            ChatSpawnAgentToolArguments.self,
-            from: XCTUnwrap(#"{"task":"do it"}"#.data(using: .utf8))
-        )
-        XCTAssertFalse(arguments.runInBackground)
-    }
-
-    func testRunInBackgroundDecodesTrue() throws {
-        let arguments = try JSONDecoder().decode(
-            ChatSpawnAgentToolArguments.self,
-            from: XCTUnwrap(#"{"task":"do it","run_in_background":true}"#.data(using: .utf8))
-        )
-        XCTAssertTrue(arguments.runInBackground)
-    }
-
-    func testRunsInBackgroundPeekMatchesFullDecode() {
-        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x"}"#))
-        XCTAssertTrue(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x","run_in_background":true}"#))
-        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(#"{"task":"x","run_in_background":false}"#))
-    }
-
-    func testRunsInBackgroundPeekIsFalseOnMalformedJSON() {
-        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground("not json"))
-        XCTAssertFalse(ChatSpawnAgentToolArguments.runsInBackground(nil))
-    }
-}
-
-@MainActor
-final class ChatSpawnAgentToolExecutorBackgroundTests: XCTestCase {
-    func testPrepareRegistersAgentAndReturnsHandlePayload() async throws {
-        let registry = ChatAgentRegistry()
-        var context = makeContext(modelSearchPath: "")
-        context.settings = NativSettings(languageModelID: "org/model")
-        context.agentRegistry = registry
-
-        let executor = ChatSpawnAgentToolExecutor()
-        let prepared = try await executor.prepare(
-            call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize"}"#),
-            context: context
-        )
-
-        XCTAssertEqual(registry.record(for: prepared.agentID)?.status, .queued)
-        XCTAssertEqual(registry.record(for: prepared.agentID)?.task, "summarize")
-
-        let handle = try decode(executor.handlePayload(agentID: prepared.agentID))
-        XCTAssertEqual(handle["ok"] as? Bool, true)
-        XCTAssertEqual(handle["agent_id"] as? String, prepared.agentID)
-        XCTAssertEqual(handle["status"] as? String, "queued")
-    }
-
-    func testPrepareCarriesFileReadConfigurationToTheSubAgent() async throws {
-        var context = makeContext(modelSearchPath: "")
-        context.settings = NativSettings(languageModelID: "org/model")
-        context.fileReadRootPath = "/tmp/some-authorized-folder"
-
-        let prepared = try await ChatSpawnAgentToolExecutor().prepare(
-            call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: #"{"task":"summarize"}"#),
-            context: context
-        )
-
-        XCTAssertEqual(prepared.subAgentContext.fileReadRootPath, "/tmp/some-authorized-folder")
-    }
-
-    func testPrepareThrowsBeforeRegisteringOnInvalidArguments() async throws {
-        let registry = ChatAgentRegistry()
-        var context = makeContext(modelSearchPath: "")
-        context.settings = NativSettings(languageModelID: "org/model")
-        context.agentRegistry = registry
-
-        let executor = ChatSpawnAgentToolExecutor()
-        do {
-            _ = try await executor.prepare(
-                call: makeCall(name: ChatSpawnAgentToolRegistry.toolName, arguments: "not json"),
-                context: context
-            )
-            XCTFail("invalid arguments must throw before registering")
-        } catch is ChatSpawnAgentToolError {
-            XCTAssertTrue(registry.allRecords().isEmpty)
-        }
-    }
-
-    private func decode(_ json: String) throws -> [String: Any] {
-        let data = try XCTUnwrap(json.data(using: .utf8))
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
 

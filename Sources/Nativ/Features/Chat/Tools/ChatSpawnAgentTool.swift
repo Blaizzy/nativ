@@ -53,12 +53,27 @@ enum ChatSpawnAgentMode: String, Decodable {
     case branch
 }
 
+struct ChatSpawnAgentResourceLimits: Equatable {
+    static let `default` = ChatSpawnAgentResourceLimits(maxTurns: 50, maxTokens: 8_000, maxWallTimeSeconds: 600)
+
+    let maxTurns: Int
+    let maxTokens: Int
+    let maxWallTimeSeconds: TimeInterval
+
+    init(maxTurns: Int, maxTokens: Int, maxWallTimeSeconds: TimeInterval) {
+        self.maxTurns = max(1, maxTurns)
+        self.maxTokens = max(1, maxTokens)
+        self.maxWallTimeSeconds = max(1, maxWallTimeSeconds)
+    }
+}
+
 struct ChatSpawnAgentToolArguments: Decodable {
     let task: String
     let mode: ChatSpawnAgentMode
     let context: String?
     let modelID: String?
     let runInBackground: Bool
+    let resourceLimits = ChatSpawnAgentResourceLimits.default
 
     enum CodingKeys: String, CodingKey {
         case task
@@ -91,6 +106,7 @@ struct ChatSpawnAgentToolResultPayload: Encodable {
     let ok: Bool
     let agentID: String?
     let status: String?
+    let stopReason: String?
     let answer: String?
     let error: String?
 
@@ -98,6 +114,7 @@ struct ChatSpawnAgentToolResultPayload: Encodable {
         case ok
         case agentID = "agent_id"
         case status
+        case stopReason = "stop_reason"
         case answer
         case error
     }
@@ -192,6 +209,7 @@ struct ChatSpawnAgentPreparedCall {
     let subAgentContext: ChatToolExecutionContext
     let onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?
     let registry: ChatAgentRegistry?
+    let limits: ChatSpawnAgentResourceLimits
 }
 
 struct ChatSpawnAgentToolExecutor {
@@ -259,28 +277,52 @@ struct ChatSpawnAgentToolExecutor {
             canEditImage: !parentImages.isEmpty,
             subAgentContext: subAgentContext,
             onUpdate: context.spawnAgentUpdate,
-            registry: context.agentRegistry
+            registry: context.agentRegistry,
+            limits: arguments.resourceLimits
         )
     }
 
     func run(_ prepared: ChatSpawnAgentPreparedCall) async -> String {
         await prepared.registry?.markRunning(prepared.agentID)
         do {
-            let completion = try await ChatAgentLoop.run(
+            let result = try await ChatAgentLoop.run(
                 messages: prepared.messages,
                 modelID: prepared.modelID,
                 settings: prepared.settings,
                 canEditImage: prepared.canEditImage,
                 context: prepared.subAgentContext,
                 agentID: prepared.agentID,
+                limits: prepared.limits,
                 onUpdate: prepared.onUpdate
             )
-            await prepared.registry?.complete(prepared.agentID, result: completion.content)
+            if let stopReason = result.stopReason {
+                await prepared.registry?.stop(prepared.agentID, reason: stopReason, partialResult: result.completion.content)
+                return (try? encodedPayload(ChatSpawnAgentToolResultPayload(
+                    ok: true,
+                    agentID: prepared.agentID,
+                    status: ChatSpawnedAgentStatus.stopped.rawValue,
+                    stopReason: stopReason.rawValue,
+                    answer: result.completion.content,
+                    error: nil
+                ))) ?? #"{"ok":true}"#
+            }
+            await prepared.registry?.complete(prepared.agentID, result: result.completion.content)
             return (try? encodedPayload(ChatSpawnAgentToolResultPayload(
                 ok: true,
                 agentID: prepared.agentID,
                 status: ChatSpawnedAgentStatus.completed.rawValue,
-                answer: completion.content,
+                stopReason: nil,
+                answer: result.completion.content,
+                error: nil
+            ))) ?? #"{"ok":true}"#
+        } catch is CancellationError {
+            await prepared.registry?.stop(prepared.agentID, reason: .cancelled, partialResult: nil)
+            return (try? encodedPayload(ChatSpawnAgentToolResultPayload(
+                ok: true,
+                agentID: prepared.agentID,
+                status: ChatSpawnedAgentStatus.stopped.rawValue,
+                stopReason: ChatSpawnedAgentStopReason.cancelled.rawValue,
+                answer: nil,
                 error: nil
             ))) ?? #"{"ok":true}"#
         } catch {
@@ -294,6 +336,7 @@ struct ChatSpawnAgentToolExecutor {
             ok: true,
             agentID: agentID,
             status: ChatSpawnedAgentStatus.queued.rawValue,
+            stopReason: nil,
             answer: nil,
             error: nil
         ))) ?? #"{"ok":true,"status":"queued"}"#
@@ -308,6 +351,7 @@ struct ChatSpawnAgentToolExecutor {
             ok: false,
             agentID: agentID,
             status: agentID == nil ? nil : ChatSpawnedAgentStatus.error.rawValue,
+            stopReason: nil,
             answer: nil,
             error: error.localizedDescription
         )

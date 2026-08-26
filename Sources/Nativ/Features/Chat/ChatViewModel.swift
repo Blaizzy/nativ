@@ -2000,7 +2000,8 @@ final class ChatViewModel: ObservableObject {
                     return
                 }
                 let content = await executor.run(prepared)
-                let succeeded = prepared.registry?.record(for: prepared.agentID)?.status == .completed
+                let finalStatus = prepared.registry?.record(for: prepared.agentID)?.status
+                let succeeded = finalStatus == .completed || finalStatus == .stopped
                 await self.updateToolMessage(
                     toolMessageID,
                     in: sessionID,
