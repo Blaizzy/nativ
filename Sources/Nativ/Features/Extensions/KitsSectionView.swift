@@ -155,7 +155,7 @@ private struct KitCard: View {
     @ViewBuilder
     private var actions: some View {
         if snapshot.state != .enabled {
-            Button(snapshot.state == .partial ? "Enable missing" : "Enable", action: onEnable)
+            Button(snapshot.state == .partial ? "Enable All" : "Enable", action: onEnable)
                 .buttonStyle(.borderedProminent)
         }
         Button(snapshot.state == .off ? "Details" : "Manage", action: onOpen)
@@ -216,7 +216,7 @@ private struct KitDetailView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if snapshot.state != .enabled {
-                    Button(snapshot.state == .partial ? "Enable missing" : "Enable all") {
+                    Button("Enable All") {
                         NativKitActivation.enableMissing(
                             in: kit,
                             model: model,
