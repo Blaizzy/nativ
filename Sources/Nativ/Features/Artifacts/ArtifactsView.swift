@@ -193,7 +193,7 @@ struct ArtifactsView: View {
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Turn on Smart search")
+                    Text("Turn on Smart Search")
                         .font(.system(size: 12, weight: .semibold))
                     Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the settings.")
                         .font(.system(size: 11))
@@ -225,10 +225,10 @@ struct ArtifactsView: View {
         } label: {
             Image(systemName: "gearshape")
         }
-        .help("Smart search settings")
+        .help("Smart Search settings")
         .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Smart search", systemImage: "sparkle.magnifyingglass")
+                Label("Smart Search", systemImage: "sparkle.magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
                 if config.isModelInstalled {
                     Toggle("Enabled", isOn: $smartSearchEnabled)
@@ -247,7 +247,7 @@ struct ArtifactsView: View {
                         isConfirmingSemanticModelRemoval = true
                     }
                     .controlSize(.small)
-                    .help("Deletes the model and turns Smart search off")
+                    .help("Deletes the model and turns Smart Search off")
                 } else if config.isDownloading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
@@ -924,7 +924,7 @@ struct ArtifactsView: View {
                 Circle()
                     .fill(Color.green.opacity(0.7))
                     .frame(width: 7, height: 7)
-                    .help("Smart search is on")
+                    .help("Smart Search is on")
             }
             TextField("Search name or prompt", text: $search)
                 .textFieldStyle(.plain)
