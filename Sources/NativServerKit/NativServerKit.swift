@@ -177,6 +177,9 @@ public enum Nativ {
         process.executableURL = try executableURL()
         process.arguments = arguments
         var processEnvironment = ProcessInfo.processInfo.environment
+        processEnvironment["PATH"] = ServerProcessEnvironment.augmentedSearchPath(
+            inheriting: processEnvironment["PATH"]
+        )
         processEnvironment.merge(environment) { _, newValue in newValue }
         // Xcode enables Metal API validation for the app process and exports
         // these variables to children. The inference server creates and
