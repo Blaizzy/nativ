@@ -179,6 +179,114 @@ struct NativKitTests {
         )
     }
 
+    @Test("Runtime resolution reports disabled and missing Kit components")
+    func runtimeResolutionReportsUnavailableComponents() throws {
+        let mcpCatalog = try makeMCPCatalog()
+        let skillID = try #require(UUID(uuidString: "AB000000-0000-4000-8000-000000000004"))
+        let skill = NativSkill(
+            id: skillID,
+            name: "Example skill",
+            instructions: "Example instructions",
+            isEnabled: true
+        )
+        let kit = makeKit(
+            id: "example",
+            components: [
+                .mcpServer(catalogID: "fetch"),
+                .skill(skill),
+                .extensionPackage(id: "com.nativ.example"),
+            ]
+        )
+        let kitCatalog = try NativKitCatalog(kits: [kit], mcpCatalog: mcpCatalog)
+        let entry = try #require(mcpCatalog.entry(id: "fetch"))
+        var settings = NativSettings(
+            mcpServers: [entry.makeConfiguration(isEnabled: false)]
+        )
+
+        var resolution = NativKitRuntimeResolver.resolve(
+            kitIDs: [kit.id],
+            settings: settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: mcpCatalog
+        )
+
+        #expect(resolution.mcpServers.isEmpty)
+        #expect(resolution.skills.isEmpty)
+        #expect(resolution.unavailableCapabilities == [
+            "Example: Example skill (not configured)",
+            "Example: Fetch (disabled)",
+        ])
+
+        var disabledSkill = skill
+        disabledSkill.isEnabled = false
+        settings = NativSettings(skills: [disabledSkill])
+        resolution = NativKitRuntimeResolver.resolve(
+            kitIDs: [kit.id],
+            settings: settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: mcpCatalog
+        )
+
+        #expect(resolution.unavailableCapabilities == [
+            "Example: Example skill (disabled)",
+            "Example: Fetch (not configured)",
+        ])
+
+        NativKitActivation.enableMissing(
+            in: kit,
+            settings: &settings,
+            mcpCatalog: mcpCatalog
+        )
+        resolution = NativKitRuntimeResolver.resolve(
+            kitIDs: [kit.id],
+            settings: settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: mcpCatalog
+        )
+
+        #expect(resolution.mcpServers.count == 1)
+        #expect(resolution.skills == [skill])
+        #expect(resolution.unavailableCapabilities.isEmpty)
+    }
+
+    @Test("Routine resolution deduplicates shared capabilities and reports unknown Kits")
+    func routineResolutionDeduplicatesSharedCapabilities() throws {
+        let mcpCatalog = try makeMCPCatalog()
+        let entry = try #require(mcpCatalog.entry(id: "fetch"))
+        let skillID = try #require(UUID(uuidString: "AB000000-0000-4000-8000-000000000006"))
+        let skill = NativSkill(
+            id: skillID,
+            name: "Shared skill",
+            instructions: "Example instructions",
+            isEnabled: true
+        )
+        let first = makeKit(
+            id: "first",
+            components: [.mcpServer(catalogID: "fetch"), .skill(skill)]
+        )
+        let second = makeKit(
+            id: "second",
+            components: [.mcpServer(catalogID: "fetch"), .skill(skill)]
+        )
+        let kitCatalog = try NativKitCatalog(
+            kits: [first, second],
+            mcpCatalog: mcpCatalog
+        )
+        let server = entry.makeConfiguration()
+        let settings = NativSettings(mcpServers: [server], skills: [skill])
+
+        let resolution = NativKitRuntimeResolver.resolve(
+            kitIDs: ["first", "missing", "second"],
+            settings: settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: mcpCatalog
+        )
+
+        #expect(resolution.mcpServers == [server])
+        #expect(resolution.skills == [skill])
+        #expect(resolution.unavailableCapabilities == ["Kit missing (unavailable)"])
+    }
+
     private func makeKit(
         id: String,
         components: [NativKitComponent]

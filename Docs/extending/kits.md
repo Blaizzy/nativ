@@ -84,3 +84,18 @@ wherever Kits are offered; no consumer-specific wiring is needed.
 Kits never own global capability state. Applying a Kit only enables missing
 components. Removing or disabling a shared component remains an explicit action
 in that component's own management surface.
+
+## Runtime resolution
+
+Routines resolve a Kit from its stable ID each time they run. The resolver uses
+the current settings snapshot and fails the run with named unavailable
+capabilities when a required MCP server or skill is missing or disabled. It does
+not silently substitute a partial Kit.
+
+Known settings failures are reported before the model server starts. Shared MCP
+servers and skills are resolved once when multiple selected Kits reference them.
+
+Extensions are activation-only prerequisites today: applying the Kit enables
+them globally, but the routine runtime does not derive tools directly from an
+extension package. A future extension-to-capability contract should replace
+that boundary before extension-provided tools are scoped to individual runs.
