@@ -449,8 +449,8 @@ final class RoutineRunner {
         for capability in routine.capabilities {
             switch capability {
             case .kit(let kitID):
-                guard let kit = NativKit.all.first(where: { $0.id == kitID }) else { continue }
-                for entry in kit.mcpEntries {
+                guard let kit = NativKitCatalog.bundled.kit(id: kitID) else { continue }
+                for entry in kit.mcpEntries(in: .bundled) {
                     if let server = settings.mcpServers.first(where: {
                         $0.command == entry.command && $0.arguments == entry.arguments
                     }) {
@@ -500,11 +500,11 @@ final class RoutineRunner {
         for capability in routine.capabilities {
             switch capability {
             case .kit(let kitID):
-                guard let kit = NativKit.all.first(where: { $0.id == kitID }) else {
+                guard let kit = NativKitCatalog.bundled.kit(id: kitID) else {
                     unavailable.append(kitID)
                     continue
                 }
-                for entry in kit.mcpEntries {
+                for entry in kit.mcpEntries(in: .bundled) {
                     if let server = settings.mcpServers.first(where: {
                         $0.command == entry.command
                             && $0.arguments == entry.arguments

@@ -35,13 +35,22 @@ struct KitsSectionView: View {
             EmptyView()
         } content: {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                ForEach(NativKit.all) { kit in
+                ForEach(NativKitCatalog.bundled.kits) { kit in
                     KitCard(
                         kit: kit,
-                        state: NativKitActivation.state(of: kit, model: model, manager: manager),
-                        inactiveParts: NativKitActivation.inactivePartNames(of: kit, model: model, manager: manager),
+                        state: NativKitActivation.state(
+                            of: kit,
+                            model: model,
+                            isExtensionEnabled: manager.isEnabled(extensionID:)
+                        ),
+                        inactiveParts: NativKitActivation.inactivePartNames(
+                            of: kit,
+                            model: model,
+                            extensionName: extensionName,
+                            isExtensionEnabled: manager.isEnabled(extensionID:)
+                        ),
                         onOpen: { openKit = kit },
-                        onEnable: { NativKitActivation.setEnabled(true, kit: kit, model: model, manager: manager) }
+                        onEnable: { enableMissing(in: kit) }
                     )
                 }
             }
@@ -49,6 +58,19 @@ struct KitsSectionView: View {
         .sheet(item: $openKit) { kit in
             KitDetailView(kit: kit, manager: manager, host: host, model: model)
         }
+    }
+
+    private func extensionName(_ id: String) -> String {
+        manager.records.first { $0.id == id }?.manifest.displayName ?? id
+    }
+
+    private func enableMissing(in kit: NativKit) {
+        NativKitActivation.enableMissing(
+            in: kit,
+            model: model,
+            isExtensionEnabled: manager.isEnabled(extensionID:),
+            enableExtension: { manager.setEnabled(true, extensionID: $0) }
+        )
     }
 }
 
@@ -68,7 +90,7 @@ private struct KitCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                NativTintedIconTile(symbol: kit.symbol, tint: kit.tint)
+                NativTintedIconTile(symbol: kit.symbol, tint: .nativTint(kit.tintName))
                 Spacer(minLength: 0)
                 NativStatusBadge(text: "Built-in")
                     .help("Ships with Nativ")
@@ -95,10 +117,12 @@ private struct KitCard: View {
                     alignment: .topLeading
                 )
             HStack(spacing: 8) {
-                if state == .off {
-                    Button("Enable", action: onEnable)
+                if state != .enabled {
+                    Button(state == .partial ? "Enable missing" : "Enable", action: onEnable)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
+                }
+                if state == .off {
                     Button("Details", action: onOpen)
                         .buttonStyle(.plain)
                         .controlSize(.small)
@@ -131,7 +155,7 @@ private struct KitCard: View {
         if state == .partial {
             return "Off: \(inactiveParts.joined(separator: " · "))"
         }
-        return "Includes: \(kit.capabilityNames.joined(separator: " · "))"
+        return "Includes: \(kit.capabilityNames(in: .bundled).joined(separator: " · "))"
     }
 }
 
@@ -142,7 +166,13 @@ private struct KitDetailView: View {
     var model: NativModel
     @Environment(\.dismiss) private var dismiss
 
-    private var state: NativKitState { NativKitActivation.state(of: kit, model: model, manager: manager) }
+    private var state: NativKitState {
+        NativKitActivation.state(
+            of: kit,
+            model: model,
+            isExtensionEnabled: manager.isEnabled(extensionID:)
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -160,7 +190,7 @@ private struct KitDetailView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            NativTintedIconTile(symbol: kit.symbol, tint: kit.tint, size: 40)
+            NativTintedIconTile(symbol: kit.symbol, tint: .nativTint(kit.tintName), size: 40)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(kit.name)
@@ -171,19 +201,19 @@ private struct KitDetailView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button("Enable all") {
-                        NativKitActivation.setEnabled(true, kit: kit, model: model, manager: manager)
+                if state != .enabled {
+                    Button(state == .partial ? "Enable missing" : "Enable all") {
+                        NativKitActivation.enableMissing(
+                            in: kit,
+                            model: model,
+                            isExtensionEnabled: manager.isEnabled(extensionID:),
+                            enableExtension: { manager.setEnabled(true, extensionID: $0) }
+                        )
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    Button("Disable all") {
-                        NativKitActivation.setEnabled(false, kit: kit, model: model, manager: manager)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
             }
             Spacer(minLength: 12)
             NativHoverCloseButton { dismiss() }
@@ -195,7 +225,7 @@ private struct KitDetailView: View {
 
     private var mcpGroup: some View {
         KitGroup(title: "MCP servers & tools", caption: "Their tools become available in chat and appear under Tools.") {
-            ForEach(kit.mcpEntries) { entry in
+            ForEach(kit.mcpEntries(in: .bundled)) { entry in
                 KitPartRow(
                     symbol: entry.symbol,
                     tint: .nativTint(entry.tintName),
@@ -213,7 +243,7 @@ private struct KitDetailView: View {
             ForEach(kit.skills) { skill in
                 KitPartRow(
                     symbol: "sparkles",
-                    tint: kit.tint,
+                    tint: .nativTint(kit.tintName),
                     logoAssetName: nil,
                     title: skill.name,
                     subtitle: nil,
@@ -228,7 +258,7 @@ private struct KitDetailView: View {
             ForEach(kit.extensionIDs, id: \.self) { extensionID in
                 KitPartRow(
                     symbol: "puzzlepiece.extension",
-                    tint: kit.tint,
+                    tint: .nativTint(kit.tintName),
                     logoAssetName: nil,
                     title: extensionName(extensionID),
                     subtitle: nil,
