@@ -283,27 +283,35 @@ struct ChatKitsPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let kits = NativKitCatalog.bundled.kits
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Kits")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.title3.weight(.semibold))
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("Enable a ready-made set of capabilities for every chat.")
-                .font(.system(size: 12))
+                .font(.body)
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 0) {
-                ForEach(Array(NativKitCatalog.bundled.kits.enumerated()), id: \.element.id) { index, kit in
-                    if index > 0 { Divider() }
-                    kitRow(kit)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(kits) { kit in
+                        VStack(spacing: 0) {
+                            kitRow(kit)
+                            if kit.id != kits.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
                 }
             }
+            .scrollBounceBehavior(.basedOnSize)
         }
         .padding(20)
-        .frame(width: 480)
+        .presentationSizing(.form)
     }
 
     @ViewBuilder
@@ -328,39 +336,39 @@ struct ChatKitsPickerSheet: View {
                 kitRowContent(kit, state: state)
             }
             .buttonStyle(.plain)
-            .accessibilityHint(
-                state == .partial
-                    ? "Enables the missing Kit capabilities"
-                    : "Enables this Kit"
-            )
+            .accessibilityHint(state == .partial ? "Enables the missing Kit capabilities" : "Enables this Kit")
         }
     }
 
     private func kitRowContent(_ kit: NativKit, state: NativKitState) -> some View {
-        HStack(spacing: 12) {
+        let actionTitle = switch state {
+        case .off: "Enable"
+        case .partial: "Enable missing"
+        case .enabled: "Enabled"
+        }
+        return HStack(spacing: 12) {
             Image(systemName: kit.symbol)
-                .font(.system(size: 15))
+                .font(.headline)
                 .foregroundStyle(Color.nativTint(kit.tintName))
-                .frame(width: 28, height: 28)
+                .frame(minWidth: 28, minHeight: 28)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(kit.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(.primary)
                 Text(kit.summary)
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Label(
+                    actionTitle,
+                    systemImage: state == .enabled ? "checkmark.circle.fill" : "plus.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(state == .enabled ? Color.green : Color.accentColor)
             }
-
-            Spacer(minLength: 20)
-
-            Label(
-                state == .enabled ? "Enabled" : state == .partial ? "Enable missing" : "Enable",
-                systemImage: state == .enabled ? "checkmark.circle.fill" : "plus.circle"
-            )
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(state == .enabled ? Color.green : Color.accentColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 12)
         .padding(.trailing, 8)
