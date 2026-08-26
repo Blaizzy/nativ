@@ -6,6 +6,7 @@ private let nativeToolNames = [
     ChatModelLibraryToolRegistry.toolName,
     ChatServerStatsToolRegistry.toolName,
     ChatSwitchModelToolRegistry.toolName,
+    ChatReadFileToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -81,6 +82,7 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatServerStatsToolRegistry.toolName,
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
         ])
     }
 
@@ -121,6 +123,15 @@ final class ChatToolRegistryTests: XCTestCase {
 
         XCTAssertEqual(descriptor?.configuration, .webRead)
         XCTAssertEqual(descriptor?.configuration?.displayName, "Web Read")
+    }
+
+    func testFileReadCarriesConfigurationMetadata() {
+        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
+            $0.definition.function.name == ChatReadFileToolRegistry.toolName
+        }
+
+        XCTAssertEqual(descriptor?.configuration, .fileRead)
+        XCTAssertEqual(descriptor?.configuration?.displayName, "File Read")
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
@@ -963,6 +974,13 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "Model switch",
                 .awaitingConsent: "Switch model?", .declined: "Model switch declined",
             ],
+            ChatReadFileToolRegistry.toolName: [
+                nil: "File read", .preparing: "Reading file…",
+                .running: "Reading file…", .succeeded: "Read file",
+                .failed: "File read", .cancelled: "File read",
+                .awaitingImageModelSelection: "File read",
+                .awaitingConsent: "File read", .declined: "File read",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -993,6 +1011,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -1002,6 +1021,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            ChatReadFileToolRegistry.toolName: "doc.text",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 

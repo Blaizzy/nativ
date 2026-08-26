@@ -216,6 +216,9 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatReadFileTool.swift
+      - path: Sources/Nativ/Features/Files/FileReadAccessPolicy.swift
+      - path: Sources/Nativ/Features/Files/SafeLocalFileReader.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingError.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingProviderClient.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingRuntime.swift

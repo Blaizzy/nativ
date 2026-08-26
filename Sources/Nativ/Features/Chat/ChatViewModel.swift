@@ -1198,6 +1198,7 @@ final class ChatViewModel: ObservableObject {
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
+        let fileReadTracker = ChatReadFileTracker()
 
         guard let initialMessages = sessionMessages(for: queuedRequest.sessionID),
               let initialAssistantIndex = initialMessages.firstIndex(where: {
@@ -1431,6 +1432,8 @@ final class ChatViewModel: ObservableObject {
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
                         additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
                         huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
+                        fileReadRootPath: queuedRequest.settings.fileReadRootPath,
+                        fileReadTracker: fileReadTracker,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
@@ -1661,12 +1664,17 @@ final class ChatViewModel: ObservableObject {
             toolDefinitions += mcpHost?.toolDefinitions() ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
+            let fileReadIsConfigured = FileReadAccessPolicy.isConfigured(
+                rootPath: settings.fileReadRootPath
+            )
             toolDefinitions.removeAll {
                 !settings.isToolEnabled($0.function.name)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
                     || ($0.function.name == ChatWebReadToolRegistry.toolName
                         && !webReadIsConfigured)
+                    || ($0.function.name == ChatReadFileToolRegistry.toolName
+                        && !fileReadIsConfigured)
             }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
