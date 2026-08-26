@@ -29,7 +29,7 @@ struct MCPSectionView: View {
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     if !catalog.entries.isEmpty {
-                        serverGroup(title: "Built in") {
+                        serverGroup(title: "Built-in") {
                             ForEach(Array(catalog.entries.enumerated()), id: \.element.id) { index, entry in
                                 if index > 0 { Divider() }
                                 builtInServerRow(entry)
