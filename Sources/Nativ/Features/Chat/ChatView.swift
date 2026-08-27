@@ -782,7 +782,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             NativStatusBadge(text: "Failed", tone: .danger)
         case .cancelled:
-            NativStatusBadge(text: "Cancelled", tone: .neutral)
+            NativStatusBadge(text: "Canceled", tone: .neutral)
         case .declined:
             NativStatusBadge(text: "Declined", tone: .neutral)
         case .preparing, .running, .awaitingConsent,
@@ -972,7 +972,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             "failed"
         case .cancelled:
-            "cancelled"
+            "canceled"
         case .awaitingConsent:
             "awaiting your confirmation"
         case .awaitingImageModelSelection:
@@ -1501,7 +1501,7 @@ private struct ChatImageAttachmentView: View {
         }
         .help(attachment.filename)
         .accessibilityLabel(attachment.filename)
-        .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
+        .alert("Couldn’t save image", isPresented: $showsSaveError) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {

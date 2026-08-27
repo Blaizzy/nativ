@@ -1137,7 +1137,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             Text(logoutConfirmationMessage)
         }
         .alert(
-            "Hugging Face Authentication Error",
+            "Hugging Face authentication error",
             isPresented: Binding(
                 get: { managementError != nil },
                 set: { if !$0 { managementError = nil } }

@@ -396,7 +396,7 @@ struct IntegrationsView: View {
         .onChange(of: viewModel.library.models) { _, _ in
             viewModel.resolveSelectedModel()
         }
-        .alert("Integration Error", isPresented: Binding(
+        .alert("Integration error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )) {

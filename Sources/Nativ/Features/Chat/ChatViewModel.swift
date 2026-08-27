@@ -1919,7 +1919,7 @@ final class ChatViewModel: ObservableObject {
         finishAssistantMessage(
             activeAssistantMessageID,
             in: sessionID,
-            fallbackContent: "Response cancelled.",
+            fallbackContent: "Response canceled.",
             fallbackReasoningContent: nil,
             responseMetrics: nil,
             isCancelled: true
