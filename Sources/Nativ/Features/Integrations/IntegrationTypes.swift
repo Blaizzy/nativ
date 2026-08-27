@@ -148,7 +148,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
             [
                 "Start Nativ's server and load a model from the Models page.",
                 "In VS Code, open the Command Palette and run \u{201C}Chat: Manage Language Models\u{201D}.",
-                "Choose \u{201C}OpenAI Compatible\u{201D}, set the Base URL and API key shown above, then pick your model.",
+                "Choose \u{201C}OpenAI Compatible\u{201D}, set the Base URL and API key shown above, then choose your model.",
                 "Or install a community \u{201C}OpenAI Compatible\u{201D} chat extension and point it at the same Base URL and key."
             ]
         case .cline:
@@ -156,7 +156,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
                 "Start Nativ's server and load a model from the Models page.",
                 "Install the Cline extension in VS Code (or a compatible editor).",
                 "Open Cline's settings and add an API Provider of type \u{201C}OpenAI Compatible\u{201D}.",
-                "Set the Base URL and API key shown above, then select your model."
+                "Set the Base URL and API key shown above, then choose your model."
             ]
         case .cursor:
             [
@@ -170,7 +170,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
                 "Start Nativ's server and load a model from the Models page.",
                 "In your JetBrains IDE, open Settings \u{2192} Tools \u{2192} AI Assistant \u{2192} Models.",
                 "Under Providers & API keys, add an \u{201C}OpenAI Compatible\u{201D} provider with the Base URL and API key shown above.",
-                "Select your model, then use it from the AI Assistant chat."
+                "Choose your model, then use it from the AI Assistant chat."
             ]
         case .buzz:
             [

@@ -918,7 +918,7 @@ struct AudioView: View {
                 "Recording from \(inputDevices.selectionTitle)."
             }
         case .processing:
-            "The recording is safely stored locally while your speech model creates text."
+            "The recording is safely stored locally while your speech-to-text model creates text."
         }
     }
 
@@ -1088,7 +1088,7 @@ struct AudioView: View {
                     .foregroundStyle(.orange)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("No speech model found")
+                    Text("No speech-to-text model found")
                         .font(.subheadline.weight(.semibold))
                     Text("Download or add a compatible model to a configured local model path.")
                         .font(.caption)

@@ -543,7 +543,7 @@ final class VoiceCaptureCoordinator {
         Install a speech-to-text model such as Parakeet, Qwen3-ASR, or \
         MOSS-Transcribe from the Models table, then record again.
         """
-        alert.addButton(withTitle: "Open Speech Models")
+        alert.addButton(withTitle: "Open Models")
         alert.addButton(withTitle: "Cancel")
         let response = alert.runModal()
         isPresentingAlert = false

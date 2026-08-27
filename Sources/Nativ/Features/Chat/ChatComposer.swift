@@ -960,7 +960,7 @@ struct ComposerModelPicker: View {
     }
 
     private var pickerTooltip: String {
-        isDisabled ? helpText : "Select model"
+        isDisabled ? helpText : "Choose model"
     }
 
     private var isPickerActive: Bool {

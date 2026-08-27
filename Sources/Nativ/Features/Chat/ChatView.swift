@@ -294,7 +294,7 @@ private struct ChatTranscriptView: View {
             return "Wait for the model to finish loading"
         }
         guard selectedModelID?.isEmpty == false else {
-            return "Select a language model before editing a prompt"
+            return "Choose a language model before editing a prompt"
         }
         if let validationError = model.settings.structuredOutputValidationError {
             return validationError
