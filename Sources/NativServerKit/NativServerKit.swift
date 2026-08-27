@@ -91,9 +91,7 @@ public enum NativServerErrorMessage {
         return nil
     }
 
-    /// True when the captured server output shows uvicorn/asyncio failing to
-    /// bind its socket because another process already holds the port —
-    /// distinct from a genuine crash, and worth naming explicitly.
+
     public static func isPortConflictFailure(in text: String) -> Bool {
         let lowered = text.lowercased()
         return lowered.contains("address already in use")
