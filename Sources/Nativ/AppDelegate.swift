@@ -430,7 +430,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
             return NativFormatting.missingValue
         }
         let usedGigabytes = Double(runtime.usedMemoryBytes) / 1_073_741_824
-        return String(format: "%.0f\u{2009}GB", usedGigabytes)
+        return usedGigabytes.formatted(
+            .number.precision(.fractionLength(0))
+        ) + "\u{2009}GB"
     }
 
     private func menuBarGigabytesImage(value: String) -> NSImage {

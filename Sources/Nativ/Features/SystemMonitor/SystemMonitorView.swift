@@ -2152,7 +2152,7 @@ private func adaptivePair<Leading: View, Trailing: View>(
 
 private enum SystemMonitorFormat {
     static func percent(_ value: Double) -> String {
-        "\(Int((value * 100).rounded()))%"
+        value.formatted(.percent.precision(.fractionLength(0)))
     }
 
     static func optionalPercent(_ value: Double?) -> String {
@@ -2161,62 +2161,56 @@ private enum SystemMonitorFormat {
 
     static func framesPerSecond(_ value: Double?) -> String {
         guard let value, value.isFinite, value >= 0 else { return NativFormatting.missingValue }
-        return "\(Int(value.rounded())) FPS"
+        return "\(Int(value.rounded()).formatted()) FPS"
     }
 
     static func celsius(_ value: Double?) -> String {
         guard let value, value.isFinite else { return NativFormatting.missingValue }
-        return String(format: "%.1f°C", value)
+        return "\(NativFormatting.decimal(value, fractionDigits: 1))°C"
     }
 
     static func watts(_ value: Double?) -> String {
         guard let value, value.isFinite, value >= 0 else { return NativFormatting.missingValue }
-        return value < 10
-            ? String(format: "%.2f W", value)
-            : String(format: "%.1f W", value)
+        let fractionDigits = value < 10 ? 2 : 1
+        return "\(NativFormatting.decimal(value, fractionDigits: fractionDigits)) W"
     }
 
     static func rpm(_ value: Int?) -> String {
         guard let value else { return NativFormatting.missingValue }
-        return "\(value) RPM"
+        return "\(value.formatted()) RPM"
     }
 
     static func decimal(_ value: Double) -> String {
-        String(format: "%.2f", value)
+        NativFormatting.decimal(value)
     }
 
     static func bytes(_ value: UInt64) -> String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(clamping: value),
-            countStyle: .file
-        )
+        Int64(clamping: value).formatted(.byteCount(style: .file))
     }
 
     static func memoryBytes(_ value: UInt64) -> String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(clamping: value),
-            countStyle: .memory
-        )
+        Int64(clamping: value).formatted(.byteCount(style: .memory))
     }
 
     static func byteRate(_ value: Double) -> String {
         guard value.isFinite, value >= 0 else { return NativFormatting.missingValue }
-        return "\(bytes(UInt64(value.rounded()))) /s"
+        return "\(bytes(UInt64(value.rounded())))/s"
     }
 
     static func uptime(_ interval: TimeInterval) -> String {
-        let totalHours = max(Int(interval / 3_600), 0)
-        let days = totalHours / 24
-        let hours = totalHours % 24
-        if days > 0 {
-            return "\(days) days, \(hours) hours"
-        }
-        return "\(hours) hours"
+        let seconds = max(interval, 0)
+        return Duration.seconds(seconds).formatted(
+            .units(
+                allowed: [.days, .hours],
+                width: .abbreviated,
+                maximumUnitCount: 2
+            )
+        )
     }
 
     static func frequency(_ hertz: UInt64) -> String {
         let gigahertz = Double(hertz) / 1_000_000_000
-        return String(format: "%.2f GHz", gigahertz)
+        return "\(NativFormatting.decimal(gigahertz)) GHz"
     }
 
     static func boolean(_ value: Bool?) -> String {
