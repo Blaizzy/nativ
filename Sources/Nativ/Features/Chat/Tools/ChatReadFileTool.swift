@@ -187,7 +187,7 @@ enum ChatReadFileToolError: Error, Equatable, Sendable {
         case .notConfigured:
             "File Read has no authorized folder."
         case .outsideAllowedRoot:
-            "The requested path is outside the authorized folder."
+            "The requested path resolves outside the authorized File Read folder."
         case .blockedCredentialPath:
             "The requested path is a protected credential or application-data location."
         case .unsupportedFileType:
@@ -218,7 +218,7 @@ enum ChatReadFileToolError: Error, Equatable, Sendable {
         case .notConfigured:
             "Choose an authorized folder in Extensions → Tools → File Read."
         case .outsideAllowedRoot:
-            "Use a path inside the folder configured for File Read."
+            "Paths beginning with / are absolute from the filesystem root. To read a file under the authorized folder, use its relative path without the leading / (for example, scripts/file.swift). Pass paths returned by search_files unchanged."
         case .blockedCredentialPath:
             "Credential stores and private-key files cannot be read."
         case .unsupportedFileType:

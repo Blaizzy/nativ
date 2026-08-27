@@ -39,7 +39,7 @@ struct ChatToolExecutionOutcome: Sendable {
 }
 
 enum ChatToolRoundGate {
-    static let maximumRounds = 4
+    static let maximumRounds = 32
 
     static func advertisesTools(atRound round: Int) -> Bool {
         round < maximumRounds
