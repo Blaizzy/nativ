@@ -1650,7 +1650,7 @@ private struct SessionActivityPlot: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text("Recent token activity")
+                Text("Recent Token Activity")
                     .font(.caption.weight(.semibold))
                 Spacer()
                 Text("About 10 minutes ago")

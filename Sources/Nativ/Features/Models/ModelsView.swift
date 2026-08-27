@@ -1138,10 +1138,10 @@ struct ModelsView: View {
 
     private var sourcesMenu: some View {
         Menu {
-            Section("Hugging Face cache") {
+            Section("Hugging Face Cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
             }
-            Section("Model folders") {
+            Section("Model Folders") {
                 ForEach(modelState.settings.normalized().additionalModelSearchPaths, id: \.self) {
                     path in
                     Menu(abbreviatedPath(path)) {

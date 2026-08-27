@@ -238,7 +238,7 @@ private struct KitDetailView: View {
     // MARK: Groups
 
     private var mcpGroup: some View {
-        KitGroup(title: "MCP servers & tools", caption: "Their tools become available in chat and appear under Tools.") {
+        KitGroup(title: "MCP Servers & Tools", caption: "Their tools become available in chat and appear under Tools.") {
             ForEach(kit.mcpEntries(in: .bundled)) { entry in
                 KitPartRow(
                     symbol: entry.symbol,

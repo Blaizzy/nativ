@@ -285,7 +285,7 @@ struct AudioView: View {
         switch destination {
         case .record:
             AudioPage(
-                title: "Record audio",
+                title: "Record Audio",
                 subtitle: "Capture audio from your Mac and turn it into searchable text",
                 maxContentWidth: 1_120
             ) {
@@ -303,7 +303,7 @@ struct AudioView: View {
             }
         case .history:
             AudioPage(
-                title: "Audio library",
+                title: "Audio Library",
                 subtitle: "Review persistent recordings alongside dictation history"
             ) {
                 savedCapturesPanel
@@ -326,7 +326,7 @@ struct AudioView: View {
             }
         case .shortcuts:
             AudioPage(
-                title: "Keyboard shortcuts",
+                title: "Keyboard Shortcuts",
                 subtitle: "Customize the global commands for recording and retranscription"
             ) {
                 shortcutConfigurationPanel
@@ -385,7 +385,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Dictation activity")
+                    Text("Dictation Activity")
                         .font(.headline)
                     Text("Words spoken over the last 14 days")
                         .font(.caption)
@@ -492,7 +492,7 @@ struct AudioView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Audio source")
+                    Text("Audio Source")
                         .font(.headline)
                     Text("Choose your microphone and verify its level before recording.")
                         .font(.caption)
@@ -732,7 +732,7 @@ struct AudioView: View {
 
             HStack(alignment: .center, spacing: 20) {
                 capturePreferenceRow(
-                    title: "Auto-summary",
+                    title: "Auto-Summary",
                     detail: "Create summarized notes automatically after each recording.",
                     systemImage: "sparkles",
                     tint: .purple,
@@ -744,7 +744,7 @@ struct AudioView: View {
                     .frame(height: 52)
 
                 capturePreferenceRow(
-                    title: "Transcription suggestions",
+                    title: "Transcription Suggestions",
                     detail: "Prompt me when a supported meeting app begins using the microphone.",
                     systemImage: "person.2.wave.2.fill",
                     tint: tint,
@@ -989,7 +989,7 @@ struct AudioView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Transcription model")
+                    Text("Transcription Model")
                         .font(.headline)
                     Text("This model handles voice dictation everywhere you use Nativ.")
                         .font(.caption)
@@ -1159,7 +1159,7 @@ struct AudioView: View {
     private var animationPicker: some View {
         VStack(alignment: .leading, spacing: 28) {
             animationSection(
-                title: "Voice dictation",
+                title: "Voice Dictation",
                 subtitle: "Shown while you dictate text with a global shortcut.",
                 styles: VoiceAnimationPreferences.dictationStyles,
                 purpose: .dictation
@@ -1211,7 +1211,7 @@ struct AudioView: View {
                         )
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Capture sound")
+                        Text("Capture Sound")
                             .font(.headline)
                         Text("Used for voice dictation and recordings.")
                             .font(.caption)
@@ -1806,7 +1806,7 @@ struct AudioView: View {
     private var shortcutConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
-                Label("Global voice shortcuts", systemImage: "keyboard")
+                Label("Global Voice Shortcuts", systemImage: "keyboard")
                     .font(.headline)
                 Text("Changes take effect immediately, including outside Nativ.")
                     .font(.caption)
@@ -1816,7 +1816,7 @@ struct AudioView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Hands-free")
+                        Text("Hands-Free")
                             .font(.callout.weight(.medium))
                         Text(handsFreeDescription)
                             .font(.caption)
@@ -1836,13 +1836,13 @@ struct AudioView: View {
                 )
 
                 shortcutRow(
-                    title: "Dictation shortcut",
+                    title: "Dictation Shortcut",
                     shortcut: shortcuts.recordShortcut,
                     kind: .record
                 )
 
                 shortcutRow(
-                    title: "Retry recent audio",
+                    title: "Retry Recent Audio",
                     shortcut: shortcuts.retryShortcut,
                     kind: .retry
                 )
@@ -1861,7 +1861,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Recent dictations")
+                    Text("Recent Dictations")
                         .font(.headline)
                     Text("Search and reuse transcripts stored locally.")
                         .font(.caption)
@@ -2900,7 +2900,7 @@ private struct AudioCaptureRecordRow: View {
             if let summary = record.summary, !summary.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     detailHeader(
-                        title: "AI-generated notes",
+                        title: "AI-Generated Notes",
                         detail: .summary,
                         text: summary
                     )

@@ -593,7 +593,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var guidedSetupPanel: some View {
-        IntegrationPanel(title: "Guided setup", systemImage: "sparkles") {
+        IntegrationPanel(title: "Guided Setup", systemImage: "sparkles") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "API key", value: "nativ")
@@ -641,7 +641,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var missingToolPanel: some View {
-        IntegrationPanel(title: "Installation required", systemImage: "arrow.down.app") {
+        IntegrationPanel(title: "Installation Required", systemImage: "arrow.down.app") {
             Text("Install \(tool.displayName), then return here and refresh its status.")
                 .foregroundStyle(.secondary)
             HStack {
@@ -711,7 +711,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var projectPanel: some View {
-        IntegrationPanel(title: "Project folder", systemImage: "folder") {
+        IntegrationPanel(title: "Project Folder", systemImage: "folder") {
             HStack(spacing: 10) {
                 Text(workingDirectory?.path ?? "Choose a folder")
                     .font(.system(.callout, design: .monospaced))
@@ -728,7 +728,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var configurationPanel: some View {
-        IntegrationPanel(title: "Managed configuration", systemImage: "gearshape.2") {
+        IntegrationPanel(title: "Managed Configuration", systemImage: "gearshape.2") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "Profile", value: IntegrationProfileManager.providerID)
@@ -751,7 +751,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var launchCommandPanel: some View {
-        IntegrationPanel(title: "Launch command", systemImage: "terminal") {
+        IntegrationPanel(title: "Launch Command", systemImage: "terminal") {
             if let workingDirectory,
                let command = viewModel.launchCommand(for: tool, workingDirectory: workingDirectory) {
                 if tool == .codex {

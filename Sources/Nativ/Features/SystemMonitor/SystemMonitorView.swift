@@ -455,7 +455,7 @@ private struct SystemSensorsPage: View {
             .frame(maxWidth: .infinity)
 
             SystemValueHistoryChart(
-                title: "Temperature history",
+                title: "Temperature History",
                 samples: temperatureHistory,
                 color: SystemMonitorPalette.red,
                 seriesName: "Die temperature",
@@ -466,7 +466,7 @@ private struct SystemSensorsPage: View {
             )
 
             SystemValueHistoryChart(
-                title: "Power history",
+                title: "Power History",
                 samples: powerHistory,
                 color: SystemMonitorPalette.orange,
                 seriesName: snapshot.power.headlineLabel,
@@ -476,7 +476,7 @@ private struct SystemSensorsPage: View {
             )
 
             adaptivePair {
-                SystemInfoCard(title: "Power breakdown") {
+                SystemInfoCard(title: "Power Breakdown") {
                     SystemInfoRow("CPU", value: SystemMonitorFormat.watts(snapshot.power.cpuWatts))
                     SystemInfoRow("GPU", value: SystemMonitorFormat.watts(snapshot.power.gpuWatts))
                     SystemInfoRow(
@@ -521,7 +521,7 @@ private struct SystemSensorsPage: View {
 
             if !snapshot.thermal.sensors.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("All sensors")
+                    Text("All Sensors")
                         .font(.headline)
 
                     LazyVGrid(
@@ -854,13 +854,13 @@ private struct SystemCPUPage: View {
             }
 
             SystemPercentHistoryChart(
-                title: "Usage history",
+                title: "Usage History",
                 samples: history,
                 color: SystemMonitorPalette.blue
             )
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Load per core")
+                Text("Load per Core")
                     .font(.headline)
 
                 LazyVGrid(
@@ -946,13 +946,13 @@ private struct SystemGPUPage: View {
 
             adaptivePair {
                 SystemPercentHistoryChart(
-                    title: "GPU utilization history",
+                    title: "GPU Utilization History",
                     samples: gpuHistory,
                     color: SystemMonitorPalette.blue
                 )
             } trailing: {
                 SystemPercentHistoryChart(
-                    title: "Neural Engine utilization history",
+                    title: "Neural Engine Utilization History",
                     samples: aneHistory,
                     color: SystemMonitorPalette.orange
                 )
@@ -1035,13 +1035,13 @@ private struct SystemMemoryPage: View {
             }
 
             SystemPercentHistoryChart(
-                title: "Memory usage history",
+                title: "Memory Usage History",
                 samples: memoryHistory,
                 color: SystemMonitorPalette.blue
             )
 
             SystemPercentHistoryChart(
-                title: "Swap history",
+                title: "Swap History",
                 samples: swapHistory,
                 color: SystemMonitorPalette.purple,
                 footer: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.memoryBytes(snapshot.memory.swapTotalBytes))"
@@ -1633,7 +1633,7 @@ private struct SystemDiskHistoryChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Read / Write history")
+                Text("Read/Write History")
                     .font(.headline)
                 Spacer()
                 SystemLegendItem(
@@ -1789,7 +1789,7 @@ private struct SystemFPSHistoryChart: View {
 
     var body: some View {
         SystemValueHistoryChart(
-            title: "FPS history",
+            title: "FPS History",
             samples: samples,
             color: SystemMonitorPalette.blue,
             seriesName: "Frame rate",
@@ -2295,9 +2295,9 @@ private struct MenuBarCustomizationMenuControl: NSViewRepresentable {
             let menu = NSMenu()
             menu.autoenablesItems = false
 
-            menu.addItem(.sectionHeader(title: "Menu bar"))
+            menu.addItem(.sectionHeader(title: "Menu Bar"))
             menu.addItem(menuItem(
-                title: "Nativ icon",
+                title: "Nativ Icon",
                 systemImage: SystemMenuBarMetric.nativ.systemImage,
                 optionID: SystemMenuBarMetric.nativ.rawValue,
                 isSelected: preferences.items.isEmpty

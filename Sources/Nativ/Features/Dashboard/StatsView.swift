@@ -330,7 +330,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
     private var modelPerformanceSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             AnalyticsSectionHeader(
-                title: "Model performance",
+                title: "Model Performance",
                 subtitle: "Usage and throughput by model for the selected period"
             )
 
@@ -351,7 +351,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
     private var recentRequestsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             AnalyticsSectionHeader(
-                title: "Recent requests",
+                title: "Recent Requests",
                 subtitle: "Select a request to inspect latency, throughput, and memory details"
             )
 
@@ -635,7 +635,7 @@ private struct UserActivityPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 AnalyticsSectionHeader(
-                    title: "User activity",
+                    title: "User Activity",
                     subtitle: "Request density · \(rangeLabel)"
                 )
                 Spacer(minLength: 8)
@@ -3334,7 +3334,7 @@ private struct RequestHealthPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             AnalyticsSectionHeader(
-                title: "Request health",
+                title: "Request Health",
                 subtitle: "Completion volume and reliability"
             )
 
@@ -4202,7 +4202,7 @@ private struct RequestDetailView: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Request details")
+                    Text("Request Details")
                         .font(.title2.weight(.semibold))
                     Text(request.completedAt.formatted(date: .abbreviated, time: .standard))
                         .font(.caption)

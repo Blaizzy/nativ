@@ -193,7 +193,7 @@ struct ArtifactsView: View {
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Turn on Smart Search")
+                    Text("Turn On Smart Search")
                         .font(.system(size: 12, weight: .semibold))
                     Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents. You can also do this later in Settings.")
                         .font(.system(size: 11))

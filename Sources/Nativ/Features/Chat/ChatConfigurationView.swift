@@ -505,7 +505,7 @@ struct ModelConfigurationView: View {
     private var draftModelMenu: some View {
         Menu {
             if !installedDrafters.isEmpty {
-                Section("Installed drafters") {
+                Section("Installed Drafters") {
                     ForEach(installedDrafters) { model in
                         Button(draftMenuTitle(for: model)) {
                             settings.draftModelID = model.repoID
@@ -514,7 +514,7 @@ struct ModelConfigurationView: View {
                 }
             }
             if !otherDraftCandidates.isEmpty {
-                Section("Other installed models") {
+                Section("Other Installed Models") {
                     ForEach(otherDraftCandidates) { model in
                         Button(model.displayName) {
                             settings.draftModelID = model.repoID

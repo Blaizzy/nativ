@@ -1103,7 +1103,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
                 if isAddingToken {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Add Hugging Face token")
+                        Text("Add Hugging Face Token")
                             .font(.caption.weight(.semibold))
 
                         tokenEditor

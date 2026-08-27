@@ -258,7 +258,7 @@ private struct WelcomeView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Select your first model")
+                            Text("Choose Your First Model")
                                 .font(.headline)
                             Text("You can change this at any time.")
                                 .font(.caption)
@@ -488,7 +488,7 @@ private struct WelcomeView: View {
                             .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Protect management access")
+                            Text("Protect Management Access")
                                 .font(.headline)
                             Text("An API key provides basic security if you're running Nativ on a shared network.")
                                 .font(.callout)
@@ -581,7 +581,7 @@ private struct WelcomeView: View {
                             )
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Optional permissions")
+                            Text("Optional Permissions")
                                 .font(.headline)
                             Text(
                                 "Nativ works fully without any of these. Enable them only if you want to dictate with \(VoiceShortcut.recordDefault.displayName), take voice notes, or capture meetings — audio and transcription stay local to your Mac."

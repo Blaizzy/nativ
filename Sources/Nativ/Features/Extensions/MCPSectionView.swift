@@ -247,7 +247,7 @@ private struct MCPServerRow: View {
             } else if case .installingGitHub(let installationURL) = state {
                 GitHubSetupCallout(
                     icon: "folder.badge.plus",
-                    title: "Choose repository access",
+                    title: "Choose Repository Access",
                     message: "GitHub authorization is complete. Select which repositories Nativ can use. You can change this later on GitHub.",
                     actionTitle: "Choose repositories",
                     actionIcon: "arrow.up.right",

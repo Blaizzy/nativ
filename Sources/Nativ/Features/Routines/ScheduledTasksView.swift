@@ -169,7 +169,7 @@ struct ScheduledTasksView: View {
                 if !recentRuns.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         ScheduledSectionHeader(
-                            title: "Recent runs",
+                            title: "Recent Runs",
                             count: recentRuns.count
                         )
                         VStack(spacing: 0) {
