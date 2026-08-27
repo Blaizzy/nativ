@@ -288,7 +288,7 @@ private struct WelcomeView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             WelcomeModelPickerRow(
-                                title: "Load on demand",
+                                title: "Load on Demand",
                                 detail: "Start without preloading a model",
                                 systemImage: "bolt.badge.clock",
                                 isSelected: selectedModelID == nil

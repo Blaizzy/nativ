@@ -131,7 +131,7 @@ struct ScheduledTasksView: View {
 
             if draft == nil {
                 Button(action: presentNewTask) {
-                    Label("New scheduled task", systemImage: "plus")
+                    Label("New Scheduled Task", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

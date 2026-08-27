@@ -1501,12 +1501,12 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             menu.addItem(pasteItem)
 
             let screenshotItem = NSMenuItem(
-                title: "Take Screenshot",
+                title: "Take a Screenshot",
                 action: #selector(captureScreenshot(_:)),
                 keyEquivalent: ""
             )
             screenshotItem.target = self
-            screenshotItem.image = menuImage("camera.viewfinder", description: "Take Screenshot")
+            screenshotItem.image = menuImage("camera.viewfinder", description: "Take a screenshot")
             screenshotItem.isEnabled = true
             menu.addItem(screenshotItem)
 
@@ -1578,7 +1578,7 @@ struct ChatComposerActionPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 section("Add") {
                     ChatComposerActionRow(
-                        title: "Upload file",
+                        title: "Upload File",
                         detail: "Choose an image or document from your Mac",
                         systemName: "doc.badge.plus",
                         action: onAttachImages
@@ -1586,7 +1586,7 @@ struct ChatComposerActionPanel: View {
 
                     if canPasteImage {
                         ChatComposerActionRow(
-                            title: "Paste image",
+                            title: "Paste Image",
                             detail: "Use an image from your clipboard",
                             systemName: "doc.on.clipboard",
                             action: onPasteImage
@@ -1594,7 +1594,7 @@ struct ChatComposerActionPanel: View {
                     }
 
                     ChatComposerActionRow(
-                        title: "Take a screenshot",
+                        title: "Take a Screenshot",
                         detail: "Capture part of your screen",
                         systemName: "camera.viewfinder",
                         action: onCaptureScreenshot
@@ -2140,7 +2140,7 @@ struct ChatPendingImageAttachmentView: View {
 
             statusIndicator
 
-            Button("Remove attachment", systemImage: "xmark", action: onRemove)
+            Button("Remove Attachment", systemImage: "xmark", action: onRemove)
                 .labelStyle(.iconOnly)
                 .font(.caption.weight(.semibold))
                 .frame(width: 14, height: 14)

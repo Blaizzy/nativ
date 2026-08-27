@@ -718,7 +718,7 @@ struct AudioView: View {
                         )
                     }
                 } label: {
-                    Label("Start recording", systemImage: "record.circle")
+                    Label("Start Recording", systemImage: "record.circle")
                         .font(.callout.weight(.semibold))
                         .frame(minWidth: 164)
                 }
@@ -1935,7 +1935,7 @@ struct AudioView: View {
                 Button {
                     destination = .record
                 } label: {
-                    Label("New recording", systemImage: "plus")
+                    Label("New Recording", systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1947,7 +1947,7 @@ struct AudioView: View {
                 } description: {
                     Text("Start a recording to create your local audio library.")
                 } actions: {
-                    Button("Record audio") {
+                    Button("Record Audio") {
                         destination = .record
                     }
                     .buttonStyle(.borderedProminent)
@@ -2028,7 +2028,7 @@ struct AudioView: View {
             .controlSize(.small)
 
             Menu {
-                Button("Restore default") {
+                Button("Restore Default") {
                     switch kind {
                     case .record:
                         shortcuts.resetRecordShortcut()
@@ -2756,9 +2756,9 @@ private struct AudioCaptureRecordRow: View {
 
                 Menu {
                     if !record.transcript.isEmpty {
-                        Button("Copy transcript", action: copyTranscript)
+                        Button("Copy Transcript", action: copyTranscript)
                         if let summary = record.summary, !summary.isEmpty {
-                            Button("Copy summary") {
+                            Button("Copy Summary") {
                                 copy(summary, detail: .summary)
                             }
                         }
@@ -2773,7 +2773,7 @@ private struct AudioCaptureRecordRow: View {
                     Divider()
                     Button("Reveal in Finder", action: onReveal)
                         .disabled(!audioIsAvailable)
-                    Button("Delete recording", role: .destructive, action: onDelete)
+                    Button("Delete Recording", role: .destructive, action: onDelete)
                 } label: {
                     Image(systemName: "ellipsis")
                         .frame(width: 18)

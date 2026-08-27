@@ -529,7 +529,7 @@ struct DeveloperView: View {
     private func logPanelActions(_ output: LogOutput) -> some View {
         HStack(spacing: 8) {
             LogToolbarActionButton(
-                title: "Copy visible logs",
+                title: "Copy Visible Logs",
                 systemImage: "doc.on.doc",
                 hoverTint: .blue,
                 isDisabled: output.visibleLineCount == 0
@@ -538,7 +538,7 @@ struct DeveloperView: View {
             }
 
             LogToolbarActionButton(
-                title: "Clear logs",
+                title: "Clear Logs",
                 systemImage: "trash",
                 hoverTint: .red,
                 isDisabled: model.serverLogs.text.isEmpty

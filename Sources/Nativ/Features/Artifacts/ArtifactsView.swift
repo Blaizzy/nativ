@@ -206,7 +206,7 @@ struct ArtifactsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                Button("Not now") {
+                Button("Not Now") {
                     semanticSearchOffered = true
                 }
                 .controlSize(.small)
@@ -243,7 +243,7 @@ struct ArtifactsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                     Divider()
-                    Button("Remove model", role: .destructive) {
+                    Button("Remove Model", role: .destructive) {
                         isConfirmingSemanticModelRemoval = true
                     }
                     .controlSize(.small)
@@ -872,7 +872,7 @@ struct ArtifactsView: View {
 
                     Spacer()
 
-                    Button("Clear all filters") {
+                    Button("Clear All Filters") {
                         kindFilter = nil
                         sourceFilter = nil
                         favoritesOnly = false

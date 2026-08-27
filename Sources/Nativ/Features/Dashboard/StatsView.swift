@@ -3713,7 +3713,7 @@ private struct ModelPerformanceTable: View {
                 .monospacedDigit()
 
             if searchText.isEmpty, sortedRows.count > defaultVisibleLimit {
-                Button(showsAllModels ? "Show top \(defaultVisibleLimit)" : "Show all") {
+                Button(showsAllModels ? "Show Top \(defaultVisibleLimit)" : "Show All") {
                     searchFocus.wrappedValue = false
                     showsAllModels.toggle()
                 }

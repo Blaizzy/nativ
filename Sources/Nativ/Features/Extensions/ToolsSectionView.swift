@@ -19,7 +19,7 @@ struct ToolsSectionView: View {
             Button {
                 showsAddTool = true
             } label: {
-                Label("Add tool", systemImage: "plus")
+                Label("Add Tool", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
         } content: {
@@ -568,7 +568,7 @@ private struct CustomToolEditorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(tool == nil ? "Add tool" : "Edit tool")
+                Text(tool == nil ? "Add Tool" : "Edit Tool")
                     .font(.system(size: 17, weight: .semibold))
                 Text(kind == .endpoint
                     ? "Send model-provided JSON to an HTTP endpoint."
@@ -601,7 +601,7 @@ private struct CustomToolEditorSheet: View {
                 }
                 Button(testing ? "Testing…" : testButtonTitle, action: test)
                     .disabled(!canTest)
-                Button(tool == nil ? "Add tool" : "Save", action: save)
+                Button(tool == nil ? "Add Tool" : "Save", action: save)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
             }

@@ -716,7 +716,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             submenu.addItem(.separator())
         }
 
-        submenu.addItem(modelOptionMenuItem(title: "Load on demand", modelID: nil))
+        submenu.addItem(modelOptionMenuItem(title: "Load on Demand", modelID: nil))
 
         let selectedModelID = model.settings.normalized().languageModelID
         let pickerModels = localModels.filter { localModel in
@@ -782,7 +782,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func installedModelsHeaderMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Installed models", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: "Installed Models", action: nil, keyEquivalent: "")
         item.view = ModelMenuSectionHeaderView()
         return item
     }

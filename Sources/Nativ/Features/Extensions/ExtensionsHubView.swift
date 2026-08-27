@@ -408,7 +408,7 @@ private struct SkillsSectionView: View {
             Button {
                 editing = NativSkill()
             } label: {
-                Label("Add skill", systemImage: "plus")
+                Label("Add Skill", systemImage: "plus")
             }
         } content: {
             VStack(spacing: 0) {

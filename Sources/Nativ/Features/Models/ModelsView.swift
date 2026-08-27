@@ -515,7 +515,7 @@ struct ModelsView: View {
                 message: installedFilterIsActive
                     ? "Try a different search or model type."
                     : "Discover an MLX model on Hugging Face and download it to this cache.",
-                actionTitle: installedFilterIsActive ? nil : "Discover models",
+                actionTitle: installedFilterIsActive ? nil : "Discover Models",
                 action: { section = .discover }
             )
             .modelsListRow()
@@ -1795,7 +1795,7 @@ private struct ActiveDownloadBannerRow: View {
                         .help(pauseResumeTitle)
 
                     Button(
-                        "Remove download",
+                        "Remove Download",
                         systemImage: "xmark",
                         role: .destructive,
                         action: confirmRemoval
@@ -2329,7 +2329,7 @@ struct ModelDownloadProgressControl: View {
                     )
 
                     ModelDownloadActionButton(
-                        title: "Remove download",
+                        title: "Remove Download",
                         systemImage: "trash",
                         tint: .red,
                         action: { isConfirmingRemoval = true }

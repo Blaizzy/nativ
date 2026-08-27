@@ -112,7 +112,7 @@ struct ScheduledTaskCard: View {
 
     @ViewBuilder
     private var taskActions: some View {
-        Button("Run now", systemImage: "play", action: onRun)
+        Button("Run Now", systemImage: "play", action: onRun)
             .disabled(isRunning)
         Button(
             task.isEnabled ? "Pause" : "Resume",
@@ -209,7 +209,7 @@ struct ScheduledTasksEmptyState: View {
             Text("Create a task to run a prompt automatically on a recurring schedule.")
         } actions: {
             if showsCreateAction {
-                Button("New scheduled task", action: onCreate)
+                Button("New Scheduled Task", action: onCreate)
                     .buttonStyle(.borderedProminent)
             }
         }

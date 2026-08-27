@@ -409,7 +409,7 @@ struct WebBrowsingSettingsView: View {
             }
 
             HStack {
-                Button(viewModel.isTesting ? "Testing…" : "Test & connect") {
+                Button(viewModel.isTesting ? "Testing…" : "Test & Connect") {
                     Task {
                         if await viewModel.testAndConnect() {
                             onConfigurationChanged(true)
@@ -419,7 +419,7 @@ struct WebBrowsingSettingsView: View {
                 .disabled(!viewModel.canConnect)
 
                 if viewModel.selectedConnectionState != .disconnected {
-                    Button("Remove key", role: .destructive) {
+                    Button("Remove Key", role: .destructive) {
                         if viewModel.removeKey() {
                             onConfigurationChanged(false)
                         }
@@ -456,7 +456,7 @@ struct WebBrowsingSettingsView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Use for search") {
+                    Button("Use for Search") {
                         viewModel.setSearchProvider(viewModel.selectedProvider)
                     }
                     .buttonStyle(.bordered)
@@ -468,7 +468,7 @@ struct WebBrowsingSettingsView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Use for page reading") {
+                    Button("Use for Page Reading") {
                         let provider = viewModel.selectedProvider
                         viewModel.setPageReaderProvider(
                             provider == viewModel.searchProvider ? nil : provider
@@ -516,11 +516,11 @@ struct WebBrowsingSettingsView: View {
         }
         switch viewModel.selectedConnectionState {
         case .disconnected:
-            return "Test & connect"
+            return "Test & Connect"
         case .connected:
-            return "Test & replace"
+            return "Test & Replace"
         case .issue:
-            return "Test & reconnect"
+            return "Test & Reconnect"
         }
     }
     @ViewBuilder

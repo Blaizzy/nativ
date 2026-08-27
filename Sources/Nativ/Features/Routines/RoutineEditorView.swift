@@ -236,7 +236,7 @@ struct RoutineEditor: View {
                     isSelectingCapabilities = true
                 } label: {
                     Label(
-                        capabilities.isEmpty ? "Add tools" : "Manage tools",
+                        capabilities.isEmpty ? "Add Tools" : "Manage Tools",
                         systemImage: "plus"
                     )
                 }

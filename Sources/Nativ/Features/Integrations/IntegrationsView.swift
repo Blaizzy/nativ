@@ -645,11 +645,11 @@ private struct IntegrationDetailView: View {
             Text("Install \(tool.displayName), then return here and refresh its status.")
                 .foregroundStyle(.secondary)
             HStack {
-                Button("View installation guide") {
+                Button("View Installation Guide") {
                     NSWorkspace.shared.open(tool.installURL)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Check again") {
+                Button("Check Again") {
                     viewModel.refreshStatuses()
                 }
                 .buttonStyle(.bordered)
@@ -743,7 +743,7 @@ private struct IntegrationDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Button("Show configuration in Finder") {
+            Button("Show Configuration in Finder") {
                 viewModel.revealConfiguration(for: tool)
             }
             .buttonStyle(.link)
