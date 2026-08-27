@@ -355,7 +355,7 @@ private struct WelcomeView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Hugging Face")
+                Text("Hugging Face Hub")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

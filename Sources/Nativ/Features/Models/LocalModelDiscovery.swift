@@ -55,9 +55,9 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
         case .imageEditing:
             "Image Editing"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .embeddings:
             "Embeddings"
         case .reranking:

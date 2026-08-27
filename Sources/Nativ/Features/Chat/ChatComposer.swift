@@ -431,7 +431,7 @@ struct ChatComposer: View {
 
     private var selectedModelLabel: String {
         guard let selectedModelID else {
-            return "Choose model"
+            return "Choose Model"
         }
         return modelMenuLabel(selectedModelID)
     }
@@ -960,7 +960,7 @@ struct ComposerModelPicker: View {
     }
 
     private var pickerTooltip: String {
-        isDisabled ? helpText : "Choose model"
+        isDisabled ? helpText : "Choose Model"
     }
 
     private var isPickerActive: Bool {
