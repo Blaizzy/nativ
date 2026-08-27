@@ -699,7 +699,7 @@ struct AudioView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("New recording")
+                    Text("New Recording")
                         .font(.headline)
                     Text("Capture audio, then transcribe it locally when you finish.")
                         .font(.caption)
@@ -1947,7 +1947,7 @@ struct AudioView: View {
                 } description: {
                     Text("Start a recording to create your local audio library.")
                 } actions: {
-                    Button("Record Audio") {
+                    Button("Start Recording") {
                         destination = .record
                     }
                     .buttonStyle(.borderedProminent)

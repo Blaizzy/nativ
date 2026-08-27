@@ -515,7 +515,7 @@ struct ModelsView: View {
                 message: installedFilterIsActive
                     ? "Try a different search or model type."
                     : "Discover an MLX model on Hugging Face and download it to this cache.",
-                actionTitle: installedFilterIsActive ? nil : "Discover Models",
+                actionTitle: installedFilterIsActive ? nil : "Open Models",
                 action: { section = .discover }
             )
             .modelsListRow()

@@ -343,7 +343,7 @@ struct ChatKitsPickerSheet: View {
     private func kitRowContent(_ kit: NativKit, state: NativKitState) -> some View {
         let actionTitle = switch state {
         case .off: "Enable"
-        case .partial: "Enable All"
+        case .partial: "Enable Missing"
         case .enabled: "Enabled"
         }
         return HStack(spacing: 12) {

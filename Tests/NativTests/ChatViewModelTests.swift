@@ -55,7 +55,7 @@ final class ChatViewModelTests: XCTestCase {
         )
         XCTAssertEqual(
             subject.unavailableReason(isRunning: true, selectedModelID: nil),
-            "Select a model in Models."
+            "Choose a model in Models."
         )
         XCTAssertNil(subject.unavailableReason(isRunning: true, selectedModelID: "model"))
     }
