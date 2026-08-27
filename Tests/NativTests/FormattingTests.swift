@@ -12,6 +12,8 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(NativFormatting.timestamp(nil), NativFormatting.missingValue)
         XCTAssertEqual(NativFormatting.titleizedIdentifier(nil), NativFormatting.missingValue)
         XCTAssertEqual(NativFormatting.missingValue, "—")
+        XCTAssertEqual(NativFormatting.accessibleValue("—"), "Not available")
+        XCTAssertEqual(NativFormatting.accessibleValue("42"), "42")
     }
 
     func testElapsedDurationUsesConsistentCompactUnits() {

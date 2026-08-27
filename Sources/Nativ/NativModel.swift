@@ -254,7 +254,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     var loadedModelDisplay: String {
-        metrics?.server.displayLoadedModel ?? "None"
+        metrics?.server.displayLoadedModel ?? NativFormatting.missingValue
     }
 
     var isModelLoading: Bool {

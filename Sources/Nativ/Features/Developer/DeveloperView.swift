@@ -786,7 +786,7 @@ private struct ServerAPIAuthenticationPanel: View {
             ) {
                 credentialAttribute(
                     title: "Token",
-                    value: tokenInfo?.maskedValue ?? "Not available",
+                    value: tokenInfo?.maskedValue ?? NativFormatting.missingValue,
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
@@ -1011,6 +1011,7 @@ private struct ServerAPIAuthenticationPanel: View {
                         ? .caption.monospaced().weight(.medium)
                         : .callout.weight(.medium)
                 )
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
                 .lineLimit(1)
         }
     }
@@ -1242,7 +1243,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             ) {
                 credentialAttribute(
                     title: "Token",
-                    value: activeTokenInfo?.maskedValue ?? "Not available",
+                    value: activeTokenInfo?.maskedValue ?? NativFormatting.missingValue,
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
@@ -1408,9 +1409,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         case .loading:
             "Checking…"
         case .loaded(let metadata):
-            metadata.name ?? "Not reported"
+            metadata.name ?? NativFormatting.missingValue
         case .unavailable:
-            "Unavailable"
+            NativFormatting.missingValue
         }
     }
 
@@ -1421,9 +1422,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         case .loading:
             "Checking…"
         case .loaded(let metadata):
-            metadata.permission ?? "Not reported"
+            metadata.permission ?? NativFormatting.missingValue
         case .unavailable:
-            "Unavailable"
+            NativFormatting.missingValue
         }
     }
 
@@ -1444,6 +1445,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                         ? .caption.monospaced().weight(.medium)
                         : .callout.weight(.medium)
                 )
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
                 .lineLimit(1)
         }
     }
@@ -1855,6 +1857,7 @@ private struct RuntimeInfoCard: View {
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .accessibilityLabel(NativFormatting.accessibleValue(value))
 
                 if let progress {
                     HStack(spacing: 8) {
@@ -1997,7 +2000,7 @@ private enum SystemRuntimeInfo {
 
     static let mlxVLMVersion: String = {
         guard let distributionURL = try? Nativ.distributionURL() else {
-            return "Unavailable"
+            return NativFormatting.missingValue
         }
         let libraryURL = distributionURL.appendingPathComponent("python/lib", isDirectory: true)
         guard let pythonDirectories = try? FileManager.default.contentsOfDirectory(
@@ -2005,7 +2008,7 @@ private enum SystemRuntimeInfo {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return "Unavailable"
+            return NativFormatting.missingValue
         }
 
         for pythonDirectory in pythonDirectories where pythonDirectory.lastPathComponent.hasPrefix("python") {
@@ -2025,7 +2028,7 @@ private enum SystemRuntimeInfo {
                 return String(name.dropFirst("mlx_vlm-".count).dropLast(".dist-info".count))
             }
         }
-        return "Unavailable"
+        return NativFormatting.missingValue
     }()
 
     static var usedMemoryBytes: UInt64 {

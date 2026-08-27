@@ -331,7 +331,7 @@ private struct SystemOverviewPage: View {
                     SystemInfoRow(
                         "Neural Engine",
                         value: snapshot.identity.aneCoreCount
-                            .map { "\($0) cores" } ?? "Unavailable"
+                            .map { "\($0) cores" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Disk",
@@ -351,17 +351,18 @@ private struct SystemOverviewPage: View {
                     SystemInfoRow("Model identifier", value: snapshot.identity.modelIdentifier)
                     SystemInfoRow(
                         "Model number",
-                        value: snapshot.identity.modelNumber ?? "Unavailable"
+                        value: snapshot.identity.modelNumber ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Production year",
-                        value: snapshot.identity.productionYear.map(String.init) ?? "Unavailable"
+                        value: snapshot.identity.productionYear.map(String.init)
+                            ?? NativFormatting.missingValue
                     )
                     SystemInfoRow("Serial number", value: snapshot.identity.serialNumber)
                     SystemInfoRow("File system", value: snapshot.identity.disk.fileSystem)
                     SystemInfoRow(
                         "Storage health",
-                        value: snapshot.identity.disk.smartStatus ?? "Unavailable"
+                        value: snapshot.identity.disk.smartStatus ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Uptime",
@@ -422,7 +423,7 @@ private struct SystemSensorsPage: View {
                     value: SystemMonitorFormat.celsius(
                         snapshot.thermal.dieTemperatureCelsius
                     ),
-                    detail: snapshot.thermal.hottestSensorName ?? "Unavailable",
+                    detail: snapshot.thermal.hottestSensorName ?? NativFormatting.missingValue,
                     icon: "thermometer.medium",
                     tint: SystemMonitorPalette.red
                 )
@@ -431,7 +432,7 @@ private struct SystemSensorsPage: View {
                     value: SystemMonitorFormat.watts(snapshot.power.headlineWatts),
                     detail: snapshot.power.hasAnyReading
                         ? snapshot.power.headlineLabel
-                        : "Unavailable",
+                        : NativFormatting.missingValue,
                     icon: "bolt.fill",
                     tint: SystemMonitorPalette.orange
                 )
@@ -1116,7 +1117,7 @@ private struct SystemDiskPage: View {
                             Spacer()
                             Text(
                                 snapshot.disk.totalBytes
-                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                                    .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue
                             )
                                 .font(.callout.weight(.medium))
                                 .foregroundStyle(.secondary)
@@ -1133,13 +1134,13 @@ private struct SystemDiskPage: View {
                             SystemLegendItem(
                                 title: "Used",
                                 value: snapshot.disk.usedBytes
-                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable",
+                                    .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue,
                                 color: diskUsageColor
                             )
                             SystemLegendItem(
                                 title: "Available",
                                 value: snapshot.disk.availableBytes
-                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable",
+                                    .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue,
                                 color: Color.secondary.opacity(0.45)
                             )
                         }
@@ -1199,52 +1200,52 @@ private struct SystemDiskPage: View {
                 SystemInfoCard(title: "SMART") {
                     SystemInfoRow(
                         "Status",
-                        value: snapshot.identity.disk.smartStatus ?? "Unavailable"
+                        value: snapshot.identity.disk.smartStatus ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Total read",
                         value: snapshot.identity.disk.lifetimeReadBytes
-                            .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                            .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Total written",
                         value: snapshot.identity.disk.lifetimeWrittenBytes
-                            .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                            .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Temperature",
                         value: snapshot.identity.disk.temperatureCelsius
-                            .map { "\($0)°C" } ?? "Unavailable"
+                            .map { "\($0)°C" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Health",
                         value: snapshot.identity.disk.healthPercent
-                            .map { "\($0)%" } ?? "Unavailable"
+                            .map { "\($0)%" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Power cycles",
                         value: snapshot.identity.disk.powerCycles
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Power on hours",
                         value: snapshot.identity.disk.powerOnHours
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Available spare",
                         value: snapshot.identity.disk.availableSparePercent
-                            .map { "\($0)%" } ?? "Unavailable"
+                            .map { "\($0)%" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Unsafe shutdowns",
                         value: snapshot.identity.disk.unsafeShutdowns
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Media errors",
                         value: snapshot.identity.disk.mediaErrors
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                 }
             }
@@ -1315,10 +1316,12 @@ private struct SystemOverviewMetric: View {
                     .foregroundStyle(SystemMonitorPalette.metricLabel)
                 Text(value)
                     .font(.title3.weight(.semibold).monospacedDigit())
+                    .accessibilityLabel(NativFormatting.accessibleValue(value))
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(SystemMonitorPalette.metricDetail)
                     .lineLimit(1)
+                    .accessibilityLabel(NativFormatting.accessibleValue(detail))
             }
         }
         .padding(15)
@@ -1372,6 +1375,7 @@ private struct SystemInfoRow: View {
                 .font(.callout.weight(.medium))
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
         }
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
@@ -1445,6 +1449,7 @@ private struct SystemLegendItem: View {
             Text(value)
                 .fontWeight(.semibold)
                 .monospacedDigit()
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
         }
         .font(.caption)
     }
@@ -2215,7 +2220,7 @@ private enum SystemMonitorFormat {
     }
 
     static func boolean(_ value: Bool?) -> String {
-        guard let value else { return "Unavailable" }
+        guard let value else { return NativFormatting.missingValue }
         return value ? "Yes" : "No"
     }
 

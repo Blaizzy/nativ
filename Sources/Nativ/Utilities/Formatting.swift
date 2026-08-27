@@ -15,6 +15,10 @@ struct StatsEntry {
 enum NativFormatting {
     static let missingValue = "—"
 
+    static func accessibleValue(_ value: String) -> String {
+        value == missingValue ? String(localized: "Not available") : value
+    }
+
     private static let integerFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -260,7 +264,7 @@ enum NativStats {
     }
 
     static func latestRequestEntries(_ latest: NativLatestRequest) -> [StatsEntry] {
-        let fullModel = latest.model ?? "None"
+        let fullModel = latest.model ?? missingValue
         var entries: [StatsEntry] = [
             StatsEntry(
                 label: "Model",

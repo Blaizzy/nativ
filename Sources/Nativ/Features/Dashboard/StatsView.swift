@@ -3908,6 +3908,7 @@ private struct SessionMetricCard: View {
                 .fontWeight(.semibold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .accessibilityLabel(NativFormatting.accessibleValue(card.value))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
