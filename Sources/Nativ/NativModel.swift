@@ -360,7 +360,7 @@ final class NativModel: ChatModelSwitchingSurface {
             // still comes up.
             launchArguments.removeSubrange(modelFlagIndex...(modelFlagIndex + 1))
             modelLoadingProgress = nil
-            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Pick a chat model to load one.\n")
+            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Choose a language model to load one.\n")
         }
         if let speechToTextModelID = settings.normalized().speechToTextModelID,
            let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(

@@ -18,7 +18,7 @@ struct MCPSectionView: View {
             Button {
                 editing = MCPServerConfig(name: "", isEnabled: true)
             } label: {
-                Label("Add your own", systemImage: "plus")
+                Label("Add MCP Server", systemImage: "plus")
             }
         } content: {
             if catalog.entries.isEmpty && customServers.isEmpty {

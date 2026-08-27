@@ -623,7 +623,7 @@ private struct IntegrationDetailView: View {
                     openGuidedApp()
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Setup guide") {
+                Button("View Setup Guide") {
                     NSWorkspace.shared.open(tool.installURL)
                 }
                 .buttonStyle(.bordered)
@@ -665,7 +665,7 @@ private struct IntegrationDetailView: View {
                     Text("Scanning installed models…").foregroundStyle(.secondary)
                 }
             } else if viewModel.eligibleModels.isEmpty {
-                Text("No installed chat models were found. Add a model folder or download one from Models.")
+                Text("No installed language models were found. Add a model folder or download one from Models.")
                     .foregroundStyle(.secondary)
             } else {
                 Picker("Model", selection: $viewModel.selectedModelID) {

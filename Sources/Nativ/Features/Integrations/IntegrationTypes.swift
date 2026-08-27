@@ -163,7 +163,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
                 "Start Nativ's server and load a model from the Models page.",
                 "In Cursor, open Settings \u{2192} Models.",
                 "Enable \u{201C}Override OpenAI Base URL\u{201D} and set the Base URL and API key shown above.",
-                "Add your model name, then select it in the chat model picker."
+                "Add your model name, then choose it in the language model picker."
             ]
         case .jetbrains:
             [
@@ -229,7 +229,7 @@ enum IntegrationServiceError: LocalizedError {
         case .invalidConfiguration(let url):
             return "The existing configuration at \(url.path) is not valid JSON. It was left unchanged."
         case .noModel:
-            return "Choose an installed chat model first."
+            return "Choose an installed language model first."
         case .serverUnavailable:
             return "The local model server did not become ready in time."
         case .modelLoadFailed(let model, let message):

@@ -1330,7 +1330,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
     private var manageTokensLink: some View {
         Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
-            Label("HF Hub", systemImage: "arrow.up.right")
+            Label("Hugging Face Hub", systemImage: "arrow.up.right")
         }
         .buttonStyle(.bordered)
     }

@@ -727,7 +727,7 @@ private struct CustomToolEditorSheet: View {
                     }
                 }
             }
-            Text("The header value is saved only in your Mac’s Keychain.")
+            Text("The header value is saved only in Keychain.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }

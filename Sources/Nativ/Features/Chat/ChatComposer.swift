@@ -817,7 +817,7 @@ private struct ChatPromptEditBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Editing prompt")
                     .fontWeight(.medium)
-                Text("Sending will create a new conversation branch.")
+                Text("Sending will create a new chat branch.")
                     .foregroundStyle(.secondary)
             }
 

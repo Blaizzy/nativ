@@ -1097,7 +1097,7 @@ struct AudioView: View {
 
                 Spacer(minLength: 12)
 
-                Button("Find models", action: onOpenSpeechModels)
+                Button("Open Models", action: onOpenSpeechModels)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }

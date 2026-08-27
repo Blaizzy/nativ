@@ -294,7 +294,7 @@ final class ChatViewModel: ObservableObject {
             return "Server is stopped."
         }
         if selectedModelID?.isEmpty != false {
-            return "Select a model in Models."
+            return "Choose a model in Models."
         }
         if activeRequestSessionID == currentSessionID {
             return "Working..."

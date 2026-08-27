@@ -459,7 +459,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                         if canForkAssistantResponse {
                             ChatMessageActionButton(
                                 icon: .asset("ChatForkIcon"),
-                                title: "Fork conversation from this response",
+                                title: "Fork chat from this response",
                                 isActive: false,
                                 isEnabled: true
                             ) {
@@ -856,7 +856,7 @@ private struct ChatAgentStepCell: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Explore models") {
+                    Button("Open Models") {
                         onExploreImageModels(request.operation)
                     }
                     .buttonStyle(.bordered)

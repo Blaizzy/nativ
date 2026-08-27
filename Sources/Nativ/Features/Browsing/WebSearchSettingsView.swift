@@ -438,7 +438,7 @@ struct WebBrowsingSettingsView: View {
                     .foregroundStyle(.orange)
             }
 
-            Text("Browsing requests are sent to the selected third-party providers. API keys stay in macOS Keychain.")
+            Text("Browsing requests are sent to the selected third-party providers. API keys stay in Keychain.")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
