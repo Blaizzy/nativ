@@ -801,7 +801,7 @@ struct AudioView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if captureLibrary.phase == .recording {
-                    Text(formatDuration(captureLibrary.elapsed))
+                    Text(NativFormatting.clockDuration(captureLibrary.elapsed))
                         .font(.title2.weight(.semibold).monospacedDigit())
                 }
             }
@@ -2255,16 +2255,6 @@ struct AudioView: View {
         shortcutConflict = nil
     }
 
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(duration.rounded(.down)))
-        let hours = totalSeconds / 3_600
-        let minutes = (totalSeconds % 3_600) / 60
-        let seconds = totalSeconds % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%d:%02d", minutes, seconds)
-    }
 }
 
 private struct AudioInputLevelMeterView: View {
@@ -2698,7 +2688,7 @@ private struct AudioCaptureRecordRow: View {
                         Text(record.recordedAt.formatted(date: .abbreviated, time: .shortened))
                         if let duration = record.durationSeconds {
                             Text("·")
-                            Text(Self.formatDuration(duration))
+                            Text(NativFormatting.clockDuration(duration))
                         }
                         if !record.transcript.isEmpty {
                             Text("·")
@@ -3011,16 +3001,6 @@ private struct AudioCaptureRecordRow: View {
         }
     }
 
-    private static func formatDuration(_ duration: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(duration.rounded(.down)))
-        let hours = totalSeconds / 3_600
-        let minutes = (totalSeconds % 3_600) / 60
-        let seconds = totalSeconds % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%d:%02d", minutes, seconds)
-    }
 }
 
 private struct ShortcutCaptureSheet: View {

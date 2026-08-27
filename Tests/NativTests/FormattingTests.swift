@@ -20,6 +20,22 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(NativFormatting.elapsedDuration(3_660), "1h 1m")
     }
 
+    func testClockDurationUsesSharedClockStyle() {
+        XCTAssertEqual(NativFormatting.clockDuration(-1), "0:00")
+        XCTAssertEqual(NativFormatting.clockDuration(.nan), "0:00")
+        XCTAssertEqual(NativFormatting.clockDuration(5), "0:05")
+        XCTAssertEqual(NativFormatting.clockDuration(125), "2:05")
+        XCTAssertEqual(NativFormatting.clockDuration(3_661), "1:01:01")
+    }
+
+    func testCompactCountsUseConsistentSuffixes() {
+        XCTAssertEqual(NativFormatting.compactCount(999).display, "999")
+        XCTAssertEqual(NativFormatting.compactCount(1_000).display, "1K")
+        XCTAssertEqual(NativFormatting.compactCount(1_200).display, "1.2K")
+        XCTAssertEqual(NativFormatting.compactCount(1_000_000).display, "1M")
+        XCTAssertEqual(NativFormatting.compactCount(2_000_000_000).display, "2B")
+    }
+
     func testTruncatedModelNamesUseTypographicEllipsis() {
         let value = NativFormatting.truncateModelName(
             "organization/a-very-long-model-name-that-needs-to-be-shortened-for-display"

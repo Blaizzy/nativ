@@ -46,10 +46,10 @@ enum NativFormatting {
         for unit in units where absoluteValue >= unit.factor {
             let scaled = absoluteValue / unit.factor
             let formatted = scaled >= 100
-                ? String(format: "%.0f%@", scaled, unit.suffix)
-                : String(format: "%.1f%@", scaled, unit.suffix)
+                ? scaled.formatted(.number.precision(.fractionLength(0))) + unit.suffix
+                : scaled.formatted(.number.precision(.fractionLength(0...1))) + unit.suffix
             return FormattedCount(
-                display: sign + formatted.replacingOccurrences(of: ".0", with: ""),
+                display: sign + formatted,
                 tooltip: raw
             )
         }
@@ -144,6 +144,19 @@ enum NativFormatting {
             return "\(minutes)m \(seconds)s"
         }
         return "\(seconds)s"
+    }
+
+    static func clockDuration(_ value: TimeInterval) -> String {
+        guard value.isFinite else {
+            return "0:00"
+        }
+
+        let totalSeconds = max(0, Int(value.rounded(.down)))
+        let duration = Duration.seconds(totalSeconds)
+        if totalSeconds >= 3_600 {
+            return duration.formatted(.time(pattern: .hourMinuteSecond))
+        }
+        return duration.formatted(.time(pattern: .minuteSecond))
     }
 
     static func gigabytes(_ value: Double) -> String {

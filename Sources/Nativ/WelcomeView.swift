@@ -1099,19 +1099,8 @@ private struct WelcomeDownloadModelRow: View {
         if let sizeBytes = model.sizeBytes {
             details.append(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))
         }
-        details.append("\(compactCount(model.downloads)) downloads")
+        details.append("\(NativFormatting.compactCount(model.downloads).display) downloads")
         return details.joined(separator: " · ")
-    }
-
-    private func compactCount(_ value: Int) -> String {
-        switch value {
-        case 1_000_000...:
-            return String(format: "%.1fM", Double(value) / 1_000_000)
-        case 1_000...:
-            return String(format: "%.1fK", Double(value) / 1_000)
-        default:
-            return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-        }
     }
 }
 

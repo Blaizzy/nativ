@@ -1279,8 +1279,7 @@ private struct VoiceCaptureOverlayView: View {
     }
 
     private var formattedElapsed: String {
-        let seconds = max(0, Int(model.elapsed))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        NativFormatting.clockDuration(model.elapsed)
     }
 
     private var accessibilityLabel: String {
@@ -1505,8 +1504,7 @@ private struct VoiceCaptureIslandView: View {
     }
 
     private var formattedElapsed: String {
-        let seconds = max(0, Int(model.elapsed))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        NativFormatting.clockDuration(model.elapsed)
     }
 
     private var canCancelDictation: Bool {
@@ -1651,8 +1649,7 @@ private struct VoiceCaptureVerticalRecorderView: View {
     }
 
     private var formattedElapsed: String {
-        let seconds = max(0, Int(model.elapsed))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        NativFormatting.clockDuration(model.elapsed)
     }
 }
 
@@ -1776,8 +1773,7 @@ struct VoiceCaptureNotchIslandView: View {
     }
 
     private var formattedElapsed: String {
-        let seconds = max(0, Int(model.elapsed))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        NativFormatting.clockDuration(model.elapsed)
     }
 
     private var canCancelDictation: Bool {
@@ -1976,8 +1972,7 @@ private struct VoiceCaptureWideNotchView: View {
     }
 
     private var formattedElapsed: String {
-        let seconds = max(0, Int(model.elapsed))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        NativFormatting.clockDuration(model.elapsed)
     }
 
     private var canCancelDictation: Bool {

@@ -2007,10 +2007,13 @@ private struct HubModelRow: View, @MainActor Equatable {
 
                             HStack(spacing: 6) {
                                 ModelPill(
-                                    title: compactCount(model.downloads),
+                                    title: NativFormatting.compactCount(model.downloads).display,
                                     systemImage: "arrow.down.circle"
                                 )
-                                ModelPill(title: compactCount(model.likes), systemImage: "heart")
+                                ModelPill(
+                                    title: NativFormatting.compactCount(model.likes).display,
+                                    systemImage: "heart"
+                                )
                                 if let sizeBytes = downloadSizeBytes {
                                     ModelPill(
                                         title: ByteCountFormatter.string(
@@ -2776,18 +2779,6 @@ private func compactContextSize(_ value: Int) -> String {
     if value >= million, value.isMultiple(of: million) { return "\(value / million)M" }
     if value >= 1024, value.isMultiple(of: 1024) { return "\(value / 1024)K" }
     return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-}
-
-private func compactCount(_ value: Int) -> String {
-    if value >= 1_000_000 {
-        return String(format: "%.1fM", Double(value) / 1_000_000).replacingOccurrences(
-            of: ".0M", with: "M")
-    }
-    if value >= 1_000 {
-        return String(format: "%.1fK", Double(value) / 1_000).replacingOccurrences(
-            of: ".0K", with: "K")
-    }
-    return "\(value)"
 }
 
 #Preview {
