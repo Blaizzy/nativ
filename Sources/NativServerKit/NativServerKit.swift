@@ -104,8 +104,8 @@ public enum NativServerErrorMessage {
 public enum NativError: Error, CustomStringConvertible {
     case missingDistribution(Bundle)
     case missingExecutable(URL)
-    case missingImageModelCapabilityManifest(URL)
-    case invalidImageModelCapabilityManifest(URL)
+    case missingModelCapabilityManifest(URL)
+    case invalidModelCapabilityManifest(URL)
     case alreadyRunning
     case notRunning
     case launchFailed(Int32, String)
@@ -116,10 +116,10 @@ public enum NativError: Error, CustomStringConvertible {
             return "Missing mlx-vlm-server resource in \(bundle.bundlePath)"
         case .missingExecutable(let url):
             return "Missing mlx-vlm-server executable at \(url.path)"
-        case .missingImageModelCapabilityManifest(let url):
-            return "Missing image model capability manifest at \(url.path)"
-        case .invalidImageModelCapabilityManifest(let url):
-            return "Invalid image model capability manifest at \(url.path)"
+        case .missingModelCapabilityManifest(let url):
+            return "Missing model capability manifest at \(url.path)"
+        case .invalidModelCapabilityManifest(let url):
+            return "Invalid model capability manifest at \(url.path)"
         case .alreadyRunning:
             return "mlx-vlm-server is already running"
         case .notRunning:
@@ -131,8 +131,7 @@ public enum NativError: Error, CustomStringConvertible {
 }
 
 public enum Nativ {
-    private static let imageModelCapabilityManifestFilename =
-        "image-model-capabilities.json"
+    private static let modelCapabilityManifestFilename = "model-capabilities.json"
 
     public static func distributionURL() throws -> URL {
         let bundle = Bundle(for: BundleToken.self)
@@ -150,23 +149,22 @@ public enum Nativ {
         return url
     }
 
-    public static func imageGenerationModelTypes() throws -> Set<String> {
+    public static func modelTypeRegistry() throws -> NativModelTypeRegistry {
         let manifestURL = try distributionURL()
-            .appendingPathComponent(imageModelCapabilityManifestFilename)
+            .appendingPathComponent(modelCapabilityManifestFilename)
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            throw NativError.missingImageModelCapabilityManifest(manifestURL)
+            throw NativError.missingModelCapabilityManifest(manifestURL)
         }
         guard let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode(
-                  ImageModelCapabilityManifest.self,
-                  from: data
-              ),
-              manifest.schemaVersion == 1,
-              !manifest.modelTypes.isEmpty
+              let registry = try? NativModelTypeRegistry(data: data)
         else {
-            throw NativError.invalidImageModelCapabilityManifest(manifestURL)
+            throw NativError.invalidModelCapabilityManifest(manifestURL)
         }
-        return Set(manifest.modelTypes)
+        return registry
+    }
+
+    public static func imageGenerationModelTypes() throws -> Set<String> {
+        try modelTypeRegistry().canonicalModelTypes(for: .imageGeneration)
     }
 
     public static func makeProcess(
@@ -225,16 +223,6 @@ public enum Nativ {
             throw NativError.launchFailed(process.terminationStatus, output)
         }
         return output
-    }
-}
-
-private struct ImageModelCapabilityManifest: Decodable {
-    let schemaVersion: Int
-    let modelTypes: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case modelTypes = "model_types"
     }
 }
 
