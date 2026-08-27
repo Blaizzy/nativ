@@ -19,4 +19,13 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(NativFormatting.elapsedDuration(120), "2m 0s")
         XCTAssertEqual(NativFormatting.elapsedDuration(3_660), "1h 1m")
     }
+
+    func testTruncatedModelNamesUseTypographicEllipsis() {
+        let value = NativFormatting.truncateModelName(
+            "organization/a-very-long-model-name-that-needs-to-be-shortened-for-display"
+        )
+
+        XCTAssertTrue(value.contains("…"))
+        XCTAssertFalse(value.contains("..."))
+    }
 }

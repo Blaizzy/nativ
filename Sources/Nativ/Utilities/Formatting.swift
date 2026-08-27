@@ -166,10 +166,10 @@ enum NativFormatting {
             return value
         }
 
-        let keep = max(8, (maxLength - 3) / 2)
+        let keep = max(8, (maxLength - 1) / 2)
         let prefix = value.prefix(keep)
         let suffix = value.suffix(keep)
-        return "\(prefix)...\(suffix)"
+        return "\(prefix)…\(suffix)"
     }
 
     static func timestamp(_ value: Double?) -> String {

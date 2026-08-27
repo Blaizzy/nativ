@@ -297,7 +297,7 @@ final class ChatViewModel: ObservableObject {
             return "Choose a model in Models."
         }
         if activeRequestSessionID == currentSessionID {
-            return "Working..."
+            return "Working…"
         }
         return nil
     }

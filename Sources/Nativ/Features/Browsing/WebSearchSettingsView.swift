@@ -212,7 +212,7 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
             } catch {
                 connectionStates[provider] = .disconnected
                 if provider == selectedProvider {
-                    status = .failure("Nativ could not read this provider's API key from Keychain.")
+                    status = .failure("Nativ could not read this provider’s API key from Keychain.")
                 }
             }
         }
@@ -593,11 +593,11 @@ private extension WebSearchCredentialIssue {
     var message: String {
         switch self {
         case .invalidAuthentication:
-            "Replace this provider's API key."
+            "Replace this provider’s API key."
         case .insufficientFunds:
             "This provider needs additional credits."
         case .planAccess:
-            "This provider's plan does not allow API search."
+            "This provider’s plan does not allow API search."
         }
     }
 }

@@ -312,7 +312,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     var unavailableMetricsText: String {
-        lastMetricsError == nil ? "Waiting for server..." : "Metrics unavailable"
+        lastMetricsError == nil ? "Waiting for server…" : "Metrics unavailable"
     }
 
     var settingsRequireRestart: Bool {
@@ -473,7 +473,7 @@ final class NativModel: ChatModelSwitchingSurface {
         }
 
         do {
-            appendLog("\nStopping mlx-vlm-server...\n")
+            appendLog("\nStopping mlx-vlm-server…\n")
             requestedServerStopReason = reason
             try server.stop()
         } catch NativError.notRunning {

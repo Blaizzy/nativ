@@ -778,7 +778,7 @@ struct ChatComposer: View {
     }
 
     private func workingStatus(elapsed: TimeInterval) -> String {
-        "Working for \(NativFormatting.elapsedDuration(elapsed))..."
+        "Working for \(NativFormatting.elapsedDuration(elapsed))…"
     }
 
     private func send() {

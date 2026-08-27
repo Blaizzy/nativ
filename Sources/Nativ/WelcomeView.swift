@@ -490,7 +490,7 @@ private struct WelcomeView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("Protect Management Access")
                                 .font(.headline)
-                            Text("An API key provides basic security if you're running Nativ on a shared network.")
+                            Text("An API key provides basic security if you’re running Nativ on a shared network.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)

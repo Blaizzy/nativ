@@ -604,7 +604,7 @@ struct AudioView: View {
                 .disabled(!inputVolume.isSupported || captureLibrary.isBusy)
                 .help(
                     inputVolume.isSupported
-                        ? "Adjust the selected microphone's input volume"
+                        ? "Adjust the selected microphone’s input volume"
                         : "This microphone controls input volume in hardware"
                 )
 

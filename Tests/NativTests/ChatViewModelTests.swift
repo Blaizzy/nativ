@@ -59,4 +59,14 @@ final class ChatViewModelTests: XCTestCase {
         )
         XCTAssertNil(subject.unavailableReason(isRunning: true, selectedModelID: "model"))
     }
+
+    func testGeneratedChatTitlesUseTypographicEllipsis() {
+        let title = ChatSession.defaultTitle(
+            for: [ChatTranscriptMessage(role: .user, content: String(repeating: "a", count: 80))],
+            createdAt: .now
+        )
+
+        XCTAssertEqual(title.count, 56)
+        XCTAssertTrue(title.hasSuffix("…"))
+    }
 }
