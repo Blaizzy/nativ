@@ -102,7 +102,7 @@ struct ScheduledTaskCard: View {
             .fixedSize()
             .padding(.trailing, 16)
         }
-        .scheduledPanelStyle(isHighlighted: isHovering)
+        .nativPanelStyle(isHighlighted: isHovering)
         .contextMenu {
             taskActions
         }
@@ -254,30 +254,6 @@ extension RoutineRunSource {
         case .scheduled: "Scheduled"
         case .manual: "Manual"
         case .api: "API"
-        }
-    }
-}
-
-extension View {
-    func scheduledPanelStyle(isHighlighted: Bool = false) -> some View {
-        background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    if isHighlighted {
-                        Color.primary.opacity(0.045)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(
-                    isHighlighted
-                        ? Color.primary.opacity(0.16)
-                        : Color(nsColor: .separatorColor),
-                    lineWidth: 0.5
-                )
         }
     }
 }

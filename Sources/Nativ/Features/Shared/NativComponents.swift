@@ -197,6 +197,68 @@ extension Color {
 // single tint over nested filled tiles, so a surface reads as one calm plane
 // rather than a stack of boxes. Prefer these over re-rolling a pill/badge/dot.
 
+/// The supported corner-radius roles for shared panel surfaces.
+enum NativPanelCornerRadius {
+    case compact
+    case standard
+    case large
+
+    fileprivate var value: CGFloat {
+        switch self {
+        case .compact: 10
+        case .standard: 12
+        case .large: 14
+        }
+    }
+}
+
+private struct NativPanelSurfaceModifier: ViewModifier {
+    let cornerRadius: NativPanelCornerRadius
+    let isHighlighted: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: cornerRadius.value,
+            style: .continuous
+        )
+
+        content
+            .background {
+                shape
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay {
+                        if isHighlighted {
+                            Color.primary.opacity(0.045)
+                        }
+                    }
+                    .clipShape(shape)
+            }
+            .overlay {
+                shape.stroke(
+                    isHighlighted
+                        ? Color.primary.opacity(0.16)
+                        : Color(nsColor: .separatorColor),
+                    lineWidth: 0.5
+                )
+            }
+    }
+}
+
+extension View {
+    /// Applies Nativ's standard semantic panel surface.
+    func nativPanelStyle(
+        cornerRadius: NativPanelCornerRadius = .standard,
+        isHighlighted: Bool = false
+    ) -> some View {
+        modifier(
+            NativPanelSurfaceModifier(
+                cornerRadius: cornerRadius,
+                isHighlighted: isHighlighted
+            )
+        )
+    }
+}
+
 /// A semantic status color, shared by dots, badges, and tool states.
 enum NativStatusTone {
     case neutral
@@ -318,6 +380,27 @@ struct NativTintedIconTile: View {
             in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
         )
     }
+}
+
+#Preview("Panel Surfaces") {
+    VStack {
+        Text("Compact")
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .nativPanelStyle(cornerRadius: .compact)
+
+        Text("Standard")
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .nativPanelStyle()
+
+        Text("Highlighted")
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .nativPanelStyle(cornerRadius: .large, isHighlighted: true)
+    }
+    .padding()
+    .frame(width: 320)
 }
 
 /// A borderless close (X) button that reveals a soft circular hover hue —
