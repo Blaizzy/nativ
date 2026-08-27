@@ -195,7 +195,7 @@ struct ArtifactsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Turn on Smart Search")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the settings.")
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents. You can also do this later in Settings.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -239,7 +239,7 @@ struct ArtifactsView: View {
                         : "Turned off. The model stays installed.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Text("Runs on-device — results are fastest when your Mac isn't busy generating.")
+                    Text("Runs on-device — results are fastest when your Mac isn’t busy generating.")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                     Divider()
@@ -255,7 +255,7 @@ struct ArtifactsView: View {
                             .font(.system(size: 11))
                     }
                 } else {
-                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by what's inside them.")
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     Button("Install") {
@@ -516,7 +516,7 @@ struct ArtifactsView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
-            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
+            Text("This removes the file from the artifact and from its chat history. It can’t be undone.")
         }
         .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
             Button("Remove Model", role: .destructive) {

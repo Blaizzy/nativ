@@ -39,7 +39,7 @@ struct MCPSectionView: View {
 
                     serverGroup(title: "Custom") {
                         if customServers.isEmpty {
-                            Text("No custom servers added.")
+                            Text("No custom servers have been added.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
