@@ -78,6 +78,26 @@ final class RoutineRunner {
         )
         store.recordRun(run)
 
+        let settings = model.settings.normalized()
+        let kitResolution = NativKitRuntimeResolver.resolve(
+            kitIDs: routine.capabilities.compactMap { capability in
+                guard case .kit(let id) = capability else { return nil }
+                return id
+            },
+            settings: settings
+        )
+        guard kitResolution.unavailableCapabilities.isEmpty else {
+            finishUnavailableCapabilities(
+                kitResolution.unavailableCapabilities,
+                run: &run,
+                routine: routine,
+                sessionID: sessionID,
+                startedAt: startedAt,
+                initialTranscript: initialTranscript
+            )
+            return
+        }
+
         if !model.isRunning {
             model.startServer()
         }
@@ -98,30 +118,27 @@ final class RoutineRunner {
             return
         }
 
-        let settings = model.settings.normalized()
-        let selectedServers = Self.selectedMCPServers(for: routine, settings: settings)
+        let selectedServers = Self.selectedMCPServers(
+            for: routine,
+            settings: settings,
+            kitMCPServers: kitResolution.mcpServers
+        )
         await mcpHost.prepare(servers: selectedServers)
         guard shouldContinue(routine) else { return }
         let capabilities = Self.resolveCapabilities(
             for: routine,
             settings: settings,
-            mcpHost: mcpHost
+            mcpHost: mcpHost,
+            kitResolution: kitResolution
         )
         guard capabilities.unavailable.isEmpty else {
-            let message = "Unavailable tools: \(capabilities.unavailable.joined(separator: ", "))."
-            saveRunChat(
+            finishUnavailableCapabilities(
+                capabilities.unavailable,
+                run: &run,
                 routine: routine,
                 sessionID: sessionID,
-                createdAt: startedAt,
-                messages: initialTranscript + [
-                    ChatTranscriptMessage(role: .error, content: message)
-                ]
-            )
-            finish(
-                &run,
-                routine: routine,
-                status: .failed,
-                summary: message
+                startedAt: startedAt,
+                initialTranscript: initialTranscript
             )
             return
         }
@@ -465,20 +482,14 @@ final class RoutineRunner {
 
     private static func selectedMCPServers(
         for routine: Routine,
-        settings: NativSettings
+        settings: NativSettings,
+        kitMCPServers: [MCPServerConfig]
     ) -> [MCPServerConfig] {
-        var ids = Set<UUID>()
+        var ids = Set(kitMCPServers.map(\.id))
         for capability in routine.capabilities {
             switch capability {
-            case .kit(let kitID):
-                guard let kit = NativKit.all.first(where: { $0.id == kitID }) else { continue }
-                for entry in kit.mcpEntries {
-                    if let server = settings.mcpServers.first(where: {
-                        $0.command == entry.command && $0.arguments == entry.arguments
-                    }) {
-                        ids.insert(server.id)
-                    }
-                }
+            case .kit:
+                break
             case .mcpServer(let id):
                 ids.insert(id)
             case .tool(let tool):
@@ -495,14 +506,19 @@ final class RoutineRunner {
     private static func resolveCapabilities(
         for routine: Routine,
         settings: NativSettings,
-        mcpHost: MCPHostManager
+        mcpHost: MCPHostManager,
+        kitResolution: NativKitRuntimeResolution
     ) -> ResolvedCapabilities {
         var toolsByName: [String: ResolvedTool] = [:]
         var conflictingToolNames = Set<String>()
         var skillsByID: [UUID: NativSkill] = [:]
-        var unavailable: [String] = []
-        var wholeMCPServers = Set<UUID>()
+        var unavailable = kitResolution.unavailableCapabilities
+        var wholeMCPServers = Set(kitResolution.mcpServers.map(\.id))
         var selectedTools: [ScheduledTool] = []
+
+        for skill in kitResolution.skills {
+            skillsByID[skill.id] = skill
+        }
 
         func registerTool(
             _ definition: MLXChatToolDefinition,
@@ -521,29 +537,8 @@ final class RoutineRunner {
 
         for capability in routine.capabilities {
             switch capability {
-            case .kit(let kitID):
-                guard let kit = NativKit.all.first(where: { $0.id == kitID }) else {
-                    unavailable.append(kitID)
-                    continue
-                }
-                for entry in kit.mcpEntries {
-                    if let server = settings.mcpServers.first(where: {
-                        $0.command == entry.command
-                            && $0.arguments == entry.arguments
-                            && $0.isEnabled
-                    }) {
-                        wholeMCPServers.insert(server.id)
-                    }
-                }
-                for skill in kit.skills {
-                    if let configured = settings.skills.first(where: { $0.id == skill.id }) {
-                        if configured.isEnabled {
-                            skillsByID[skill.id] = configured
-                        }
-                    } else {
-                        skillsByID[skill.id] = skill
-                    }
-                }
+            case .kit:
+                break
             case .mcpServer(let id):
                 wholeMCPServers.insert(id)
             case .tool(let tool):
@@ -638,6 +633,24 @@ final class RoutineRunner {
             },
             unavailable: Array(Set(unavailable)).sorted()
         )
+    }
+
+    private func finishUnavailableCapabilities(
+        _ unavailable: [String],
+        run: inout RoutineRun,
+        routine: Routine,
+        sessionID: UUID,
+        startedAt: Date,
+        initialTranscript: [ChatTranscriptMessage]
+    ) {
+        let message = "Unavailable capabilities: \(unavailable.joined(separator: ", "))."
+        saveRunChat(
+            routine: routine,
+            sessionID: sessionID,
+            createdAt: startedAt,
+            messages: initialTranscript + [ChatTranscriptMessage(role: .error, content: message)]
+        )
+        finish(&run, routine: routine, status: .failed, summary: message)
     }
 
     private static func normalizedToolCalls(_ calls: [MLXChatToolCall]) -> [MLXChatToolCall] {

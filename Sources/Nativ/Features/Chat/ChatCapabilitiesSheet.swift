@@ -319,7 +319,7 @@ struct ChatKitsPickerSheet: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 0) {
-                ForEach(Array(NativKit.all.enumerated()), id: \.element.id) { index, kit in
+                ForEach(Array(NativKitCatalog.bundled.kits.enumerated()), id: \.element.id) { index, kit in
                     if index > 0 { Divider() }
                     kitRow(kit)
                 }
@@ -329,47 +329,65 @@ struct ChatKitsPickerSheet: View {
         .frame(width: 480)
     }
 
+    @ViewBuilder
     private func kitRow(_ kit: NativKit) -> some View {
-        let state = NativKitActivation.state(of: kit, model: model, manager: manager)
-        return Button {
-            NativKitActivation.setEnabled(
-                state != .enabled,
-                kit: kit,
-                model: model,
-                manager: manager
-            )
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: kit.symbol)
-                    .font(.system(size: 15))
-                    .foregroundStyle(kit.tint)
-                    .frame(width: 28, height: 28)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(kit.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text(kit.summary)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 20)
-
-                if state == .enabled {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.green)
-                        .frame(width: 18, height: 18)
-                        .accessibilityLabel("Enabled globally")
-                }
+        let state = NativKitActivation.state(
+            of: kit,
+            model: model,
+            isExtensionEnabled: manager.isEnabled(extensionID:)
+        )
+        if state == .enabled {
+            kitRowContent(kit, state: state)
+                .accessibilityElement(children: .combine)
+        } else {
+            Button {
+                NativKitActivation.enableMissing(
+                    in: kit,
+                    model: model,
+                    isExtensionEnabled: manager.isEnabled(extensionID:),
+                    enableExtension: { manager.setEnabled(true, extensionID: $0) }
+                )
+            } label: {
+                kitRowContent(kit, state: state)
             }
-            .padding(.vertical, 12)
-            .padding(.trailing, 8)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityHint(
+                state == .partial
+                    ? "Enables the missing Kit capabilities"
+                    : "Enables this Kit"
+            )
         }
-        .buttonStyle(.plain)
+    }
+
+    private func kitRowContent(_ kit: NativKit, state: NativKitState) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: kit.symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.nativTint(kit.tintName))
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(kit.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(kit.summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 20)
+
+            Label(
+                state == .enabled ? "Enabled" : state == .partial ? "Enable missing" : "Enable",
+                systemImage: state == .enabled ? "checkmark.circle.fill" : "plus.circle"
+            )
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(state == .enabled ? Color.green : Color.accentColor)
+        }
+        .padding(.vertical, 12)
+        .padding(.trailing, 8)
+        .contentShape(Rectangle())
     }
 }
 

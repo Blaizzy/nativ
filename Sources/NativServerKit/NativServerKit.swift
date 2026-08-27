@@ -91,6 +91,13 @@ public enum NativServerErrorMessage {
         return nil
     }
 
+
+    public static func isPortConflictFailure(in text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("address already in use")
+            || lowered.contains("errno 48")
+    }
+
     private static func normalized(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty
@@ -109,6 +116,7 @@ public enum NativError: Error, CustomStringConvertible {
     case alreadyRunning
     case notRunning
     case launchFailed(Int32, String)
+    case portInUse(host: String, port: Int)
 
     public var description: String {
         switch self {
@@ -126,6 +134,8 @@ public enum NativError: Error, CustomStringConvertible {
             return "mlx-vlm-server is not running"
         case .launchFailed(let status, let output):
             return "mlx-vlm-server exited with status \(status):\n\(output)"
+        case .portInUse(let host, let port):
+            return "\(host):\(port) is already in use by another process"
         }
     }
 }
@@ -177,6 +187,9 @@ public enum Nativ {
         process.executableURL = try executableURL()
         process.arguments = arguments
         var processEnvironment = ProcessInfo.processInfo.environment
+        processEnvironment["PATH"] = ServerProcessEnvironment.augmentedSearchPath(
+            inheriting: processEnvironment["PATH"]
+        )
         processEnvironment.merge(environment) { _, newValue in newValue }
         // Xcode enables Metal API validation for the app process and exports
         // these variables to children. The inference server creates and

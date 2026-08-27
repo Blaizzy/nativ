@@ -67,7 +67,7 @@ struct RoutineEditor: View {
             case .skill:
                 return false
             case .kit(let id):
-                return NativKit.all.first(where: { $0.id == id })?.mcpServerIDs.isEmpty == false
+                return NativKitCatalog.bundled.kit(id: id)?.mcpServerIDs.isEmpty == false
             case .mcpServer, .tool:
                 return true
             }
@@ -75,7 +75,7 @@ struct RoutineEditor: View {
     }
 
     private var capabilityOptions: [ScheduledCapabilityOption] {
-        var options = NativKit.all.map { kit in
+        var options = NativKitCatalog.bundled.kits.map { kit in
             ScheduledCapabilityOption(
                 capability: .kit(kit.id),
                 section: .kits,

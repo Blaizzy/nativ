@@ -145,8 +145,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.4
-        CURRENT_PROJECT_VERSION: 9
+        MARKETING_VERSION: 0.3.5
+        CURRENT_PROJECT_VERSION: 10
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -167,8 +167,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.4
-        CURRENT_PROJECT_VERSION: 9
+        MARKETING_VERSION: 0.3.5
+        CURRENT_PROJECT_VERSION: 10
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -178,6 +178,8 @@ targets:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
+      - path: Sources/Nativ/Features/Extensions/NativKit.swift
+      - path: Sources/Nativ/Features/Extensions/NativKitRuntimeResolver.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
       - path: Sources/Nativ/Features/Routines/ScheduledTaskChatLinker.swift
