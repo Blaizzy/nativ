@@ -157,6 +157,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let isPrivate: Bool
     let isGated: Bool
     let safetensors: HuggingFaceSafetensors?
+    let configuration: HuggingFaceModelConfiguration?
+    let support: HuggingFaceModelSupport
     // These values are used by every visible row. Resolve them once while the
     // response is decoded instead of repeating string parsing, provider lookup,
     // and memory estimation during every SwiftUI body pass while scrolling.
@@ -175,7 +177,12 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case isPrivate = "private"
         case gated
         case safetensors
+        case config
     }
+
+    private static let supportClassifier = try? HuggingFaceModelSupportClassifier(
+        registry: Nativ.modelTypeRegistry()
+    )
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -187,6 +194,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         safetensors = try container.decodeIfPresent(HuggingFaceSafetensors.self, forKey: .safetensors)
+        configuration = try container.decodeIfPresent(
+            HuggingFaceModelConfiguration.self,
+            forKey: .config
+        )
 
         if let value = try? container.decode(Bool.self, forKey: .gated) {
             isGated = value
@@ -196,7 +207,16 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             isGated = false
         }
 
-        provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
+        support = Self.supportClassifier?.classify(
+            configuration: configuration,
+            pipelineTag: pipelineTag,
+            tags: tags
+        ) ?? .unknown
+        provider = LocalModelProviderResolver.resolve(
+            repoID: id,
+            modelType: configuration?.modelType,
+            architectures: configuration?.architectures ?? []
+        )
         sizeBytes = safetensors?.sizeBytes
         capabilities = Self.resolveCapabilities(
             pipelineTag: pipelineTag,
@@ -539,7 +559,7 @@ private struct HuggingFaceHubClient: Sendable {
         }
         queryItems.append(contentsOf: [
             "downloads", "likes", "pipeline_tag", "library_name", "tags",
-            "private", "gated", "safetensors"
+            "private", "gated", "safetensors", "config"
         ].map { URLQueryItem(name: "expand[]", value: $0) })
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedQuery.isEmpty {
@@ -561,7 +581,7 @@ private struct HuggingFaceHubClient: Sendable {
         components.path = "/api/models/\(id)"
         components.queryItems = [
             "downloads", "likes", "pipeline_tag", "library_name", "tags",
-            "private", "gated", "safetensors"
+            "private", "gated", "safetensors", "config"
         ].map { URLQueryItem(name: "expand[]", value: $0) }
 
         guard let url = components.url else {

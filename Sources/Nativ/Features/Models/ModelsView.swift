@@ -290,7 +290,7 @@ struct ModelsView: View {
                 }
             }
         }
-        .onChange(of: localLibrary.models.map(\.repoID)) { _, _ in
+        .onChange(of: localLibrary.allModels.map(\.repoID)) { _, _ in
             selectFirstVisibleReadmeIfNeeded(in: .installed)
         }
         .onChange(of: hubLibrary.models.map(\.id)) { _, _ in
@@ -503,7 +503,7 @@ struct ModelsView: View {
             .modelsListRow()
         }
 
-        if localLibrary.isScanning && localLibrary.models.isEmpty {
+        if localLibrary.isScanning && localLibrary.allModels.isEmpty {
             ModelsLoadingState(title: "Scanning your Hugging Face cache…")
                 .modelsListRow()
         } else if visibleModels.isEmpty {
@@ -553,7 +553,7 @@ struct ModelsView: View {
                             model.requestPreloadedModelSwitch(
                                 to: localModel,
                                 for: slot,
-                                availableModels: localLibrary.models
+                                availableModels: localLibrary.allModels
                             )
                         } else {
                             model.switchPreloadedModel(to: nil, for: slot)
@@ -884,8 +884,8 @@ struct ModelsView: View {
         let query = localQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         var models =
             query.isEmpty
-            ? localLibrary.models
-            : localLibrary.models.filter {
+            ? localLibrary.allModels
+            : localLibrary.allModels.filter {
                 $0.repoID.localizedCaseInsensitiveContains(query)
                     || $0.displayName.localizedCaseInsensitiveContains(query)
                     || $0.provider?.displayName.localizedCaseInsensitiveContains(query) == true
@@ -909,7 +909,7 @@ struct ModelsView: View {
     }
 
     private var installedModelIDs: Set<String> {
-        Set(localLibrary.models.map(\.repoID))
+        Set(localLibrary.allModels.map(\.repoID))
     }
 
     private var pageTitle: some View {
@@ -1477,7 +1477,6 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
-    @State private var showsUnsupportedModelInformation = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.localModel == rhs.localModel
@@ -1607,14 +1606,6 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         .padding(14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .modelRowBackground(isHighlighted: isReadmeSelected)
-        .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
-            Button("OK", role: .cancel) {}
-                .keyboardShortcut(.defaultAction)
-        } message: {
-            Text(
-                "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
-            )
-        }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
             Button("Delete Model", role: .destructive, action: onDelete)
                 .keyboardShortcut(.defaultAction)
@@ -1667,15 +1658,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         }
     }
 
-    @ViewBuilder
     private var loadButton: some View {
-        if let preferredPreloadSlot {
-            let isLoaded = selectedPreloadSlots.contains(preferredPreloadSlot)
-            Button {
-                guard !isSelectionDisabled else { return }
-                onSetPreload(preferredPreloadSlot, !isLoaded)
-            } label: {
-                Image(systemName: isLoaded ? "stop.fill" : "play.fill")
+        let loadSlot = preferredPreloadSlot ?? .language
+        let isLoaded = selectedPreloadSlots.contains(loadSlot)
+        return Button {
+            guard !isSelectionDisabled else { return }
+            onSetPreload(loadSlot, !isLoaded)
+        } label: {
+            Image(systemName: isLoaded ? "stop.fill" : "play.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 30)
@@ -1684,30 +1674,12 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                         .fill(isLoaded ? Color.red : Color.accentColor)
                 )
                 .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isSelectionDisabled)
-            .help(rowHelp)
-            .accessibilityLabel(rowHelp)
-            .fixedSize()
-        } else {
-            Button {
-                showsUnsupportedModelInformation = true
-            } label: {
-                Label("Unavailable", systemImage: "exclamationmark.triangle")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color.secondary.opacity(0.10))
-                    )
-            }
-            .buttonStyle(.plain)
-            .help(rowHelp)
-            .fixedSize()
         }
+        .buttonStyle(.plain)
+        .disabled(isSelectionDisabled)
+        .help(rowHelp)
+        .accessibilityLabel(rowHelp)
+        .fixedSize()
     }
 
     private var rowHelp: String {
@@ -1719,7 +1691,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         if let preferredPreloadSlot {
             return "Preload \(localModel.repoID) for \(preferredPreloadSlot.displayName)"
         }
-        return "\(localModel.repoID) has no supported preload role"
+        return "Try loading \(localModel.repoID) as a language model"
     }
 }
 
@@ -1994,6 +1966,13 @@ private struct HubModelRow: View, @MainActor Equatable {
                                     .lineLimit(1)
                                 if model.isGated {
                                     ModelPill(title: "Gated", systemImage: "lock")
+                                }
+                                if model.support == .unsupported {
+                                    ModelPill(
+                                        title: "Unsupported",
+                                        systemImage: "exclamationmark.triangle.fill",
+                                        color: .orange
+                                    )
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)

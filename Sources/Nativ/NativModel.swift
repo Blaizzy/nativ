@@ -351,17 +351,6 @@ final class NativModel: ChatModelSwitchingSurface {
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         var launchArguments = settings.launchArguments
-        if let languageModelID = settings.normalized().languageModelID,
-           isKnownNonGenerativeModel(languageModelID),
-           let modelFlagIndex = launchArguments.firstIndex(of: "--model"),
-           modelFlagIndex + 1 < launchArguments.count {
-            // A stale, non-chat selection (e.g. a BERT encoder) would make the
-            // server abort while pre-loading it. Start on-demand instead so it
-            // still comes up.
-            launchArguments.removeSubrange(modelFlagIndex...(modelFlagIndex + 1))
-            modelLoadingProgress = nil
-            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Pick a chat model to load one.\n")
-        }
         if let speechToTextModelID = settings.normalized().speechToTextModelID,
            let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(
                repoID: speechToTextModelID,
@@ -402,47 +391,6 @@ final class NativModel: ChatModelSwitchingSurface {
             startMetricsPolling()
         }
         notifyMenuStateChanged()
-    }
-
-    /// Returns true only when the model is present locally and its config's
-    /// architectures are all non-generative (e.g. a BERT/RoBERTa encoder), which
-    /// mlx-vlm cannot load as a chat model. Any uncertainty returns false, so a
-    /// genuine chat model is never skipped.
-    private func isKnownNonGenerativeModel(_ repoID: String) -> Bool {
-        let cacheName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
-        let fileManager = FileManager.default
-
-        // Consolidated roots (primary folder + user-added folders + HF hub cache) so
-        // this check also covers models the user keeps in custom folders.
-        let roots = settings.normalized().modelSearchRoots
-
-        let generativeMarkers = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
-        for root in roots {
-            let snapshots = URL(fileURLWithPath: root)
-                .appendingPathComponent(cacheName)
-                .appendingPathComponent("snapshots")
-            guard let revisions = try? fileManager.contentsOfDirectory(
-                at: snapshots,
-                includingPropertiesForKeys: nil
-            ) else {
-                continue
-            }
-            for revision in revisions {
-                let configURL = revision.appendingPathComponent("config.json")
-                guard let data = try? Data(contentsOf: configURL),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let architectures = json["architectures"] as? [String],
-                      !architectures.isEmpty
-                else {
-                    continue
-                }
-                let isGenerative = architectures
-                    .map { $0.lowercased() }
-                    .contains { arch in generativeMarkers.contains { arch.contains($0) } }
-                return !isGenerative
-            }
-        }
-        return false
     }
 
     func stopServer(preserveSessionStats: Bool = false) {

@@ -276,6 +276,11 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
     let hiddenSize: Int?
 }
 
+struct LocalModelInventory: Sendable {
+    let models: [LocalModel]
+    let cachedModels: [LocalModel]
+}
+
 enum LocalModelDiscovery {
     private actor ScanCache {
         struct Key: Hashable, Sendable {
@@ -284,18 +289,18 @@ enum LocalModelDiscovery {
         }
 
         private struct Entry: Sendable {
-            let models: [LocalModel]
+            let inventory: LocalModelInventory
             let expiresAt: Date
         }
 
         private var entries: [Key: Entry] = [:]
-        private var inFlight: [Key: Task<[LocalModel], Error>] = [:]
+        private var inFlight: [Key: Task<LocalModelInventory, Error>] = [:]
 
-        func scan(key: Key) async throws -> [LocalModel] {
+        func scan(key: Key) async throws -> LocalModelInventory {
             let now = Date()
             entries = entries.filter { $0.value.expiresAt > now }
             if let entry = entries[key] {
-                return entry.models
+                return entry.inventory
             }
 
             if let task = inFlight[key] {
@@ -313,7 +318,7 @@ enum LocalModelDiscovery {
             do {
                 let models = try await task.value
                 entries[key] = Entry(
-                    models: models,
+                    inventory: models,
                     expiresAt: Date().addingTimeInterval(2)
                 )
                 inFlight.removeValue(forKey: key)
@@ -328,7 +333,11 @@ enum LocalModelDiscovery {
     private static let scanCache = ScanCache()
 
     static func scan(searchPaths: LocalModelSearchPaths) async throws -> [LocalModel] {
-        return try await scanCache.scan(
+        try await inventory(searchPaths: searchPaths).models
+    }
+
+    static func inventory(searchPaths: LocalModelSearchPaths) async throws -> LocalModelInventory {
+        try await scanCache.scan(
             key: ScanCache.Key(
                 path: searchPaths.primary,
                 additionalPaths: searchPaths.additional
@@ -339,18 +348,25 @@ enum LocalModelDiscovery {
     private static func performScan(
         path: String,
         additionalPaths: [String]
-    ) throws -> [LocalModel] {
+    ) throws -> LocalModelInventory {
         let externalModels = Self.scanAdditionalPathsSynchronously(
             additionalPaths,
             fileManager: FileManager.default
         )
         do {
-            return Self.sortedByDisplayName(try Self.scanSynchronously(path: path) + externalModels)
+            let inventory = try Self.scanSynchronously(path: path)
+            return LocalModelInventory(
+                models: Self.sortedByDisplayName(inventory.models + externalModels),
+                cachedModels: Self.sortedByDisplayName(inventory.cachedModels)
+            )
         } catch {
             guard !externalModels.isEmpty else {
                 throw error
             }
-            return Self.sortedByDisplayName(externalModels)
+            return LocalModelInventory(
+                models: Self.sortedByDisplayName(externalModels),
+                cachedModels: []
+            )
         }
     }
 
@@ -393,7 +409,7 @@ enum LocalModelDiscovery {
         return (effectivePath as NSString).expandingTildeInPath
     }
 
-    private static func scanSynchronously(path: String) throws -> [LocalModel] {
+    private static func scanSynchronously(path: String) throws -> LocalModelInventory {
         let fileManager = FileManager.default
         let rootURL = URL(fileURLWithPath: path, isDirectory: true)
         var isDirectory: ObjCBool = false
@@ -411,55 +427,68 @@ enum LocalModelDiscovery {
             options: [.skipsHiddenFiles]
         )
 
-        let models = repoURLs.compactMap { repoURL -> LocalModel? in
+        var models: [LocalModel] = []
+        var cachedModels: [LocalModel] = []
+        for repoURL in repoURLs {
             guard repoURL.lastPathComponent.hasPrefix("models--"),
                   isDirectoryURL(repoURL, fileManager: fileManager),
                   let repoID = repoID(fromCacheDirectoryName: repoURL.lastPathComponent)
             else {
-                return nil
+                continue
             }
 
-            guard let snapshotURL = preferredSnapshotURL(for: repoURL, fileManager: fileManager),
-                  isLikelyMLXModelSnapshot(snapshotURL, model: repoID, fileManager: fileManager)
-            else {
-                return nil
-            }
+            let preferredSnapshotURL = preferredSnapshotURL(
+                for: repoURL,
+                fileManager: fileManager
+            )
+            let modelURL = preferredSnapshotURL ?? repoURL
+            let isRecognized = preferredSnapshotURL.map {
+                isLikelyMLXModelSnapshot($0, model: repoID, fileManager: fileManager)
+            } ?? false
 
-            let modifiedAt = (try? snapshotURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let modifiedAt = (try? modelURL.resourceValues(
+                forKeys: [.contentModificationDateKey]
+            ))?.contentModificationDate
             let memoryMetadata = modelMemoryMetadata(
                 repoID: repoID,
-                snapshotURL: snapshotURL,
+                snapshotURL: modelURL,
                 fileManager: fileManager
             )
             let speculativeMetadata = speculativeMetadata(
-                at: snapshotURL,
+                at: modelURL,
                 fileManager: fileManager
             )
-            return LocalModel(
+            let model = LocalModel(
                 repoID: repoID,
-                snapshotURL: snapshotURL,
+                snapshotURL: modelURL,
                 modifiedAt: modifiedAt,
-                sizeBytes: snapshotSize(at: snapshotURL, fileManager: fileManager),
+                sizeBytes: snapshotSize(at: modelURL, fileManager: fileManager),
                 parameterCount: memoryMetadata.parameterCount,
                 quantizationBits: memoryMetadata.quantizationBits,
                 quantizationGroupSize: memoryMetadata.quantizationGroupSize,
-                contextSize: contextSize(at: snapshotURL, fileManager: fileManager),
+                contextSize: contextSize(at: modelURL, fileManager: fileManager),
                 provider: modelProvider(
                     repoID: repoID,
-                    snapshotURL: snapshotURL,
+                    snapshotURL: modelURL,
                     fileManager: fileManager
                 ),
-                capabilities: modelCapabilities(
-                    model: repoID,
-                    at: snapshotURL,
-                    fileManager: fileManager
-                ),
+                capabilities: isRecognized
+                    ? modelCapabilities(
+                        model: repoID,
+                        at: modelURL,
+                        fileManager: fileManager
+                    ) : [],
                 drafterKind: speculativeMetadata.drafterKind,
                 hiddenSize: speculativeMetadata.hiddenSize
             )
+            if isRecognized {
+                models.append(model)
+            } else {
+                cachedModels.append(model)
+            }
         }
 
-        return models
+        return LocalModelInventory(models: models, cachedModels: cachedModels)
     }
 
     private static func sortedByDisplayName(_ models: [LocalModel]) -> [LocalModel] {
@@ -1710,6 +1739,8 @@ enum LocalModelDiscoveryError: LocalizedError, Equatable {
 @MainActor
 final class LocalModelLibrary: ObservableObject {
     @Published private(set) var models: [LocalModel] = []
+    private(set) var cachedModels: [LocalModel] = []
+    @Published private(set) var allModels: [LocalModel] = []
     @Published private(set) var isScanning = false
     @Published private(set) var deletingModelIDs = Set<String>()
     @Published private(set) var error: String?
@@ -1727,11 +1758,17 @@ final class LocalModelLibrary: ObservableObject {
 
         scanTask = Task { [weak self] in
             do {
-                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+                let inventory = try await LocalModelDiscovery.inventory(
+                    searchPaths: searchPaths
+                )
                 guard !Task.isCancelled else {
                     return
                 }
-                self?.models = models
+                self?.models = inventory.models
+                self?.cachedModels = inventory.cachedModels
+                self?.allModels = Self.sortedByDisplayName(
+                    inventory.models + inventory.cachedModels
+                )
                 self?.error = nil
             } catch is CancellationError {
                 return
@@ -1740,6 +1777,8 @@ final class LocalModelLibrary: ObservableObject {
                     return
                 }
                 self?.models = []
+                self?.cachedModels = []
+                self?.allModels = []
                 self?.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
 
@@ -1769,11 +1808,26 @@ final class LocalModelLibrary: ObservableObject {
             do {
                 try await LocalModelDiscovery.delete(repoID: model.repoID, path: path)
                 self?.models.removeAll { $0.repoID == model.repoID }
+                self?.cachedModels.removeAll { $0.repoID == model.repoID }
+                self?.allModels.removeAll { $0.repoID == model.repoID }
                 self?.deletingModelIDs.remove(model.repoID)
                 onCompletion()
             } catch {
                 self?.deletingModelIDs.remove(model.repoID)
                 self?.error = "Couldn’t delete \(model.repoID): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private static func sortedByDisplayName(_ models: [LocalModel]) -> [LocalModel] {
+        models.sorted { lhs, rhs in
+            switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
+            case .orderedAscending:
+                true
+            case .orderedDescending:
+                false
+            case .orderedSame:
+                lhs.repoID < rhs.repoID
             }
         }
     }
