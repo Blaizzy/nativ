@@ -215,6 +215,12 @@ private final class ChatAgentDisplayTranscript {
         }
         messages[index].content += event.content ?? ""
         messages[index].reasoningContent += event.reasoningContent ?? ""
+        if event.generatedTokens != nil || event.decodeTokensPerSecond != nil {
+            messages[index].responseMetrics = ChatResponseMetrics(
+                generatedTokens: event.generatedTokens,
+                decodeTokensPerSecond: event.decodeTokensPerSecond
+            )
+        }
         onUpdate?(messages)
     }
 
@@ -225,6 +231,7 @@ private final class ChatAgentDisplayTranscript {
         messages[index].content = completion.content
         messages[index].reasoningContent = completion.reasoningContent ?? ""
         messages[index].isStreaming = false
+        messages[index].responseMetrics = ChatResponseMetrics(completion: completion)
         onUpdate?(messages)
     }
 

@@ -718,6 +718,26 @@ private struct ChatAgentStepCell: View {
             && imageModelSelectionRequest != nil
     }
 
+    private var spawnAgentAccumulatedMetrics: ChatResponseMetrics? {
+        guard message.toolName == ChatSpawnAgentToolRegistry.toolName else { return nil }
+        return accumulatedResponseMetrics(from: message.subMessages)
+    }
+
+    @ViewBuilder
+    private var spawnAgentMetricsWidget: some View {
+        if let metrics = spawnAgentAccumulatedMetrics, metrics.hasVisibleValues {
+            Group {
+                if isAnyRoundStreaming(in: message.subMessages) {
+                    ChatLiveDecodeMetricsBadge(metrics: metrics)
+                        .equatable()
+                } else {
+                    ChatResponseMetricsRow(metrics: metrics)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -731,6 +751,10 @@ private struct ChatAgentStepCell: View {
             .help(isExpanded ? "Hide call details" : "Show call details")
             .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
+            if !isExpanded {
+                spawnAgentMetricsWidget
+            }
+
             if isAwaitingImageModelSelection {
                 Divider()
                     .padding(.top, 7)
@@ -743,6 +767,7 @@ private struct ChatAgentStepCell: View {
                 Divider()
                     .padding(.top, 7)
                 details
+                spawnAgentMetricsWidget
             }
         }
         .padding(.horizontal, 10)
@@ -1037,6 +1062,27 @@ private struct ChatAgentStepCell: View {
         }
         return object["error"] as? String
     }
+}
+
+private func accumulatedResponseMetrics(from subMessages: [ChatTranscriptMessage]) -> ChatResponseMetrics? {
+    let allMetrics = subMessages
+        .filter { $0.role == .assistant }
+        .compactMap(\.responseMetrics)
+    guard !allMetrics.isEmpty else { return nil }
+
+    let totalTokens = allMetrics.compactMap(\.totalTokens).reduce(0, +)
+    let generatedTokens = allMetrics.compactMap(\.generatedTokens).reduce(0, +)
+    return ChatResponseMetrics(
+        totalTokens: totalTokens > 0 ? totalTokens : nil,
+        generatedTokens: generatedTokens > 0 ? generatedTokens : nil,
+        decodeTokensPerSecond: allMetrics.last?.decodeTokensPerSecond,
+        peakMemoryGB: allMetrics.compactMap(\.peakMemoryGB).max(),
+        specAcceptanceRate: allMetrics.last?.specAcceptanceRate
+    )
+}
+
+private func isAnyRoundStreaming(in subMessages: [ChatTranscriptMessage]) -> Bool {
+    subMessages.contains { $0.role == .assistant && $0.isStreaming }
 }
 
 private struct ChatSpawnAgentSubTranscriptView: View {
