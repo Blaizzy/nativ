@@ -373,6 +373,12 @@ final class NativModel: ChatModelSwitchingSurface {
             appendLog("\n\(speechIssue) Starting the server without it — dictation stays unavailable until that model is replaced or repaired.\n")
         }
         do {
+            if !server.isRunning {
+                let target = settings.normalized()
+                if ServerPortProbe.availability(host: target.serverHost, port: target.serverPort) == .addressInUse {
+                    throw NativError.portInUse(host: target.serverHost, port: target.serverPort)
+                }
+            }
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
             if let effectiveHuggingFaceToken {
@@ -393,6 +399,9 @@ final class NativModel: ChatModelSwitchingSurface {
             huggingFaceTokenAppliedAtServerStart = effectiveHuggingFaceToken
             appendLog("\nmlx-vlm-server is already running.\n")
             shouldStartMetrics = true
+        } catch NativError.portInUse(let host, let port) {
+            modelLoadingProgress = nil
+            appendLog("\nCan't start mlx-vlm-server: \(host):\(port) is already in use by another process. Stop that process or choose a different port in Settings, then try again.\n")
         } catch {
             modelLoadingProgress = nil
             appendLog("\nFailed to start mlx-vlm-server: \(error)\n")
@@ -842,6 +851,11 @@ final class NativModel: ChatModelSwitchingSurface {
                 if let stopReason {
                     self.appendLog(
                         "\nmlx-vlm-server stopped after Nativ requested \(stopReason.rawValue) (status \(status))\n"
+                    )
+                } else if NativServerErrorMessage.isPortConflictFailure(in: self.currentServerOutput) {
+                    let target = self.settingsAppliedAtServerStart ?? self.settings.normalized()
+                    self.appendLog(
+                        "\nmlx-vlm-server couldn't start: \(target.serverHost):\(target.serverPort) is already in use by another process. Stop that process or choose a different port in Settings, then start the server again.\n"
                     )
                 } else {
                     self.appendLog(

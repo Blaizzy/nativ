@@ -964,6 +964,21 @@ final class NativChatToolProtocolTests: XCTestCase {
             )
         )
     }
+
+    func testPortConflictFailureIsDetectedFromServerLogs() {
+        let output = """
+            INFO:     Application startup complete.
+            ERROR:    [Errno 48] error while attempting to bind on address ('127.0.0.1', 8080): [errno 48] address already in use
+            INFO:     Waiting for application shutdown.
+            """
+
+        XCTAssertTrue(NativServerErrorMessage.isPortConflictFailure(in: output))
+        XCTAssertFalse(
+            NativServerErrorMessage.isPortConflictFailure(
+                in: "ERROR: Application startup failed."
+            )
+        )
+    }
 }
 
 extension Array where Element == String {
