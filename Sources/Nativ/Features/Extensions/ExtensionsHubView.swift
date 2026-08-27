@@ -249,13 +249,7 @@ private struct ExtensionRow: View {
     }
 
     private var includedBadge: some View {
-        Text("INCLUDED")
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.4)
-            .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+        NativStatusBadge(text: "Included", tone: .active)
     }
 
     private var permissions: some View {
@@ -306,9 +300,7 @@ private struct ExtensionRow: View {
         actionTitle: String?
     ) -> some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(status.color)
-                .frame(width: 7, height: 7)
+            NativStatusDot(tone: status.nativTone)
             Text(permission.displayName)
             Text("· \(status.title)")
                 .foregroundStyle(.secondary)
@@ -326,6 +318,16 @@ private struct ExtensionRow: View {
             in: Capsule()
         )
         .contentShape(Capsule())
+    }
+}
+
+private extension NativExtensionPermissionStatus {
+    var nativTone: NativStatusTone {
+        switch self {
+        case .granted: .success
+        case .denied: .danger
+        case .notRequested: .neutral
+        }
     }
 }
 

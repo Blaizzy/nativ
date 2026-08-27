@@ -184,9 +184,9 @@ private struct DashboardContentView: View, @MainActor Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
-                Circle()
-                    .fill(modelState.isRunning ? DashboardPalette.positive : Color.secondary)
-                    .frame(width: 7, height: 7)
+                NativStatusDot(
+                    tone: modelState.isRunning ? .success : .neutral
+                )
                 Text(modelState.isRunning ? "Live" : "Offline")
                     .font(.caption.weight(.semibold))
 

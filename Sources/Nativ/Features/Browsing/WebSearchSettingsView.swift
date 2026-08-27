@@ -365,12 +365,7 @@ struct WebBrowsingSettingsView: View {
     }
 
     private func routeBadge(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 8, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.1), in: Capsule())
+        NativStatusBadge(text: text, tone: .active)
     }
 
     @ViewBuilder
@@ -379,15 +374,15 @@ struct WebBrowsingSettingsView: View {
         case .disconnected:
             EmptyView()
         case .connected:
-            Circle()
-                .fill(Color.green)
-                .frame(width: 6, height: 6)
+            NativStatusDot(tone: .success, diameter: 6)
                 .help("Connected")
+                .accessibilityLabel("Connected")
         case .issue:
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(.orange)
+                .font(.caption2)
+                .foregroundStyle(NativStatusTone.warning.color)
                 .help("This connection needs attention")
+                .accessibilityLabel("Connection needs attention")
         }
     }
 

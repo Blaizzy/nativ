@@ -87,9 +87,9 @@ struct SystemMonitorView: View {
             menuBarControl
 
             HStack(spacing: 7) {
-                Circle()
-                    .fill(store.isSampling ? SystemMonitorPalette.positive : Color.secondary)
-                    .frame(width: 7, height: 7)
+                NativStatusDot(
+                    tone: store.isSampling ? .success : .neutral
+                )
                 Text(store.isSampling ? "Live" : "Paused")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
