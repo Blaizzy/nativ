@@ -427,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
 
     private func menuBarMemoryUsedText() -> String {
         guard runtime.usedMemoryBytes > 0 else {
-            return "--\u{2009}GB"
+            return NativFormatting.missingValue
         }
         let usedGigabytes = Double(runtime.usedMemoryBytes) / 1_073_741_824
         return String(format: "%.0f\u{2009}GB", usedGigabytes)

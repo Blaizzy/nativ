@@ -2151,28 +2151,28 @@ private enum SystemMonitorFormat {
     }
 
     static func optionalPercent(_ value: Double?) -> String {
-        value.map(percent) ?? "--"
+        value.map(percent) ?? NativFormatting.missingValue
     }
 
     static func framesPerSecond(_ value: Double?) -> String {
-        guard let value, value.isFinite, value >= 0 else { return "--" }
+        guard let value, value.isFinite, value >= 0 else { return NativFormatting.missingValue }
         return "\(Int(value.rounded())) FPS"
     }
 
     static func celsius(_ value: Double?) -> String {
-        guard let value, value.isFinite else { return "--" }
+        guard let value, value.isFinite else { return NativFormatting.missingValue }
         return String(format: "%.1f°C", value)
     }
 
     static func watts(_ value: Double?) -> String {
-        guard let value, value.isFinite, value >= 0 else { return "--" }
+        guard let value, value.isFinite, value >= 0 else { return NativFormatting.missingValue }
         return value < 10
             ? String(format: "%.2f W", value)
             : String(format: "%.1f W", value)
     }
 
     static func rpm(_ value: Int?) -> String {
-        guard let value else { return "--" }
+        guard let value else { return NativFormatting.missingValue }
         return "\(value) RPM"
     }
 
@@ -2195,7 +2195,7 @@ private enum SystemMonitorFormat {
     }
 
     static func byteRate(_ value: Double) -> String {
-        guard value.isFinite, value >= 0 else { return "--" }
+        guard value.isFinite, value >= 0 else { return NativFormatting.missingValue }
         return "\(bytes(UInt64(value.rounded()))) /s"
     }
 

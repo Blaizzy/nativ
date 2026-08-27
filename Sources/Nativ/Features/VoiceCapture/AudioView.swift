@@ -2159,14 +2159,7 @@ struct AudioView: View {
     }
 
     private var formattedSavedTime: String {
-        let seconds = analytics.estimatedTimeSaved
-        if seconds < 60 {
-            return "\(Int(seconds.rounded())) sec"
-        }
-        if seconds < 3_600 {
-            return "\(Int((seconds / 60).rounded())) min"
-        }
-        return String(format: "%.1f hr", seconds / 3_600)
+        NativFormatting.elapsedDuration(analytics.estimatedTimeSaved)
     }
 
     private func handleViewAppear() {

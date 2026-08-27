@@ -70,7 +70,7 @@ struct StatsView: View {
 
     private func makeSessionCard(title: String, rawCount: Int?) -> SessionCardValue {
         guard let rawCount else {
-            return SessionCardValue(title: title, value: "--", help: nil)
+            return SessionCardValue(title: title, value: NativFormatting.missingValue, help: nil)
         }
         let formatted = NativFormatting.compactCount(rawCount)
         return SessionCardValue(
@@ -378,7 +378,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
     }
 
     private var successRateLabel: String {
-        guard totalRequests > 0 else { return "--" }
+        guard totalRequests > 0 else { return NativFormatting.missingValue }
         return NativFormatting.percent(
             Double(dashboard.historicalSummary.requestsCompleted) / Double(totalRequests)
         )
@@ -2754,7 +2754,7 @@ private struct SuccessRateHealthChart: View {
     }
 
     private var overallRateLabel: String {
-        overallRate.map(NativFormatting.percent) ?? "--"
+        overallRate.map(NativFormatting.percent) ?? NativFormatting.missingValue
     }
 
     private var healthStatus: String {
@@ -2929,7 +2929,7 @@ private struct SuccessRateHealthTooltip: View {
     }
 
     private var successRateLabel: String {
-        segment.successRate.map(NativFormatting.percent) ?? "--"
+        segment.successRate.map(NativFormatting.percent) ?? NativFormatting.missingValue
     }
 
     private var dateLabel: String {
@@ -3100,7 +3100,7 @@ private struct ModelOverviewTooltip: View {
         case .requests:
             NativFormatting.integer(point.totalRequests)
         case .successRate:
-            point.successRate.map(NativFormatting.percent) ?? "--"
+            point.successRate.map(NativFormatting.percent) ?? NativFormatting.missingValue
         case .decodeSpeed:
             NativFormatting.rate(point.decodeSpeed)
         }
@@ -3113,13 +3113,13 @@ private struct ModelOverviewTooltip: View {
         case .requests:
             return NativFormatting.integer(points.reduce(0) { $0 + $1.totalRequests })
         case .successRate:
-            guard totalRequests > 0 else { return "--" }
+            guard totalRequests > 0 else { return NativFormatting.missingValue }
             let completed = points.reduce(0) { $0 + $1.requestsCompleted }
             return NativFormatting.percent(Double(completed) / Double(totalRequests))
         case .decodeSpeed:
             let decodeTokens = points.reduce(0) { $0 + $1.decodeTokensTotal }
             let decodeMilliseconds = points.reduce(Int64.zero) { $0 + $1.decodeTimeTotalMilliseconds }
-            guard decodeTokens > 0, decodeMilliseconds > 0 else { return "--" }
+            guard decodeTokens > 0, decodeMilliseconds > 0 else { return NativFormatting.missingValue }
             let speed = Double(decodeTokens) / (Double(decodeMilliseconds) / 1_000)
             return NativFormatting.rate(speed)
         }
@@ -3239,7 +3239,7 @@ private struct DashboardMetricTooltip: View {
             case .successRate:
                 metricRow(
                     "Success rate",
-                    value: successRate.map(NativFormatting.percent) ?? "--",
+                    value: successRate.map(NativFormatting.percent) ?? NativFormatting.missingValue,
                     color: DashboardPalette.positive
                 )
                 metricRow(
@@ -3339,7 +3339,7 @@ private struct RequestHealthPanel: View {
             )
 
             HStack(alignment: .firstTextBaseline) {
-                Text(total == 0 ? "--" : NativFormatting.percent(Double(completed) / Double(total)))
+                Text(total == 0 ? NativFormatting.missingValue : NativFormatting.percent(Double(completed) / Double(total)))
                     .font(.system(size: 29, weight: .semibold, design: .rounded).monospacedDigit())
                 Text("successful")
                     .font(.caption)
@@ -3567,7 +3567,7 @@ private struct RequestHealthTooltip: View {
     }
 
     private var successRate: String {
-        guard total > 0 else { return "--" }
+        guard total > 0 else { return NativFormatting.missingValue }
         return NativFormatting.percent(Double(point.requestsCompleted) / Double(total))
     }
 
@@ -3754,7 +3754,7 @@ private struct ModelPerformanceTable: View {
 
             tableValue(NativFormatting.compactCount(row.processedTokens).display, width: 105)
             tableValue(NativFormatting.integer(row.totalRequests), width: 90)
-            tableValue(row.successRate.map(NativFormatting.percent) ?? "--", width: 85)
+            tableValue(row.successRate.map(NativFormatting.percent) ?? NativFormatting.missingValue, width: 85)
             tableValue(NativFormatting.rate(row.averageDecodeTokensPerSecond), width: 105)
             tableValue(NativFormatting.gigabytes(fromBytes: row.peakMemoryBytes), width: 105)
         }

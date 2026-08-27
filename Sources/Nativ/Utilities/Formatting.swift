@@ -13,6 +13,8 @@ struct StatsEntry {
 }
 
 enum NativFormatting {
+    static let missingValue = "—"
+
     private static let integerFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -57,14 +59,14 @@ enum NativFormatting {
 
     static func rate(_ value: Double?) -> String {
         guard let value, value > 0, value.isFinite else {
-            return "--"
+            return missingValue
         }
         return String(format: "%.1f tok/s", value)
     }
 
     static func decimal(_ value: Double?, fractionDigits: Int = 2) -> String {
         guard let value, value.isFinite else {
-            return "--"
+            return missingValue
         }
 
         let digits = min(max(fractionDigits, 0), 4)
@@ -76,28 +78,28 @@ enum NativFormatting {
 
     static func integer(_ value: Int?) -> String {
         guard let value else {
-            return "--"
+            return missingValue
         }
         return integerFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
     static func milliseconds(_ value: Double?, fractionDigits: Int = 0) -> String {
         guard let value, value >= 0, value.isFinite else {
-            return "--"
+            return missingValue
         }
         return "\(decimal(value, fractionDigits: fractionDigits)) ms"
     }
 
     static func seconds(fromMilliseconds value: Int64?, fractionDigits: Int = 2) -> String {
         guard let value, value >= 0 else {
-            return "--"
+            return missingValue
         }
         return decimal(Double(value) / 1_000, fractionDigits: fractionDigits)
     }
 
     static func gigabytes(fromBytes value: Int64?, fractionDigits: Int = 1) -> String {
         guard let value, value >= 0 else {
-            return "--"
+            return missingValue
         }
         let gigabytes = Double(value) / Double(1024 * 1024 * 1024)
         return "\(decimal(gigabytes, fractionDigits: fractionDigits)) GB"
@@ -105,7 +107,7 @@ enum NativFormatting {
 
     static func duration(_ value: Double?) -> String {
         guard let value, value >= 0, value.isFinite else {
-            return "--"
+            return missingValue
         }
 
         if value < 1 {
@@ -146,14 +148,14 @@ enum NativFormatting {
 
     static func gigabytes(_ value: Double) -> String {
         guard value.isFinite else {
-            return "--"
+            return missingValue
         }
         return String(format: "%.2f GB", value)
     }
 
     static func percent(_ value: Double) -> String {
         guard value.isFinite else {
-            return "--"
+            return missingValue
         }
         let percent = value <= 1 ? value * 100 : value
         return String(format: "%.1f%%", percent)
@@ -172,7 +174,7 @@ enum NativFormatting {
 
     static func timestamp(_ value: Double?) -> String {
         guard let value, value > 0 else {
-            return "--"
+            return missingValue
         }
         return Date(timeIntervalSince1970: value).formatted(
             date: .abbreviated,
@@ -184,7 +186,7 @@ enum NativFormatting {
         guard let rawValue = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawValue.isEmpty
         else {
-            return "--"
+            return missingValue
         }
 
         return rawValue
@@ -252,7 +254,7 @@ enum NativStats {
                 value: NativFormatting.truncateModelName(fullModel),
                 tooltip: fullModel
             ),
-            StatsEntry(label: "Endpoint", value: latest.endpoint ?? "--", tooltip: nil),
+            StatsEntry(label: "Endpoint", value: latest.endpoint ?? NativFormatting.missingValue, tooltip: nil),
             statsEntry("Prompt tokens", latest.promptTokens),
             statsEntry("Completion tokens", latest.completionTokens),
             statsEntry("Generated tokens", latest.generatedTokens),
@@ -387,7 +389,7 @@ enum NativStats {
         if latest.apcEnabled {
             flags.append("APC")
         }
-        return flags.isEmpty ? "--" : flags.joined(separator: ", ")
+        return flags.isEmpty ? NativFormatting.missingValue : flags.joined(separator: ", ")
     }
 }
 

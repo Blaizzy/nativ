@@ -1653,7 +1653,7 @@ private struct SessionActivityPlot: View {
                 Text("Recent token activity")
                     .font(.caption.weight(.semibold))
                 Spacer()
-                Text("Last ~10 min")
+                Text("Last 10 min")
                     .font(.caption)
                     .foregroundStyle(secondaryTextColor)
             }
