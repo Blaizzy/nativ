@@ -605,7 +605,7 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testRoundGateAdvertisesToolsUnderTheCapAndStopsAtIt() {
-        XCTAssertEqual(ChatToolRoundGate.maximumRounds, 4)
+        XCTAssertEqual(ChatToolRoundGate.maximumRounds, 32)
         for round in 0..<ChatToolRoundGate.maximumRounds {
             XCTAssertTrue(ChatToolRoundGate.advertisesTools(atRound: round), "round \(round) should still advertise tools")
         }

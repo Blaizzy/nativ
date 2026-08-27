@@ -260,6 +260,7 @@ targets:
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
+      - path: Sources/Nativ/Utilities/ServerPortProbe.swift
       - path: Sources/Nativ/Utilities/Formatting.swift
       - path: Sources/Nativ/Utilities/MarkdownFormatting.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
