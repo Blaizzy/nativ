@@ -160,23 +160,16 @@ struct NativKitTests {
         let entry = try #require(mcpCatalog.entry(id: "fetch"))
         mcpCatalog.setEnabled(true, for: entry, in: &settings.mcpServers)
 
-        #expect(
-            NativKitActivation.state(
-                of: kit,
-                settings: settings,
-                isExtensionEnabled: { _ in false },
-                mcpCatalog: mcpCatalog
-            ) == .partial
+        let snapshot = NativKitActivation.snapshot(
+            of: kit,
+            settings: settings,
+            extensionName: { $0 },
+            isExtensionEnabled: { _ in false },
+            mcpCatalog: mcpCatalog
         )
-        #expect(
-            NativKitActivation.inactivePartNames(
-                of: kit,
-                settings: settings,
-                extensionName: { $0 },
-                isExtensionEnabled: { _ in false },
-                mcpCatalog: mcpCatalog
-            ) == ["Example skill"]
-        )
+
+        #expect(snapshot.state == .partial)
+        #expect(snapshot.inactivePartNames == ["Example skill"])
     }
 
     @Test("Runtime resolution reports disabled and missing Kit components")
