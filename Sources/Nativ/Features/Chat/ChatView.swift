@@ -294,7 +294,7 @@ private struct ChatTranscriptView: View {
             return "Wait for the model to finish loading"
         }
         guard selectedModelID?.isEmpty == false else {
-            return "Select a language model before editing a prompt"
+            return "Choose a language model before editing a prompt"
         }
         if let validationError = model.settings.structuredOutputValidationError {
             return validationError
@@ -459,7 +459,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                         if canForkAssistantResponse {
                             ChatMessageActionButton(
                                 icon: .asset("ChatForkIcon"),
-                                title: "Fork conversation from this response",
+                                title: "Fork chat from this response",
                                 isActive: false,
                                 isEnabled: true
                             ) {
@@ -782,7 +782,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             NativStatusBadge(text: "Failed", tone: .danger)
         case .cancelled:
-            NativStatusBadge(text: "Cancelled", tone: .neutral)
+            NativStatusBadge(text: "Canceled", tone: .neutral)
         case .declined:
             NativStatusBadge(text: "Declined", tone: .neutral)
         case .preparing, .running, .awaitingConsent,
@@ -817,6 +817,12 @@ private struct ChatAgentStepCell: View {
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
             return Text(
                 "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
+        }
+        if let toolName = message.toolName,
+           ChatFileWriteToolRegistry.toolNames.contains(toolName) {
+            return Text(
+                "The model wants to modify a protected instruction or credential configuration file in your authorized folder. Confirm to allow this change."
             )
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
@@ -856,7 +862,7 @@ private struct ChatAgentStepCell: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Explore models") {
+                    Button("Open Models") {
                         onExploreImageModels(request.operation)
                     }
                     .buttonStyle(.bordered)
@@ -972,7 +978,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             "failed"
         case .cancelled:
-            "cancelled"
+            "canceled"
         case .awaitingConsent:
             "awaiting your confirmation"
         case .awaitingImageModelSelection:
@@ -1398,7 +1404,7 @@ private struct ChatResponseMetricsRow: View {
         }
         ChatResponseMetricPill(
             label: "Peak memory",
-            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? "--"
+            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? NativFormatting.missingValue
         )
     }
 }
@@ -1501,7 +1507,7 @@ private struct ChatImageAttachmentView: View {
         }
         .help(attachment.filename)
         .accessibilityLabel(attachment.filename)
-        .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
+        .alert("Couldn’t save image", isPresented: $showsSaveError) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {

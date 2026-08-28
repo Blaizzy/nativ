@@ -2,6 +2,13 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
+        let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
+
+        XCTAssertFalse(settings.isToolEnabled("read_file"))
+        XCTAssertFalse(settings.isToolEnabled("search_files"))
+    }
+
     func testFileReadRootRoundTripsAndNormalizesWhitespace() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -13,6 +20,19 @@ final class NativSettingsTests: XCTestCase {
         let data = try PropertyListEncoder().encode(settings)
         let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
         XCTAssertEqual(decoded.fileReadRootPath, directory.path)
+    }
+
+    func testFileWriteRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileWriteRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileWriteRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileWriteRootPath, directory.path)
     }
 
     func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
@@ -961,6 +981,21 @@ final class NativChatToolProtocolTests: XCTestCase {
         XCTAssertNil(
             NativServerErrorMessage.modelLoadFailure(
                 in: "Chat endpoint returned HTTP 400: Prompt is too long."
+            )
+        )
+    }
+
+    func testPortConflictFailureIsDetectedFromServerLogs() {
+        let output = """
+            INFO:     Application startup complete.
+            ERROR:    [Errno 48] error while attempting to bind on address ('127.0.0.1', 8080): [errno 48] address already in use
+            INFO:     Waiting for application shutdown.
+            """
+
+        XCTAssertTrue(NativServerErrorMessage.isPortConflictFailure(in: output))
+        XCTAssertFalse(
+            NativServerErrorMessage.isPortConflictFailure(
+                in: "ERROR: Application startup failed."
             )
         )
     }

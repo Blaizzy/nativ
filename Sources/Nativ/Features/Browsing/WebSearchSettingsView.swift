@@ -212,7 +212,7 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
             } catch {
                 connectionStates[provider] = .disconnected
                 if provider == selectedProvider {
-                    status = .failure("Nativ could not read this provider's API key from Keychain.")
+                    status = .failure("Nativ could not read this provider’s API key from Keychain.")
                 }
             }
         }
@@ -365,12 +365,7 @@ struct WebBrowsingSettingsView: View {
     }
 
     private func routeBadge(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 8, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.1), in: Capsule())
+        NativStatusBadge(text: text, tone: .active)
     }
 
     @ViewBuilder
@@ -379,15 +374,15 @@ struct WebBrowsingSettingsView: View {
         case .disconnected:
             EmptyView()
         case .connected:
-            Circle()
-                .fill(Color.green)
-                .frame(width: 6, height: 6)
+            NativStatusDot(tone: .success, diameter: 6)
                 .help("Connected")
+                .accessibilityLabel("Connected")
         case .issue:
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(.orange)
+                .font(.caption2)
+                .foregroundStyle(NativStatusTone.warning.color)
                 .help("This connection needs attention")
+                .accessibilityLabel("Connection needs attention")
         }
     }
 
@@ -409,7 +404,7 @@ struct WebBrowsingSettingsView: View {
             }
 
             HStack {
-                Button(viewModel.isTesting ? "Testing…" : "Test & connect") {
+                Button(viewModel.isTesting ? "Testing…" : "Test & Connect") {
                     Task {
                         if await viewModel.testAndConnect() {
                             onConfigurationChanged(true)
@@ -419,7 +414,7 @@ struct WebBrowsingSettingsView: View {
                 .disabled(!viewModel.canConnect)
 
                 if viewModel.selectedConnectionState != .disconnected {
-                    Button("Remove key", role: .destructive) {
+                    Button("Remove Key", role: .destructive) {
                         if viewModel.removeKey() {
                             onConfigurationChanged(false)
                         }
@@ -438,7 +433,7 @@ struct WebBrowsingSettingsView: View {
                     .foregroundStyle(.orange)
             }
 
-            Text("Browsing requests are sent to the selected third-party providers. API keys stay in macOS Keychain.")
+            Text("Browsing requests are sent to the selected third-party providers. API keys stay in Keychain.")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -456,7 +451,7 @@ struct WebBrowsingSettingsView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Use for search") {
+                    Button("Use for Search") {
                         viewModel.setSearchProvider(viewModel.selectedProvider)
                     }
                     .buttonStyle(.bordered)
@@ -468,7 +463,7 @@ struct WebBrowsingSettingsView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Use for page reading") {
+                    Button("Use for Page Reading") {
                         let provider = viewModel.selectedProvider
                         viewModel.setPageReaderProvider(
                             provider == viewModel.searchProvider ? nil : provider
@@ -516,11 +511,11 @@ struct WebBrowsingSettingsView: View {
         }
         switch viewModel.selectedConnectionState {
         case .disconnected:
-            return "Test & connect"
+            return "Test & Connect"
         case .connected:
-            return "Test & replace"
+            return "Test & Replace"
         case .issue:
-            return "Test & reconnect"
+            return "Test & Reconnect"
         }
     }
     @ViewBuilder
@@ -593,11 +588,11 @@ private extension WebSearchCredentialIssue {
     var message: String {
         switch self {
         case .invalidAuthentication:
-            "Replace this provider's API key."
+            "Replace this provider’s API key."
         case .insufficientFunds:
             "This provider needs additional credits."
         case .planAccess:
-            "This provider's plan does not allow API search."
+            "This provider’s plan does not allow API search."
         }
     }
 }

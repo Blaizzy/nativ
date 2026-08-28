@@ -240,6 +240,11 @@ enum NativKitState: Equatable {
     case enabled
 }
 
+struct NativKitActivationSnapshot: Equatable {
+    let state: NativKitState
+    let inactivePartNames: [String]
+}
+
 /// Additively enables Kit components and derives status from their live state.
 @MainActor
 enum NativKitActivation {
@@ -291,12 +296,13 @@ enum NativKitActivation {
         mcpCatalog: MCPServerCatalog = .bundled,
         isExtensionEnabled: (String) -> Bool
     ) -> NativKitState {
-        state(
+        snapshot(
             of: kit,
             settings: model.settings,
+            extensionName: { $0 },
             isExtensionEnabled: isExtensionEnabled,
             mcpCatalog: mcpCatalog
-        )
+        ).state
     }
 
     static func state(
@@ -305,26 +311,23 @@ enum NativKitActivation {
         isExtensionEnabled: (String) -> Bool,
         mcpCatalog: MCPServerCatalog
     ) -> NativKitState {
-        let inactiveCount = inactivePartNames(
+        snapshot(
             of: kit,
             settings: settings,
             extensionName: { $0 },
             isExtensionEnabled: isExtensionEnabled,
             mcpCatalog: mcpCatalog
-        ).count
-        guard inactiveCount < kit.components.count else { return .off }
-        return inactiveCount == 0 ? .enabled : .partial
+        ).state
     }
 
-    /// Names the components a person still needs to enable for this Kit.
-    static func inactivePartNames(
+    static func snapshot(
         of kit: NativKit,
         model: NativModel,
         mcpCatalog: MCPServerCatalog = .bundled,
         extensionName: (String) -> String,
         isExtensionEnabled: (String) -> Bool
-    ) -> [String] {
-        inactivePartNames(
+    ) -> NativKitActivationSnapshot {
+        snapshot(
             of: kit,
             settings: model.settings,
             extensionName: extensionName,
@@ -333,14 +336,14 @@ enum NativKitActivation {
         )
     }
 
-    static func inactivePartNames(
+    static func snapshot(
         of kit: NativKit,
         settings: NativSettings,
         extensionName: (String) -> String,
         isExtensionEnabled: (String) -> Bool,
         mcpCatalog: MCPServerCatalog
-    ) -> [String] {
-        kit.components.compactMap { component in
+    ) -> NativKitActivationSnapshot {
+        let inactivePartNames = kit.components.compactMap { component in
             switch component {
             case .mcpServer(let catalogID):
                 guard let entry = mcpCatalog.entry(id: catalogID) else { return catalogID }
@@ -352,5 +355,19 @@ enum NativKitActivation {
                 return isExtensionEnabled(id) ? nil : extensionName(id)
             }
         }
+        let state: NativKitState
+        if kit.components.isEmpty {
+            state = .off
+        } else if inactivePartNames.isEmpty {
+            state = .enabled
+        } else if inactivePartNames.count == kit.components.count {
+            state = .off
+        } else {
+            state = .partial
+        }
+        return NativKitActivationSnapshot(
+            state: state,
+            inactivePartNames: inactivePartNames
+        )
     }
 }

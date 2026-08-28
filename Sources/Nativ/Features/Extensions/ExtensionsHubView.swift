@@ -84,7 +84,7 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, host: host, model: model)
+            KitsSectionView(manager: manager, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:
@@ -126,9 +126,9 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.title3.weight(.semibold))
                         Text(subtitle)
-                            .font(.system(size: 12))
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
@@ -249,13 +249,7 @@ private struct ExtensionRow: View {
     }
 
     private var includedBadge: some View {
-        Text("INCLUDED")
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.4)
-            .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+        NativStatusBadge(text: "Included", tone: .active)
     }
 
     private var permissions: some View {
@@ -306,9 +300,7 @@ private struct ExtensionRow: View {
         actionTitle: String?
     ) -> some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(status.color)
-                .frame(width: 7, height: 7)
+            NativStatusDot(tone: status.nativTone)
             Text(permission.displayName)
             Text("· \(status.title)")
                 .foregroundStyle(.secondary)
@@ -326,6 +318,16 @@ private struct ExtensionRow: View {
             in: Capsule()
         )
         .contentShape(Capsule())
+    }
+}
+
+private extension NativExtensionPermissionStatus {
+    var nativTone: NativStatusTone {
+        switch self {
+        case .granted: .success
+        case .denied: .danger
+        case .notRequested: .neutral
+        }
     }
 }
 
@@ -408,7 +410,7 @@ private struct SkillsSectionView: View {
             Button {
                 editing = NativSkill()
             } label: {
-                Label("Add skill", systemImage: "plus")
+                Label("Add Skill", systemImage: "plus")
             }
         } content: {
             VStack(spacing: 0) {

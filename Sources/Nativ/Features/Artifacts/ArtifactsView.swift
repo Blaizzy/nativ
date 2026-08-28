@@ -193,9 +193,9 @@ struct ArtifactsView: View {
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Turn on Smart search")
+                    Text("Turn On Smart Search")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the settings.")
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents. You can also do this later in Settings.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -206,7 +206,7 @@ struct ArtifactsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                Button("Not now") {
+                Button("Not Now") {
                     semanticSearchOffered = true
                 }
                 .controlSize(.small)
@@ -225,10 +225,10 @@ struct ArtifactsView: View {
         } label: {
             Image(systemName: "gearshape")
         }
-        .help("Smart search settings")
+        .help("Smart Search settings")
         .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Smart search", systemImage: "sparkle.magnifyingglass")
+                Label("Smart Search", systemImage: "sparkle.magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
                 if config.isModelInstalled {
                     Toggle("Enabled", isOn: $smartSearchEnabled)
@@ -239,15 +239,15 @@ struct ArtifactsView: View {
                         : "Turned off. The model stays installed.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Text("Runs on-device — results are fastest when your Mac isn't busy generating.")
+                    Text("Runs on-device — results are fastest when your Mac isn’t busy generating.")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                     Divider()
-                    Button("Remove model", role: .destructive) {
+                    Button("Remove Model", role: .destructive) {
                         isConfirmingSemanticModelRemoval = true
                     }
                     .controlSize(.small)
-                    .help("Deletes the model and turns Smart search off")
+                    .help("Deletes the model and turns Smart Search off")
                 } else if config.isDownloading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
@@ -255,7 +255,7 @@ struct ArtifactsView: View {
                             .font(.system(size: 11))
                     }
                 } else {
-                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by what's inside them.")
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     Button("Install") {
@@ -516,7 +516,7 @@ struct ArtifactsView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
-            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
+            Text("This removes the file from the artifact and from its chat history. It can’t be undone.")
         }
         .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
             Button("Remove Model", role: .destructive) {
@@ -872,7 +872,7 @@ struct ArtifactsView: View {
 
                     Spacer()
 
-                    Button("Clear all filters") {
+                    Button("Clear All Filters") {
                         kindFilter = nil
                         sourceFilter = nil
                         favoritesOnly = false
@@ -924,7 +924,7 @@ struct ArtifactsView: View {
                 Circle()
                     .fill(Color.green.opacity(0.7))
                     .frame(width: 7, height: 7)
-                    .help("Smart search is on")
+                    .help("Smart Search is on")
             }
             TextField("Search name or prompt", text: $search)
                 .textFieldStyle(.plain)

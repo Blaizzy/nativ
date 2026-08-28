@@ -120,7 +120,7 @@ struct SystemDiskIdentity: Equatable, Sendable {
     var volumeName = "Macintosh HD"
     var fileSystem = "APFS"
     var mountPoint = "/"
-    var deviceIdentifier = "--"
+    var deviceIdentifier = NativFormatting.missingValue
     var model = "Internal storage"
     var connection = "Internal"
     var isEncrypted: Bool?
@@ -139,10 +139,10 @@ struct SystemDiskIdentity: Equatable, Sendable {
 
 struct SystemMonitorIdentity: Equatable, Sendable {
     var computerName = Host.current().localizedName ?? "This Mac"
-    var modelIdentifier = "--"
+    var modelIdentifier = NativFormatting.missingValue
     var modelNumber: String?
     var productionYear: Int?
-    var serialNumber = "--"
+    var serialNumber = NativFormatting.missingValue
     var chipName = "Apple silicon"
     var physicalCoreCount = ProcessInfo.processInfo.processorCount
     var logicalCoreCount = ProcessInfo.processInfo.activeProcessorCount
@@ -154,7 +154,7 @@ struct SystemMonitorIdentity: Equatable, Sendable {
     var nominalCPUFrequencyHz: UInt64?
     var operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
     var displayName = "Built-in display"
-    var displayResolution = "--"
+    var displayResolution = NativFormatting.missingValue
     var displayRefreshRate: Double?
     var disk = SystemDiskIdentity()
 }
@@ -809,7 +809,7 @@ private actor SystemMetricsCollector {
                 ?? volume["FilesystemType"] as? String
                 ?? "APFS",
             mountPoint: volume["MountPoint"] as? String ?? "/",
-            deviceIdentifier: volume["DeviceIdentifier"] as? String ?? "--",
+            deviceIdentifier: volume["DeviceIdentifier"] as? String ?? NativFormatting.missingValue,
             model: device?["MediaName"] as? String ?? "Internal storage",
             connection: device?["BusProtocol"] as? String
                 ?? volume["BusProtocol"] as? String
