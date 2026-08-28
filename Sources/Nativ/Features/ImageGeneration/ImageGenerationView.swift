@@ -314,7 +314,7 @@ private struct ImageGenerationComposer: View {
 
     private var modelLabel: String {
         guard let selectedModelID else {
-            return "Choose model"
+            return "Choose Model"
         }
         return selectedModelID.split(separator: "/").last.map(String.init)
             ?? selectedModelID

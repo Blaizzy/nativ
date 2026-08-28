@@ -437,7 +437,7 @@ struct ModelsView: View {
             HStack(spacing: 10) {
                 DebouncedModelsSearchField(
                     prompt: renderedSection == .installed
-                        ? "Search installed models" : "Search models on Hugging Face",
+                        ? "Search installed models" : "Search models on Hugging Face Hub",
                     text: activeSearchQuery,
                     identity: renderedSection,
                     debounceMilliseconds: renderedSection == .installed ? 100 : 350
@@ -514,8 +514,8 @@ struct ModelsView: View {
                     ? "No models match your filter" : "No MLX models installed",
                 message: installedFilterIsActive
                     ? "Try a different search or model type."
-                    : "Discover an MLX model on Hugging Face and download it to this cache.",
-                actionTitle: installedFilterIsActive ? nil : "Discover models",
+                    : "Discover an MLX model on Hugging Face Hub and download it to this cache.",
+                actionTitle: installedFilterIsActive ? nil : "Open Models",
                 action: { section = .discover }
             )
             .modelsListRow()
@@ -614,7 +614,7 @@ struct ModelsView: View {
         if let error = hubLibrary.error {
             ScrollView {
                 ModelsNotice(
-                    title: "Hugging Face is unavailable",
+                    title: "Hugging Face Hub is unavailable",
                     message: error,
                     systemImage: "wifi.exclamationmark",
                     color: .orange
@@ -625,7 +625,7 @@ struct ModelsView: View {
             ScrollView {
                 ModelsLoadingState(
                     title: hubQuery.isEmpty
-                        ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
+                        ? "Finding popular Safetensors models…" : "Searching Hugging Face Hub…")
                     .modelsListRow()
             }
         } else if hubLibrary.models.isEmpty {
@@ -916,7 +916,7 @@ struct ModelsView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Models")
                 .font(.title2.weight(.semibold))
-            Text("Manage local MLX models or find new ones on Hugging Face.")
+            Text("Manage local MLX models or find new ones on Hugging Face Hub.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -1138,10 +1138,10 @@ struct ModelsView: View {
 
     private var sourcesMenu: some View {
         Menu {
-            Section("Hugging Face cache") {
+            Section("Hugging Face Cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
             }
-            Section("Model folders") {
+            Section("Model Folders") {
                 ForEach(modelState.settings.normalized().additionalModelSearchPaths, id: \.self) {
                     path in
                     Menu(abbreviatedPath(path)) {
@@ -1435,7 +1435,7 @@ private struct ModelReadmePanel: View {
                 Text(store.error ?? "This model doesn’t include a README.")
             } actions: {
                 if let hubURL {
-                    Link("Open on Hugging Face", destination: hubURL)
+                    Link("Open on Hugging Face Hub", destination: hubURL)
                 }
             }
         }
@@ -1795,7 +1795,7 @@ private struct ActiveDownloadBannerRow: View {
                         .help(pauseResumeTitle)
 
                     Button(
-                        "Remove download",
+                        "Remove Download",
                         systemImage: "xmark",
                         role: .destructive,
                         action: confirmRemoval
@@ -2007,10 +2007,13 @@ private struct HubModelRow: View, @MainActor Equatable {
 
                             HStack(spacing: 6) {
                                 ModelPill(
-                                    title: compactCount(model.downloads),
+                                    title: NativFormatting.compactCount(model.downloads).display,
                                     systemImage: "arrow.down.circle"
                                 )
-                                ModelPill(title: compactCount(model.likes), systemImage: "heart")
+                                ModelPill(
+                                    title: NativFormatting.compactCount(model.likes).display,
+                                    systemImage: "heart"
+                                )
                                 if let sizeBytes = downloadSizeBytes {
                                     ModelPill(
                                         title: ByteCountFormatter.string(
@@ -2098,7 +2101,7 @@ private struct HubModelRow: View, @MainActor Equatable {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Link(destination: modelHubURL) {
-                    Label("Request access on Hugging Face", systemImage: "arrow.up.right")
+                    Label("Request access on Hugging Face Hub", systemImage: "arrow.up.right")
                         .font(.caption.weight(.semibold))
                 }
             }
@@ -2329,7 +2332,7 @@ struct ModelDownloadProgressControl: View {
                     )
 
                     ModelDownloadActionButton(
-                        title: "Remove download",
+                        title: "Remove Download",
                         systemImage: "trash",
                         tint: .red,
                         action: { isConfirmingRemoval = true }
@@ -2776,18 +2779,6 @@ private func compactContextSize(_ value: Int) -> String {
     if value >= million, value.isMultiple(of: million) { return "\(value / million)M" }
     if value >= 1024, value.isMultiple(of: 1024) { return "\(value / 1024)K" }
     return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-}
-
-private func compactCount(_ value: Int) -> String {
-    if value >= 1_000_000 {
-        return String(format: "%.1fM", Double(value) / 1_000_000).replacingOccurrences(
-            of: ".0M", with: "M")
-    }
-    if value >= 1_000 {
-        return String(format: "%.1fK", Double(value) / 1_000).replacingOccurrences(
-            of: ".0K", with: "K")
-    }
-    return "\(value)"
 }
 
 #Preview {

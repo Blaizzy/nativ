@@ -155,7 +155,7 @@ private struct KitCard: View {
     @ViewBuilder
     private var actions: some View {
         if snapshot.state != .enabled {
-            Button(snapshot.state == .partial ? "Enable All" : "Enable", action: onEnable)
+            Button(snapshot.state == .partial ? "Enable Missing" : "Enable", action: onEnable)
                 .buttonStyle(.borderedProminent)
         }
         Button(snapshot.state == .off ? "Details" : "Manage", action: onOpen)
@@ -216,7 +216,7 @@ private struct KitDetailView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if snapshot.state != .enabled {
-                    Button("Enable All") {
+                    Button(snapshot.state == .partial ? "Enable Missing" : "Enable All") {
                         NativKitActivation.enableMissing(
                             in: kit,
                             model: model,
@@ -238,7 +238,7 @@ private struct KitDetailView: View {
     // MARK: Groups
 
     private var mcpGroup: some View {
-        KitGroup(title: "MCP servers & tools", caption: "Their tools become available in chat and appear under Tools.") {
+        KitGroup(title: "MCP Servers & Tools", caption: "Their tools become available in chat and appear under Tools.") {
             ForEach(kit.mcpEntries(in: .bundled)) { entry in
                 KitPartRow(
                     symbol: entry.symbol,

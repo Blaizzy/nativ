@@ -236,7 +236,7 @@ struct RoutineEditor: View {
                     isSelectingCapabilities = true
                 } label: {
                     Label(
-                        capabilities.isEmpty ? "Add tools" : "Manage tools",
+                        capabilities.isEmpty ? "Add Tools" : "Manage Tools",
                         systemImage: "plus"
                     )
                 }
@@ -274,7 +274,7 @@ struct RoutineEditor: View {
                     field("Model") {
                         VStack(alignment: .leading, spacing: 8) {
                             Picker("Model", selection: $modelID) {
-                                Text("Select a model").tag("")
+                                Text("Choose Model").tag("")
                                 ForEach(availableModelIDs, id: \.self) { id in
                                     Text(NativFormatting.truncateModelName(id, maxLength: 52)).tag(id)
                                 }

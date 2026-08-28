@@ -18,7 +18,7 @@ struct MCPSectionView: View {
             Button {
                 editing = MCPServerConfig(name: "", isEnabled: true)
             } label: {
-                Label("Add your own", systemImage: "plus")
+                Label("Add MCP Server", systemImage: "plus")
             }
         } content: {
             if catalog.entries.isEmpty && customServers.isEmpty {
@@ -29,7 +29,7 @@ struct MCPSectionView: View {
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     if !catalog.entries.isEmpty {
-                        serverGroup(title: "Built in") {
+                        serverGroup(title: "Built-in") {
                             ForEach(Array(catalog.entries.enumerated()), id: \.element.id) { index, entry in
                                 if index > 0 { Divider() }
                                 builtInServerRow(entry)
@@ -39,7 +39,7 @@ struct MCPSectionView: View {
 
                     serverGroup(title: "Custom") {
                         if customServers.isEmpty {
-                            Text("No custom servers added.")
+                            Text("No custom servers have been added.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
@@ -247,7 +247,7 @@ private struct MCPServerRow: View {
             } else if case .installingGitHub(let installationURL) = state {
                 GitHubSetupCallout(
                     icon: "folder.badge.plus",
-                    title: "Choose repository access",
+                    title: "Choose Repository Access",
                     message: "GitHub authorization is complete. Select which repositories Nativ can use. You can change this later on GitHub.",
                     actionTitle: "Choose repositories",
                     actionIcon: "arrow.up.right",

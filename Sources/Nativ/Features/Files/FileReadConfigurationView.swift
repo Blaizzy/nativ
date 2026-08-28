@@ -83,7 +83,7 @@ struct FileReadConfigurationView: View {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
         panel.prompt = "Allow Reading"
-        panel.message = "Choose the folder that Nativ's File Read tool may access."
+        panel.message = "Choose the folder that Nativ’s File Read tool may access."
         panel.directoryURL = configuredRootURL
 
         guard panel.runModal() == .OK, let url = panel.url else { return }

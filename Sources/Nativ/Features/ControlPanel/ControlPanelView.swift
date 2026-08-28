@@ -233,7 +233,7 @@ struct ControlPanelView: View {
             chat.reloadPersistedSessions()
         }
         .alert(
-            "Unable to Update Start at Login",
+            "Unable to update Start at Login",
             isPresented: Binding(
                 get: { contentState.launchAtLoginErrorMessage != nil },
                 set: { isPresented in
