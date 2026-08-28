@@ -24,9 +24,6 @@ packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
-  PhosphorSwift:
-    url: https://github.com/phosphor-icons/swift
-    exactVersion: 2.1.0
 schemes:
   Nativ:
     build:
@@ -123,8 +120,6 @@ targets:
         product: Textual
       - package: ZIPFoundation
         product: ZIPFoundation
-      - package: PhosphorSwift
-        product: PhosphorSwift
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
