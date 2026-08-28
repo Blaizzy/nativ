@@ -41,10 +41,16 @@ struct ToolsSectionView: View {
         .onAppear {
             synchronizeConfiguredToolAvailability()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .webBrowsingConfigurationDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .webBrowsingConfigurationDidChange)) {
+            _ in
             synchronizeConfiguredToolAvailability()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .fileReadConfigurationDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .fileReadConfigurationDidChange)) {
+            _ in
+            synchronizeConfiguredToolAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fileWriteConfigurationDidChange)) {
+            _ in
             synchronizeConfiguredToolAvailability()
         }
         .sheet(item: $inspecting, onDismiss: finishToolConfiguration) { tool in
@@ -67,6 +73,13 @@ struct ToolsSectionView: View {
                 )
             case .fileRead:
                 FileReadConfigurationView(
+                    model: model,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case .fileWrite:
+                FileWriteConfigurationView(
                     model: model,
                     onConfigurationChanged: { _ in
                         reconcileConfiguredTool(tool)
@@ -103,10 +116,13 @@ struct ToolsSectionView: View {
                 Text("This removes the tool.")
             }
         }
-        .alert("Couldn’t remove tool", isPresented: Binding(
-            get: { toolManagementError != nil },
-            set: { if !$0 { toolManagementError = nil } }
-        )) {
+        .alert(
+            "Couldn’t remove tool",
+            isPresented: Binding(
+                get: { toolManagementError != nil },
+                set: { if !$0 { toolManagementError = nil } }
+            )
+        ) {
             Button("OK", role: .cancel) {
                 toolManagementError = nil
             }
@@ -146,33 +162,34 @@ struct ToolsSectionView: View {
         guard tool.isBuiltIn else { return nil }
         return Binding(
             get: {
-                model.settings.isToolEnabled(tool.name)
+                tool.toolNames.allSatisfy(model.settings.isToolEnabled)
                     && (tool.configuration?.isConfigured ?? true)
             },
             set: { enabled in
                 guard enabled else {
-                    model.settings.setToolEnabled(false, toolName: tool.name)
+                    setEnabled(false, for: tool)
                     return
                 }
                 guard let configuration = tool.configuration else {
-                    model.settings.setToolEnabled(true, toolName: tool.name)
+                    setEnabled(true, for: tool)
                     return
                 }
                 guard configuration.isConfigured else {
-                    model.settings.setToolEnabled(false, toolName: tool.name)
+                    setEnabled(false, for: tool)
                     configurationPendingEnablement = tool.name
                     inspecting = tool
                     return
                 }
-                model.settings.setToolEnabled(true, toolName: tool.name)
+                setEnabled(true, for: tool)
             }
         )
     }
 
     private func inspect(_ tool: ToolItem) {
         if let configuration = tool.configuration,
-           configuration.isConfigured,
-           model.settings.isToolEnabled(tool.name) {
+            configuration.isConfigured,
+            tool.toolNames.allSatisfy(model.settings.isToolEnabled)
+        {
             configurationPendingEnablement = tool.name
         }
         inspecting = tool
@@ -182,7 +199,7 @@ struct ToolsSectionView: View {
         guard let configuration = tool.configuration else { return }
         let isConfigured = configuration.isConfigured
         if !isConfigured || configurationPendingEnablement == tool.name {
-            model.settings.setToolEnabled(isConfigured, toolName: tool.name)
+            setEnabled(isConfigured, for: tool)
         }
     }
 
@@ -194,30 +211,43 @@ struct ToolsSectionView: View {
 
     private func finishToolConfiguration() {
         guard let toolName = configurationPendingEnablement,
-              let tool = nativeTools.first(where: { $0.name == toolName }),
-              let configuration = tool.configuration
+            let tool = nativeTools.first(where: { $0.toolNames.contains(toolName) }),
+            let configuration = tool.configuration
         else {
             configurationPendingEnablement = nil
             return
         }
-        model.settings.setToolEnabled(
-            configuration.isConfigured,
-            toolName: tool.name
-        )
+        setEnabled(configuration.isConfigured, for: tool)
         configurationPendingEnablement = nil
     }
 
     private var nativeTools: [ToolItem] {
-        ChatToolRegistry.descriptors(canEditImage: false).map {
-            ToolItem(
-                name: $0.definition.function.name,
-                title: $0.configuration?.displayName ?? humanized($0.definition.function.name),
-                detail: $0.displayDescription,
-                parameters: $0.definition.function.parameters,
+        var seenConfigurations = Set<ChatNativeToolConfiguration>()
+        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+            let configuration = descriptor.configuration
+            if let configuration,
+                configuration.toolNames.count > 1,
+                !seenConfigurations.insert(configuration).inserted
+            {
+                return nil
+            }
+            let name = descriptor.definition.function.name
+            return ToolItem(
+                name: name,
+                toolNames: configuration?.toolNames ?? [name],
+                title: configuration?.displayName ?? humanized(name),
+                detail: descriptor.displayDescription,
+                parameters: descriptor.definition.function.parameters,
                 isRunnable: false,
                 isBuiltIn: true,
-                configuration: $0.configuration
+                configuration: configuration
             )
+        }
+    }
+
+    private func setEnabled(_ enabled: Bool, for tool: ToolItem) {
+        for toolName in tool.toolNames {
+            model.settings.setToolEnabled(enabled, toolName: toolName)
         }
     }
 
@@ -287,6 +317,7 @@ struct ToolsSectionView: View {
 struct ToolItem: Identifiable {
     var id: String { name }
     let name: String
+    var toolNames: [String] = []
     let title: String
     let detail: String
     var parameters: MLXJSONValue?
@@ -373,8 +404,8 @@ private struct BrowsingToolConfigurationView: View {
                             ? "Choose the provider used for web search."
                             : "Choose the provider used to read source pages."
                     )
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 16)
                 Button(action: { dismiss() }) {
@@ -472,13 +503,17 @@ private struct ToolInspectorView: View {
                                 .padding(8)
                         }
                         .frame(height: 130)
-                        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+                        .background(
+                            Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
             } else {
-                Text(tool.executionHint ?? "Built-in tools run inside a chat when a tool-capable model calls them.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                Text(
+                    tool.executionHint
+                        ?? "Built-in tools run inside a chat when a tool-capable model calls them."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             }
         }
         .padding(20)
@@ -486,7 +521,9 @@ private struct ToolInspectorView: View {
     }
 
     @ViewBuilder
-    private func section<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
+    private func section<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             content()
@@ -498,7 +535,8 @@ private struct ToolInspectorView: View {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(parameters),
-              let text = String(data: data, encoding: .utf8) else {
+            let text = String(data: data, encoding: .utf8)
+        else {
             return "No schema provided."
         }
         return text
@@ -559,10 +597,13 @@ private struct CustomToolEditorSheet: View {
         _scriptLanguage = State(initialValue: tool?.scriptLanguage ?? .python)
         _script = State(initialValue: tool?.script ?? CustomToolScriptLanguage.python.template)
         _headerName = State(initialValue: tool?.headerName ?? "")
-        _parametersJSON = State(initialValue: tool?.parametersJSON ?? CustomTool.defaultParametersJSON)
-        _verifiedScriptSignature = State(initialValue: tool?.kind == .script
-            ? Self.scriptSignature(language: tool?.scriptLanguage ?? .python, script: tool?.script ?? "")
-            : nil)
+        _parametersJSON = State(
+            initialValue: tool?.parametersJSON ?? CustomTool.defaultParametersJSON)
+        _verifiedScriptSignature = State(
+            initialValue: tool?.kind == .script
+                ? Self.scriptSignature(
+                    language: tool?.scriptLanguage ?? .python, script: tool?.script ?? "")
+                : nil)
     }
 
     var body: some View {
@@ -570,11 +611,13 @@ private struct CustomToolEditorSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(tool == nil ? "Add Tool" : "Edit Tool")
                     .font(.system(size: 17, weight: .semibold))
-                Text(kind == .endpoint
-                    ? "Send model-provided JSON to an HTTP endpoint."
-                    : "Run a local script with model-provided JSON.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                Text(
+                    kind == .endpoint
+                        ? "Send model-provided JSON to an HTTP endpoint."
+                        : "Run a local script with model-provided JSON."
+                )
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
             }
 
             form
@@ -738,7 +781,9 @@ private struct CustomToolEditorSheet: View {
             get: { kind },
             set: { newKind in
                 kind = newKind
-                if newKind == .script && script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if newKind == .script
+                    && script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
                     script = scriptLanguage.template
                 }
                 resetFeedback()
@@ -750,7 +795,8 @@ private struct CustomToolEditorSheet: View {
         Binding(
             get: { scriptLanguage },
             set: { newLanguage in
-                let shouldReplaceTemplate = script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let shouldReplaceTemplate =
+                    script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || script == scriptLanguage.template
                 scriptLanguage = newLanguage
                 if shouldReplaceTemplate {
@@ -791,7 +837,9 @@ private struct CustomToolEditorSheet: View {
     }
 
     @ViewBuilder
-    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
@@ -806,13 +854,16 @@ private struct CustomToolEditorSheet: View {
                 return
             }
             let savedTool = try makeTool()
-            guard !model.settings.customTools.contains(where: {
-                $0.id != savedTool.id && $0.toolName == savedTool.toolName
-            }) else {
+            guard
+                !model.settings.customTools.contains(where: {
+                    $0.id != savedTool.id && $0.toolName == savedTool.toolName
+                })
+            else {
                 validationError = "A tool with that name already exists."
                 return
             }
-            try CustomToolKeychain().save(savedTool.kind == .endpoint ? headerValue : nil, for: savedTool.id)
+            try CustomToolKeychain().save(
+                savedTool.kind == .endpoint ? headerValue : nil, for: savedTool.id)
             if let index = model.settings.customTools.firstIndex(where: { $0.id == savedTool.id }) {
                 model.settings.customTools[index] = savedTool
             } else {
@@ -899,7 +950,9 @@ private struct CustomToolEditorSheet: View {
         testResult = nil
     }
 
-    private static func scriptSignature(language: CustomToolScriptLanguage, script: String) -> String {
+    private static func scriptSignature(language: CustomToolScriptLanguage, script: String)
+        -> String
+    {
         "\(language.rawValue)\u{0}\(script)"
     }
 }

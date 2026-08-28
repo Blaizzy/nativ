@@ -102,6 +102,7 @@ struct RoutineEditor: View {
         options += ChatToolRegistry.descriptors(canEditImage: false)
             .filter {
                 $0.definition.function.name != ChatSwitchModelToolRegistry.toolName
+                    && $0.configuration != .fileWrite
                     && !disabledNames.contains($0.definition.function.name)
                     && ($0.configuration != .webSearch || ChatWebSearchToolRegistry.isConfigured())
                     && ($0.configuration != .fileRead
@@ -115,8 +116,8 @@ struct RoutineEditor: View {
                     capability: .tool(ScheduledTool(provider: .builtIn, name: definition.name)),
                     section: .tools,
                     title: descriptor.configuration?.displayName ?? humanized(definition.name),
-                    detail: definition.name == ChatReadFileToolRegistry.toolName
-                        ? "Reads only within \(model.settings.fileReadRootPath ?? "the configured File Read folder"). Runs without confirmation in scheduled tasks."
+                    detail: ChatReadFileToolRegistry.toolNames.contains(definition.name)
+                        ? "Reads or searches only within \(model.settings.fileReadRootPath ?? "the configured File Read folder"). Runs without confirmation in scheduled tasks."
                         : definition.description,
                     systemImage: "hammer"
                 )

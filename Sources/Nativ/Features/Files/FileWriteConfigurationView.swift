@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 extension Notification.Name {
-    static let fileReadConfigurationDidChange = Notification.Name(
-        "dev.local.Nativ.file-read-configuration-did-change"
+    static let fileWriteConfigurationDidChange = Notification.Name(
+        "dev.local.Nativ.file-write-configuration-did-change"
     )
 }
 
-struct FileReadConfigurationView: View {
+struct FileWriteConfigurationView: View {
     var model: NativModel
     let onConfigurationChanged: (Bool) -> Void
 
@@ -15,18 +15,16 @@ struct FileReadConfigurationView: View {
     @State private var errorMessage: String?
 
     private var configuredRootURL: URL? {
-        FileReadAccessPolicy.configuredRootURL(
-            rootPath: model.settings.fileReadRootPath
-        )
+        FileWriteAccessPolicy.configuredRootURL(rootPath: model.settings.fileWriteRootPath)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("File Read")
+                    Text("File Write")
                         .font(.title2.weight(.semibold))
-                    Text("Choose the folder where Nativ tools may read and search.")
+                    Text("Choose the folder where Nativ tools may create and edit files.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -44,8 +42,8 @@ struct FileReadConfigurationView: View {
 
                     Text(
                         configuredRootURL == nil
-                            ? "The read_file and search_files tools remain unavailable until a folder is selected."
-                            : "Relative paths resolve inside this folder. Absolute paths and symlinks cannot escape it."
+                            ? "File editing remains unavailable until a folder is selected."
+                            : "File editing is confined to this folder. Protected instruction and credential configuration files still require confirmation."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -55,9 +53,7 @@ struct FileReadConfigurationView: View {
                             chooseFolder()
                         }
                         if configuredRootURL != nil {
-                            Button("Remove", role: .destructive) {
-                                updateRoot(nil)
-                            }
+                            Button("Remove", role: .destructive) { updateRoot(nil) }
                         }
                     }
                 }
@@ -69,11 +65,10 @@ struct FileReadConfigurationView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-
             Spacer()
         }
         .padding(22)
-        .frame(width: 520, height: 300)
+        .frame(width: 560, height: 320)
     }
 
     private func chooseFolder() {
@@ -81,15 +76,15 @@ struct FileReadConfigurationView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.prompt = "Allow Reading"
-        panel.message = "Choose the folder that Nativ’s File Read tools may access."
+        panel.canCreateDirectories = true
+        panel.prompt = "Allow Writing"
+        panel.message = "Choose the folder that Nativ's File Write tools may modify."
         panel.directoryURL = configuredRootURL
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
-        guard FileReadAccessPolicy.isConfigured(rootPath: resolved.path) else {
-            errorMessage = "That folder is not readable."
+        guard FileWriteAccessPolicy.isConfigured(rootPath: resolved.path) else {
+            errorMessage = "That folder is not writable."
             return
         }
         updateRoot(resolved.path)
@@ -97,9 +92,9 @@ struct FileReadConfigurationView: View {
 
     private func updateRoot(_ path: String?) {
         errorMessage = nil
-        model.settings.fileReadRootPath = path
-        let configured = FileReadAccessPolicy.isConfigured(rootPath: path)
-        NotificationCenter.default.post(name: .fileReadConfigurationDidChange, object: nil)
+        model.settings.fileWriteRootPath = path
+        let configured = FileWriteAccessPolicy.isConfigured(rootPath: path)
+        NotificationCenter.default.post(name: .fileWriteConfigurationDidChange, object: nil)
         onConfigurationChanged(configured)
     }
 }
