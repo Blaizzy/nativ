@@ -862,6 +862,41 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func toolRouter(for settings: NativSettings) -> NativToolRouter {
+        var providers: [any NativCapabilityProvider] = [
+            CustomToolProvider(tools: settings.customTools)
+        ]
+        if let host = mcpHost {
+            providers.append(HostedMCPToolProvider(host: host))
+        }
+        return NativToolRouter(providers: providers, fallback: NativeToolProvider())
+    }
+
+    func answerToolConsent(requestID: UUID, in sessionID: UUID) async -> ChatToolConsentOutcome {
+        updateToolMessage(
+            requestID,
+            in: sessionID,
+            status: .awaitingConsent,
+            content: "",
+            attachments: []
+        )
+        let approved = await awaitToolConsent(for: requestID)
+        let outcome = ChatToolConsentRouter.outcome(
+            approved: approved,
+            isCancelled: Task.isCancelled
+        )
+        if outcome == .approved {
+            updateToolMessage(
+                requestID,
+                in: sessionID,
+                status: .running,
+                content: "",
+                attachments: []
+            )
+        }
+        return outcome
+    }
+
     private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
         await toolConsentGate.awaitDecision(for: toolMessageID)
     }
@@ -1238,7 +1273,7 @@ final class ChatViewModel: ObservableObject {
                 documentContext.result.omittedDocuments,
                 for: queuedRequest.sessionID
             )
-            guard let request = makeCompletionRequest(
+            guard let request = await makeCompletionRequest(
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
@@ -1299,45 +1334,6 @@ final class ChatViewModel: ObservableObject {
                 let customTool = toolCall.function?.name.flatMap { toolName in
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
-                if customTool?.kind == .script {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
-                    }
-                }
-
                 if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
@@ -1475,20 +1471,35 @@ final class ChatViewModel: ObservableObject {
                             )
                         }
                     )
+                    let result = try await toolRouter(for: queuedRequest.settings).call(
+                        toolCall.function?.name ?? "",
+                        argumentsJSON: toolCall.function?.arguments,
+                        context: context,
+                        requestID: toolMessageID,
+                        asking: ChatConsentAsker(chat: self, sessionID: queuedRequest.sessionID)
+                    )
                     let outcome: ChatToolExecutionOutcome
-                    if let customTool {
-                        let result = try await CustomToolExecutor.execute(
-                            customTool,
-                            argumentsJSON: toolCall.function?.arguments
+                    switch result {
+                    case .completed(let completed):
+                        outcome = completed
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: #"{"ok":false,"error":"The user declined to run this script tool."}"#,
+                            attachments: []
                         )
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else if let host = mcpHost,
-                              let toolName = toolCall.function?.name,
-                              host.handlesTool(named: toolName) {
-                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else {
-                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
+                        continue
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
                     }
                     updateToolMessage(
                         toolMessageID,
@@ -1635,7 +1646,7 @@ final class ChatViewModel: ObservableObject {
         advertisesTools: Bool,
         settings: NativSettings,
         documentContexts: [UUID: String]
-    ) -> MLXChatCompletionRequest? {
+    ) async -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
               let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
               let assistantIndex = sessionMessages.firstIndex(where: { $0.id == assistantMessageID })
@@ -1652,30 +1663,19 @@ final class ChatViewModel: ObservableObject {
         }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
-            ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { message in
-                    message.imageAttachments.contains { $0.chatAttachmentKind == .image }
-                }
-            )
-            : []
+        var toolDefinitions: [MLXChatToolDefinition] = []
         if advertisesToolsForModel {
-            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
-            let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
-            let fileReadIsConfigured = FileReadAccessPolicy.isConfigured(
-                rootPath: settings.fileReadRootPath
-            )
-            toolDefinitions.removeAll {
-                !settings.isToolEnabled($0.function.name)
-                    || ($0.function.name == ChatWebSearchToolRegistry.toolName
-                        && !webSearchIsConfigured)
-                    || ($0.function.name == ChatWebReadToolRegistry.toolName
-                        && !webReadIsConfigured)
-                    || ($0.function.name == ChatReadFileToolRegistry.toolName
-                        && !fileReadIsConfigured)
+            let canEditImage = precedingMessages.contains { message in
+                message.imageAttachments.contains { $0.chatAttachmentKind == .image }
             }
+            toolDefinitions = await toolRouter(for: settings).definitions(
+                NativToolCatalogOptions(
+                    canEditImage: canEditImage,
+                    disabledToolNames: Set(settings.disabledToolNames),
+                    webSearchIsConfigured: ChatWebSearchToolRegistry.isConfigured(),
+                    webReadIsConfigured: ChatWebReadToolRegistry.isConfigured()
+                )
+            )
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
@@ -2378,5 +2378,15 @@ final class ChatViewModel: ObservableObject {
             RoutineStore.shared.detachSession(sessionID)
             sessionStore.deleteSession(id: sessionID)
         }
+    }
+}
+
+struct ChatConsentAsker: NativInteraction {
+    let chat: ChatViewModel
+    let sessionID: UUID
+
+    @MainActor
+    func requestConsent(for toolName: String, requestID: UUID) async -> ChatToolConsentOutcome {
+        await chat.answerToolConsent(requestID: requestID, in: sessionID)
     }
 }

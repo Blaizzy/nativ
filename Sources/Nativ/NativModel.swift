@@ -62,6 +62,7 @@ final class ServerLogStore {
 @Observable
 final class NativModel: ChatModelSwitchingSurface {
     private(set) var isRunning = false
+    private(set) var agentAccessState: NativMCPState = .off
     let serverLogs = ServerLogStore()
     private(set) var metrics: NativMetrics?
     private(set) var lastMetricsError: String?
@@ -980,6 +981,28 @@ final class NativModel: ChatModelSwitchingSurface {
         default:
             return false
         }
+    }
+
+    func voiceTranscriptionConfiguration() -> VoiceTranscriptionConfiguration {
+        let settings = settings.normalized()
+        return VoiceTranscriptionConfiguration(
+            modelSearchPath: settings.modelSearchPath,
+            additionalModelSearchPaths: settings.additionalModelSearchPaths,
+            selectedModelID: settings.speechToTextModelID,
+            languageModelID: settings.languageModelID,
+            maxTokens: settings.maxTokens,
+            serverBaseURL: activeServerBaseURL ?? settings.serverBaseURL,
+            serverAPIKey: settings.serverAPIKey,
+            serverIsRunning: isRunning
+        )
+    }
+
+    func setAgentAccessState(_ state: NativMCPState) {
+        agentAccessState = state
+    }
+
+    func appendAgentAccessLog(_ line: String) {
+        appendLog("[external plugin] \(line)\n")
     }
 
     private func appendLog(_ text: String) {

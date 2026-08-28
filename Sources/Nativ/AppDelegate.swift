@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import NativServerKit
 import SwiftUI
 import UserNotifications
@@ -11,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private lazy var extensionManager = NativExtensionManager(
         builtInExtensions: [voiceDictationExtension]
     )
+    private lazy var agentAccess = NativMCPService(preferences: .shared)
+    private var agentAccessObserver: AnyCancellable?
+    private var agentAccessTask: Task<Void, Never>?
     private let controlPanelNavigation = ControlPanelNavigation()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
@@ -40,6 +44,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private var downloadShutdownTask: Task<Void, Never>?
     private var didFinishDownloadShutdown = false
 
+    private func startAgentAccess() {
+        let preferences = NativMCPPreferences.shared
+        agentAccessObserver = preferences.objectWillChange
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.restartAgentAccess()
+            }
+        restartAgentAccess()
+    }
+
+    private func restartAgentAccess() {
+        let previous = agentAccessTask
+        agentAccessTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else {
+                return
+            }
+            await self.agentAccess.restart(model: self.model)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()
@@ -49,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         }
         runtime.start()
         setUpRoutines()
+        startAgentAccess()
         model.onMenuStateChanged = { [weak self] in
             self?.statusMenuController.modelStateDidChange()
         }
@@ -64,17 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
                     guard let self else {
                         return nil
                     }
-                    let settings = self.model.settings.normalized()
-                    return VoiceTranscriptionConfiguration(
-                        modelSearchPath: settings.modelSearchPath,
-                        additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                        selectedModelID: settings.speechToTextModelID,
-                        languageModelID: settings.languageModelID,
-                        maxTokens: settings.maxTokens,
-                        serverBaseURL: self.model.activeServerBaseURL ?? settings.serverBaseURL,
-                        serverAPIKey: settings.serverAPIKey,
-                        serverIsRunning: self.model.isRunning
-                    )
+                    return self.model.voiceTranscriptionConfiguration()
                 },
                 openSpeechModels: { [weak self] in
                     self?.controlPanelNavigation.openSpeechModelDiscovery()
@@ -127,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         systemMenuBarPreferences.onChange = nil
         runtime.stop()
         model.applicationWillTerminate()
+        agentAccessObserver = nil
     }
 
     var rootView: some View {
