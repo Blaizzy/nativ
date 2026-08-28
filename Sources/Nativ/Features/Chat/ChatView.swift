@@ -77,7 +77,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .font(.system(size: 15, weight: .medium))
+                    .nativTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)

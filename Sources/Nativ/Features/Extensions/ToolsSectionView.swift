@@ -142,7 +142,7 @@ struct ToolsSectionView: View {
     private func toolGroup(title: String, tools: [ToolItem]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .nativTextStyle(.badge)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
@@ -341,11 +341,11 @@ private struct ToolRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(tool.title)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .nativTextStyle(.technicalLabel)
                 }
                 if !tool.detail.isEmpty {
                     Text(tool.detail)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -398,14 +398,14 @@ private struct BrowsingToolConfigurationView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(toolName)
-                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .nativTextStyle(.technicalDisplayTitle)
                     Text(
                         capability == .search
                             ? "Choose the provider used for web search."
                             : "Choose the provider used to read source pages."
                     )
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                        .nativTextStyle(.supporting)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 16)
                 Button(action: { dismiss() }) {
@@ -443,10 +443,10 @@ private struct ToolInspectorView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(tool.title)
-                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                        .nativTextStyle(.technicalTitle)
                     if !tool.detail.isEmpty {
                         Text(tool.detail)
-                            .font(.system(size: 12))
+                            .nativTextStyle(.supporting)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -462,7 +462,7 @@ private struct ToolInspectorView: View {
             section("Input schema") {
                 ScrollView {
                     Text(schemaText)
-                        .font(.system(size: 11, design: .monospaced))
+                        .nativTextStyle(.code)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
@@ -474,7 +474,7 @@ private struct ToolInspectorView: View {
             if tool.isRunnable {
                 section("Try it — arguments (JSON)") {
                     TextEditor(text: $argumentsJSON)
-                        .font(.system(size: 12, design: .monospaced))
+                        .nativTextStyle(.code)
                         .frame(height: 70)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
@@ -491,13 +491,13 @@ private struct ToolInspectorView: View {
                     Spacer()
                 }
                 if let errorText {
-                    Text(errorText).font(.system(size: 11)).foregroundStyle(.red)
+                    Text(errorText).nativTextStyle(.supporting).foregroundStyle(.red)
                 }
                 if let result {
                     section("Result") {
                         ScrollView {
                             Text(result)
-                                .font(.system(size: 11, design: .monospaced))
+                                .nativTextStyle(.code)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(8)
@@ -512,7 +512,7 @@ private struct ToolInspectorView: View {
                     tool.executionHint
                         ?? "Built-in tools run inside a chat when a tool-capable model calls them."
                 )
-                .font(.system(size: 11))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
             }
         }
@@ -525,7 +525,7 @@ private struct ToolInspectorView: View {
         -> some View
     {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            Text(label).nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
             content()
         }
     }
@@ -610,13 +610,13 @@ private struct CustomToolEditorSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(tool == nil ? "Add Tool" : "Edit Tool")
-                    .font(.system(size: 17, weight: .semibold))
+                    .nativTextStyle(.sheetTitle)
                 Text(
                     kind == .endpoint
                         ? "Send model-provided JSON to an HTTP endpoint."
                         : "Run a local script with model-provided JSON."
                 )
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
             }
 
@@ -624,12 +624,12 @@ private struct CustomToolEditorSheet: View {
 
             if let validationError {
                 Text(validationError)
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.red)
             }
             if let testResult {
                 Text(testResult)
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(validationError == nil ? .green : .red)
                     .lineLimit(2)
             }
@@ -639,7 +639,7 @@ private struct CustomToolEditorSheet: View {
                 Spacer()
                 if kind == .script, isScriptVerified {
                     Label("Verified", systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 11, weight: .medium))
+                        .nativTextStyle(.actionLabel)
                         .foregroundStyle(.green)
                 }
                 Button(testing ? "Testing…" : testButtonTitle, action: test)
@@ -683,7 +683,7 @@ private struct CustomToolEditorSheet: View {
 
                     field("Parameters") {
                         TextEditor(text: $parametersJSON)
-                            .font(.system(size: 11, design: .monospaced))
+                            .nativTextStyle(.code)
                             .frame(height: 120)
                             .padding(6)
                             .overlay(
@@ -693,12 +693,12 @@ private struct CustomToolEditorSheet: View {
                     }
                     field("Test arguments") {
                         TextField(#"{"query":"test"}"#, text: $testArgumentsJSON)
-                            .font(.system(size: 11, design: .monospaced))
+                            .nativTextStyle(.code)
                     }
                 }
                 .padding(.top, 6)
             }
-            .font(.system(size: 12, weight: .medium))
+            .nativTextStyle(.supportingEmphasized)
         }
     }
 
@@ -709,7 +709,7 @@ private struct CustomToolEditorSheet: View {
                 .textContentType(.URL)
         }
         Text("Uses POST with a JSON request body.")
-            .font(.system(size: 11))
+            .nativTextStyle(.supporting)
             .foregroundStyle(.secondary)
     }
 
@@ -726,11 +726,11 @@ private struct CustomToolEditorSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text(scriptLanguage.availabilityNote)
-                .font(.system(size: 11))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
             field("Script") {
                 TextEditor(text: $script)
-                    .font(.system(size: 11, design: .monospaced))
+                    .nativTextStyle(.code)
                     .frame(height: 180)
                     .padding(6)
                     .overlay(
@@ -739,7 +739,7 @@ private struct CustomToolEditorSheet: View {
                     )
             }
             Text("Arguments arrive as JSON on stdin. Return the tool result on stdout.")
-                .font(.system(size: 11))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
         }
     }
@@ -771,7 +771,7 @@ private struct CustomToolEditorSheet: View {
                 }
             }
             Text("The header value is saved only in Keychain.")
-                .font(.system(size: 11))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
         }
     }
@@ -842,7 +842,7 @@ private struct CustomToolEditorSheet: View {
     {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .nativTextStyle(.supportingEmphasized)
             content()
         }
     }

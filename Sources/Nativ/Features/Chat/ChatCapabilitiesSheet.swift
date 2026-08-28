@@ -133,13 +133,13 @@ struct ChatCapabilitiesSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Directory")
-                    .font(.system(size: 18, weight: .semibold))
+                    .nativTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("These settings apply to every chat.")
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             TextField("Search directory", text: $query)
@@ -152,7 +152,7 @@ struct ChatCapabilitiesSheet: View {
                             query.isEmpty
                                 ? "No capabilities are available." : "No matching capabilities."
                         )
-                        .font(.system(size: 12))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 44)
@@ -176,7 +176,7 @@ struct ChatCapabilitiesSheet: View {
         if !sectionItems.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(kind.title.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
+                    .nativTextStyle(.badge)
                     .foregroundStyle(.secondary)
 
                 VStack(spacing: 0) {
@@ -216,12 +216,12 @@ struct ChatCapabilitiesSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .nativTextStyle(.rowTitleEmphasized)
                     .foregroundStyle(item.isAvailable ? Color.primary : Color.secondary)
 
                 if item.isAvailable {
                     Text(item.detail)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 } else if let setupSection = item.setupSection {
                     GlobalCapabilitySetupDetail(detail: item.detail) {
@@ -310,13 +310,13 @@ struct ChatKitsPickerSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Kits")
-                    .font(.title3.weight(.semibold))
+                    .nativTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("Enable a ready-made set of capabilities for every chat.")
-                .font(.body)
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             ScrollView {
@@ -378,17 +378,17 @@ struct ChatKitsPickerSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(kit.name)
-                    .font(.headline)
+                    .nativTextStyle(.rowTitle)
                     .foregroundStyle(.primary)
                 Text(kit.summary)
-                    .font(.caption)
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Label(
                     actionTitle,
                     systemImage: state == .enabled ? "checkmark.circle.fill" : "plus.circle"
                 )
-                .font(.caption)
+                .nativTextStyle(.actionLabel)
                 .foregroundStyle(state == .enabled ? Color.green : Color.accentColor)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -413,7 +413,7 @@ private struct GlobalCapabilitySetupDetail: View {
                     .underline()
             }
         }
-        .font(.system(size: 11))
+        .nativTextStyle(.metadata)
         .multilineTextAlignment(.leading)
         .buttonStyle(.plain)
         .environment(

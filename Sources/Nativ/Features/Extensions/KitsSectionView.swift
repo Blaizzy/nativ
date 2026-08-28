@@ -110,15 +110,15 @@ private struct KitCard: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(kit.name)
-                    .font(.headline)
+                    .nativTextStyle(.cardTitle)
                 Text(kit.summary)
-                    .font(.subheadline)
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(capabilitiesText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .nativTextStyle(.metadata)
+                .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
@@ -129,6 +129,7 @@ private struct KitCard: View {
                     actions
                 }
             }
+            .nativTextStyle(.supporting)
             .controlSize(.regular)
         }
         .padding(14)
@@ -208,11 +209,11 @@ private struct KitDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(kit.name)
-                        .font(.title3.weight(.semibold))
+                        .nativTextStyle(.detailTitle)
                     KitStateIcon(state: snapshot.state)
                 }
                 Text(kit.summary)
-                    .font(.body)
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if snapshot.state != .enabled {
@@ -332,10 +333,10 @@ private struct KitGroup<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.headline)
+                    .nativTextStyle(.sectionTitle)
                 if let caption {
                     Text(caption)
-                        .font(.caption)
+                        .nativTextStyle(.metadata)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -367,10 +368,10 @@ private struct KitPartRow: View {
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.body.weight(.medium))
+                        .nativTextStyle(.rowTitle)
                     if let subtitle {
                         Text(subtitle)
-                            .font(.caption)
+                            .nativTextStyle(.metadata)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

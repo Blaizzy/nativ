@@ -1648,12 +1648,12 @@ private struct ServerEndpointRow: View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
                 Text(endpoint.method.displayTitle)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .nativTextStyle(.codeEmphasized)
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .font(.system(size: 12, design: .monospaced))
+                    .nativTextStyle(.code)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)

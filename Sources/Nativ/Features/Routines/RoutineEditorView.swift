@@ -189,7 +189,7 @@ struct RoutineEditor: View {
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No tools selected")
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.rowTitle)
                     }
                 }
             } else {
@@ -203,15 +203,15 @@ struct RoutineEditor: View {
                                 .frame(width: 22)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.title)
-                                    .font(.system(size: 12, weight: .medium))
+                                    .nativTextStyle(.supportingEmphasized)
                                 Text(option.summaryLine)
-                                    .font(.system(size: 10))
+                                    .nativTextStyle(.metadata)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 8)
                             Text(option.section.singularTitle)
-                                .font(.system(size: 9, weight: .semibold))
+                                .nativTextStyle(.badge)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
@@ -587,9 +587,9 @@ private struct ScheduledCapabilityPicker: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Tools")
-                    .font(.system(size: 18, weight: .semibold))
+                    .nativTextStyle(.sheetTitle)
                 Text("Choose the tools this scheduled task can use.")
-                    .font(.system(size: 12))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -618,11 +618,11 @@ private struct ScheduledCapabilityPicker: View {
                         let count = count(for: item)
                         if count > 0 {
                             Text("\(count)")
-                                .font(.system(size: 10, weight: .medium))
+                                .nativTextStyle(.badgeMuted)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.system(size: 12, weight: .medium))
+                    .nativTextStyle(.supportingEmphasized)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .foregroundStyle(section == item ? Color.accentColor : Color.primary)
@@ -710,16 +710,16 @@ private struct ScheduledCapabilityPicker: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 7) {
                         Text(option.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.rowTitle)
                         Text(option.section.singularTitle)
-                            .font(.system(size: 9, weight: .semibold))
+                            .nativTextStyle(.badge)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
                     Text(option.summaryLine)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -737,7 +737,7 @@ private struct ScheduledCapabilityPicker: View {
     private var footer: some View {
         HStack {
             Text(selection.isEmpty ? "No tools selected" : "\(selection.count) selected")
-                .font(.system(size: 11))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Done", action: dismiss.callAsFunction)

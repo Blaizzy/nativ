@@ -296,7 +296,7 @@ struct WebBrowsingSettingsView: View {
     private var providerPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Providers")
-                .font(.system(size: 13, weight: .semibold))
+                .nativTextStyle(.sectionTitle)
 
             ForEach(viewModel.availableProviders) { provider in
                 providerRow(provider)
@@ -389,7 +389,7 @@ struct WebBrowsingSettingsView: View {
     private var keySetup: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(viewModel.selectedProvider.metadata.displayName)
-                .font(.system(size: 13, weight: .semibold))
+                .nativTextStyle(.sectionTitle)
 
             routingActions
 
@@ -429,12 +429,12 @@ struct WebBrowsingSettingsView: View {
             if viewModel.selectedCapability == .read,
                let status = viewModel.pageReaderStatus {
                 Label(status, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.orange)
             }
 
             Text("Browsing requests are sent to the selected third-party providers. API keys stay in Keychain.")
-                .font(.system(size: 10))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -448,7 +448,7 @@ struct WebBrowsingSettingsView: View {
             case .search:
                 if viewModel.searchProvider == viewModel.selectedProvider {
                     Label("Search", systemImage: "checkmark")
-                        .font(.system(size: 11, weight: .medium))
+                        .nativTextStyle(.actionLabel)
                         .foregroundStyle(.secondary)
                 } else {
                     Button("Use for Search") {
@@ -460,7 +460,7 @@ struct WebBrowsingSettingsView: View {
             case .read:
                 if viewModel.resolvedPageReaderProvider == viewModel.selectedProvider {
                     Label("Page reading", systemImage: "checkmark")
-                        .font(.system(size: 11, weight: .medium))
+                        .nativTextStyle(.actionLabel)
                         .foregroundStyle(.secondary)
                 } else {
                     Button("Use for Page Reading") {
@@ -524,11 +524,11 @@ struct WebBrowsingSettingsView: View {
             switch status {
             case .connected(let message):
                 Label(message, systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.green)
             case .failure(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.red)
             }
         } else {
@@ -537,11 +537,11 @@ struct WebBrowsingSettingsView: View {
                 EmptyView()
             case .connected:
                 Label("Connected", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.green)
             case .issue(let issue):
                 Label(issue.message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.orange)
             }
         }
