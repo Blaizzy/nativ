@@ -819,6 +819,12 @@ private struct ChatAgentStepCell: View {
                 "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
             )
         }
+        if let toolName = message.toolName,
+           ChatFileWriteToolRegistry.toolNames.contains(toolName) {
+            return Text(
+                "The model wants to modify a protected instruction or credential configuration file in your authorized folder. Confirm to allow this change."
+            )
+        }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
     }
 

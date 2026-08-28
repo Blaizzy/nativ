@@ -15,7 +15,7 @@ private enum GlobalChatCapabilityKind: Int, CaseIterable {
 }
 
 private enum GlobalChatCapabilityTarget: Hashable {
-    case nativeTool(String)
+    case nativeTools([String])
     case customTool(String)
     case skill(UUID)
     case mcpServer(UUID)
@@ -81,7 +81,8 @@ struct ChatCapabilitiesSheet: View {
                 let entry = MCPServerCatalog.bundled.entry(matching: server)
                 let requiredEnvironment = entry?.requiredEnvironment ?? []
                 let hasRequiredEnvironment = requiredEnvironment.allSatisfy {
-                    server.environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    server.environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        == false
                 }
                 return GlobalChatCapabilityItem(
                     id: "mcp-\(server.id.uuidString)",
@@ -104,12 +105,20 @@ struct ChatCapabilitiesSheet: View {
     }
 
     private var nativeToolItems: [GlobalChatCapabilityItem] {
-        ChatToolRegistry.descriptors(canEditImage: false).map { descriptor in
+        var seenConfigurations = Set<ChatNativeToolConfiguration>()
+        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
+            if let configuration,
+                configuration.toolNames.count > 1,
+                !seenConfigurations.insert(configuration).inserted
+            {
+                return nil
+            }
+            let toolNames = configuration?.toolNames ?? [toolName]
             return GlobalChatCapabilityItem(
                 id: "native-tool-\(toolName)",
-                target: .nativeTool(toolName),
+                target: .nativeTools(toolNames),
                 title: configuration?.displayName ?? humanized(toolName),
                 detail: "Tool · Built-in",
                 kind: .tool,
@@ -139,11 +148,14 @@ struct ChatCapabilitiesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     if filteredItems.isEmpty {
-                        Text(query.isEmpty ? "No capabilities are available." : "No matching capabilities.")
-                            .nativTextStyle(.supporting)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 44)
+                        Text(
+                            query.isEmpty
+                                ? "No capabilities are available." : "No matching capabilities."
+                        )
+                        .nativTextStyle(.supporting)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 44)
                     } else {
                         ForEach(GlobalChatCapabilityKind.allCases, id: \.rawValue) { kind in
                             capabilitySection(kind)
@@ -236,7 +248,9 @@ struct ChatCapabilitiesSheet: View {
     private func isEnabled(_ item: GlobalChatCapabilityItem) -> Bool {
         guard item.isAvailable else { return false }
         switch item.target {
-        case .nativeTool(let toolName), .customTool(let toolName):
+        case .nativeTools(let toolNames):
+            return toolNames.allSatisfy(model.settings.isToolEnabled)
+        case .customTool(let toolName):
             return model.settings.isToolEnabled(toolName)
         case .skill(let id):
             return model.settings.skills.first { $0.id == id }?.isEnabled == true
@@ -247,16 +261,25 @@ struct ChatCapabilitiesSheet: View {
 
     private func toggle(_ item: GlobalChatCapabilityItem) {
         switch item.target {
-        case .nativeTool(let toolName), .customTool(let toolName):
+        case .nativeTools(let toolNames):
+            let enabled = !toolNames.allSatisfy(model.settings.isToolEnabled)
+            for toolName in toolNames {
+                model.settings.setToolEnabled(enabled, toolName: toolName)
+            }
+        case .customTool(let toolName):
             model.settings.setToolEnabled(
                 !model.settings.isToolEnabled(toolName),
                 toolName: toolName
             )
         case .skill(let id):
-            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else {
+                return
+            }
             model.settings.skills[index].isEnabled.toggle()
         case .mcpServer(let id):
-            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else {
+                return
+            }
             model.settings.mcpServers[index].isEnabled.toggle()
         }
     }
@@ -393,9 +416,11 @@ private struct GlobalCapabilitySetupDetail: View {
         .nativTextStyle(.metadata)
         .multilineTextAlignment(.leading)
         .buttonStyle(.plain)
-        .environment(\.openURL, OpenURLAction { _ in
-            action()
-            return .handled
-        })
+        .environment(
+            \.openURL,
+            OpenURLAction { _ in
+                action()
+                return .handled
+            })
     }
 }
