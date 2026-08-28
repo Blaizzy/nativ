@@ -72,7 +72,7 @@ enum WelcomeModelCatalog {
         switch tier {
         case .fast:
             return [
-                "mlx-community/LFM2.5-VL-1.6B-8bit",
+                "mlx-community/LFM2.5-2.6B-8bit",
                 "mlx-community/Qwen3.5-0.8B-8bit",
                 "mlx-community/Qwen3-VL-2B-Instruct-4bit"
             ]
