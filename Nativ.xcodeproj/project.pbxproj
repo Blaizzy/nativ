@@ -27,6 +27,7 @@
 		0AB78A4BB9F2D08433653C7C /* HuggingFaceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A832F692EF1E810D78BD6B6C /* HuggingFaceCacheTests.swift */; };
 		0C5F88A2A36645F095B948CE /* ExternalModelCacheLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62A8F15BC67A4D29AF0FC351 /* ExternalModelCacheLocation.swift */; };
 		0D1E6598BCEE4482B6BF73EB /* ExternalModelCacheLocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED0E94070644C808D5765D4 /* ExternalModelCacheLocationTests.swift */; };
+		91C7A31D49F04D20B937AB01 /* ServerPortProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330FEA0F4955A2486E0C3A22 /* ServerPortProbe.swift */; };
 		0B11412D6A9FB77B9A204E7C /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3D808CCA7AE53C7245C3D7 /* Formatting.swift */; };
 		0B5170A046C3C587DE077072 /* PDFDocumentTextExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8513AE482EB6C3113080826A /* PDFDocumentTextExtractorTests.swift */; };
 		0C9F43690B51C4F3012E9DD2 /* ControlPanelSidebarDragAndDrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 087534BC45A233134507ED19 /* ControlPanelSidebarDragAndDrop.swift */; };
@@ -1733,6 +1734,7 @@
 				9E5AB6D42F995E0A78C4EA79 /* HubModelSizeResolver.swift in Sources */,
 				0C5F88A2A36645F095B948CE /* ExternalModelCacheLocation.swift in Sources */,
 				0D1E6598BCEE4482B6BF73EB /* ExternalModelCacheLocationTests.swift in Sources */,
+				91C7A31D49F04D20B937AB01 /* ServerPortProbe.swift in Sources */,
 				A2DF29E907CC0CEF6EF86FBD /* HuggingFaceCache.swift in Sources */,
 				0AB78A4BB9F2D08433653C7C /* HuggingFaceCacheTests.swift in Sources */,
 				E5DF6B83A09106489F564CED /* HuggingFaceCuratedModelLoaderTests.swift in Sources */,

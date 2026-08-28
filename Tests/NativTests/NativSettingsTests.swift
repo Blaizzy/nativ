@@ -96,6 +96,32 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.usesExternalModelCache)
     }
 
+    func testChangingModelCacheClearsEveryModelSelection() {
+        var settings = NativSettings(
+            languageModelID: "org/language",
+            imageGenerationModelID: "org/image",
+            textToSpeechModelID: "org/tts",
+            speechToTextModelID: "org/stt",
+            embeddingModelID: "org/embeddings",
+            speculativeDecodingEnabled: true,
+            draftModelID: "org/draft"
+        )
+
+        settings.clearModelSelections()
+
+        for slot in ModelPreloadSlot.allCases {
+            XCTAssertNil(settings.modelID(for: slot))
+        }
+        XCTAssertEqual(settings.draftModelID, "")
+        XCTAssertFalse(settings.speculativeDecodingActive)
+        XCTAssertFalse(settings.launchArguments.contains("--model"))
+        XCTAssertFalse(settings.launchArguments.contains("--image-model"))
+        XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
+        XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
+        XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
+        XCTAssertFalse(settings.launchArguments.contains("--draft-model"))
+    }
+
     func testBookmarkWithoutVolumeIdentifierIsNotAnExternalSelection() {
         let settings = NativSettings(
             modelSearchPath: "/Volumes/Models/Nativ",

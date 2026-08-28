@@ -1188,6 +1188,13 @@ struct NativSettings: Codable, Equatable {
         externalModelCacheVolumeIdentifier = nil
     }
 
+    mutating func clearModelSelections() {
+        for slot in ModelPreloadSlot.allCases {
+            setModelID(nil, for: slot)
+        }
+        draftModelID = ""
+    }
+
     var localModelSearchPaths: LocalModelSearchPaths {
         LocalModelSearchPaths(
             primary: modelSearchPath,

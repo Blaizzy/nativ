@@ -776,13 +776,13 @@ final class NativModel: ChatModelSwitchingSurface {
         let reference = try ExternalModelCacheLocation.makeReference(for: selectedURL)
         var updatedSettings = settings
         updatedSettings.setExternalModelCache(reference)
-        settings = updatedSettings
-        externalModelCacheState = .available(
-            path: reference.url.path,
-            availableCapacity: reference.availableCapacity
+        switchModelCache(
+            to: updatedSettings,
+            state: .available(
+                path: reference.url.path,
+                availableCapacity: reference.availableCapacity
+            )
         )
-        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
-        restartServer()
     }
 
     func restoreDefaultModelCache() throws {
@@ -792,10 +792,41 @@ final class NativModel: ChatModelSwitchingSurface {
 
         var updatedSettings = settings
         updatedSettings.restoreDefaultModelCache()
-        settings = updatedSettings
-        externalModelCacheState = .systemDefault
+        switchModelCache(to: updatedSettings, state: .systemDefault)
+    }
+
+    private func switchModelCache(
+        to updatedSettings: NativSettings,
+        state: ExternalModelCacheLocation.State
+    ) {
+        let shouldRestartServer = server.isRunning
+        if shouldRestartServer {
+            stopServer(preserveSessionStats: false, reason: .configurationRestart)
+            guard !server.isRunning else {
+                appendLog("\nCould not stop mlx-vlm-server to change model storage.\n")
+                return
+            }
+        }
+
+        cancelPendingModelPreloadSwitch()
+        modelSwitchWatchdog?.cancel()
+        modelSwitchWatchdog = nil
+        modelSwitchInProgress = false
+        modelSwitchTargetID = nil
+        modelLoadingProgress = nil
+        clearPreservedSessionStats()
+        stopMetricsPolling(clearSession: true)
+        clearModelLoadFailure()
+
+        var settingsForNewCache = updatedSettings
+        settingsForNewCache.clearModelSelections()
+        settings = settingsForNewCache
+        externalModelCacheState = state
         NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
-        restartServer()
+
+        if shouldRestartServer {
+            startServer()
+        }
     }
 
     func refreshExternalModelCacheState() {
