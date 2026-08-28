@@ -73,6 +73,57 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.text))
     }
 
+    func testDeleteRemovesModelFromSystemCache() async throws {
+        let repoID = "org/model"
+        let repository = temporaryCache.appendingPathComponent(
+            "models--org--model",
+            isDirectory: true
+        )
+        let lock = temporaryCache
+            .appendingPathComponent(".locks", isDirectory: true)
+            .appendingPathComponent("models--org--model", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: repository,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: lock,
+            withIntermediateDirectories: true
+        )
+
+        try await LocalModelDiscovery.delete(repoID: repoID, path: temporaryCache.path)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: repository.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lock.path))
+    }
+
+    func testDeleteRejectsUnexpectedVolumeBeforeRemovingModel() async throws {
+        let repository = temporaryCache.appendingPathComponent(
+            "models--org--model",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: repository,
+            withIntermediateDirectories: true
+        )
+
+        do {
+            try await LocalModelDiscovery.delete(
+                repoID: "org/model",
+                path: temporaryCache.path,
+                volumeIdentifier: "external-volume"
+            )
+            XCTFail("Deletion must reject a cache on the wrong volume")
+        } catch {
+            XCTAssertEqual(
+                error as? ExternalModelCacheLocation.ValidationError,
+                .internalVolume
+            )
+        }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repository.path))
+    }
+
     func testClassifiesEncoderWithPoolingAsEmbeddingModel() async throws {
         try makeTextModelSnapshot(
             repoID: "org/xlm-roberta-embed",

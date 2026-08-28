@@ -96,7 +96,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.usesExternalModelCache)
     }
 
-    func testChangingModelCacheClearsEveryModelSelection() {
+    func testClearingModelSelectionsRemovesEveryPreloadedModel() {
         var settings = NativSettings(
             languageModelID: "org/language",
             imageGenerationModelID: "org/image",
@@ -120,6 +120,60 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
         XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
         XCTAssertFalse(settings.launchArguments.contains("--draft-model"))
+    }
+
+    func testClearingModelSelectionsPreservesUnrelatedConfiguration() {
+        let bookmark = Data([1, 2, 3])
+        var settings = NativSettings(
+            modelSearchPath: "/Volumes/Models/Nativ",
+            externalModelCacheBookmark: bookmark,
+            externalModelCacheVolumeIdentifier: "external-volume",
+            additionalModelSearchPaths: ["~/Models"],
+            languageModelID: "org/language",
+            imageGenerationModelID: "org/image",
+            textToSpeechModelID: "org/tts",
+            speechToTextModelID: "org/stt",
+            embeddingModelID: "org/embeddings",
+            serverHost: "127.0.0.2",
+            serverPort: 9_999,
+            maxTokens: 4_096,
+            speculativeDecodingEnabled: true,
+            draftModelID: "org/draft",
+            draftKind: "eagle3",
+            draftBlockSize: 8,
+            prefixCachingEnabled: true,
+            modelConfigs: [
+                "org/language": ModelConfigProfile(thinkingEnabled: true)
+            ]
+        )
+
+        settings.clearModelSelections()
+
+        XCTAssertEqual(settings.modelSearchPath, "/Volumes/Models/Nativ")
+        XCTAssertEqual(settings.externalModelCacheBookmark, bookmark)
+        XCTAssertEqual(settings.externalModelCacheVolumeIdentifier, "external-volume")
+        XCTAssertEqual(settings.additionalModelSearchPaths, ["~/Models"])
+        XCTAssertEqual(settings.serverHost, "127.0.0.2")
+        XCTAssertEqual(settings.serverPort, 9_999)
+        XCTAssertEqual(settings.maxTokens, 4_096)
+        XCTAssertTrue(settings.speculativeDecodingEnabled)
+        XCTAssertEqual(settings.draftKind, "eagle3")
+        XCTAssertEqual(settings.draftBlockSize, 8)
+        XCTAssertTrue(settings.prefixCachingEnabled)
+        XCTAssertEqual(
+            settings.modelConfigs["org/language"],
+            ModelConfigProfile(thinkingEnabled: true)
+        )
+    }
+
+    func testClearingModelSelectionsIsIdempotent() {
+        var settings = NativSettings()
+        let original = settings
+
+        settings.clearModelSelections()
+        settings.clearModelSelections()
+
+        XCTAssertEqual(settings, original)
     }
 
     func testBookmarkWithoutVolumeIdentifierIsNotAnExternalSelection() {

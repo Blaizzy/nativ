@@ -108,6 +108,31 @@ final class ExternalModelCacheLocationTests: XCTestCase {
         }
     }
 
+    func testResolvePreservesActionableValidationError() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try Data().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let bookmarkData = try file.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+
+        XCTAssertThrowsError(
+            try ExternalModelCacheLocation.resolve(
+                bookmarkData: bookmarkData,
+                expectedVolumeIdentifier: "external-volume",
+                lastKnownPath: file.path
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? ExternalModelCacheLocation.ValidationError,
+                .notDirectory
+            )
+        }
+    }
+
     func testSystemCacheKeepsExistingCreateOnDemandBehavior() throws {
         let missingLocation = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
