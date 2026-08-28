@@ -59,6 +59,19 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
+    func testExternalModelCachePathPersistsAndRoutesModelOperations() throws {
+        let modelCachePath = "/Volumes/Models/Nativ"
+        let data = try PropertyListEncoder().encode(
+            NativSettings(modelSearchPath: modelCachePath)
+        )
+
+        let settings = try PropertyListDecoder().decode(NativSettings.self, from: data)
+
+        XCTAssertEqual(settings.modelSearchPath, modelCachePath)
+        XCTAssertEqual(settings.localModelSearchPaths.primary, modelCachePath)
+        XCTAssertEqual(settings.launchEnvironment["HF_HUB_CACHE"], modelCachePath)
+    }
+
     func testLaunchArgumentsRouteEachPreloadedModelToItsOwnFlag() {
         let settings = NativSettings(
             languageModelID: "org/language",

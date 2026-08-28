@@ -225,6 +225,7 @@ struct ModelsView: View {
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
+    @State private var modelCacheLocationError: ExternalModelCacheLocation.ValidationError?
 
     init(
         model: NativModel,
@@ -325,6 +326,13 @@ struct ModelsView: View {
             localLibrary.cancel()
             hubLibrary.cancel()
             lastStartedHubSearchTaskID = nil
+        }
+        .alert(item: $modelCacheLocationError) { error in
+            Alert(
+                title: Text("Couldn’t Use Model Storage"),
+                message: Text(error.localizedDescription),
+                dismissButton: .default(Text("OK"))
+            )
         }
     }
 
@@ -1140,6 +1148,18 @@ struct ModelsView: View {
         Menu {
             Section("Hugging Face cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
+                Button(
+                    "Choose External Location…",
+                    systemImage: "externaldrive",
+                    action: chooseExternalModelCache
+                )
+                if !usesSystemModelCache {
+                    Button(
+                        "Restore System Default",
+                        systemImage: "arrow.counterclockwise",
+                        action: restoreSystemModelCache
+                    )
+                }
             }
             Section("Model folders") {
                 ForEach(modelState.settings.normalized().additionalModelSearchPaths, id: \.self) {
@@ -1160,7 +1180,7 @@ struct ModelsView: View {
             Label("Sources", systemImage: "folder")
         }
         .fixedSize()
-        .help("Folders scanned for MLX models in addition to the Hugging Face cache")
+        .help("Manage Hugging Face model storage and additional model folders")
     }
 
     private func rescanLocalModels() {
@@ -1180,6 +1200,56 @@ struct ModelsView: View {
         model.settings.additionalModelSearchPaths.append(
             (url.path as NSString).abbreviatingWithTildeInPath
         )
+    }
+
+    private func chooseExternalModelCache() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder on an external APFS drive for Nativ’s models."
+        guard panel.runModal() == .OK, let selectedURL = panel.url else {
+            return
+        }
+
+        do {
+            let location = try ExternalModelCacheLocation.validate(selectedURL)
+            setModelCachePath(location.path)
+        } catch let error as ExternalModelCacheLocation.ValidationError {
+            modelCacheLocationError = error
+        } catch {
+            modelCacheLocationError = .unavailable
+        }
+    }
+
+    private func restoreSystemModelCache() {
+        setModelCachePath(NativSettings.defaultModelSearchPath)
+    }
+
+    private func setModelCachePath(_ path: String) {
+        guard !pathsMatch(path, model.settings.modelSearchPath) else {
+            return
+        }
+        model.settings.modelSearchPath = path
+        model.restartServer()
+    }
+
+    private var usesSystemModelCache: Bool {
+        pathsMatch(
+            modelState.settings.normalized().modelSearchPath,
+            NativSettings.defaultModelSearchPath
+        )
+    }
+
+    private func pathsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        let leftURL = URL(fileURLWithPath: LocalModelDiscovery.expandedPath(lhs))
+            .standardizedFileURL
+        let rightURL = URL(fileURLWithPath: LocalModelDiscovery.expandedPath(rhs))
+            .standardizedFileURL
+        return leftURL == rightURL
     }
 
     private func removeModelSourceFolder(_ path: String) {
