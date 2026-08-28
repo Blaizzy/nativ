@@ -284,40 +284,74 @@ struct NativStatusDot: View {
     var pulsing: Bool = false
     var diameter: CGFloat = 7
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animating = false
 
     var body: some View {
         Circle()
             .fill(tone.color)
             .frame(width: diameter, height: diameter)
-            .opacity(pulsing && animating ? 0.35 : 1)
+            .opacity(pulsing && animating && !reduceMotion ? 0.35 : 1)
             .animation(
-                pulsing ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default,
+                pulsing && !reduceMotion
+                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                    : nil,
                 value: animating
             )
             .onAppear { animating = pulsing }
+            .onChange(of: pulsing) { _, newValue in
+                animating = newValue
+            }
     }
 }
 
-/// A compact capsule badge: a short label tinted by tone, with an optional leading symbol.
+/// A compact capsule badge with an optional leading status dot or symbol.
 struct NativStatusBadge: View {
     let text: String
     var tone: NativStatusTone = .neutral
     var symbol: String? = nil
+    var showsDot = false
 
     var body: some View {
         HStack(spacing: 4) {
+            if showsDot {
+                NativStatusDot(tone: tone, diameter: 6)
+            }
             if let symbol {
                 Image(systemName: symbol)
             }
             Text(text)
         }
-        .font(.caption2.weight(.semibold))
+        .font(.caption.weight(.semibold))
         .foregroundStyle(tone.color)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(tone.color.opacity(0.12), in: Capsule())
+        .accessibilityElement(children: .combine)
     }
+}
+
+#Preview("Status Indicators") {
+    VStack(alignment: .leading) {
+        HStack {
+            NativStatusDot(tone: .neutral)
+            NativStatusDot(tone: .active)
+            NativStatusDot(tone: .success)
+            NativStatusDot(tone: .warning)
+            NativStatusDot(tone: .danger)
+        }
+
+        NativStatusBadge(text: "Inactive")
+        NativStatusBadge(text: "Active", tone: .active, showsDot: true)
+        NativStatusBadge(text: "Connected", tone: .success, showsDot: true)
+        NativStatusBadge(
+            text: "Needs attention",
+            tone: .warning,
+            symbol: "exclamationmark.triangle.fill"
+        )
+        NativStatusBadge(text: "Failed", tone: .danger)
+    }
+    .padding()
 }
 
 /// A monospaced code/JSON block with a subtle background and selectable text.

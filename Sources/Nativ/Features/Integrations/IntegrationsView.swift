@@ -870,16 +870,31 @@ private struct IntegrationAvailabilityBadge: View {
     var isGuidedSetup: Bool = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(isGuidedSetup ? Color.accentColor : (status.executableURL == nil ? Color.secondary : (status.isConfigured ? .green : .orange)))
-                .frame(width: 7, height: 7)
-            Text(isGuidedSetup ? "Guided setup" : (status.executableURL == nil ? "Not installed" : (status.isConfigured ? "Configured" : "Not configured")))
+        NativStatusBadge(
+            text: title,
+            tone: tone,
+            showsDot: true
+        )
+    }
+
+    private var title: String {
+        if isGuidedSetup {
+            return "Guided setup"
         }
-        .font(.caption.weight(.semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.quaternary, in: Capsule())
+        guard status.executableURL != nil else {
+            return "Not installed"
+        }
+        return status.isConfigured ? "Configured" : "Not configured"
+    }
+
+    private var tone: NativStatusTone {
+        if isGuidedSetup {
+            return .active
+        }
+        guard status.executableURL != nil else {
+            return .neutral
+        }
+        return status.isConfigured ? .success : .warning
     }
 }
 
