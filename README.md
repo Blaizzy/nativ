@@ -102,6 +102,21 @@ On first launch:
 4. Open **Models** to download or select a compatible model.
 5. Start chatting, inspect analytics, or connect one of the supported coding tools.
 
+### Store models on an external SSD
+
+Nativ can store downloaded models on a locally connected external SSD formatted as APFS:
+
+1. Connect the SSD, then open **Models**.
+2. Open **Sources** and choose **Choose External Location…**.
+3. Select a folder on the external SSD. New model downloads and model management now use that folder.
+
+Nativ remembers the folder after relaunching and reconnecting the same SSD. If the SSD is
+disconnected, reconnect it before downloading, loading, or deleting models stored there. To use
+the Mac’s built-in model cache again, open **Sources** and choose **Restore System Default**.
+
+Changing locations does not move or copy existing models. Nativ unloads selected models when the
+location changes, and models in the previous location remain there until you switch back.
+
 Nativ asks for Accessibility permission so it can detect the default Control + Option + Command
 double-tap outside the app, and for Microphone permission the first time you record. Recordings are
 saved temporarily as `.wav` files with matching `.txt` transcripts and can be opened from
