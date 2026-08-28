@@ -2042,21 +2042,36 @@ final class ChatViewModel: ObservableObject {
                     callContext.spawnAgentUpdate = { [weak self] subMessages in
                         _ = self?.updateMessage(toolMessageID, in: sessionID) { $0.subMessages = subMessages }
                     }
+                    let executor = ChatSpawnAgentToolExecutor()
                     do {
-                        let content = try await ChatSpawnAgentToolExecutor().execute(call: call, context: callContext)
+                        let prepared = try await executor.prepare(call: call, context: callContext)
                         await self.updateToolMessage(
                             toolMessageID,
                             in: sessionID,
-                            status: .succeeded,
-                            content: content,
+                            status: .running,
+                            content: executor.handlePayload(agentID: prepared.agentID),
                             attachments: []
                         )
+                        let task = Task<Void, Never> {
+                            let content = await executor.run(prepared)
+                            let finalStatus = await prepared.registry?.record(for: prepared.agentID)?.status
+                            let succeeded = finalStatus == .completed || finalStatus == .stopped
+                            await self.updateToolMessage(
+                                toolMessageID,
+                                in: sessionID,
+                                status: succeeded ? .succeeded : .failed,
+                                content: content,
+                                attachments: []
+                            )
+                        }
+                        await prepared.registry?.setTask(task, for: prepared.agentID)
+                        await task.value
                     } catch {
                         await self.updateToolMessage(
                             toolMessageID,
                             in: sessionID,
                             status: .failed,
-                            content: ChatSpawnAgentToolExecutor().failurePayload(error: error),
+                            content: executor.failurePayload(error: error),
                             attachments: []
                         )
                     }
