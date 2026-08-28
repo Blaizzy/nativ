@@ -9,6 +9,7 @@ struct ExtensionsHubView: View {
     var model: NativModel
     @Binding var section: HubSection
     @State private var didLaunch = false
+    @ObservedObject private var kitStore = NativKitStore.shared
 
     enum HubSection: String, CaseIterable, Identifiable {
         case kits = "Kits"
@@ -84,7 +85,12 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, model: model)
+            KitsSectionView(
+                host: host,
+                model: model,
+                store: kitStore,
+                onOpenCapability: openCapability
+            )
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:
@@ -93,6 +99,17 @@ struct ExtensionsHubView: View {
             ToolsSectionView(host: host, model: model)
         case .skills:
             SkillsSectionView(model: model)
+        }
+    }
+
+    private func openCapability(_ capability: NativKitCapabilityReference) {
+        switch capability {
+        case .mcp:
+            section = .mcp
+        case .mcpTool, .nativeTool, .customTool:
+            section = .tools
+        case .skill:
+            section = .skills
         }
     }
 }

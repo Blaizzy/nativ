@@ -178,6 +178,10 @@ targets:
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
       - path: Sources/Nativ/Features/Extensions/NativKitRuntimeResolver.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
+      - path: Sources/Nativ/Features/Extensions/MCPCatalogEntry.swift
+      - path: Sources/Nativ/Features/Kits/NativKit.swift
+      - path: Sources/Nativ/Features/Kits/NativKitCatalog.swift
+      - path: Sources/Nativ/Features/Kits/NativKitStore.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
       - path: Sources/Nativ/Features/Routines/ScheduledTaskChatLinker.swift
       - path: Sources/Nativ/Features/Routines/ScheduledTaskNotification.swift

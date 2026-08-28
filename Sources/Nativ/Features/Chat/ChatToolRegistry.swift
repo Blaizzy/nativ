@@ -75,6 +75,13 @@ enum ChatNativeToolConfiguration: Equatable {
             "doc.text"
         }
     }
+
+    var isReady: Bool {
+        switch self {
+        case .webSearch:
+            ChatWebSearchToolRegistry.isConfigured()
+        }
+    }
 }
 
 struct ChatNativeToolDescriptor {

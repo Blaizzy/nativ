@@ -11,6 +11,7 @@ struct ChatView: View {
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var kitStore: NativKitStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
@@ -27,6 +28,8 @@ struct ChatView: View {
                 model: model,
                 chat: chat,
                 extensionManager: extensionManager,
+                mcpHost: mcpHost,
+                kitStore: kitStore,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 onExploreImageModels: onExploreImageModels,
@@ -55,6 +58,7 @@ struct ChatView: View {
         }
         .onAppear {
             chat.mcpHost = mcpHost
+            chat.kitStore = kitStore
             mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
         }
@@ -108,6 +112,8 @@ private struct ChatTranscriptView: View {
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
@@ -195,6 +201,8 @@ private struct ChatTranscriptView: View {
                     model: model,
                     chat: chat,
                     extensionManager: extensionManager,
+                    mcpHost: mcpHost,
+                    kitStore: kitStore,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
                     onHeightChange: { height in
@@ -307,6 +315,8 @@ private struct ChatComposerContainer: View {
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var kitStore: NativKitStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onHeightChange: (CGFloat) -> Void
@@ -316,19 +326,33 @@ private struct ChatComposerContainer: View {
         model.settings.normalized().languageModelID
     }
 
+    private var kitUnavailableReason: String? {
+        guard let kitID = chat.currentKitID else { return nil }
+        guard let kit = kitStore.kit(id: kitID) else {
+            return "The selected Kit is no longer available."
+        }
+        return NativKitCapabilityInventory(settings: model.settings, host: mcpHost)
+            .evaluation(of: kit)
+            .summary
+    }
+
     var body: some View {
         ChatComposer(
             model: model,
             viewModel: chat,
             extensionManager: extensionManager,
+            kitStore: kitStore,
+            mcpHost: mcpHost,
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+                ?? kitUnavailableReason
                 ?? model.settings.structuredOutputValidationError,
             canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
                 && model.settings.structuredOutputValidationError == nil,
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
+                && kitUnavailableReason == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
@@ -1779,6 +1803,7 @@ private struct ChatEmptyTranscriptView: View {
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
         extensionManager: NativExtensionManager(builtInExtensions: []),
+        kitStore: .init(),
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
