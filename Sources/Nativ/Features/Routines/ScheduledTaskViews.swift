@@ -45,7 +45,7 @@ struct ScheduledTaskCard: View {
                     VStack(alignment: .leading, spacing: 9) {
                         HStack(spacing: 8) {
                             Text(task.name.isEmpty ? "Untitled scheduled task" : task.name)
-                                .font(.system(size: 15, weight: .semibold))
+                                .nativTextStyle(.cardTitle)
                                 .lineLimit(1)
                             if isRunning {
                                 Text("Running")

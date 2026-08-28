@@ -822,7 +822,7 @@ private struct UserActivityPanel: View {
                         Text(percentLabel(for: period))
                             .font(.caption.weight(.semibold).monospacedDigit())
                         Text(period.title)
-                            .font(.system(size: 9))
+                            .nativTextStyle(.chartLabel)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }

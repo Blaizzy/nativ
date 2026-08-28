@@ -116,7 +116,7 @@ extension ControlPanelView {
 
     var emptyFoldersHint: some View {
         Label("No folders yet — tap + to add one", systemImage: "folder")
-            .font(.system(size: 13))
+            .nativTextStyle(.body)
             .foregroundStyle(.secondary.opacity(0.6))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)
@@ -218,7 +218,7 @@ extension ControlPanelView {
 
     var emptyPinnedHint: some View {
         Label("Drag a chat here to pin", systemImage: "pin")
-            .font(.system(size: 13))
+            .nativTextStyle(.body)
             .foregroundStyle(.secondary.opacity(0.6))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)
@@ -235,7 +235,7 @@ extension ControlPanelView {
         HStack(spacing: 8) {
             HStack(spacing: 4) {
                 Text(title)
-                    .font(.system(size: 15, weight: .regular))
+                    .nativTextStyle(.sidebarSectionTitle)
                     .foregroundStyle(.secondary.opacity(0.7))
 
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
