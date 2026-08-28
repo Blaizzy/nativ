@@ -29,6 +29,8 @@ struct ChatToolExecutionContext: Sendable {
     var fileOperationRunID = UUID()
     var fileMutationState = FileMutationState.shared
     var fileWriteToolDependencies = ChatFileWriteToolDependencies.live
+    var terminalApprovalGranted = false
+    var terminalToolDependencies = ChatTerminalToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -189,6 +191,13 @@ enum ChatToolRegistry {
                 displayDescription: "Read and find relevant information on public web pages.",
                 configuration: .webRead
             ))
+        tools.append(
+            ChatNativeToolDescriptor(
+                definition: ChatTerminalToolRegistry.definition,
+                displayDescription:
+                    "Run approved shell commands locally on this Mac.",
+                configuration: nil
+            ))
         return tools
     }
 }
@@ -235,6 +244,9 @@ enum ChatToolDispatcher {
         ChatFileWriteToolRegistry.patchToolName: { call, context in
             try await executeFileWriteTool(call: call, context: context)
         },
+        ChatTerminalToolRegistry.toolName: { call, context in
+            try await executeTerminalTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
@@ -273,6 +285,9 @@ enum ChatToolDispatcher {
         },
         ChatFileWriteToolRegistry.patchToolName: { _, error in
             ChatFileWriteToolExecutor().failurePayload(error: error)
+        },
+        ChatTerminalToolRegistry.toolName: { _, error in
+            ChatTerminalToolExecutor().failurePayload(error: error)
         },
     ]
 
@@ -418,6 +433,16 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeTerminalTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatTerminalToolExecutor(
+            dependencies: context.terminalToolDependencies
+        ).execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -500,6 +525,8 @@ enum ChatToolPresentation {
             return fileWriteTitle(isPatch: false, status: status)
         case ChatFileWriteToolRegistry.patchToolName:
             return fileWriteTitle(isPatch: true, status: status)
+        case ChatTerminalToolRegistry.toolName:
+            return terminalTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -541,6 +568,8 @@ enum ChatToolPresentation {
             case ChatFileWriteToolRegistry.writeToolName,
                 ChatFileWriteToolRegistry.patchToolName:
                 return "square.and.pencil"
+            case ChatTerminalToolRegistry.toolName:
+                return "terminal"
             default:
                 return "wrench.and.screwdriver"
             }
@@ -693,6 +722,23 @@ enum ChatToolPresentation {
             return isPatch ? "File patch" : "File write"
         case nil:
             return isPatch ? "File patch" : "File write"
+        }
+    }
+
+    private static func terminalTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .awaitingConsent:
+            return "Run terminal command?"
+        case .preparing, .running:
+            return "Running terminal command…"
+        case .succeeded:
+            return "Ran terminal command"
+        case .declined:
+            return "Terminal command declined"
+        case .failed, .cancelled, .awaitingImageModelSelection:
+            return "Terminal command"
+        case nil:
+            return "Terminal"
         }
     }
 

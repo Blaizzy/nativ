@@ -575,7 +575,10 @@ final class RoutineRunner {
         }
 
         let nativeDefinitions = ChatToolRegistry.descriptors(canEditImage: false)
-            .filter { $0.configuration != .fileWrite }
+            .filter {
+                $0.configuration != .fileWrite
+                    && $0.definition.function.name != ChatTerminalToolRegistry.toolName
+            }
             .map(\.definition)
             .filter { $0.function.name != ChatSwitchModelToolRegistry.toolName }
         for tool in selectedTools {
@@ -585,6 +588,7 @@ final class RoutineRunner {
                     $0.function.name == tool.name
                 }), !settings.disabledToolNames.contains(tool.name),
                     !ChatFileWriteToolRegistry.toolNames.contains(tool.name),
+                    tool.name != ChatTerminalToolRegistry.toolName,
                     tool.name != ChatWebSearchToolRegistry.toolName
                         || ChatWebSearchToolRegistry.isConfigured(),
                     tool.name != ChatReadFileToolRegistry.toolName

@@ -10,6 +10,7 @@ private let nativeToolNames = [
     ChatSearchFilesToolRegistry.toolName,
     ChatFileWriteToolRegistry.writeToolName,
     ChatFileWriteToolRegistry.patchToolName,
+    ChatTerminalToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -87,6 +88,7 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatSearchFilesToolRegistry.toolName,
             ChatFileWriteToolRegistry.writeToolName,
             ChatFileWriteToolRegistry.patchToolName,
+            ChatTerminalToolRegistry.toolName,
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
         ])
@@ -1020,6 +1022,14 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "File patch",
                 .awaitingConsent: "Patch protected file?", .declined: "Patch declined",
             ],
+            ChatTerminalToolRegistry.toolName: [
+                nil: "Terminal", .preparing: "Running terminal command…",
+                .running: "Running terminal command…", .succeeded: "Ran terminal command",
+                .failed: "Terminal command", .cancelled: "Terminal command",
+                .awaitingImageModelSelection: "Terminal command",
+                .awaitingConsent: "Run terminal command?",
+                .declined: "Terminal command declined",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -1053,6 +1063,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatReadFileToolRegistry.toolName,
             ChatSearchFilesToolRegistry.toolName,
             ChatFileWriteToolRegistry.writeToolName, ChatFileWriteToolRegistry.patchToolName,
+            ChatTerminalToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -1066,6 +1077,7 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatSearchFilesToolRegistry.toolName: "doc.text.magnifyingglass",
             ChatFileWriteToolRegistry.writeToolName: "square.and.pencil",
             ChatFileWriteToolRegistry.patchToolName: "square.and.pencil",
+            ChatTerminalToolRegistry.toolName: "terminal",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
