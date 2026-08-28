@@ -537,7 +537,7 @@ private struct SystemSensorsPage: View {
                         }
                     }
                     .padding(14)
-                    .systemMonitorPanel()
+                    .nativPanelStyle()
                 }
             }
         }
@@ -881,7 +881,7 @@ private struct SystemCPUPage: View {
                     }
                 }
                 .padding(14)
-                .systemMonitorPanel()
+                .nativPanelStyle()
             }
 
         }
@@ -1291,7 +1291,7 @@ private struct SystemPanel<Content: View>: View {
         content
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .systemMonitorPanel()
+            .nativPanelStyle()
     }
 }
 
@@ -1326,7 +1326,7 @@ private struct SystemOverviewMetric: View {
         }
         .padding(15)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 }
 
@@ -1344,7 +1344,7 @@ private struct SystemInfoCard<Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 }
 
@@ -1624,7 +1624,7 @@ private struct SystemPercentHistoryChart: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 }
 
@@ -1753,7 +1753,7 @@ private struct SystemDiskHistoryChart: View {
             }
         }
         .padding(16)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 
     private func diskHoverRows(at date: Date) -> [SystemChartHoverRow] {
@@ -1955,7 +1955,7 @@ private struct SystemValueHistoryChart: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 
     private var axisRange: ClosedRange<Double> {
@@ -2379,26 +2379,6 @@ private enum SystemMonitorPalette {
     static let positive = Color(red: 0.18, green: 0.72, blue: 0.38)
     static let metricLabel = Color.primary.opacity(0.72)
     static let metricDetail = Color.primary.opacity(0.58)
-}
-
-private struct SystemMonitorPanelModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            }
-    }
-}
-
-private extension View {
-    func systemMonitorPanel() -> some View {
-        modifier(SystemMonitorPanelModifier())
-    }
 }
 
 private extension Array {

@@ -182,7 +182,7 @@ struct ScheduledTasksView: View {
                                 }
                             }
                         }
-                        .scheduledPanelStyle()
+                        .nativPanelStyle()
                     }
                 }
             }

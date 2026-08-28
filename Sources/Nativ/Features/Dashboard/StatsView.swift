@@ -223,7 +223,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
             }
         }
         .padding(12)
-        .dashboardPanelStyle(cornerRadius: 12)
+        .nativPanelStyle()
     }
 
     private var overviewCards: some View {
@@ -516,7 +516,7 @@ private struct AnalyticsMetricCard: View {
             }
             .padding(16)
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .dashboardPanelStyle(cornerRadius: 14)
+            .nativPanelStyle(cornerRadius: .large)
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(isHovered ? tint.opacity(0.045) : Color.clear)
@@ -655,7 +655,7 @@ private struct UserActivityPanel: View {
             periodBreakdown
         }
         .padding(18)
-        .dashboardPanelStyle(cornerRadius: 14)
+        .nativPanelStyle(cornerRadius: .large)
         .animation(.snappy(duration: 0.24), value: isExpanded)
     }
 
@@ -1408,7 +1408,7 @@ private struct TokenUsagePanel: View {
             }
         }
         .padding(18)
-        .dashboardPanelStyle(cornerRadius: 14)
+        .nativPanelStyle(cornerRadius: .large)
     }
 
     private var chartTitle: String {
@@ -3443,7 +3443,7 @@ private struct RequestHealthPanel: View {
         }
         .padding(18)
         .frame(minHeight: minimumHeight, alignment: .top)
-        .dashboardPanelStyle(cornerRadius: 14)
+        .nativPanelStyle(cornerRadius: .large)
     }
 
     private var total: Int { completed + failed }
@@ -3671,7 +3671,7 @@ private struct ModelPerformanceTable: View {
             }
         }
         .padding(.horizontal, 16)
-        .dashboardPanelStyle(cornerRadius: 14)
+        .nativPanelStyle(cornerRadius: .large)
     }
 
     private var tableContent: some View {
@@ -3912,7 +3912,7 @@ private struct SessionMetricCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .dashboardPanelStyle()
+        .nativPanelStyle()
         .help(card.help ?? card.value)
     }
 }
@@ -3936,7 +3936,7 @@ private struct DashboardPickerContainer<Content: View>: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .dashboardPanelStyle(cornerRadius: 10)
+        .nativPanelStyle(cornerRadius: .compact)
     }
 }
 
@@ -3996,7 +3996,7 @@ private struct SummaryPill: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .dashboardPanelStyle(cornerRadius: 10)
+        .nativPanelStyle(cornerRadius: .compact)
         .help(value)
     }
 }
@@ -4023,7 +4023,7 @@ private struct HistoricalChartCard<Content: View>: View {
             content
         }
         .padding(16)
-        .dashboardPanelStyle(cornerRadius: 14)
+        .nativPanelStyle(cornerRadius: .large)
     }
 }
 
@@ -4148,7 +4148,7 @@ private struct DashboardRecentRequestsTable: View {
             }
         }
         .padding(16)
-        .dashboardPanelStyle(cornerRadius: 14)
+        .nativPanelStyle(cornerRadius: .large)
         .sheet(item: $selectedRequest) { request in
             RequestDetailView(request: request)
         }
@@ -4271,7 +4271,7 @@ private struct RequestDetailMetric: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .dashboardPanelStyle(cornerRadius: 10)
+        .nativPanelStyle(cornerRadius: .compact)
     }
 }
 
@@ -4889,7 +4889,6 @@ private enum DashboardPalette {
     static let primaryBar = Color(red: 73 / 255, green: 163 / 255, blue: 176 / 255)
     static let successBar = Color(red: 68 / 255, green: 157 / 255, blue: 187 / 255)
     static let failureBar = Color(red: 181 / 255, green: 51 / 255, blue: 63 / 255)
-    static let panelFill = Color(nsColor: .controlBackgroundColor)
     static let panelStroke = Color(nsColor: .separatorColor).opacity(0.6)
     static let axisLabel = Color(nsColor: .tertiaryLabelColor)
     static let axisText = Color(nsColor: .secondaryLabelColor)
@@ -4966,26 +4965,4 @@ private enum DashboardFormatters {
         formatter.setLocalizedDateFormatFromTemplate("MMM d")
         return formatter
     }()
-}
-
-private struct DashboardPanelModifier: ViewModifier {
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(DashboardPalette.panelFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(DashboardPalette.panelStroke, lineWidth: 0.75)
-            )
-    }
-}
-
-private extension View {
-    func dashboardPanelStyle(cornerRadius: CGFloat = 12) -> some View {
-        modifier(DashboardPanelModifier(cornerRadius: cornerRadius))
-    }
 }
