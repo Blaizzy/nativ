@@ -190,8 +190,11 @@ enum ChatAgentLoop {
 
 @MainActor
 private final class ChatAgentDisplayTranscript {
+    private static let publishInterval: TimeInterval = 0.05
+
     private var messages: [ChatTranscriptMessage] = []
     private let onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?
+    private var lastPublishedAt: Date?
 
     init(onUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)?) {
         self.onUpdate = onUpdate
@@ -221,7 +224,7 @@ private final class ChatAgentDisplayTranscript {
                 decodeTokensPerSecond: event.decodeTokensPerSecond
             )
         }
-        onUpdate?(messages)
+        publish(throttled: true)
     }
 
     func finishAssistant(_ id: UUID, completion: MLXChatCompletion) {
@@ -232,6 +235,15 @@ private final class ChatAgentDisplayTranscript {
         messages[index].reasoningContent = completion.reasoningContent ?? ""
         messages[index].isStreaming = false
         messages[index].responseMetrics = ChatResponseMetrics(completion: completion)
+        publish(throttled: false)
+    }
+
+    private func publish(throttled: Bool) {
+        let now = Date()
+        if throttled, let last = lastPublishedAt, now.timeIntervalSince(last) < Self.publishInterval {
+            return
+        }
+        lastPublishedAt = now
         onUpdate?(messages)
     }
 
