@@ -61,15 +61,59 @@ final class NativSettingsTests: XCTestCase {
 
     func testExternalModelCachePathPersistsAndRoutesModelOperations() throws {
         let modelCachePath = "/Volumes/Models/Nativ"
+        let bookmark = Data([0x4E, 0x41, 0x54, 0x49, 0x56])
+        let volumeIdentifier = "A5BC991E-2319-4D21-AFC8-7C0429E17E41"
         let data = try PropertyListEncoder().encode(
-            NativSettings(modelSearchPath: modelCachePath)
+            NativSettings(
+                modelSearchPath: modelCachePath,
+                externalModelCacheBookmark: bookmark,
+                externalModelCacheVolumeIdentifier: volumeIdentifier
+            )
         )
 
         let settings = try PropertyListDecoder().decode(NativSettings.self, from: data)
 
         XCTAssertEqual(settings.modelSearchPath, modelCachePath)
+        XCTAssertEqual(settings.externalModelCacheBookmark, bookmark)
+        XCTAssertEqual(settings.externalModelCacheVolumeIdentifier, volumeIdentifier)
+        XCTAssertTrue(settings.usesExternalModelCache)
         XCTAssertEqual(settings.localModelSearchPaths.primary, modelCachePath)
         XCTAssertEqual(settings.launchEnvironment["HF_HUB_CACHE"], modelCachePath)
+    }
+
+    func testRestoringDefaultModelCacheClearsExternalReference() {
+        var settings = NativSettings(
+            modelSearchPath: "/Volumes/Models/Nativ",
+            externalModelCacheBookmark: Data([1, 2, 3]),
+            externalModelCacheVolumeIdentifier: "external-volume"
+        )
+
+        settings.restoreDefaultModelCache()
+
+        XCTAssertEqual(settings.modelSearchPath, NativSettings.defaultModelSearchPath)
+        XCTAssertNil(settings.externalModelCacheBookmark)
+        XCTAssertNil(settings.externalModelCacheVolumeIdentifier)
+        XCTAssertFalse(settings.usesExternalModelCache)
+    }
+
+    func testBookmarkWithoutVolumeIdentifierIsNotAnExternalSelection() {
+        let settings = NativSettings(
+            modelSearchPath: "/Volumes/Models/Nativ",
+            externalModelCacheBookmark: Data([1, 2, 3])
+        ).normalized()
+
+        XCTAssertNil(settings.externalModelCacheBookmark)
+        XCTAssertFalse(settings.usesExternalModelCache)
+    }
+
+    func testVolumeIdentifierWithoutBookmarkIsNotAnExternalSelection() {
+        let settings = NativSettings(
+            modelSearchPath: "/Volumes/Models/Nativ",
+            externalModelCacheVolumeIdentifier: "external-volume"
+        ).normalized()
+
+        XCTAssertNil(settings.externalModelCacheVolumeIdentifier)
+        XCTAssertFalse(settings.usesExternalModelCache)
     }
 
     func testLaunchArgumentsRouteEachPreloadedModelToItsOwnFlag() {

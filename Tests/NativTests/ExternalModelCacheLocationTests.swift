@@ -91,6 +91,50 @@ final class ExternalModelCacheLocationTests: XCTestCase {
         }
     }
 
+    func testUnavailableExternalCacheIsRejectedBeforeUse() {
+        let missingLocation = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+
+        XCTAssertThrowsError(
+            try ExternalModelCacheLocation.validateForUse(
+                path: missingLocation.path,
+                expectedVolumeIdentifier: "external-volume"
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? ExternalModelCacheLocation.ValidationError,
+                .unavailable
+            )
+        }
+    }
+
+    func testSystemCacheKeepsExistingCreateOnDemandBehavior() throws {
+        let missingLocation = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+
+        let resolved = try ExternalModelCacheLocation.validateForUse(
+            path: missingLocation.path,
+            expectedVolumeIdentifier: nil
+        )
+
+        XCTAssertEqual(resolved.path, missingLocation.standardizedFileURL.path)
+    }
+
+    func testRecognizesCacheNestedInsideUnmountedVolume() {
+        XCTAssertTrue(
+            ExternalModelCacheLocation.path(
+                "/Volumes/Models/Nativ/cache",
+                isOnVolumeAt: URL(fileURLWithPath: "/Volumes/Models", isDirectory: true)
+            )
+        )
+        XCTAssertFalse(
+            ExternalModelCacheLocation.path(
+                "/Volumes/Models-Backup/Nativ/cache",
+                isOnVolumeAt: URL(fileURLWithPath: "/Volumes/Models", isDirectory: true)
+            )
+        )
+    }
+
     private func properties(
         isDirectory: Bool = true,
         isReadable: Bool = true,

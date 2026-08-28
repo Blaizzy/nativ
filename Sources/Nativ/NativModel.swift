@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativServerKit
 import Observation
@@ -22,6 +23,7 @@ private enum RequestedServerStopReason: String {
     case stopRequest = "a stop request"
     case modelSwitch = "a model switch"
     case configurationRestart = "a configuration restart"
+    case externalStorageUnavailable = "external model storage became unavailable"
     case appTermination = "app termination"
 }
 
@@ -80,6 +82,7 @@ final class NativModel: ChatModelSwitchingSurface {
     private(set) var metricsLoading = false
     private(set) var systemHuggingFaceCredential =
         HuggingFaceAuthentication.systemCredential()
+    private(set) var externalModelCacheState = ExternalModelCacheLocation.State.systemDefault
     private(set) var serverRestartCountdown: Int?
     var settings = NativSettings.load() {
         didSet {
@@ -108,6 +111,7 @@ final class NativModel: ChatModelSwitchingSurface {
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
     private var currentServerOutput = ""
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
@@ -115,6 +119,8 @@ final class NativModel: ChatModelSwitchingSurface {
     init() {
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
+        observeExternalModelCacheVolume()
+        refreshExternalModelCacheState()
         isRunning = server.isRunning
         refreshAllTimeStats()
         resolveHuggingFaceEnvironmentFromLoginShell()
@@ -348,6 +354,11 @@ final class NativModel: ChatModelSwitchingSurface {
         var shouldStartMetrics = false
         clearModelLoadFailure()
         currentServerOutput = ""
+        guard prepareExternalModelCacheForUse() else {
+            modelLoadingProgress = nil
+            notifyMenuStateChanged()
+            return
+        }
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         var launchArguments = settings.launchArguments
@@ -737,6 +748,9 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func applicationWillTerminate() {
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceObservers.forEach { workspaceCenter.removeObserver($0) }
+        workspaceObservers.removeAll()
         allTimeStatsLoadTask?.cancel()
         allTimeStatsLoadTask = nil
         stopMetricsPolling(clearSession: true)
@@ -751,6 +765,216 @@ final class NativModel: ChatModelSwitchingSurface {
 
     func resetSettings() {
         settings = NativSettings()
+        refreshExternalModelCacheState()
+    }
+
+    func selectExternalModelCache(at selectedURL: URL) throws {
+        guard HuggingFaceDownloadManager.shared.activeCount == 0 else {
+            throw ExternalModelCacheLocation.ValidationError.downloadsInProgress
+        }
+
+        let reference = try ExternalModelCacheLocation.makeReference(for: selectedURL)
+        var updatedSettings = settings
+        updatedSettings.setExternalModelCache(reference)
+        settings = updatedSettings
+        externalModelCacheState = .available(
+            path: reference.url.path,
+            availableCapacity: reference.availableCapacity
+        )
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        restartServer()
+    }
+
+    func restoreDefaultModelCache() throws {
+        guard HuggingFaceDownloadManager.shared.activeCount == 0 else {
+            throw ExternalModelCacheLocation.ValidationError.downloadsInProgress
+        }
+
+        var updatedSettings = settings
+        updatedSettings.restoreDefaultModelCache()
+        settings = updatedSettings
+        externalModelCacheState = .systemDefault
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        restartServer()
+    }
+
+    func refreshExternalModelCacheState() {
+        let currentSettings = settings.normalized()
+        guard currentSettings.usesExternalModelCache,
+              let bookmarkData = currentSettings.externalModelCacheBookmark,
+              let volumeIdentifier = currentSettings.externalModelCacheVolumeIdentifier else {
+            externalModelCacheState = .systemDefault
+            return
+        }
+
+        do {
+            let reference = try ExternalModelCacheLocation.resolve(
+                bookmarkData: bookmarkData,
+                expectedVolumeIdentifier: volumeIdentifier,
+                lastKnownPath: currentSettings.modelSearchPath
+            )
+            var updatedSettings = settings
+            updatedSettings.setExternalModelCache(reference)
+            if updatedSettings != settings {
+                settings = updatedSettings
+            }
+            externalModelCacheState = .available(
+                path: reference.url.path,
+                availableCapacity: reference.availableCapacity
+            )
+        } catch let error as ExternalModelCacheLocation.ValidationError {
+            externalModelCacheState = .unavailable(
+                path: currentSettings.modelSearchPath,
+                reason: error
+            )
+        } catch {
+            externalModelCacheState = .unavailable(
+                path: currentSettings.modelSearchPath,
+                reason: .unavailable
+            )
+        }
+    }
+
+    private func prepareExternalModelCacheForUse() -> Bool {
+        guard settings.normalized().usesExternalModelCache else {
+            return true
+        }
+
+        refreshExternalModelCacheState()
+        guard case .unavailable(_, let reason) = externalModelCacheState else {
+            return true
+        }
+        appendLog("\nCan’t start mlx-vlm-server: \(reason.localizedDescription)\n")
+        return false
+    }
+
+    private func observeExternalModelCacheVolume() {
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for name in [
+            NSWorkspace.willUnmountNotification,
+            NSWorkspace.didUnmountNotification,
+            NSWorkspace.didMountNotification,
+            NSWorkspace.didRenameVolumeNotification,
+        ] {
+            workspaceObservers.append(
+                workspaceCenter.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] notification in
+                    let notificationName = notification.name
+                    let volumeURL = notification.userInfo?[
+                        NSWorkspace.volumeURLUserInfoKey
+                    ] as? URL
+                    let devicePath = notification.userInfo?["NSDevicePath"] as? String
+                    let volumeIdentifier = volumeURL.flatMap {
+                        try? $0.resourceValues(
+                            forKeys: [.volumeUUIDStringKey]
+                        ).volumeUUIDString
+                    }
+                    Task { @MainActor [weak self] in
+                        self?.handleExternalVolumeChange(
+                            notificationName: notificationName,
+                            volumeURL: volumeURL,
+                            devicePath: devicePath,
+                            volumeIdentifier: volumeIdentifier
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    private func handleExternalVolumeChange(
+        notificationName: Notification.Name,
+        volumeURL: URL?,
+        devicePath: String?,
+        volumeIdentifier: String?
+    ) {
+        guard settings.normalized().usesExternalModelCache else {
+            return
+        }
+
+        switch notificationName {
+        case NSWorkspace.willUnmountNotification, NSWorkspace.didUnmountNotification:
+            guard notificationMatchesSelectedExternalVolume(
+                volumeURL: volumeURL,
+                devicePath: devicePath,
+                volumeIdentifier: volumeIdentifier
+            ) else {
+                return
+            }
+            makeExternalModelCacheUnavailable()
+        case NSWorkspace.didMountNotification, NSWorkspace.didRenameVolumeNotification:
+            let previousState = externalModelCacheState
+            let previousPath = settings.modelSearchPath
+            refreshExternalModelCacheState()
+            if externalModelCacheState != previousState
+                || settings.modelSearchPath != previousPath {
+                NotificationCenter.default.post(
+                    name: .localModelLibraryDidChange,
+                    object: nil
+                )
+            }
+        default:
+            break
+        }
+    }
+
+    private func notificationMatchesSelectedExternalVolume(
+        volumeURL: URL?,
+        devicePath: String?,
+        volumeIdentifier: String?
+    ) -> Bool {
+        let currentSettings = settings.normalized()
+        guard let expectedVolumeIdentifier =
+            currentSettings.externalModelCacheVolumeIdentifier else {
+            return false
+        }
+
+        if let volumeURL {
+            if ExternalModelCacheLocation.path(
+                currentSettings.expandedModelSearchPath,
+                isOnVolumeAt: volumeURL
+            ) {
+                return true
+            }
+            if volumeIdentifier == expectedVolumeIdentifier {
+                return true
+            }
+        }
+
+        if let devicePath {
+            return ExternalModelCacheLocation.path(
+                currentSettings.expandedModelSearchPath,
+                isOnVolumeAt: URL(fileURLWithPath: devicePath, isDirectory: true)
+            )
+        }
+        return false
+    }
+
+    private func makeExternalModelCacheUnavailable() {
+        let currentSettings = settings.normalized()
+        guard let volumeIdentifier = currentSettings.externalModelCacheVolumeIdentifier else {
+            return
+        }
+
+        HuggingFaceDownloadManager.shared.stopDownloads(
+            forVolumeIdentifier: volumeIdentifier,
+            reason: .unavailable
+        )
+        if server.isRunning {
+            stopServer(
+                preserveSessionStats: false,
+                reason: .externalStorageUnavailable
+            )
+        }
+        externalModelCacheState = .unavailable(
+            path: currentSettings.modelSearchPath,
+            reason: .unavailable
+        )
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        notifyMenuStateChanged()
     }
 
     func clearLogs() {

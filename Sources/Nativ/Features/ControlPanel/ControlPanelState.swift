@@ -27,6 +27,7 @@ final class ControlPanelChromeState: ObservableObject {
         let serverPort: Int
         let serverAPIKey: String?
         let modelSearchPath: String
+        let modelCacheVolumeIdentifier: String?
         let localModelSearchPaths: LocalModelSearchPaths
     }
 
@@ -143,6 +144,7 @@ final class ControlPanelChromeState: ObservableObject {
                 serverPort: settings.serverPort,
                 serverAPIKey: settings.serverAPIKey,
                 modelSearchPath: settings.modelSearchPath,
+                modelCacheVolumeIdentifier: settings.externalModelCacheVolumeIdentifier,
                 localModelSearchPaths: settings.localModelSearchPaths
             )
         )

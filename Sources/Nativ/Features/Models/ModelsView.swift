@@ -78,6 +78,7 @@ private final class ModelsNativState: ObservableObject {
         var modelLoadFailure: ModelLoadFailure?
         var systemHuggingFaceCredential: HuggingFaceCredential?
         var loadedModelID: String?
+        var externalModelCacheState: ExternalModelCacheLocation.State
     }
 
     @Published private var snapshot: Snapshot
@@ -94,7 +95,8 @@ private final class ModelsNativState: ObservableObject {
             metricsLoading: model.metricsLoading,
             modelLoadFailure: model.modelLoadFailure,
             systemHuggingFaceCredential: model.systemHuggingFaceCredential,
-            loadedModelID: model.metrics?.server.loadedModel
+            loadedModelID: model.metrics?.server.loadedModel,
+            externalModelCacheState: model.externalModelCacheState
         )
 
         observeModel()
@@ -119,6 +121,7 @@ private final class ModelsNativState: ObservableObject {
             $0.modelLoadFailure = model.modelLoadFailure
             $0.systemHuggingFaceCredential = model.systemHuggingFaceCredential
             $0.loadedModelID = model.metrics?.server.loadedModel
+            $0.externalModelCacheState = model.externalModelCacheState
         }
     }
 
@@ -138,6 +141,9 @@ private final class ModelsNativState: ObservableObject {
     var modelLoadFailure: ModelLoadFailure? { snapshot.modelLoadFailure }
     var systemHuggingFaceCredential: HuggingFaceCredential? {
         snapshot.systemHuggingFaceCredential
+    }
+    var externalModelCacheState: ExternalModelCacheLocation.State {
+        snapshot.externalModelCacheState
     }
     var loadedModelID: String? { snapshot.loadedModelID }
 
@@ -265,9 +271,11 @@ struct ModelsView: View {
             rescanLocalModels()
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            model.refreshExternalModelCacheState()
             rescanLocalModels()
         }
         .onAppear {
+            model.refreshExternalModelCacheState()
             openSpeechModelDiscoveryIfRequested()
             openImageModelDiscoveryIfRequested()
         }
@@ -511,6 +519,16 @@ struct ModelsView: View {
             .modelsListRow()
         }
 
+        if case .unavailable(_, let reason) = modelState.externalModelCacheState {
+            ModelsNotice(
+                title: "External model storage is unavailable",
+                message: reason.localizedDescription,
+                systemImage: "externaldrive.badge.exclamationmark",
+                color: .orange
+            )
+            .modelsListRow()
+        }
+
         if localLibrary.isScanning && localLibrary.models.isEmpty {
             ModelsLoadingState(title: "Scanning your Hugging Face cache…")
                 .modelsListRow()
@@ -689,6 +707,8 @@ struct ModelsView: View {
                                     repoID: hubModel.id,
                                     sizeBytes: downloadSizeBytes,
                                     cachePath: modelState.settings.modelSearchPath,
+                                    volumeIdentifier: modelState.settings
+                                        .externalModelCacheVolumeIdentifier,
                                     token: modelState.effectiveHuggingFaceToken
                                 ) {}
                             },
@@ -868,7 +888,8 @@ struct ModelsView: View {
         guard localModel.isDeletable else { return }
         localLibrary.delete(
             model: localModel,
-            path: modelState.settings.modelSearchPath
+            path: modelState.settings.modelSearchPath,
+            volumeIdentifier: modelState.settings.externalModelCacheVolumeIdentifier
         ) {
             var settings = modelState.settings
             if settings.languageModelID == localModel.repoID {
@@ -1148,6 +1169,7 @@ struct ModelsView: View {
         Menu {
             Section("Hugging Face cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
+                externalModelCacheStatus
                 Button(
                     "Choose External Location…",
                     systemImage: "externaldrive",
@@ -1183,6 +1205,24 @@ struct ModelsView: View {
         .help("Manage Hugging Face model storage and additional model folders")
     }
 
+    @ViewBuilder
+    private var externalModelCacheStatus: some View {
+        switch modelState.externalModelCacheState {
+        case .systemDefault:
+            EmptyView()
+        case .available(_, let availableCapacity):
+            Label("External drive connected", systemImage: "externaldrive.fill.badge.checkmark")
+            if let availableCapacity {
+                Text(
+                    "\(ByteCountFormatter.string(fromByteCount: availableCapacity, countStyle: .file)) available"
+                )
+            }
+        case .unavailable(_, let reason):
+            Label("External drive unavailable", systemImage: "externaldrive.badge.exclamationmark")
+            Text(reason.localizedDescription)
+        }
+    }
+
     private func rescanLocalModels() {
         localLibrary.scan(searchPaths: modelState.settings.localModelSearchPaths)
     }
@@ -1216,8 +1256,7 @@ struct ModelsView: View {
         }
 
         do {
-            let location = try ExternalModelCacheLocation.validate(selectedURL)
-            setModelCachePath(location.path)
+            try model.selectExternalModelCache(at: selectedURL)
         } catch let error as ExternalModelCacheLocation.ValidationError {
             modelCacheLocationError = error
         } catch {
@@ -1226,30 +1265,17 @@ struct ModelsView: View {
     }
 
     private func restoreSystemModelCache() {
-        setModelCachePath(NativSettings.defaultModelSearchPath)
-    }
-
-    private func setModelCachePath(_ path: String) {
-        guard !pathsMatch(path, model.settings.modelSearchPath) else {
-            return
+        do {
+            try model.restoreDefaultModelCache()
+        } catch let error as ExternalModelCacheLocation.ValidationError {
+            modelCacheLocationError = error
+        } catch {
+            modelCacheLocationError = .unavailable
         }
-        model.settings.modelSearchPath = path
-        model.restartServer()
     }
 
     private var usesSystemModelCache: Bool {
-        pathsMatch(
-            modelState.settings.normalized().modelSearchPath,
-            NativSettings.defaultModelSearchPath
-        )
-    }
-
-    private func pathsMatch(_ lhs: String, _ rhs: String) -> Bool {
-        let leftURL = URL(fileURLWithPath: LocalModelDiscovery.expandedPath(lhs))
-            .standardizedFileURL
-        let rightURL = URL(fileURLWithPath: LocalModelDiscovery.expandedPath(rhs))
-            .standardizedFileURL
-        return leftURL == rightURL
+        !modelState.settings.normalized().usesExternalModelCache
     }
 
     private func removeModelSourceFolder(_ path: String) {

@@ -294,7 +294,8 @@ struct ArtifactsPageHost: View {
         let modelSearchPath = settings.modelSearchPath
         let insufficientReason = downloads.capacityBlocker(
             sizeBytes: Self.embeddingModelSize,
-            cachePath: settings.modelSearchPath
+            cachePath: settings.modelSearchPath,
+            volumeIdentifier: settings.modelCacheVolumeIdentifier
         )
         return ArtifactSemanticSearchConfig(
             modelID: modelID,
@@ -337,6 +338,7 @@ struct ArtifactsPageHost: View {
             repoID: modelID,
             sizeBytes: Self.embeddingModelSize,
             cachePath: settings.modelSearchPath,
+            volumeIdentifier: settings.modelCacheVolumeIdentifier,
             token: model.effectiveHuggingFaceToken
         ) {
             EmbeddingModelPreparer.prepare(
@@ -354,7 +356,8 @@ struct ArtifactsPageHost: View {
         Task {
             try? await LocalModelDiscovery.delete(
                 repoID: modelID,
-                path: settings.modelSearchPath
+                path: settings.modelSearchPath,
+                volumeIdentifier: settings.modelCacheVolumeIdentifier
             )
             embeddingLibrary.scan(searchPaths: settings.localModelSearchPaths)
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)

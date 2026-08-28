@@ -1,6 +1,19 @@
 import Foundation
 
 struct ExternalModelCacheLocation {
+    struct Reference: Equatable, Sendable {
+        let url: URL
+        let bookmarkData: Data
+        let volumeIdentifier: String
+        let availableCapacity: Int64?
+    }
+
+    enum State: Equatable, Sendable {
+        case systemDefault
+        case available(path: String, availableCapacity: Int64?)
+        case unavailable(path: String, reason: ValidationError)
+    }
+
     struct VolumeProperties: Equatable, Sendable {
         let isDirectory: Bool
         let isReadable: Bool
@@ -13,7 +26,7 @@ struct ExternalModelCacheLocation {
         let fileSystemType: String
     }
 
-    enum ValidationError: LocalizedError, Hashable, Identifiable {
+    enum ValidationError: LocalizedError, Hashable, Identifiable, Sendable {
         case unavailable
         case notDirectory
         case networkVolume
@@ -21,6 +34,8 @@ struct ExternalModelCacheLocation {
         case readOnly
         case notReadable
         case notWritable
+        case differentVolume
+        case downloadsInProgress
         case unsupportedFileSystem(String)
 
         var id: Self { self }
@@ -41,10 +56,93 @@ struct ExternalModelCacheLocation {
                 "Nativ cannot read the selected folder. Check its permissions or choose another folder."
             case .notWritable:
                 "Nativ cannot write to the selected folder. Check its permissions or choose another folder."
+            case .differentVolume:
+                "A different drive is mounted at the selected location. Reconnect the original drive or choose another location."
+            case .downloadsInProgress:
+                "Finish or cancel active model downloads before changing the model-storage location."
             case .unsupportedFileSystem(let fileSystemType):
                 "Only APFS external drives are supported in this release. The selected drive uses \(fileSystemType.uppercased())."
             }
         }
+    }
+
+    static func makeReference(for selectedURL: URL) throws -> Reference {
+        let url = try validate(selectedURL)
+        return try makeReference(for: url, expectedVolumeIdentifier: nil)
+    }
+
+    static func resolve(
+        bookmarkData: Data,
+        expectedVolumeIdentifier: String,
+        lastKnownPath: String
+    ) throws -> Reference {
+        var candidates: [URL] = []
+        var bookmarkIsStale = false
+        if let bookmarkedURL = try? URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [.withoutUI],
+            relativeTo: nil,
+            bookmarkDataIsStale: &bookmarkIsStale
+        ) {
+            candidates.append(bookmarkedURL)
+        }
+
+        let lastKnownURL = URL(
+            fileURLWithPath: NSString(string: lastKnownPath).expandingTildeInPath,
+            isDirectory: true
+        )
+        if !candidates.contains(where: { $0.standardizedFileURL == lastKnownURL.standardizedFileURL }) {
+            candidates.append(lastKnownURL)
+        }
+
+        var identityError: ValidationError?
+        var validationError: ValidationError?
+        for candidate in candidates {
+            do {
+                let url = try validate(candidate)
+                return try makeReference(
+                    for: url,
+                    expectedVolumeIdentifier: expectedVolumeIdentifier
+                )
+            } catch let error as ValidationError {
+                if error == .differentVolume {
+                    identityError = error
+                } else if validationError == nil {
+                    validationError = error
+                }
+            } catch {
+                continue
+            }
+        }
+
+        throw identityError ?? validationError ?? ValidationError.unavailable
+    }
+
+    static func validateForUse(
+        path: String,
+        expectedVolumeIdentifier: String?
+    ) throws -> URL {
+        let url = URL(
+            fileURLWithPath: NSString(string: path).expandingTildeInPath,
+            isDirectory: true
+        ).standardizedFileURL
+        guard let expectedVolumeIdentifier else {
+            return url
+        }
+
+        let validatedURL = try validate(url)
+        let values = try validatedURL.resourceValues(forKeys: [.volumeUUIDStringKey])
+        guard values.volumeUUIDString == expectedVolumeIdentifier else {
+            throw ValidationError.differentVolume
+        }
+        return validatedURL
+    }
+
+    static func path(_ path: String, isOnVolumeAt volumeURL: URL) -> Bool {
+        let cachePath = URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL.path
+        let volumePath = volumeURL.standardizedFileURL.path
+        return cachePath == volumePath || cachePath.hasPrefix(volumePath + "/")
     }
 
     static func validate(_ selectedURL: URL) throws -> URL {
@@ -126,5 +224,41 @@ struct ExternalModelCacheLocation {
             throw ValidationError.notWritable
         }
         return url
+    }
+
+    private static func makeReference(
+        for url: URL,
+        expectedVolumeIdentifier: String?
+    ) throws -> Reference {
+        let values = try url.resourceValues(forKeys: [
+            .volumeUUIDStringKey,
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+        ])
+        guard let volumeIdentifier = values.volumeUUIDString else {
+            throw ValidationError.unavailable
+        }
+        if let expectedVolumeIdentifier,
+           volumeIdentifier != expectedVolumeIdentifier {
+            throw ValidationError.differentVolume
+        }
+
+        let bookmarkData = try url.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: [.volumeUUIDStringKey],
+            relativeTo: nil
+        )
+        let availableCapacity = [
+            values.volumeAvailableCapacityForImportantUsage,
+            values.volumeAvailableCapacity.map(Int64.init),
+        ]
+        .compactMap { $0 }
+        .max()
+        return Reference(
+            url: url,
+            bookmarkData: bookmarkData,
+            volumeIdentifier: volumeIdentifier,
+            availableCapacity: availableCapacity
+        )
     }
 }

@@ -402,6 +402,8 @@ struct NativSettings: Codable, Equatable {
     static let serverSupportsEmbeddingModelArgument = false
 
     var modelSearchPath: String
+    var externalModelCacheBookmark: Data?
+    var externalModelCacheVolumeIdentifier: String?
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
     var mcpServers: [MCPServerConfig]
@@ -454,6 +456,8 @@ struct NativSettings: Codable, Equatable {
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
+        externalModelCacheBookmark: Data? = nil,
+        externalModelCacheVolumeIdentifier: String? = nil,
         additionalModelSearchPaths: [String] = [],
         languageModelID: String? = nil,
         mcpServers: [MCPServerConfig] = [],
@@ -505,6 +509,8 @@ struct NativSettings: Codable, Equatable {
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
+        self.externalModelCacheBookmark = externalModelCacheBookmark
+        self.externalModelCacheVolumeIdentifier = externalModelCacheVolumeIdentifier
         self.additionalModelSearchPaths = additionalModelSearchPaths
         self.languageModelID = languageModelID
         self.mcpServers = mcpServers
@@ -558,6 +564,8 @@ struct NativSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case modelSearchPath
+        case externalModelCacheBookmark
+        case externalModelCacheVolumeIdentifier
         case additionalModelSearchPaths
         case languageModelID
         case mcpServers
@@ -616,6 +624,14 @@ struct NativSettings: Codable, Equatable {
         let legacySelectedModelID = try container.decodeIfPresent(String.self, forKey: .selectedModelID)
         let storedModelSearchPath = try container.decodeIfPresent(String.self, forKey: .modelSearchPath)
         modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
+        externalModelCacheBookmark = try container.decodeIfPresent(
+            Data.self,
+            forKey: .externalModelCacheBookmark
+        )
+        externalModelCacheVolumeIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .externalModelCacheVolumeIdentifier
+        )
         additionalModelSearchPaths = try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths) ?? defaults.additionalModelSearchPaths
         languageModelID = try container.decodeIfPresent(String.self, forKey: .languageModelID) ?? legacySelectedModelID ?? defaults.languageModelID
         mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
@@ -670,6 +686,14 @@ struct NativSettings: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
+        try container.encodeIfPresent(
+            externalModelCacheBookmark,
+            forKey: .externalModelCacheBookmark
+        )
+        try container.encodeIfPresent(
+            externalModelCacheVolumeIdentifier,
+            forKey: .externalModelCacheVolumeIdentifier
+        )
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encode(mcpServers, forKey: .mcpServers)
@@ -848,6 +872,16 @@ struct NativSettings: Codable, Equatable {
         var settings = self
         let trimmedPath = settings.modelSearchPath.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.modelSearchPath = trimmedPath.isEmpty ? Self.defaultModelSearchPath : trimmedPath
+        let volumeIdentifier = settings.externalModelCacheVolumeIdentifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.externalModelCacheVolumeIdentifier = volumeIdentifier?.isEmpty == false
+            ? volumeIdentifier
+            : nil
+        if settings.externalModelCacheBookmark == nil
+            || settings.externalModelCacheVolumeIdentifier == nil {
+            settings.externalModelCacheBookmark = nil
+            settings.externalModelCacheVolumeIdentifier = nil
+        }
         var seenAdditionalPaths = Set<String>()
         settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1136,6 +1170,22 @@ struct NativSettings: Codable, Equatable {
 
     var expandedModelSearchPath: String {
         NSString(string: modelSearchPath).expandingTildeInPath
+    }
+
+    var usesExternalModelCache: Bool {
+        externalModelCacheBookmark != nil && externalModelCacheVolumeIdentifier != nil
+    }
+
+    mutating func setExternalModelCache(_ reference: ExternalModelCacheLocation.Reference) {
+        modelSearchPath = reference.url.path
+        externalModelCacheBookmark = reference.bookmarkData
+        externalModelCacheVolumeIdentifier = reference.volumeIdentifier
+    }
+
+    mutating func restoreDefaultModelCache() {
+        modelSearchPath = Self.defaultModelSearchPath
+        externalModelCacheBookmark = nil
+        externalModelCacheVolumeIdentifier = nil
     }
 
     var localModelSearchPaths: LocalModelSearchPaths {

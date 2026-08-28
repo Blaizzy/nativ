@@ -398,6 +398,7 @@ final class ImageGenerationViewModel: ObservableObject {
         let serverBaseURL = serverSettings.serverBaseURL
         let serverAPIKey = serverSettings.serverAPIKey
         let modelSearchPath = serverSettings.modelSearchPath
+        let modelCacheVolumeIdentifier = serverSettings.externalModelCacheVolumeIdentifier
         let huggingFaceToken = appModel.effectiveHuggingFaceToken
         activeTask = Task { @MainActor [weak self, weak appModel] in
             guard let self else {
@@ -410,6 +411,7 @@ final class ImageGenerationViewModel: ObservableObject {
                         repoID: requestModelID,
                         sizeBytes: nil,
                         cachePath: modelSearchPath,
+                        volumeIdentifier: modelCacheVolumeIdentifier,
                         token: huggingFaceToken
                     )
                     try Task.checkCancellation()

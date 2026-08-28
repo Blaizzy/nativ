@@ -467,7 +467,8 @@ private struct WelcomeView: View {
             downloadProgress: downloadManager.progress(for: hubModel.id),
             downloadBlockedReason: downloadManager.capacityBlocker(
                 sizeBytes: hubModel.sizeBytes,
-                cachePath: model.settings.modelSearchPath
+                cachePath: model.settings.modelSearchPath,
+                volumeIdentifier: model.settings.externalModelCacheVolumeIdentifier
             ),
             downloadError: downloadManager.errorByModelID[hubModel.id]?.localizedDescription,
             onSelect: { selectedModelID = hubModel.id },
@@ -790,6 +791,7 @@ private struct WelcomeView: View {
             repoID: hubModel.id,
             sizeBytes: hubModel.sizeBytes,
             cachePath: model.settings.modelSearchPath,
+            volumeIdentifier: model.settings.externalModelCacheVolumeIdentifier,
             token: model.effectiveHuggingFaceToken
         ) {
             modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
