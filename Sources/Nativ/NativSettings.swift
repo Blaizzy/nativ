@@ -223,9 +223,9 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
         case .imageGeneration:
             "Image Generation"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .embeddings:
             "Embeddings"
         }

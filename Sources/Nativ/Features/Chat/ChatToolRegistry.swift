@@ -147,7 +147,7 @@ enum ChatToolRegistry {
         tools += ChatSystemMonitorToolRegistry.definitions().map {
             ChatNativeToolDescriptor(
                 definition: $0,
-                displayDescription: "Check this device's CPU, GPU, memory, and disk usage.",
+                displayDescription: "Check this device’s CPU, GPU, memory, and disk usage.",
                 configuration: nil
             )
         }

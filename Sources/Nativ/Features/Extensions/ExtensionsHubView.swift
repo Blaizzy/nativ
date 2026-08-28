@@ -84,7 +84,7 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, host: host, model: model)
+            KitsSectionView(manager: manager, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:
@@ -126,9 +126,9 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.title3.weight(.semibold))
                         Text(subtitle)
-                            .font(.system(size: 12))
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
@@ -408,7 +408,7 @@ private struct SkillsSectionView: View {
             Button {
                 editing = NativSkill()
             } label: {
-                Label("Add skill", systemImage: "plus")
+                Label("Add Skill", systemImage: "plus")
             }
         } content: {
             VStack(spacing: 0) {

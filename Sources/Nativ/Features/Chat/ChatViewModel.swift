@@ -293,10 +293,10 @@ final class ChatViewModel: ObservableObject {
             return "Server is stopped."
         }
         if selectedModelID?.isEmpty != false {
-            return "Select a model in Models."
+            return "Choose a model in Models."
         }
         if activeRequestSessionID == currentSessionID {
-            return "Working..."
+            return "Working…"
         }
         return nil
     }
@@ -2023,7 +2023,7 @@ final class ChatViewModel: ObservableObject {
         finishAssistantMessage(
             activeAssistantMessageID,
             in: sessionID,
-            fallbackContent: "Response cancelled.",
+            fallbackContent: "Response canceled.",
             fallbackReasoningContent: nil,
             responseMetrics: nil,
             isCancelled: true

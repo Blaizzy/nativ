@@ -67,7 +67,7 @@ struct ArtifactPreview: View {
             Spacer(minLength: 0)
 
             Button(action: { onOpenChat(artifact) }) {
-                Label("Open in chat", systemImage: "bubble.left.and.bubble.right")
+                Label("Open in Chat", systemImage: "bubble.left.and.bubble.right")
             }
             .buttonStyle(.bordered)
             .tint(.white)
