@@ -302,13 +302,13 @@ struct ControlPanelFolderHeaderView: View {
                     }
             } else {
                 Text(folder.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .nativTextStyle(.rowTitle)
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
 
                 Text("\(count)")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.metadata)
                     .foregroundStyle(.secondary.opacity(0.7))
             }
         }
@@ -377,7 +377,7 @@ struct SidebarRowSelectionStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .font(.system(size: 15, weight: .regular))
+            .nativTextStyle(.sidebarItem)
             .padding(.horizontal, 7)
             .padding(.vertical, 6)
             .background(

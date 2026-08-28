@@ -55,9 +55,9 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
         case .imageEditing:
             "Image Editing"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .embeddings:
             "Embeddings"
         case .reranking:
@@ -203,9 +203,9 @@ struct LocalModel: Identifiable, Equatable, Sendable {
 
     private static func compactCount(_ value: Double, suffix: String) -> String {
         if value.rounded() == value {
-            return "\(Int(value))\(suffix)"
+            return Int(value).formatted() + suffix
         }
-        return String(format: "%.1f%@", value, suffix)
+        return value.formatted(.number.precision(.fractionLength(1))) + suffix
     }
 }
 

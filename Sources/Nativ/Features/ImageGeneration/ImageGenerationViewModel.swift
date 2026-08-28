@@ -660,9 +660,9 @@ final class ImageGenerationViewModel: ObservableObject {
     private func finishCancelledTurn(_ turnID: UUID) {
         updateTurn(turnID) { turn in
             turn.status = .cancelled
-            turn.errorMessage = "Image generation cancelled."
+            turn.errorMessage = "Image generation canceled."
         }
-        statusText = "Cancelled."
+        statusText = "Canceled."
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
     }

@@ -49,7 +49,7 @@ extension ControlPanelView {
     var bulkSelectionBar: some View {
         HStack(spacing: 6) {
             Text(bulkSelectionTitle)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             Spacer(minLength: 0)
@@ -86,7 +86,7 @@ extension ControlPanelView {
                     exitSelectMode()
                 }
             }
-            .font(.system(size: 12, weight: .medium))
+            .nativTextStyle(.supportingEmphasized)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

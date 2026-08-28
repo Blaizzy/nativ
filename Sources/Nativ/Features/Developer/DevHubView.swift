@@ -42,7 +42,7 @@ struct DevHubView: View {
                         Image(systemName: item.systemImage)
                             .frame(width: 18)
                         Text(item.rawValue)
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.sidebarItem)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10)

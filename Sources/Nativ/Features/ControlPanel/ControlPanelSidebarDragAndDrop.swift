@@ -197,7 +197,7 @@ extension ControlPanelView {
             Image(systemName: "bubble.left")
                 .font(.system(size: 11))
             Text(recent.title)
-                .font(.system(size: 13, weight: .medium))
+                .nativTextStyle(.rowTitle)
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)

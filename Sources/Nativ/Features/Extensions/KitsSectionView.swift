@@ -2,30 +2,48 @@ import NativExtensionSDK
 import NativServerKit
 import SwiftUI
 
-@ViewBuilder
-private func kitCompletionIndicator(_ state: NativKitState) -> some View {
-    ZStack {
-        if state == .enabled {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.green)
-                .help("Enabled")
-                .accessibilityLabel("Enabled")
+private struct KitStateIcon: View {
+    let state: NativKitState
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(color)
+            .accessibilityLabel("Kit status: \(title)")
+            .help(title)
+    }
+
+    private var title: String {
+        switch state {
+        case .off: "Not enabled"
+        case .partial: "Partially enabled"
+        case .enabled: "Enabled"
         }
     }
-    .frame(width: 16, height: 16)
+
+    private var symbol: String {
+        switch state {
+        case .off: "circle"
+        case .partial: "circle.lefthalf.filled"
+        case .enabled: "circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch state {
+        case .off: .secondary
+        case .partial: .orange
+        case .enabled: .green
+        }
+    }
 }
 
 struct KitsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
-    @ObservedObject var host: MCPHostManager
     var model: NativModel
     @State private var openKit: NativKit?
 
-    private let columns = [
-        GridItem(.flexible(minimum: 240, maximum: 340), spacing: 14),
-        GridItem(.flexible(minimum: 240, maximum: 340)),
-    ]
+    private static let columns = [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 14)]
 
     var body: some View {
         HubSectionScaffold(
@@ -34,30 +52,30 @@ struct KitsSectionView: View {
         ) {
             EmptyView()
         } content: {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 14) {
                 ForEach(NativKitCatalog.bundled.kits) { kit in
-                    KitCard(
-                        kit: kit,
-                        state: NativKitActivation.state(
-                            of: kit,
-                            model: model,
-                            isExtensionEnabled: manager.isEnabled(extensionID:)
-                        ),
-                        inactiveParts: NativKitActivation.inactivePartNames(
-                            of: kit,
-                            model: model,
-                            extensionName: extensionName,
-                            isExtensionEnabled: manager.isEnabled(extensionID:)
-                        ),
-                        onOpen: { openKit = kit },
-                        onEnable: { enableMissing(in: kit) }
-                    )
+                    kitCard(for: kit)
                 }
             }
         }
         .sheet(item: $openKit) { kit in
-            KitDetailView(kit: kit, manager: manager, host: host, model: model)
+            KitDetailView(kit: kit, manager: manager, model: model)
         }
+    }
+
+    private func kitCard(for kit: NativKit) -> some View {
+        let snapshot = NativKitActivation.snapshot(
+            of: kit,
+            model: model,
+            extensionName: extensionName,
+            isExtensionEnabled: manager.isEnabled(extensionID:)
+        )
+        return KitCard(
+            kit: kit,
+            snapshot: snapshot,
+            onOpen: { openKit = kit },
+            onEnable: { enableMissing(in: kit) }
+        )
     }
 
     private func extensionName(_ id: String) -> String {
@@ -75,15 +93,8 @@ struct KitsSectionView: View {
 }
 
 private struct KitCard: View {
-    private enum Layout {
-        static let summaryHeight: CGFloat = 50
-        static let capabilitiesHeight: CGFloat = 28
-        static let actionsHeight: CGFloat = 24
-    }
-
     let kit: NativKit
-    let state: NativKitState
-    let inactiveParts: [String]
+    let snapshot: NativKitActivationSnapshot
     let onOpen: () -> Void
     let onEnable: () -> Void
 
@@ -91,51 +102,35 @@ private struct KitCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 NativTintedIconTile(symbol: kit.symbol, tint: .nativTint(kit.tintName))
+                    .accessibilityHidden(true)
                 Spacer(minLength: 0)
                 NativStatusBadge(text: "Built-in")
                     .help("Ships with Nativ")
-                kitCompletionIndicator(state)
+                KitStateIcon(state: snapshot.state)
             }
-            .frame(height: 44)
             VStack(alignment: .leading, spacing: 3) {
                 Text(kit.name)
-                    .font(.system(size: 15, weight: .semibold))
+                    .nativTextStyle(.cardTitle)
                 Text(kit.summary)
-                    .font(.system(size: 12))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(height: Layout.summaryHeight, alignment: .topLeading)
             Text(capabilitiesText)
-                .font(.system(size: 11))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.tertiary)
-                .lineLimit(2)
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: Layout.capabilitiesHeight,
-                    maxHeight: Layout.capabilitiesHeight,
-                    alignment: .topLeading
-                )
-            HStack(spacing: 8) {
-                if state != .enabled {
-                    Button(state == .partial ? "Enable missing" : "Enable", action: onEnable)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    actions
                 }
-                if state == .off {
-                    Button("Details", action: onOpen)
-                        .buttonStyle(.plain)
-                        .controlSize(.small)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Button("Manage", action: onOpen)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 8) {
+                    actions
                 }
-                Spacer(minLength: 0)
             }
-            .font(.system(size: 12))
-            .frame(height: Layout.actionsHeight)
+            .nativTextStyle(.supporting)
+            .controlSize(.regular)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -147,62 +142,82 @@ private struct KitCard: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .contentShape(.rect)
-        .onTapGesture(perform: onOpen)
+        .accessibilityElement(children: .contain)
     }
 
     private var capabilitiesText: String {
-        if state == .partial {
-            return "Off: \(inactiveParts.joined(separator: " · "))"
+        if snapshot.state == .partial {
+            "Needs: \(snapshot.inactivePartNames.joined(separator: " · "))"
+        } else {
+            "Includes: \(kit.capabilityNames(in: .bundled).joined(separator: " · "))"
         }
-        return "Includes: \(kit.capabilityNames(in: .bundled).joined(separator: " · "))"
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if snapshot.state != .enabled {
+            Button(snapshot.state == .partial ? "Enable Missing" : "Enable", action: onEnable)
+                .buttonStyle(.borderedProminent)
+        }
+        Button(snapshot.state == .off ? "Details" : "Manage", action: onOpen)
+            .buttonStyle(.bordered)
     }
 }
 
 private struct KitDetailView: View {
     let kit: NativKit
     @ObservedObject var manager: NativExtensionManager
-    @ObservedObject var host: MCPHostManager
     var model: NativModel
     @Environment(\.dismiss) private var dismiss
-
-    private var state: NativKitState {
-        NativKitActivation.state(
-            of: kit,
-            model: model,
-            isExtensionEnabled: manager.isEnabled(extensionID:)
-        )
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            VStack(alignment: .leading, spacing: 22) {
-                mcpGroup
-                if !kit.skills.isEmpty { skillsGroup }
-                if !kit.extensionIDs.isEmpty { extensionsGroup }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    mcpGroup
+                    if !kit.skills.isEmpty { skillsGroup }
+                    if !kit.extensionIDs.isEmpty { extensionsGroup }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
             }
-            .padding(20)
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .frame(width: 560)
+        .presentationSizing(.fitted)
+        .frame(
+            minWidth: 600,
+            idealWidth: 680,
+            maxWidth: 920,
+            minHeight: 480,
+            idealHeight: 620,
+            maxHeight: 800
+        )
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        let snapshot = NativKitActivation.snapshot(
+            of: kit,
+            model: model,
+            extensionName: extensionName,
+            isExtensionEnabled: manager.isEnabled(extensionID:)
+        )
+        return HStack(alignment: .top, spacing: 12) {
             NativTintedIconTile(symbol: kit.symbol, tint: .nativTint(kit.tintName), size: 40)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(kit.name)
-                        .font(.system(size: 17, weight: .semibold))
-                    kitCompletionIndicator(state)
+                        .nativTextStyle(.detailTitle)
+                    KitStateIcon(state: snapshot.state)
                 }
                 Text(kit.summary)
-                    .font(.system(size: 12))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if state != .enabled {
-                    Button(state == .partial ? "Enable missing" : "Enable all") {
+                if snapshot.state != .enabled {
+                    Button(snapshot.state == .partial ? "Enable Missing" : "Enable All") {
                         NativKitActivation.enableMissing(
                             in: kit,
                             model: model,
@@ -211,7 +226,7 @@ private struct KitDetailView: View {
                         )
                     }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .controlSize(.regular)
                     .padding(.top, 4)
                 }
             }
@@ -224,7 +239,7 @@ private struct KitDetailView: View {
     // MARK: Groups
 
     private var mcpGroup: some View {
-        KitGroup(title: "MCP servers & tools", caption: "Their tools become available in chat and appear under Tools.") {
+        KitGroup(title: "MCP Servers & Tools", caption: "Their tools become available in chat and appear under Tools.") {
             ForEach(kit.mcpEntries(in: .bundled)) { entry in
                 KitPartRow(
                     symbol: entry.symbol,
@@ -318,11 +333,12 @@ private struct KitGroup<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .nativTextStyle(.sectionTitle)
                 if let caption {
                     Text(caption)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.metadata)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             VStack(spacing: 0) {
@@ -341,24 +357,30 @@ private struct KitPartRow: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            NativTintedIconTile(symbol: symbol, tint: tint, logoAssetName: logoAssetName, size: 30)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        Toggle(isOn: $isOn) {
+            HStack(spacing: 10) {
+                NativTintedIconTile(
+                    symbol: symbol,
+                    tint: tint,
+                    logoAssetName: logoAssetName,
+                    size: 30
+                )
+                .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .nativTextStyle(.rowTitle)
+                    if let subtitle {
+                        Text(subtitle)
+                            .nativTextStyle(.metadata)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                Spacer(minLength: 12)
             }
-            Spacer(minLength: 12)
-            Toggle("", isOn: $isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
         }
+        .toggleStyle(.switch)
+        .controlSize(.regular)
         .padding(.vertical, 8)
     }
 }

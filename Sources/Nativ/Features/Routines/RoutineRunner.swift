@@ -110,7 +110,9 @@ final class RoutineRunner {
                 routine: routine,
                 sessionID: sessionID,
                 createdAt: startedAt,
-                messages: initialTranscript + [ChatTranscriptMessage(role: .error, content: message)]
+                messages: initialTranscript + [
+                    ChatTranscriptMessage(role: .error, content: message)
+                ]
             )
             finish(&run, routine: routine, status: .failed, summary: message)
             return
@@ -164,9 +166,10 @@ final class RoutineRunner {
         } catch let failure as ScheduledCompletionFailure {
             guard shouldContinue(routine) else { return }
             let errorMessage = failure.localizedDescription
-            let transcript = failure.transcript + [
-                ChatTranscriptMessage(role: .error, content: errorMessage)
-            ]
+            let transcript =
+                failure.transcript + [
+                    ChatTranscriptMessage(role: .error, content: errorMessage)
+                ]
             saveRunChat(
                 routine: routine,
                 sessionID: sessionID,
@@ -206,12 +209,16 @@ final class RoutineRunner {
         var transcript = [ChatTranscriptMessage(role: .user, content: routine.instructions)]
         var toolRound = 0
         let fileReadTracker = ChatReadFileTracker()
+        let fileSearchTracker = ChatSearchFilesTracker()
+        let fileOperationRunID = UUID()
 
         while true {
             try Task.checkCancellation()
-            let advertisesTools = !capabilities.tools.isEmpty
+            let advertisesTools =
+                !capabilities.tools.isEmpty
                 && ChatToolRoundGate.advertisesTools(atRound: toolRound)
-            let toolDefinitions = advertisesTools
+            let toolDefinitions =
+                advertisesTools
                 ? capabilities.tools.map(\.definition)
                 : nil
             let request = MLXChatCompletionRequest(
@@ -246,31 +253,34 @@ final class RoutineRunner {
             let toolCalls = Self.normalizedToolCalls(completion.toolCalls)
 
             guard advertisesTools, !toolCalls.isEmpty else {
-                transcript.append(ChatTranscriptMessage(
-                    role: .assistant,
-                    content: completion.content,
-                    reasoningContent: completion.reasoningContent ?? "",
-                    modelID: routine.modelID
-                ))
+                transcript.append(
+                    ChatTranscriptMessage(
+                        role: .assistant,
+                        content: completion.content,
+                        reasoningContent: completion.reasoningContent ?? "",
+                        modelID: routine.modelID
+                    ))
                 return ScheduledExecutionResult(
                     finalContent: completion.content,
                     transcript: transcript
                 )
             }
 
-            requestMessages.append(MLXChatMessage(
-                role: "assistant",
-                content: completion.content,
-                reasoningContent: completion.reasoningContent,
-                toolCalls: toolCalls
-            ))
-            transcript.append(ChatTranscriptMessage(
-                role: .assistant,
-                content: completion.content,
-                reasoningContent: completion.reasoningContent ?? "",
-                modelID: routine.modelID,
-                toolCalls: toolCalls
-            ))
+            requestMessages.append(
+                MLXChatMessage(
+                    role: "assistant",
+                    content: completion.content,
+                    reasoningContent: completion.reasoningContent,
+                    toolCalls: toolCalls
+                ))
+            transcript.append(
+                ChatTranscriptMessage(
+                    role: .assistant,
+                    content: completion.content,
+                    reasoningContent: completion.reasoningContent ?? "",
+                    modelID: routine.modelID,
+                    toolCalls: toolCalls
+                ))
 
             for call in toolCalls {
                 try Task.checkCancellation()
@@ -279,23 +289,27 @@ final class RoutineRunner {
                     capabilities: capabilities,
                     settings: settings,
                     baseURL: baseURL,
-                    fileReadTracker: fileReadTracker
+                    fileReadTracker: fileReadTracker,
+                    fileSearchTracker: fileSearchTracker,
+                    fileOperationRunID: fileOperationRunID
                 )
-                requestMessages.append(MLXChatMessage(
-                    role: "tool",
-                    content: result.content,
-                    toolCallID: call.id,
-                    name: call.function?.name
-                ))
-                transcript.append(ChatTranscriptMessage(
-                    role: .tool,
-                    content: result.content,
-                    imageAttachments: result.attachments,
-                    toolCallID: call.id,
-                    toolName: call.function?.name,
-                    toolStatus: result.succeeded ? .succeeded : .failed,
-                    toolArguments: call.function?.arguments
-                ))
+                requestMessages.append(
+                    MLXChatMessage(
+                        role: "tool",
+                        content: result.content,
+                        toolCallID: call.id,
+                        name: call.function?.name
+                    ))
+                transcript.append(
+                    ChatTranscriptMessage(
+                        role: .tool,
+                        content: result.content,
+                        imageAttachments: result.attachments,
+                        toolCallID: call.id,
+                        toolName: call.function?.name,
+                        toolStatus: result.succeeded ? .succeeded : .failed,
+                        toolArguments: call.function?.arguments
+                    ))
             }
             toolRound += 1
         }
@@ -306,12 +320,14 @@ final class RoutineRunner {
         capabilities: ResolvedCapabilities,
         settings: NativSettings,
         baseURL: URL,
-        fileReadTracker: ChatReadFileTracker
+        fileReadTracker: ChatReadFileTracker,
+        fileSearchTracker: ChatSearchFilesTracker,
+        fileOperationRunID: UUID
     ) async throws -> ScheduledToolResult {
         do {
             try Task.checkCancellation()
             guard let name = call.function?.name,
-                  let tool = capabilities.tool(named: name)
+                let tool = capabilities.tool(named: name)
             else {
                 throw ScheduledToolExecutionError.notAllowed(call.function?.name ?? "unknown")
             }
@@ -346,7 +362,9 @@ final class RoutineRunner {
                     additionalModelSearchPaths: settings.additionalModelSearchPaths,
                     huggingFaceToken: model.effectiveHuggingFaceToken,
                     fileReadRootPath: settings.fileReadRootPath,
-                    fileReadTracker: fileReadTracker
+                    fileReadTracker: fileReadTracker,
+                    fileSearchTracker: fileSearchTracker,
+                    fileOperationRunID: fileOperationRunID
                 )
                 outcome = try await ChatToolDispatcher.execute(call: call, context: context)
             }
@@ -448,12 +466,14 @@ final class RoutineRunner {
         if !capabilities.tools.isEmpty {
             instructions.append(NativSkill.builtInToolGuide.instructions)
         }
-        instructions.append(contentsOf: capabilities.skills.map(\.instructions).filter { !$0.isEmpty })
+        instructions.append(
+            contentsOf: capabilities.skills.map(\.instructions).filter { !$0.isEmpty })
         return instructions.joined(separator: "\n\n")
     }
 
     private static func summarize(_ content: String) -> String {
-        let firstLine = content
+        let firstLine =
+            content
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? ""
@@ -528,7 +548,8 @@ final class RoutineRunner {
                     if skill.isEnabled {
                         skillsByID[id] = skill
                     } else {
-                        unavailable.append(skill.name.isEmpty ? "Skill \(id.uuidString)" : skill.name)
+                        unavailable.append(
+                            skill.name.isEmpty ? "Skill \(id.uuidString)" : skill.name)
                     }
                 } else {
                     unavailable.append("Skill \(id.uuidString)")
@@ -541,7 +562,8 @@ final class RoutineRunner {
             if definitions.isEmpty {
                 let configuredName = settings.mcpServers.first(where: { $0.id == serverID })?.name
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let name = configuredName.flatMap { $0.isEmpty ? nil : $0 }
+                let name =
+                    configuredName.flatMap { $0.isEmpty ? nil : $0 }
                     ?? "MCP server \(serverID.uuidString)"
                 unavailable.append(name)
             }
@@ -553,6 +575,7 @@ final class RoutineRunner {
         }
 
         let nativeDefinitions = ChatToolRegistry.descriptors(canEditImage: false)
+            .filter { $0.configuration != .fileWrite }
             .map(\.definition)
             .filter { $0.function.name != ChatSwitchModelToolRegistry.toolName }
         for tool in selectedTools {
@@ -561,10 +584,12 @@ final class RoutineRunner {
                 if let definition = nativeDefinitions.first(where: {
                     $0.function.name == tool.name
                 }), !settings.disabledToolNames.contains(tool.name),
-                   (tool.name != ChatWebSearchToolRegistry.toolName
-                    || ChatWebSearchToolRegistry.isConfigured()),
-                   (tool.name != ChatReadFileToolRegistry.toolName
-                    || FileReadAccessPolicy.isConfigured(rootPath: settings.fileReadRootPath)) {
+                    !ChatFileWriteToolRegistry.toolNames.contains(tool.name),
+                    tool.name != ChatWebSearchToolRegistry.toolName
+                        || ChatWebSearchToolRegistry.isConfigured(),
+                    tool.name != ChatReadFileToolRegistry.toolName
+                        || FileReadAccessPolicy.isConfigured(rootPath: settings.fileReadRootPath)
+                {
                     registerTool(definition, provider: .builtIn)
                 } else {
                     unavailable.append(
@@ -573,8 +598,9 @@ final class RoutineRunner {
                 }
             case .custom(let id):
                 if let customTool = settings.customTools.first(where: { $0.id == id }),
-                   !settings.disabledToolNames.contains(customTool.toolName),
-                   let definition = try? customTool.definition() {
+                    !settings.disabledToolNames.contains(customTool.toolName),
+                    let definition = try? customTool.definition()
+                {
                     registerTool(definition, provider: .custom(id))
                 } else {
                     unavailable.append(
@@ -582,8 +608,9 @@ final class RoutineRunner {
                     )
                 }
             case .mcp(let serverID):
-                guard let exposedName = mcpHost.tools(forServer: serverID)
-                    .first(where: { $0.displayName == tool.name })?.name,
+                guard
+                    let exposedName = mcpHost.tools(forServer: serverID)
+                        .first(where: { $0.displayName == tool.name })?.name,
                     !settings.disabledToolNames.contains(exposedName),
                     let definition = mcpHost.toolDefinitions(forServer: serverID)
                         .first(where: { $0.function.name == exposedName })
@@ -601,7 +628,9 @@ final class RoutineRunner {
             tools: toolsByName.values.sorted {
                 $0.definition.function.name < $1.definition.function.name
             },
-            skills: skillsByID.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            skills: skillsByID.values.sorted {
+                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            },
             unavailable: Array(Set(unavailable)).sorted()
         )
     }

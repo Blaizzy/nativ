@@ -260,7 +260,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     var loadedModelDisplay: String {
-        metrics?.server.displayLoadedModel ?? "None"
+        metrics?.server.displayLoadedModel ?? NativFormatting.missingValue
     }
 
     var isModelLoading: Bool {
@@ -318,7 +318,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     var unavailableMetricsText: String {
-        lastMetricsError == nil ? "Waiting for server..." : "Metrics unavailable"
+        lastMetricsError == nil ? "Waiting for server…" : "Metrics unavailable"
     }
 
     var settingsRequireRestart: Bool {
@@ -371,7 +371,7 @@ final class NativModel: ChatModelSwitchingSurface {
             // still comes up.
             launchArguments.removeSubrange(modelFlagIndex...(modelFlagIndex + 1))
             modelLoadingProgress = nil
-            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Pick a chat model to load one.\n")
+            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Choose a language model to load one.\n")
         }
         if let speechToTextModelID = settings.normalized().speechToTextModelID,
            let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(
@@ -484,7 +484,7 @@ final class NativModel: ChatModelSwitchingSurface {
         }
 
         do {
-            appendLog("\nStopping mlx-vlm-server...\n")
+            appendLog("\nStopping mlx-vlm-server…\n")
             requestedServerStopReason = reason
             try server.stop()
         } catch NativError.notRunning {

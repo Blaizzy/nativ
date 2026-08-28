@@ -431,7 +431,7 @@ struct ChatComposer: View {
 
     private var selectedModelLabel: String {
         guard let selectedModelID else {
-            return "Choose model"
+            return "Choose Model"
         }
         return modelMenuLabel(selectedModelID)
     }
@@ -778,7 +778,7 @@ struct ChatComposer: View {
     }
 
     private func workingStatus(elapsed: TimeInterval) -> String {
-        "Working for \(NativFormatting.elapsedDuration(elapsed))..."
+        "Working for \(NativFormatting.elapsedDuration(elapsed))…"
     }
 
     private func send() {
@@ -817,7 +817,7 @@ private struct ChatPromptEditBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Editing prompt")
                     .fontWeight(.medium)
-                Text("Sending will create a new conversation branch.")
+                Text("Sending will create a new chat branch.")
                     .foregroundStyle(.secondary)
             }
 
@@ -960,7 +960,7 @@ struct ComposerModelPicker: View {
     }
 
     private var pickerTooltip: String {
-        isDisabled ? helpText : "Select model"
+        isDisabled ? helpText : "Choose Model"
     }
 
     private var isPickerActive: Bool {
@@ -1333,7 +1333,7 @@ private struct ComposerModelPickerLabel: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .font(.system(size: 12, weight: .medium))
+        .nativTextStyle(.supportingEmphasized)
         .foregroundStyle(Color.primary)
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -1501,12 +1501,12 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             menu.addItem(pasteItem)
 
             let screenshotItem = NSMenuItem(
-                title: "Take Screenshot",
+                title: "Take a Screenshot",
                 action: #selector(captureScreenshot(_:)),
                 keyEquivalent: ""
             )
             screenshotItem.target = self
-            screenshotItem.image = menuImage("camera.viewfinder", description: "Take Screenshot")
+            screenshotItem.image = menuImage("camera.viewfinder", description: "Take a screenshot")
             screenshotItem.isEnabled = true
             menu.addItem(screenshotItem)
 
@@ -1578,7 +1578,7 @@ struct ChatComposerActionPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 section("Add") {
                     ChatComposerActionRow(
-                        title: "Upload file",
+                        title: "Upload File",
                         detail: "Choose an image or document from your Mac",
                         systemName: "doc.badge.plus",
                         action: onAttachImages
@@ -1586,7 +1586,7 @@ struct ChatComposerActionPanel: View {
 
                     if canPasteImage {
                         ChatComposerActionRow(
-                            title: "Paste image",
+                            title: "Paste Image",
                             detail: "Use an image from your clipboard",
                             systemName: "doc.on.clipboard",
                             action: onPasteImage
@@ -1594,7 +1594,7 @@ struct ChatComposerActionPanel: View {
                     }
 
                     ChatComposerActionRow(
-                        title: "Take a screenshot",
+                        title: "Take a Screenshot",
                         detail: "Capture part of your screen",
                         systemName: "camera.viewfinder",
                         action: onCaptureScreenshot
@@ -1668,7 +1668,7 @@ struct ChatComposerActionPanel: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .nativTextStyle(.supportingEmphasized)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
 
@@ -1699,11 +1699,11 @@ private struct ChatComposerActionRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 13, weight: .medium))
+                        .nativTextStyle(.rowTitle)
                         .foregroundStyle(.primary)
 
                     Text(detail)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -2140,7 +2140,7 @@ struct ChatPendingImageAttachmentView: View {
 
             statusIndicator
 
-            Button("Remove attachment", systemImage: "xmark", action: onRemove)
+            Button("Remove Attachment", systemImage: "xmark", action: onRemove)
                 .labelStyle(.iconOnly)
                 .font(.caption.weight(.semibold))
                 .frame(width: 14, height: 14)

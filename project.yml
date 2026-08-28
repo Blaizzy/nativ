@@ -109,6 +109,9 @@ targets:
         buildPhase: resources
       - path: Extensions/VoiceDictation/Manifest.json
         buildPhase: resources
+      - path: ThirdParty/ripgrep/Tools
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
@@ -220,8 +223,16 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatReadFileTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatSearchFilesTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatFileWriteTools.swift
       - path: Sources/Nativ/Features/Files/FileReadAccessPolicy.swift
       - path: Sources/Nativ/Features/Files/SafeLocalFileReader.swift
+      - path: Sources/Nativ/Features/Files/FileSearchEngine.swift
+      - path: Sources/Nativ/Features/Files/FileWriteAccessPolicy.swift
+      - path: Sources/Nativ/Features/Files/SafeLocalFileWriter.swift
+      - path: Sources/Nativ/Features/Files/FileMutationState.swift
+      - path: Sources/Nativ/Features/Files/FileEditEngine.swift
+      - path: Sources/Nativ/Features/Files/FileSyntaxValidator.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingError.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingProviderClient.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingRuntime.swift

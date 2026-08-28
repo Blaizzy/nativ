@@ -107,8 +107,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
             return value
         }
 
-        let keep = max(1, maxLength - 3)
-        return "\(value.prefix(keep))..."
+        let keep = max(1, maxLength - 1)
+        return "\(value.prefix(keep))…"
     }
 }
 

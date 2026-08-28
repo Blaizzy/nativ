@@ -45,7 +45,7 @@ struct ScheduledTaskCard: View {
                     VStack(alignment: .leading, spacing: 9) {
                         HStack(spacing: 8) {
                             Text(task.name.isEmpty ? "Untitled scheduled task" : task.name)
-                                .font(.system(size: 15, weight: .semibold))
+                                .nativTextStyle(.cardTitle)
                                 .lineLimit(1)
                             if isRunning {
                                 Text("Running")
@@ -102,7 +102,7 @@ struct ScheduledTaskCard: View {
             .fixedSize()
             .padding(.trailing, 16)
         }
-        .scheduledPanelStyle(isHighlighted: isHovering)
+        .nativPanelStyle(isHighlighted: isHovering)
         .contextMenu {
             taskActions
         }
@@ -112,7 +112,7 @@ struct ScheduledTaskCard: View {
 
     @ViewBuilder
     private var taskActions: some View {
-        Button("Run now", systemImage: "play", action: onRun)
+        Button("Run Now", systemImage: "play", action: onRun)
             .disabled(isRunning)
         Button(
             task.isEnabled ? "Pause" : "Resume",
@@ -209,7 +209,7 @@ struct ScheduledTasksEmptyState: View {
             Text("Create a task to run a prompt automatically on a recurring schedule.")
         } actions: {
             if showsCreateAction {
-                Button("New scheduled task", action: onCreate)
+                Button("New Scheduled Task", action: onCreate)
                     .buttonStyle(.borderedProminent)
             }
         }
@@ -254,30 +254,6 @@ extension RoutineRunSource {
         case .scheduled: "Scheduled"
         case .manual: "Manual"
         case .api: "API"
-        }
-    }
-}
-
-extension View {
-    func scheduledPanelStyle(isHighlighted: Bool = false) -> some View {
-        background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    if isHighlighted {
-                        Color.primary.opacity(0.045)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(
-                    isHighlighted
-                        ? Color.primary.opacity(0.16)
-                        : Color(nsColor: .separatorColor),
-                    lineWidth: 0.5
-                )
         }
     }
 }

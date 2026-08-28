@@ -467,9 +467,9 @@ enum HuggingFaceHubError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "Hugging Face returned an invalid response."
+            "Hugging Face Hub returned an invalid response."
         case .requestFailed(let status, let message):
-            message.isEmpty ? "Hugging Face request failed (HTTP \(status))." : message
+            message.isEmpty ? "Hugging Face Hub request failed (HTTP \(status))." : message
         case .pythonUnavailable:
             "The bundled model downloader is unavailable."
         case .downloadStalled:
