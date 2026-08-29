@@ -23,6 +23,7 @@ private struct ChatSessionBootstrap {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    let agentRegistry = ChatAgentRegistry()
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
     private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
@@ -750,6 +751,10 @@ final class ChatViewModel: ObservableObject {
         toolConsentGate.deny(toolMessageID)
     }
 
+    func cancelSpawnedAgent(_ agentID: String) {
+        agentRegistry.cancel(agentID)
+    }
+
     func imageModelSelectionRequest(
         for toolMessageID: UUID
     ) -> ChatImageModelSelectionRequest? {
@@ -1296,8 +1301,74 @@ final class ChatViewModel: ObservableObject {
             }
 
             var insertionAnchor = assistantMessageID
+            var handledSpawnAgentIndices = Set<Int>()
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
+                if handledSpawnAgentIndices.contains(index) {
+                    continue
+                }
+
+                if toolCall.function?.name == ChatSpawnAgentToolRegistry.toolName {
+                    let batch = toolCalls[index...].prefix {
+                        $0.function?.name == ChatSpawnAgentToolRegistry.toolName
+                    }
+                    var batchMessageIDs: [UUID] = []
+                    for (offset, call) in batch.enumerated() {
+                        let toolMessageID = UUID()
+                        guard insertToolMessage(
+                            id: toolMessageID,
+                            call: call,
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        ) else {
+                            throw NativChatError.invalidResponse
+                        }
+                        insertionAnchor = toolMessageID
+                        batchMessageIDs.append(toolMessageID)
+                        handledSpawnAgentIndices.insert(index + offset)
+                    }
+
+                    let sharedContext = ChatToolExecutionContext(
+                        imageGenerationModelID: activeImageModelID,
+                        baseURL: queuedRequest.settings.serverBaseURL,
+                        apiKey: queuedRequest.settings.serverAPIKey,
+                        imageReferences: [],
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        huggingFaceToken: appModel?.effectiveHuggingFaceToken,
+                        mcpHost: mcpHost,
+                        settings: activeSettings,
+                        spawnAgentParentMessages: sessionMessages(for: queuedRequest.sessionID) ?? [],
+                        agentRegistry: agentRegistry
+                    )
+
+                    var foregroundCalls: [MLXChatToolCall] = []
+                    var foregroundMessageIDs: [UUID] = []
+                    for (call, toolMessageID) in zip(batch, batchMessageIDs) {
+                        if ChatSpawnAgentToolArguments.runsInBackground(call.function?.arguments) {
+                            await startBackgroundSpawnAgent(
+                                call: call,
+                                toolMessageID: toolMessageID,
+                                context: sharedContext,
+                                in: queuedRequest.sessionID
+                            )
+                        } else {
+                            foregroundCalls.append(call)
+                            foregroundMessageIDs.append(toolMessageID)
+                        }
+                    }
+                    if !foregroundCalls.isEmpty {
+                        await runConcurrentSpawnAgentBatch(
+                            calls: foregroundCalls,
+                            messageIDs: foregroundMessageIDs,
+                            context: sharedContext,
+                            in: queuedRequest.sessionID
+                        )
+                    }
+                    appModel?.refreshMetricsIfRunning(force: true)
+                    continue
+                }
+
                 let toolMessageID = UUID()
                 let initialToolStatus: ChatTranscriptMessage.ToolStatus =
                     switch toolCall.function?.name {
@@ -1559,7 +1630,11 @@ final class ChatViewModel: ObservableObject {
                                 modelID: selectedModelID,
                                 in: queuedRequest.sessionID
                             )
-                        }
+                        },
+                        mcpHost: mcpHost,
+                        settings: activeSettings,
+                        spawnAgentParentMessages: sessionMessages(for: queuedRequest.sessionID) ?? [],
+                        agentRegistry: agentRegistry
                     )
                     let outcome: ChatToolExecutionOutcome
                     if let customTool {
@@ -1898,6 +1973,117 @@ final class ChatViewModel: ObservableObject {
         }
         storedSessions[sessionIndex].messages.insert(message, at: anchorIndex + 1)
         return true
+    }
+
+    private func startBackgroundSpawnAgent(
+        call: MLXChatToolCall,
+        toolMessageID: UUID,
+        context: ChatToolExecutionContext,
+        in sessionID: UUID
+    ) async {
+        var callContext = context
+        callContext.spawnAgentUpdate = { [weak self] subMessages in
+            _ = self?.updateMessage(toolMessageID, in: sessionID) { $0.subMessages = subMessages }
+        }
+        let executor = ChatSpawnAgentToolExecutor()
+        do {
+            let prepared = try await executor.prepare(call: call, context: callContext)
+            updateToolMessage(
+                toolMessageID,
+                in: sessionID,
+                status: .running,
+                content: executor.handlePayload(agentID: prepared.agentID),
+                attachments: []
+            )
+            let task = Task { [weak self] in
+                guard let self else {
+                    return
+                }
+                let content = await executor.run(prepared)
+                let finalStatus = prepared.registry?.record(for: prepared.agentID)?.status
+                let succeeded = finalStatus == .completed || finalStatus == .stopped
+                await self.updateToolMessage(
+                    toolMessageID,
+                    in: sessionID,
+                    status: succeeded ? .succeeded : .failed,
+                    content: content,
+                    attachments: []
+                )
+            }
+            prepared.registry?.setTask(task, for: prepared.agentID)
+        } catch {
+            updateToolMessage(
+                toolMessageID,
+                in: sessionID,
+                status: .failed,
+                content: executor.failurePayload(error: error),
+                attachments: []
+            )
+        }
+    }
+
+    private func runConcurrentSpawnAgentBatch(
+        calls: [MLXChatToolCall],
+        messageIDs: [UUID],
+        context: ChatToolExecutionContext,
+        in sessionID: UUID
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            var remaining = zip(calls, messageIDs).makeIterator()
+            func addNext() {
+                guard let (call, toolMessageID) = remaining.next() else {
+                    return
+                }
+                group.addTask { [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    var callContext = context
+                    callContext.spawnAgentUpdate = { [weak self] subMessages in
+                        _ = self?.updateMessage(toolMessageID, in: sessionID) { $0.subMessages = subMessages }
+                    }
+                    let executor = ChatSpawnAgentToolExecutor()
+                    do {
+                        let prepared = try await executor.prepare(call: call, context: callContext)
+                        await self.updateToolMessage(
+                            toolMessageID,
+                            in: sessionID,
+                            status: .running,
+                            content: executor.handlePayload(agentID: prepared.agentID),
+                            attachments: []
+                        )
+                        let task = Task<Void, Never> {
+                            let content = await executor.run(prepared)
+                            let finalStatus = await prepared.registry?.record(for: prepared.agentID)?.status
+                            let succeeded = finalStatus == .completed || finalStatus == .stopped
+                            await self.updateToolMessage(
+                                toolMessageID,
+                                in: sessionID,
+                                status: succeeded ? .succeeded : .failed,
+                                content: content,
+                                attachments: []
+                            )
+                        }
+                        await prepared.registry?.setTask(task, for: prepared.agentID)
+                        await task.value
+                    } catch {
+                        await self.updateToolMessage(
+                            toolMessageID,
+                            in: sessionID,
+                            status: .failed,
+                            content: executor.failurePayload(error: error),
+                            attachments: []
+                        )
+                    }
+                }
+            }
+            for _ in 0..<min(ChatConcurrentSpawnGate.maximumConcurrent, calls.count) {
+                addNext()
+            }
+            while await group.next() != nil {
+                addNext()
+            }
+        }
     }
 
     private func normalizedToolCalls(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {
