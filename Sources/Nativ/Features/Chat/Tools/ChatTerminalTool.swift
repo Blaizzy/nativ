@@ -322,9 +322,19 @@ enum TerminalCommandSafetyPolicy {
     }
 
     private static func rmArgumentStrings(_ command: String) -> [String] {
+        let executablePath = #"(?:[^\s;&|'\"]*/)?"#
+        let quotedShellExecutable =
+            #"['\"]?"# + executablePath + #"(?:sh|bash|zsh)['\"]?"#
+        let shellLauncher =
+            #"(?:"# + quotedShellExecutable
+            + #"\s+(?:-[^\s;&|]+\s+)*['\"]?\s*)?"#
+        let quotedRMExecutable = #"['\"]?"# + executablePath + #"rm['\"]?"#
+        let pattern =
+            #"(?i)(?:^|[;&|]\s*)(?:sudo\s+)?(?:command\s+)?"#
+            + shellLauncher + quotedRMExecutable + #"\s+([^;&|]+)"#
         guard
             let regex = try? NSRegularExpression(
-                pattern: #"(?i)(?:^|[;&|]\s*)(?:sudo\s+)?(?:command\s+)?rm\s+([^;&|]+)"#
+                pattern: pattern
             )
         else { return [] }
         let range = NSRange(command.startIndex..., in: command)

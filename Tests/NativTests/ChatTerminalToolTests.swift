@@ -74,8 +74,20 @@ final class ChatTerminalToolTests: XCTestCase {
     }
 
     func testSafetyPolicyBlocksCatastrophicCommandsAfterNormalization() {
-        let rootDelete = TerminalCommandSafetyPolicy.assess(command: "rm -r${IFS}-f${IFS}/")
-        XCTAssertNotNil(rootDelete.blockedReason)
+        let catastrophicDeletes = [
+            "rm -rf /",
+            "rm -r${IFS}-f${IFS}/",
+            "/bin/rm -rf /",
+            "/bin/bash rm -rf /",
+            #"/bin/bash -c 'rm -rf /'"#,
+            "/bin/zsh -lc \"/bin/rm -rf /\"",
+        ]
+        for command in catastrophicDeletes {
+            XCTAssertNotNil(
+                TerminalCommandSafetyPolicy.assess(command: command).blockedReason,
+                "Expected catastrophic delete to be blocked: \(command)"
+            )
+        }
 
         let forkBomb = TerminalCommandSafetyPolicy.assess(command: ": ( ) { : | : & } ; :")
         XCTAssertNotNil(forkBomb.blockedReason)
