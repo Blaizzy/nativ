@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 @MainActor
@@ -44,6 +45,17 @@ final class ChatViewModelTests: XCTestCase {
 
         XCTAssertTrue(subject.pendingImageAttachments.isEmpty)
         XCTAssertFalse(subject.canSend(isRunning: true, selectedModelID: "model"))
+    }
+
+    func testPastingTextDoesNotSetAttachmentImportError() {
+        let subject = ChatViewModel()
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.clearContents()
+        pasteboard.setString("Plain text", forType: .string)
+
+        XCTAssertFalse(subject.attachImages(from: pasteboard))
+        XCTAssertNil(subject.attachmentImportError)
+        XCTAssertTrue(subject.pendingImageAttachments.isEmpty)
     }
 
     func testUnavailableReasonUsesServerAndModelPreconditions() {

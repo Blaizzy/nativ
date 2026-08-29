@@ -976,6 +976,9 @@ final class ChatViewModel: ObservableObject {
 
     @discardableResult
     func attachImages(from pasteboard: NSPasteboard) -> Bool {
+        guard ChatImageAttachment.canReadImages(from: pasteboard) else {
+            return false
+        }
         let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
         guard !attachments.isEmpty else {
             attachmentImportError = "The clipboard image couldn’t be read."
@@ -1323,6 +1326,7 @@ final class ChatViewModel: ObservableObject {
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
                 var fileWriteApprovalGranted = false
+                var terminalApprovalGranted = false
                 if customTool?.kind == .script {
                     updateToolMessage(
                         toolMessageID,
@@ -1355,6 +1359,67 @@ final class ChatViewModel: ObservableObject {
                         )
                         continue
                     case .approved:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .running,
+                            content: "",
+                            attachments: []
+                        )
+                    }
+                }
+
+                let isNativeTerminal = customTool == nil
+                    && !(toolCall.function?.name.flatMap {
+                        mcpHost?.handlesTool(named: $0)
+                    } ?? false)
+                    && toolCall.function?.name == ChatTerminalToolRegistry.toolName
+                if isNativeTerminal {
+                    do {
+                        try ChatTerminalToolExecutor().preflight(call: toolCall)
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatTerminalToolExecutor().failurePayload(error: error),
+                            attachments: []
+                        )
+                        continue
+                    }
+
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .awaitingConsent,
+                        content: "",
+                        attachments: []
+                    )
+                    let approved = await awaitToolConsent(for: toolMessageID)
+                    switch ChatToolConsentRouter.outcome(
+                        approved: approved,
+                        isCancelled: Task.isCancelled
+                    ) {
+                    case .cancelled:
+                        cancelToolMessages(
+                            currentID: toolMessageID,
+                            currentCall: toolCall,
+                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        )
+                        throw CancellationError()
+                    case .declined:
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .declined,
+                            content: ChatTerminalToolExecutor().declinedPayload(),
+                            attachments: []
+                        )
+                        continue
+                    case .approved:
+                        terminalApprovalGranted = true
                         updateToolMessage(
                             toolMessageID,
                             in: queuedRequest.sessionID,
@@ -1520,6 +1585,7 @@ final class ChatViewModel: ObservableObject {
                         fileWriteRootPath: queuedRequest.settings.fileWriteRootPath,
                         fileWriteApprovalGranted: fileWriteApprovalGranted,
                         fileOperationRunID: fileOperationRunID,
+                        terminalApprovalGranted: terminalApprovalGranted,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()

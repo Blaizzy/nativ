@@ -793,10 +793,14 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            consentDescription
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let terminalRequest {
+                terminalConsentPrompt(for: terminalRequest)
+            } else {
+                consentDescription
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -811,6 +815,35 @@ private struct ChatAgentStepCell: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 7)
+    }
+
+    private func terminalConsentPrompt(for request: ChatTerminalToolRequest) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(
+                "The model wants to run this command on your Mac. Review it carefully before confirming."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let cwd = request.cwd {
+                LabeledContent("Working directory") {
+                    Text(cwd)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                .font(.caption)
+            }
+
+            NativCodeBlock(raw: request.command, lineLimit: 10)
+
+            ForEach(terminalAssessment.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var consentDescription: Text {
@@ -898,6 +931,18 @@ private struct ChatAgentStepCell: View {
             return "a different model"
         }
         return modelID
+    }
+
+    private var terminalRequest: ChatTerminalToolRequest? {
+        guard message.toolName == ChatTerminalToolRegistry.toolName else { return nil }
+        return try? ChatTerminalToolRequest(argumentsJSON: message.toolArguments)
+    }
+
+    private var terminalAssessment: TerminalCommandAssessment {
+        guard let terminalRequest else {
+            return TerminalCommandAssessment(blockedReason: nil, warnings: [])
+        }
+        return TerminalCommandSafetyPolicy.assess(command: terminalRequest.command)
     }
 
     @ViewBuilder
