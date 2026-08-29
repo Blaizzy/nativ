@@ -193,6 +193,22 @@ enum ChatToolRegistry {
     }
 }
 
+enum ChatUnknownToolError: LocalizedError {
+    case unknownTool(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unknownTool(let name):
+            return "Unknown tool: \(name)"
+        }
+    }
+}
+
+private struct ChatUnknownToolResultPayload: Encodable {
+    let ok: Bool
+    let error: String?
+}
+
 enum ChatToolDispatcher {
     private typealias Handler =
         @Sendable (
@@ -281,17 +297,27 @@ enum ChatToolDispatcher {
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         guard let name = call.function?.name, let handler = handlers[name] else {
-            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+            throw ChatUnknownToolError.unknownTool(call.function?.name ?? "unknown")
         }
         return try await handler(call, context)
     }
 
     static func failurePayload(toolName: String?, error: Error) -> String {
         guard let toolName, let handler = failureHandlers[toolName] else {
-            return ChatImageToolExecutor().failurePayload(
-                operation: toolName ?? "tool", error: error)
+            return unknownToolFailurePayload(error: error)
         }
         return handler(toolName, error)
+    }
+
+    private static func unknownToolFailurePayload(error: Error) -> String {
+        let payload = ChatUnknownToolResultPayload(ok: false, error: error.localizedDescription)
+        return (try? encodedPayload(payload)) ?? #"{"ok":false,"error":"Unknown tool."}"#
+    }
+
+    private static func encodedPayload(_ payload: ChatUnknownToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
     }
 
     private static func executeImageTool(

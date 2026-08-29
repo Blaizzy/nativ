@@ -769,6 +769,28 @@ final class ChatToolRegistryTests: XCTestCase {
             availability: availability
         )
     }
+
+    func testUnknownToolNameGetsAGenericFailurePayloadNotAnImageOne() throws {
+        let payload = ChatToolDispatcher.failurePayload(
+            toolName: "websearch",
+            error: ChatUnknownToolError.unknownTool("websearch")
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "Unknown tool: websearch")
+        XCTAssertNil(object["operation"], "must not fall through to the image-tool shape")
+    }
+
+    func testDispatcherExecuteThrowsUnknownToolErrorForAnUnrecognizedName() async {
+        do {
+            _ = try await ChatToolDispatcher.execute(call: makeCall(name: "websearch"), context: makeContext())
+            XCTFail("an unrecognized tool name must not execute")
+        } catch let error as ChatUnknownToolError {
+            XCTAssertEqual(error.errorDescription, "Unknown tool: websearch")
+        } catch {
+            XCTFail("expected ChatUnknownToolError, got \(error)")
+        }
+    }
 }
 
 @MainActor
