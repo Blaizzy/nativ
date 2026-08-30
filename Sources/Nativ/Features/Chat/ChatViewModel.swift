@@ -44,6 +44,7 @@ final class ChatViewModel: ObservableObject {
 
     private struct ImageModelPreparationContext {
         let modelSearchPath: String
+        let modelCacheVolumeIdentifier: String?
         let additionalModelSearchPaths: [String]
         let huggingFaceToken: String?
     }
@@ -797,6 +798,7 @@ final class ChatViewModel: ObservableObject {
                     repoID: selectedModel.modelID,
                     sizeBytes: selectedModel.downloadSizeBytes,
                     cachePath: preparationContext.modelSearchPath,
+                    volumeIdentifier: preparationContext.modelCacheVolumeIdentifier,
                     token: preparationContext.huggingFaceToken
                 )
                 try Task.checkCancellation()
@@ -1579,6 +1581,8 @@ final class ChatViewModel: ObservableObject {
                     )
                     let imageModelPreparationContext = ImageModelPreparationContext(
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        modelCacheVolumeIdentifier: queuedRequest.settings
+                            .externalModelCache?.volumeIdentifier,
                         additionalModelSearchPaths: queuedRequest.settings
                             .additionalModelSearchPaths,
                         huggingFaceToken: appModel?.effectiveHuggingFaceToken

@@ -80,6 +80,24 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
         throw lastError
     }
 
+    static func validateForUse(
+        path: String,
+        expectedVolumeIdentifier: String?
+    ) throws -> URL {
+        let expandedPath = NSString(string: path).expandingTildeInPath
+        let url = URL(filePath: expandedPath, directoryHint: .isDirectory)
+        guard let expectedVolumeIdentifier else { return url.standardizedFileURL }
+
+        let validatedURL = try validate(url)
+        let actualVolumeIdentifier = try validatedURL.resourceValues(
+            forKeys: [.volumeUUIDStringKey]
+        ).volumeUUIDString
+        guard actualVolumeIdentifier == expectedVolumeIdentifier else {
+            throw ValidationError.differentVolume
+        }
+        return validatedURL
+    }
+
     static func validate(_ selectedURL: URL) throws -> URL {
         guard selectedURL.isFileURL else {
             throw ValidationError.unavailable
