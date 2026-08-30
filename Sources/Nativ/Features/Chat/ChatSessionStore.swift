@@ -23,7 +23,6 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var folderID: UUID?
     var imageGenerationModelID: String?
     var scheduledTaskID: String?
-
     var summary: ChatSessionSummary {
         ChatSessionSummary(
             id: id,
@@ -388,17 +387,177 @@ struct ChatResponseMetrics: Equatable, Codable {
     }
 }
 
+struct MediaAssetReference: Equatable, Codable, Hashable, Sendable {
+    let relativePath: String
+    let byteCount: Int
+}
+
+/// Durable, app-owned media storage. Session JSON owns references; binary payloads live in
+/// Application Support so session-list loading never has to decode them.
+final class MediaAssetStore: @unchecked Sendable {
+    static let shared = MediaAssetStore()
+
+    private static let manifestLock = NSLock()
+    private let fileManager: FileManager
+    let rootDirectory: URL
+
+    init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        if let rootDirectory {
+            self.rootDirectory = rootDirectory
+        } else {
+            let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            self.rootDirectory = support
+                .appendingPathComponent("Nativ", isDirectory: true)
+                .appendingPathComponent("MediaAssets", isDirectory: true)
+        }
+    }
+
+    func store(
+        _ data: Data,
+        id: UUID = UUID(),
+        mimeType: String,
+        filename: String
+    ) throws -> MediaAssetReference {
+        let filenameExtension = URL(fileURLWithPath: filename).pathExtension
+        let ext = UTType(mimeType: mimeType)?.preferredFilenameExtension
+            ?? (filenameExtension.isEmpty ? nil : filenameExtension)
+            ?? "dat"
+        let relativePath = "Objects/\(id.uuidString.prefix(2))/\(id.uuidString).\(ext)"
+        let destination = try validatedURL(for: relativePath)
+        try fileManager.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if !fileManager.fileExists(atPath: destination.path) {
+            try data.write(to: destination, options: .atomic)
+        }
+        return MediaAssetReference(
+            relativePath: relativePath,
+            byteCount: data.count
+        )
+    }
+
+    func data(for reference: MediaAssetReference) -> Data? {
+        guard let url = try? validatedURL(for: reference.relativePath) else { return nil }
+        return try? Data(contentsOf: url, options: .mappedIfSafe)
+    }
+
+    func fileURL(for reference: MediaAssetReference) -> URL? {
+        guard let url = try? validatedURL(for: reference.relativePath),
+              fileManager.fileExists(atPath: url.path)
+        else { return nil }
+        return url
+    }
+
+    func updateOwner(_ owner: String, assets: Set<MediaAssetReference>) {
+        Self.manifestLock.lock()
+        defer { Self.manifestLock.unlock() }
+        var manifest = loadManifest()
+        manifest[owner] = assets.map(\.relativePath).sorted()
+        if assets.isEmpty { manifest.removeValue(forKey: owner) }
+        writeManifest(manifest)
+    }
+
+    func removeOwner(_ owner: String, orphanGracePeriod: TimeInterval = 86_400) {
+        Self.manifestLock.lock()
+        defer { Self.manifestLock.unlock() }
+        var manifest = loadManifest()
+        manifest.removeValue(forKey: owner)
+        writeManifest(manifest)
+        pruneOrphans(ownedPaths: Set(manifest.values.joined()), gracePeriod: orphanGracePeriod)
+    }
+
+    private func validatedURL(for relativePath: String) throws -> URL {
+        let relative = URL(fileURLWithPath: relativePath)
+        guard !relativePath.isEmpty,
+              !relativePath.hasPrefix("/"),
+              !relative.pathComponents.contains("..")
+        else { throw CocoaError(.fileReadInvalidFileName) }
+        return rootDirectory.appendingPathComponent(relativePath)
+    }
+
+    private var manifestURL: URL { rootDirectory.appendingPathComponent("owners.json") }
+
+    private func loadManifest() -> [String: [String]] {
+        guard let data = try? Data(contentsOf: manifestURL) else { return [:] }
+        return (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
+    }
+
+    private func writeManifest(_ manifest: [String: [String]]) {
+        do {
+            try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        } catch {
+            NSLog("Nativ media ownership manifest write failed: %@", error.localizedDescription)
+        }
+    }
+
+    private func pruneOrphans(ownedPaths: Set<String>, gracePeriod: TimeInterval) {
+        let objects = rootDirectory.appendingPathComponent("Objects", isDirectory: true)
+        guard let enumerator = fileManager.enumerator(
+            at: objects,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey]
+        ) else { return }
+        // temporaryDirectory commonly enters as /var while enumeration returns /private/var.
+        // Resolve both sides so orphan detection cannot silently skip an entire store.
+        let prefix = rootDirectory.resolvingSymlinksInPath().path + "/"
+        let cutoff = Date().addingTimeInterval(-gracePeriod)
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+                  values.isRegularFile == true,
+                  (gracePeriod <= 0 || (values.contentModificationDate ?? .distantPast) <= cutoff)
+            else { continue }
+            let resolvedPath = url.resolvingSymlinksInPath().path
+            let relativePath = resolvedPath.hasPrefix(prefix)
+                ? String(resolvedPath.dropFirst(prefix.count))
+                : ""
+            if !relativePath.isEmpty, !ownedPaths.contains(relativePath) {
+                try? fileManager.removeItem(at: url)
+            }
+        }
+    }
+}
+
 struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     var filename: String
     var mimeType: String
-    var base64Data: String
+    private var inlineBase64Data: String?
+    private(set) var asset: MediaAssetReference?
+
+    enum CodingKeys: String, CodingKey {
+        case id, filename, mimeType, base64Data, asset
+    }
+
+    var base64Data: String {
+        get {
+            if let inlineBase64Data { return inlineBase64Data }
+            return imageData?.base64EncodedString() ?? ""
+        }
+        set {
+            inlineBase64Data = newValue
+            asset = nil
+        }
+    }
 
     init(id: UUID = UUID(), filename: String, mimeType: String, base64Data: String) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
-        self.base64Data = base64Data
+        self.inlineBase64Data = base64Data
+        self.asset = nil
+    }
+
+    init(id: UUID, filename: String, mimeType: String, asset: MediaAssetReference) {
+        self.id = id
+        self.filename = filename
+        self.mimeType = mimeType
+        self.inlineBase64Data = nil
+        self.asset = asset
     }
 
     init(contentsOf url: URL) throws {
@@ -411,11 +570,15 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 
         let data = try Data(contentsOf: url)
         let type = UTType(filenameExtension: url.pathExtension)
-        self.init(
-            filename: url.lastPathComponent,
-            mimeType: type?.preferredMIMEType ?? "application/octet-stream",
-            base64Data: data.base64EncodedString()
+        let id = UUID()
+        let mimeType = type?.preferredMIMEType ?? "application/octet-stream"
+        let asset = try MediaAssetStore.shared.store(
+            data,
+            id: id,
+            mimeType: mimeType,
+            filename: url.lastPathComponent
         )
+        self.init(id: id, filename: url.lastPathComponent, mimeType: mimeType, asset: asset)
     }
 
     var dataURL: String {
@@ -423,7 +586,40 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
     }
 
     var imageData: Data? {
-        Data(base64Encoded: base64Data)
+        if let asset { return MediaAssetStore.shared.data(for: asset) }
+        guard let inlineBase64Data else { return nil }
+        return Data(base64Encoded: inlineBase64Data)
+    }
+
+    var assetFileURL: URL? {
+        asset.flatMap(MediaAssetStore.shared.fileURL)
+    }
+
+    mutating func externalize(using store: MediaAssetStore = .shared) throws -> Bool {
+        guard asset == nil, let inlineBase64Data,
+              let data = Data(base64Encoded: inlineBase64Data)
+        else { return false }
+        asset = try store.store(data, id: id, mimeType: mimeType, filename: filename)
+        self.inlineBase64Data = nil
+        return true
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        filename = try container.decode(String.self, forKey: .filename)
+        mimeType = try container.decode(String.self, forKey: .mimeType)
+        asset = try container.decodeIfPresent(MediaAssetReference.self, forKey: .asset)
+        inlineBase64Data = try container.decodeIfPresent(String.self, forKey: .base64Data)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(filename, forKey: .filename)
+        try container.encode(mimeType, forKey: .mimeType)
+        try container.encodeIfPresent(asset, forKey: .asset)
+        if asset == nil { try container.encodeIfPresent(inlineBase64Data, forKey: .base64Data) }
     }
 
     static func canReadImages(from pasteboard: NSPasteboard) -> Bool {
@@ -459,11 +655,14 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         else {
             return nil
         }
-        return ChatImageAttachment(
-            filename: filename,
+        let id = UUID()
+        guard let asset = try? MediaAssetStore.shared.store(
+            png,
+            id: id,
             mimeType: "image/png",
-            base64Data: png.base64EncodedString()
-        )
+            filename: filename
+        ) else { return nil }
+        return ChatImageAttachment(id: id, filename: filename, mimeType: "image/png", asset: asset)
     }
 
     private static func isImageURL(_ url: URL) -> Bool {
@@ -478,7 +677,6 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 }
 
 struct ChatSessionStore {
-    private let fileManager = FileManager.default
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Nativ",
         category: "ChatPersistence"
@@ -502,10 +700,38 @@ struct ChatSessionStore {
             )
         )
     }
+    private let fileManager: FileManager
+    private let chatDirectory: URL
+    private let legacyChatDirectory: URL?
+    private let mediaStore: MediaAssetStore
 
-    init() {}
+    init(
+        chatDirectory: URL? = nil,
+        legacyChatDirectory: URL? = nil,
+        mediaStore: MediaAssetStore = .shared,
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        self.mediaStore = mediaStore
+        if let chatDirectory {
+            self.chatDirectory = chatDirectory
+            self.legacyChatDirectory = legacyChatDirectory
+        } else {
+            let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            self.chatDirectory = support
+                .appendingPathComponent("Nativ", isDirectory: true)
+                .appendingPathComponent("Chat", isDirectory: true)
+            let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            self.legacyChatDirectory = caches
+                .appendingPathComponent("Nativ", isDirectory: true)
+                .appendingPathComponent("Chat", isDirectory: true)
+        }
+    }
 
     func loadSessions() -> [ChatSession] {
+        migrateLegacyStoreIfNeeded()
         migrateLegacyTranscriptIfNeeded()
 
         guard let urls = try? fileManager.contentsOfDirectory(
@@ -522,21 +748,23 @@ struct ChatSessionStore {
     }
 
     func loadSession(id: UUID) -> ChatSession? {
-        loadSession(from: sessionURL(for: id))
+        migrateLegacyStoreIfNeeded()
+        return loadSession(from: sessionURL(for: id))
     }
 
     func saveSession(_ session: ChatSession) {
         do {
+            migrateLegacyStoreIfNeeded()
             try fileManager.createDirectory(
                 at: sessionsDirectory,
                 withIntermediateDirectories: true
             )
 
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(session)
-            try data.write(to: sessionURL(for: session.id), options: .atomic)
+            var persisted = session
+            _ = try persisted.externalizeAssets(using: mediaStore)
+            let data = try makeEncoder().encode(persisted)
+            try data.write(to: sessionURL(for: persisted.id), options: .atomic)
+            mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
         } catch {
             reportFailure("saveSession", sessionID: session.id, error: error)
         }
@@ -546,10 +774,12 @@ struct ChatSessionStore {
         do {
             try fileManager.removeItem(at: sessionURL(for: id))
         } catch CocoaError.fileNoSuchFile {
-            return
+            // Continue so stale ownership and index records are also removed.
         } catch {
             reportFailure("deleteSession", sessionID: id, error: error)
+            return
         }
+        mediaStore.removeOwner("chat:\(id.uuidString)")
     }
 
     func loadFolders() -> [ChatFolder] {
@@ -581,11 +811,58 @@ struct ChatSessionStore {
         }
 
         do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode(ChatSession.self, from: data)
+            var session = try makeDecoder().decode(ChatSession.self, from: data)
+            if try session.externalizeAssets(using: mediaStore) {
+                try makeEncoder().encode(session).write(to: url, options: .atomic)
+            }
+            mediaStore.updateOwner("chat:\(session.id.uuidString)", assets: session.assetReferences)
+            return session
         } catch {
+            NSLog("Nativ chat session load failed for %@: %@", url.lastPathComponent, error.localizedDescription)
             return nil
+        }
+    }
+
+    private func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+
+    private func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    private func migrateLegacyStoreIfNeeded() {
+        guard let legacyChatDirectory,
+              legacyChatDirectory.standardizedFileURL != chatDirectory.standardizedFileURL,
+              fileManager.fileExists(atPath: legacyChatDirectory.path)
+        else { return }
+        do {
+            try fileManager.createDirectory(at: chatDirectory, withIntermediateDirectories: true)
+            for name in ["folders.json", "current.json"] {
+                let source = legacyChatDirectory.appendingPathComponent(name)
+                let destination = chatDirectory.appendingPathComponent(name)
+                if fileManager.fileExists(atPath: source.path), !fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.copyItem(at: source, to: destination)
+                }
+            }
+            let legacySessions = legacyChatDirectory.appendingPathComponent("Sessions", isDirectory: true)
+            if fileManager.fileExists(atPath: legacySessions.path) {
+                try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+                for source in try fileManager.contentsOfDirectory(at: legacySessions, includingPropertiesForKeys: nil)
+                    where source.pathExtension == "json" {
+                    let destination = sessionsDirectory.appendingPathComponent(source.lastPathComponent)
+                    if !fileManager.fileExists(atPath: destination.path) {
+                        try fileManager.copyItem(at: source, to: destination)
+                    }
+                }
+            }
+        } catch {
+            NSLog("Nativ legacy chat migration failed: %@", error.localizedDescription)
         }
     }
 
@@ -650,15 +927,6 @@ struct ChatSessionStore {
         sessionsDirectory.appendingPathComponent("\(id.uuidString).json")
     }
 
-    private var chatDirectory: URL {
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-
-        return caches
-            .appendingPathComponent("Nativ", isDirectory: true)
-            .appendingPathComponent("Chat", isDirectory: true)
-    }
-
     private var sessionsDirectory: URL {
         chatDirectory.appendingPathComponent("Sessions", isDirectory: true)
     }
@@ -669,6 +937,24 @@ struct ChatSessionStore {
 
     private var legacyTranscriptURL: URL {
         chatDirectory.appendingPathComponent("current.json")
+    }
+
+}
+
+private extension ChatSession {
+    var assetReferences: Set<MediaAssetReference> {
+        Set(messages.flatMap(\.imageAttachments).compactMap(\.asset))
+    }
+
+    mutating func externalizeAssets(using store: MediaAssetStore) throws -> Bool {
+        var changed = false
+        for messageIndex in messages.indices {
+            for attachmentIndex in messages[messageIndex].imageAttachments.indices {
+                changed = try messages[messageIndex].imageAttachments[attachmentIndex]
+                    .externalize(using: store) || changed
+            }
+        }
+        return changed
     }
 }
 
