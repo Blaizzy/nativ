@@ -114,6 +114,7 @@
 		40FAF7AC21743208E1C38AC2 /* WebBrowsingProviderClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E0214BE1D88EB4CDB66836 /* WebBrowsingProviderClient.swift */; };
 		41E383BBE43E9CDE0B70826D /* IntegrationServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A221B9B5CCE60A43CC46AC /* IntegrationServices.swift */; };
 		42293318F2E4FA62AD0CF762 /* IntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8DD9E277F67490B9744732 /* IntegrationTypes.swift */; };
+		4262747AC6425403FC1F2210 /* ArtifactDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4FFC04214D6E98258786D8 /* ArtifactDeletionTests.swift */; };
 		444833C6AEF5C794590B8A45 /* ChatToolRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D10F9AFCCD57FA0625CA24 /* ChatToolRegistry.swift */; };
 		44F8A17BDE2610C6E90CE53F /* CustomTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */; };
 		455662EBEFC2C805F0223541 /* ControlPanelSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885B9207F7063BEC112E5CAB /* ControlPanelSidebarView.swift */; };
@@ -703,6 +704,7 @@
 		FB497800D0F8B237A1891EE1 /* WebBrowsingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebBrowsingTransport.swift; sourceTree = "<group>"; };
 		FD296E4B5897E7E46606B697 /* ControlPanelActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelActions.swift; sourceTree = "<group>"; };
 		FD670E29FC7EBFD886ED2DB8 /* HuggingFaceModelReadme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceModelReadme.swift; sourceTree = "<group>"; };
+		FE4FFC04214D6E98258786D8 /* ArtifactDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactDeletionTests.swift; sourceTree = "<group>"; };
 		FE82B4EBA796206F12005498 /* OfficeArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficeArchive.swift; sourceTree = "<group>"; };
 		FF6D2D7280064648E0EFC847 /* BraveBrowsingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BraveBrowsingProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -1303,6 +1305,7 @@
 		F1DA823EC3D3358ABDB845B7 /* NativTests */ = {
 			isa = PBXGroup;
 			children = (
+				FE4FFC04214D6E98258786D8 /* ArtifactDeletionTests.swift */,
 				3B965B701714787B0A85AE6B /* AudioTests.swift */,
 				C42683FE576BB34517A487B0 /* ChatAttachmentValidatorTests.swift */,
 				B059AF48F10F1B0502DC5E6F /* ChatConversationBranchTests.swift */,
@@ -1801,6 +1804,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				145464A2B098437667795AFB /* Artifact.swift in Sources */,
+				4262747AC6425403FC1F2210 /* ArtifactDeletionTests.swift in Sources */,
 				3D96ED3F0E463F75A47071C6 /* ArtifactStore.swift in Sources */,
 				AB1C4B8494B46754E6E8BE24 /* AudioAnalyticsStore.swift in Sources */,
 				01A65582AEB5E196FDEFDBE8 /* AudioInputDevicePreferences.swift in Sources */,
