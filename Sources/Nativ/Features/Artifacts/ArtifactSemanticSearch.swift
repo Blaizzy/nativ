@@ -1,7 +1,7 @@
 import Foundation
 import NativServerKit
 
-struct ArtifactSemanticSearchConfig {
+struct ArtifactSemanticSearchConfig: Sendable {
     let modelID: String
     let sizeBytes: Int64
     let client: NativEmbeddingsClient
@@ -10,8 +10,9 @@ struct ArtifactSemanticSearchConfig {
     let downloadProgress: Double
     let canInstall: Bool
     let insufficientReason: String?
-    let onEnable: () -> Void
-    var onRemove: () -> Void = {}
+    let onEnable: @MainActor @Sendable () -> Void
+    var onRemove: @MainActor @Sendable () -> Void = {}
+    var prepareModel: @Sendable () -> Void = {}
 
     var sizeLabel: String {
         ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)

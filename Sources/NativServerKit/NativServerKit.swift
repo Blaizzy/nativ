@@ -91,6 +91,13 @@ public enum NativServerErrorMessage {
         return nil
     }
 
+
+    public static func isPortConflictFailure(in text: String) -> Bool {
+        let lowered = text.lowercased()
+        return lowered.contains("address already in use")
+            || lowered.contains("errno 48")
+    }
+
     private static func normalized(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty
@@ -104,11 +111,12 @@ public enum NativServerErrorMessage {
 public enum NativError: Error, CustomStringConvertible {
     case missingDistribution(Bundle)
     case missingExecutable(URL)
-    case missingImageModelCapabilityManifest(URL)
-    case invalidImageModelCapabilityManifest(URL)
+    case missingModelCapabilityManifest(URL)
+    case invalidModelCapabilityManifest(URL)
     case alreadyRunning
     case notRunning
     case launchFailed(Int32, String)
+    case portInUse(host: String, port: Int)
 
     public var description: String {
         switch self {
@@ -116,23 +124,24 @@ public enum NativError: Error, CustomStringConvertible {
             return "Missing mlx-vlm-server resource in \(bundle.bundlePath)"
         case .missingExecutable(let url):
             return "Missing mlx-vlm-server executable at \(url.path)"
-        case .missingImageModelCapabilityManifest(let url):
-            return "Missing image model capability manifest at \(url.path)"
-        case .invalidImageModelCapabilityManifest(let url):
-            return "Invalid image model capability manifest at \(url.path)"
+        case .missingModelCapabilityManifest(let url):
+            return "Missing model capability manifest at \(url.path)"
+        case .invalidModelCapabilityManifest(let url):
+            return "Invalid model capability manifest at \(url.path)"
         case .alreadyRunning:
             return "mlx-vlm-server is already running"
         case .notRunning:
             return "mlx-vlm-server is not running"
         case .launchFailed(let status, let output):
             return "mlx-vlm-server exited with status \(status):\n\(output)"
+        case .portInUse(let host, let port):
+            return "\(host):\(port) is already in use by another process"
         }
     }
 }
 
 public enum Nativ {
-    private static let imageModelCapabilityManifestFilename =
-        "image-model-capabilities.json"
+    private static let modelCapabilityManifestFilename = "model-capabilities.json"
 
     public static func distributionURL() throws -> URL {
         let bundle = Bundle(for: BundleToken.self)
@@ -150,23 +159,22 @@ public enum Nativ {
         return url
     }
 
-    public static func imageGenerationModelTypes() throws -> Set<String> {
+    public static func modelTypeRegistry() throws -> NativModelTypeRegistry {
         let manifestURL = try distributionURL()
-            .appendingPathComponent(imageModelCapabilityManifestFilename)
+            .appendingPathComponent(modelCapabilityManifestFilename)
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            throw NativError.missingImageModelCapabilityManifest(manifestURL)
+            throw NativError.missingModelCapabilityManifest(manifestURL)
         }
         guard let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode(
-                  ImageModelCapabilityManifest.self,
-                  from: data
-              ),
-              manifest.schemaVersion == 1,
-              !manifest.modelTypes.isEmpty
+              let registry = try? NativModelTypeRegistry(data: data)
         else {
-            throw NativError.invalidImageModelCapabilityManifest(manifestURL)
+            throw NativError.invalidModelCapabilityManifest(manifestURL)
         }
-        return Set(manifest.modelTypes)
+        return registry
+    }
+
+    public static func imageGenerationModelTypes() throws -> Set<String> {
+        try modelTypeRegistry().canonicalModelTypes(for: .imageGeneration)
     }
 
     public static func makeProcess(
@@ -177,6 +185,9 @@ public enum Nativ {
         process.executableURL = try executableURL()
         process.arguments = arguments
         var processEnvironment = ProcessInfo.processInfo.environment
+        processEnvironment["PATH"] = ServerProcessEnvironment.augmentedSearchPath(
+            inheriting: processEnvironment["PATH"]
+        )
         processEnvironment.merge(environment) { _, newValue in newValue }
         // Xcode enables Metal API validation for the app process and exports
         // these variables to children. The inference server creates and
@@ -222,16 +233,6 @@ public enum Nativ {
             throw NativError.launchFailed(process.terminationStatus, output)
         }
         return output
-    }
-}
-
-private struct ImageModelCapabilityManifest: Decodable {
-    let schemaVersion: Int
-    let modelTypes: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case modelTypes = "model_types"
     }
 }
 
@@ -588,7 +589,7 @@ public enum NativMetricsError: Error, LocalizedError, CustomStringConvertible {
     }
 }
 
-public final class NativMetricsClient {
+public final class NativMetricsClient: @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let timeout: TimeInterval
@@ -647,7 +648,7 @@ public final class NativMetricsClient {
     }
 }
 
-public final class NativProcessController {
+public final class NativProcessController: @unchecked Sendable {
     public typealias OutputHandler = @Sendable (String) -> Void
     public typealias TerminationHandler = @Sendable (Int32) -> Void
 
@@ -655,9 +656,18 @@ public final class NativProcessController {
     private var process: Process?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private var outputHandler: OutputHandler?
+    private var terminationHandler: TerminationHandler?
 
-    public var onOutput: OutputHandler?
-    public var onTermination: TerminationHandler?
+    public var onOutput: OutputHandler? {
+        get { lock.withLock { outputHandler } }
+        set { lock.withLock { outputHandler = newValue } }
+    }
+
+    public var onTermination: TerminationHandler? {
+        get { lock.withLock { terminationHandler } }
+        set { lock.withLock { terminationHandler = newValue } }
+    }
 
     public init() {}
 
@@ -719,13 +729,29 @@ public final class NativProcessController {
             return process
         }
 
+        // uvicorn treats SIGTERM and SIGINT as graceful shutdowns and waits for
+        // in-flight requests, so a wedged generation survives both and the app is
+        // left reporting a server it cannot stop. Escalate to SIGKILL rather than
+        // giving up, while keeping the overall wait inside `timeout` so this does
+        // not block its caller for any longer than before.
         process.terminate()
+        waitForExit(process, timeout: timeout * 0.6)
+
+        if process.isRunning {
+            process.interrupt()
+            waitForExit(process, timeout: timeout * 0.2)
+        }
+
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            waitForExit(process, timeout: timeout * 0.2)
+        }
+    }
+
+    private func waitForExit(_ process: Process, timeout: TimeInterval) {
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-        if process.isRunning {
-            process.interrupt()
         }
     }
 

@@ -2,8 +2,26 @@ import AppKit
 import NativServerKit
 import SwiftUI
 
+private final class MetricsProbeResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var succeeded = false
+
+    func markSucceeded() {
+        lock.lock()
+        succeeded = true
+        lock.unlock()
+    }
+
+    var value: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return succeeded
+    }
+}
+
 @main
 enum Main {
+    @MainActor
     static func main() {
         if CommandLine.arguments.contains("--smoke-test") {
             do {
@@ -51,6 +69,11 @@ enum Main {
             }
         }
 
+        if let index = CommandLine.arguments.firstIndex(of: "--run-routine"),
+           index + 1 < CommandLine.arguments.count {
+            RoutineHeadlessRun.execute(routineID: CommandLine.arguments[index + 1])
+        }
+
         NativApplication.main()
     }
 
@@ -76,10 +99,11 @@ enum Main {
         }
 
         let semaphore = DispatchSemaphore(value: 0)
-        var didSucceed = false
+        let result = MetricsProbeResult()
         let task = URLSession.shared.dataTask(with: url) { _, response, _ in
-            if let httpResponse = response as? HTTPURLResponse {
-                didSucceed = (200..<300).contains(httpResponse.statusCode)
+            if let httpResponse = response as? HTTPURLResponse,
+               (200..<300).contains(httpResponse.statusCode) {
+                result.markSucceeded()
             }
             semaphore.signal()
         }
@@ -88,7 +112,7 @@ enum Main {
         if semaphore.wait(timeout: .now() + 5) == .timedOut {
             task.cancel()
         }
-        return didSucceed
+        return result.value
     }
 }
 
@@ -102,6 +126,7 @@ private struct NativApplication: App {
         .defaultSize(width: 1240, height: 720)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowBackgroundDragBehavior(.enabled)
         .commands {
             CommandGroup(after: .appInfo) {
@@ -155,10 +180,18 @@ private struct NativApplication: App {
 private struct NativRootView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
+    @StateObject private var controlPanelDependencies: ControlPanelDependencies
     let appDelegate: AppDelegate
 
+    init(appDelegate: AppDelegate) {
+        self.appDelegate = appDelegate
+        _controlPanelDependencies = StateObject(
+            wrappedValue: appDelegate.makeControlPanelDependencies()
+        )
+    }
+
     var body: some View {
-        appDelegate.rootView
+        appDelegate.rootView(controlPanelDependencies: controlPanelDependencies)
             .onAppear {
                 applyAppearance(appearance)
                 appDelegate.registerMainWindowOpener {

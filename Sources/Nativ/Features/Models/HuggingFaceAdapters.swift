@@ -639,7 +639,7 @@ final class LoRAAdapterDownloadManager: ObservableObject {
             ) { [weak self] progress in
                 Task { @MainActor in
                     guard let self, self.installID == installID else { return }
-                    self.progress = max(self.progress, progress)
+                    self.progress = max(self.progress, progress.fractionCompleted)
                     if !self.isPaused {
                         self.phase = .downloading
                     }
@@ -650,7 +650,7 @@ final class LoRAAdapterDownloadManager: ObservableObject {
             let task = Task.detached(priority: .userInitiated) {
                 try operation.run()
                 guard let snapshotPath = operation.snapshotPath else {
-                    throw HuggingFaceHubError.downloadFailed(
+                    throw HuggingFaceDownloadFailure.message(
                         "The Hub downloader did not return a snapshot path."
                     )
                 }

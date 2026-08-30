@@ -1,14 +1,73 @@
+import AVFoundation
 import Foundation
 import XCTest
 @testable import NativServerKit
+
+@MainActor
+final class NativSystemPermissionControllerTests: XCTestCase {
+    func testAuthorizedMicrophoneAccessDoesNotRequestAgain() async {
+        var requestCount = 0
+
+        let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+            status: .authorized
+        ) {
+            requestCount += 1
+            return false
+        }
+
+        XCTAssertTrue(granted)
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    func testUndeterminedMicrophoneAccessRequestsAndReturnsGrant() async {
+        var requestCount = 0
+
+        let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+            status: .notDetermined
+        ) {
+            requestCount += 1
+            return true
+        }
+
+        XCTAssertTrue(granted)
+        XCTAssertEqual(requestCount, 1)
+    }
+
+    func testUndeterminedMicrophoneAccessReturnsDenial() async {
+        let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+            status: .notDetermined
+        ) {
+            false
+        }
+
+        XCTAssertFalse(granted)
+    }
+
+    func testDeniedOrRestrictedMicrophoneAccessDoesNotRequestAgain() async {
+        var requestCount = 0
+
+        for status in [AVAuthorizationStatus.denied, .restricted] {
+            let granted = await NativSystemPermissionController.resolveMicrophoneAccess(
+                status: status
+            ) {
+                requestCount += 1
+                return true
+            }
+
+            XCTAssertFalse(granted)
+        }
+
+        XCTAssertEqual(requestCount, 0)
+    }
+}
 
 @MainActor
 final class AudioAnalyticsStoreTests: XCTestCase {
     private var temporaryDirectory: URL!
     private var store: AudioAnalyticsStore!
 
-    override func setUpWithError() throws {
-        try super.setUpWithError()
+    override func setUp() async throws {
+        try await super.setUp()
         temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -20,11 +79,11 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         )
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         store = nil
         try FileManager.default.removeItem(at: temporaryDirectory)
         temporaryDirectory = nil
-        try super.tearDownWithError()
+        try await super.tearDown()
     }
 
     func testCalculatesWordsSpeedAndEstimatedTimeSaved() {
@@ -228,6 +287,76 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         )
         XCTAssertEqual(reloaded.records.first?.displayTitle, "Product launch idea")
     }
+
+    func testImportedCaptureUsesImportDateAndPreservesItAfterTranscription() throws {
+        let earlierRecordingURL = temporaryDirectory.appendingPathComponent("earlier.wav")
+        let uploadedAudioURL = temporaryDirectory.appendingPathComponent("uploaded.m4a")
+        let earlierDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let importedAt = earlierDate.addingTimeInterval(3_600)
+
+        store.addCapture(
+            recordingURL: earlierRecordingURL,
+            kind: .voiceNote,
+            title: "Earlier recording",
+            durationSeconds: 30,
+            recordedAt: earlierDate
+        )
+        store.addCapture(
+            recordingURL: uploadedAudioURL,
+            kind: .voiceNote,
+            title: "Uploaded audio",
+            durationSeconds: 60,
+            recordedAt: importedAt
+        )
+
+        XCTAssertEqual(store.records.map(\.id), ["uploaded", "earlier"])
+
+        store.upsertTranscription(
+            recordingURL: uploadedAudioURL,
+            transcript: "A completed uploaded audio transcript.",
+            durationSeconds: 60,
+            modelID: "local-asr",
+            applicationName: nil,
+            kind: .voiceNote,
+            title: "Uploaded audio",
+            persistAudioReference: true
+        )
+
+        XCTAssertEqual(store.records.map(\.id), ["uploaded", "earlier"])
+        XCTAssertEqual(store.records.first?.recordedAt, importedAt)
+    }
+
+    func testMigratesExistingImportedCaptureDateFromUTCManagedFileName() throws {
+        let legacyDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let importedAudioURL = temporaryDirectory.appendingPathComponent(
+            "Imported Audio 2026-08-20 at 02.18.18.000 ABCD1234.m4a"
+        )
+        store.addCapture(
+            recordingURL: importedAudioURL,
+            kind: .voiceNote,
+            title: "Existing upload",
+            durationSeconds: 60,
+            recordedAt: legacyDate
+        )
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        let migratedDate = try XCTUnwrap(reloaded.records.first?.recordedAt)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let components = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: migratedDate
+        )
+
+        XCTAssertEqual(components.year, 2026)
+        XCTAssertEqual(components.month, 8)
+        XCTAssertEqual(components.day, 20)
+        XCTAssertEqual(components.hour, 2)
+        XCTAssertEqual(components.minute, 18)
+        XCTAssertEqual(components.second, 18)
+    }
 }
 
 final class FnControlShortcutStateTests: XCTestCase {
@@ -274,71 +403,57 @@ final class FnRetryShortcutStateTests: XCTestCase {
 }
 
 final class VoiceModifierToggleShortcutStateTests: XCTestCase {
-    private let origin = Date(timeIntervalSinceReferenceDate: 0)
-
     @discardableResult
     private func tap(
         _ state: inout VoiceModifierToggleShortcutState,
-        shortcut: VoiceShortcutModifiers = [.option],
-        at time: Date
+        shortcut: VoiceShortcutModifiers = [.option]
     ) -> Bool {
-        _ = state.update(activeModifiers: shortcut, shortcutModifiers: shortcut, now: time)
-        return state.update(activeModifiers: [], shortcutModifiers: shortcut, now: time)
+        _ = state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        return state.update(activeModifiers: [], shortcutModifiers: shortcut)
     }
 
-    func testSingleTapDoesNotToggle() {
+    func testSingleTapToggles() {
         var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
+        XCTAssertTrue(tap(&state))
         XCTAssertFalse(state.isHeld)
     }
 
-    func testDoubleTapWithinWindowToggles() {
+    func testEachCleanTapToggles() {
         var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.2)))
+        XCTAssertTrue(tap(&state))
+        XCTAssertTrue(tap(&state))
     }
 
-    func testSecondTapAfterWindowDoesNotToggle() {
-        var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(1.0)))
-    }
-
-    func testChordTapDoesNotArmDoubleTap() {
+    func testExtraModifierDoesNotInvalidateTap() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option, .shift],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             state.update(
                 activeModifiers: [],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
     }
 
-    func testKeyPressDoesNotArmDoubleTap() {
+    func testKeyPressDoesNotToggle() {
         var state = VoiceModifierToggleShortcutState()
 
         XCTAssertFalse(
             state.update(
                 activeModifiers: [.option],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
         state.noteKeyDown()
@@ -346,20 +461,83 @@ final class VoiceModifierToggleShortcutStateTests: XCTestCase {
         XCTAssertFalse(
             state.update(
                 activeModifiers: [],
-                shortcutModifiers: [.option],
-                now: origin
+                shortcutModifiers: [.option]
             )
         )
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(0.1)))
+        XCTAssertTrue(tap(&state))
     }
 
-    func testCanToggleAgainAfterCompletingDoubleTap() {
+    func testEntersHeldWithExtraModifier() {
         var state = VoiceModifierToggleShortcutState()
-        XCTAssertFalse(tap(&state, at: origin))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(0.2)))
+        let shortcut: VoiceShortcutModifiers = [.control, .option, .command]
+        XCTAssertFalse(
+            state.update(
+                activeModifiers: [.control, .option, .command, .shift],
+                shortcutModifiers: shortcut
+            )
+        )
+        XCTAssertTrue(state.isHeld)
+        XCTAssertTrue(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(tap(&state, shortcut: shortcut))
+    }
 
-        XCTAssertFalse(tap(&state, at: origin.addingTimeInterval(2)))
-        XCTAssertTrue(tap(&state, at: origin.addingTimeInterval(2.2)))
+    func testPartialReleaseCannotRearmFromStaleModifierSample() {
+        var state = VoiceModifierToggleShortcutState()
+        let shortcut: VoiceShortcutModifiers = [.function, .control]
+
+        XCTAssertFalse(
+            state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(
+            state.update(activeModifiers: [.function], shortcutModifiers: shortcut)
+        )
+        XCTAssertTrue(state.isAwaitingFullRelease)
+
+        // A polling sample can briefly report the old fully-held state after
+        // the release event. It must not arm a second toggle.
+        XCTAssertFalse(
+            state.update(activeModifiers: shortcut, shortcutModifiers: shortcut)
+        )
+        XCTAssertFalse(state.isHeld)
+
+        XCTAssertFalse(
+            state.update(activeModifiers: [], shortcutModifiers: shortcut)
+        )
+        XCTAssertFalse(state.isAwaitingFullRelease)
+        XCTAssertTrue(tap(&state, shortcut: shortcut))
+    }
+}
+
+final class PushToTalkHoldStateTests: XCTestCase {
+    private let origin = Date(timeIntervalSinceReferenceDate: 0)
+
+    func testRisingEdgeStartsAndSustainedIsNoChange() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: true, now: origin.addingTimeInterval(0.05)))
+        XCTAssertTrue(state.isHeld)
+    }
+
+    func testTransientDropWithinGraceKeepsHeld() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: false, now: origin.addingTimeInterval(0.05)))
+        XCTAssertTrue(state.isHeld)
+        XCTAssertNil(state.update(rawHeld: true, now: origin.addingTimeInterval(0.08)))
+        XCTAssertTrue(state.isHeld)
+    }
+
+    func testSustainedReleaseAfterGraceStops() {
+        var state = PushToTalkHoldState()
+        XCTAssertEqual(state.update(rawHeld: true, now: origin), true)
+        XCTAssertNil(state.update(rawHeld: false, now: origin.addingTimeInterval(0.05)))
+        XCTAssertEqual(
+            state.update(rawHeld: false, now: origin.addingTimeInterval(0.2)),
+            false
+        )
+        XCTAssertFalse(state.isHeld)
     }
 }
 
@@ -654,13 +832,16 @@ final class VoiceAudioRetentionTests: XCTestCase {
     }
 }
 
+private struct VoiceStoredPreferencesPayload: Codable {
+    let recordShortcut: VoiceShortcut
+    let retryShortcut: VoiceShortcut
+    let isHandsFreeEnabled: Bool?
+}
+
 @MainActor
 final class VoiceShortcutPreferencesTests: XCTestCase {
     func testDefaultsMatchExistingVoiceCommands() {
-        XCTAssertEqual(
-            VoiceShortcut.recordDefault.displayName,
-            "Control + Option + Command"
-        )
+        XCTAssertEqual(VoiceShortcut.recordDefault.displayName, "Fn + Control")
         XCTAssertEqual(VoiceShortcut.retryDefault.displayName, "Fn + R")
 
         let suiteName = "VoiceShortcutPreferencesTests.\(UUID().uuidString)"
@@ -733,6 +914,9 @@ final class VoiceShortcutPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.retryShortcut, .retryDefault)
         XCTAssertTrue(restored.isHandsFreeEnabled)
     }
+
+
+
 
     func testAddsHandsFreeModeDefaultToLegacyPreferences() throws {
         struct LegacyPayload: Codable {

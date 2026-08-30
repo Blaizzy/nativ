@@ -6,6 +6,11 @@ private let nativeToolNames = [
     ChatModelLibraryToolRegistry.toolName,
     ChatServerStatsToolRegistry.toolName,
     ChatSwitchModelToolRegistry.toolName,
+    ChatReadFileToolRegistry.toolName,
+    ChatSearchFilesToolRegistry.toolName,
+    ChatFileWriteToolRegistry.writeToolName,
+    ChatFileWriteToolRegistry.patchToolName,
+    ChatTerminalToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -70,6 +75,86 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
+    func testBuiltInToolsUseThePresentationOrder() {
+        let names = ChatToolRegistry.definitions(canEditImage: false)
+            .map(\.function.name)
+
+        XCTAssertEqual(names, [
+            ChatImageToolRegistry.generateToolName,
+            ChatModelLibraryToolRegistry.toolName,
+            ChatSwitchModelToolRegistry.toolName,
+            ChatSystemMonitorToolRegistry.toolName,
+            ChatServerStatsToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
+            ChatSearchFilesToolRegistry.toolName,
+            ChatFileWriteToolRegistry.writeToolName,
+            ChatFileWriteToolRegistry.patchToolName,
+            ChatTerminalToolRegistry.toolName,
+            ChatWebSearchToolRegistry.toolName,
+            ChatWebReadToolRegistry.toolName,
+        ])
+    }
+
+    func testImageToolHasSeparateUserAndModelDescriptions() throws {
+        let descriptor = try XCTUnwrap(
+            ChatToolRegistry.descriptors(canEditImage: false).first
+        )
+
+        XCTAssertEqual(descriptor.displayDescription, "Create an image from a written description.")
+        XCTAssertTrue(descriptor.definition.function.description.contains("do not ask"))
+        XCTAssertNotEqual(
+            descriptor.displayDescription,
+            descriptor.definition.function.description
+        )
+    }
+
+    func testDefinitionsAdvertiseBrowsingTools() {
+        let names = ChatToolRegistry.definitions(canEditImage: false)
+            .map(\.function.name)
+
+        XCTAssertTrue(names.contains(ChatWebSearchToolRegistry.toolName))
+        XCTAssertTrue(names.contains(ChatWebReadToolRegistry.toolName))
+    }
+
+    func testWebSearchCarriesConfigurationMetadata() {
+        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
+            $0.definition.function.name == ChatWebSearchToolRegistry.toolName
+        }
+
+        XCTAssertEqual(descriptor?.configuration, .webSearch)
+        XCTAssertEqual(descriptor?.configuration?.displayName, "Web Search")
+    }
+
+    func testWebReadCarriesConfigurationMetadata() {
+        let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
+            $0.definition.function.name == ChatWebReadToolRegistry.toolName
+        }
+
+        XCTAssertEqual(descriptor?.configuration, .webRead)
+        XCTAssertEqual(descriptor?.configuration?.displayName, "Web Read")
+    }
+
+    func testFileReadOperationsShareConfigurationMetadata() {
+        let descriptors = ChatToolRegistry.descriptors(canEditImage: false).filter {
+            ChatReadFileToolRegistry.toolNames.contains($0.definition.function.name)
+        }
+
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration == .fileRead })
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration?.displayName == "File Read" })
+        XCTAssertEqual(ChatNativeToolConfiguration.fileRead.toolNames, ["read_file", "search_files"])
+    }
+
+    func testFileWriteOperationsShareConfigurationMetadata() {
+        let descriptors = ChatToolRegistry.descriptors(canEditImage: false).filter {
+            ChatFileWriteToolRegistry.toolNames.contains($0.definition.function.name)
+        }
+
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration == .fileWrite })
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration?.displayName == "File Write" })
+    }
+
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
@@ -125,7 +210,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let resolution = ChatImageModelSelection.resolve(
             operation: .generate,
             selectedModelID: "org/generator",
-            installedModels: imageModelOptions
+            availableModels: imageModelOptions
         )
 
         guard case .selected(let model) = resolution else {
@@ -138,7 +223,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let resolution = ChatImageModelSelection.resolve(
             operation: .generate,
             selectedModelID: nil,
-            installedModels: imageModelOptions
+            availableModels: imageModelOptions
         )
 
         guard case .selectionRequired(let request) = resolution else {
@@ -158,7 +243,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let resolution = ChatImageModelSelection.resolve(
             operation: .generate,
             selectedModelID: nil,
-            installedModels: [onlyModel]
+            availableModels: [onlyModel]
         )
 
         guard case .selectionRequired(let request) = resolution else {
@@ -184,7 +269,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let resolution = ChatImageModelSelection.resolve(
             operation: .generate,
             selectedModelID: "org/not-installed",
-            installedModels: imageModelOptions
+            availableModels: imageModelOptions
         )
 
         guard case .selectionRequired(let request) = resolution else {
@@ -197,7 +282,7 @@ final class ChatToolRegistryTests: XCTestCase {
         let resolution = ChatImageModelSelection.resolve(
             operation: .edit,
             selectedModelID: "org/generator",
-            installedModels: imageModelOptions
+            availableModels: imageModelOptions
         )
 
         guard case .selectionRequired(let request) = resolution else {
@@ -206,16 +291,187 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(request.models.map(\.modelID), ["org/editor", "org/both"])
     }
 
-    func testNoInstalledImageModelRequiresInstallation() {
+    func testNoInstalledImageModelStillPresentsExploreFlow() {
         let resolution = ChatImageModelSelection.resolve(
             operation: .generate,
             selectedModelID: nil,
-            installedModels: []
+            availableModels: []
         )
 
-        guard case .installationRequired(.generate) = resolution else {
-            return XCTFail("expected installationRequired(.generate)")
+        guard case .selectionRequired(let request) = resolution else {
+            return XCTFail("an empty picker must remain available for model discovery")
         }
+        XCTAssertEqual(request.operation, .generate)
+        XCTAssertTrue(request.models.isEmpty)
+    }
+
+    func testPickerShowsAllDownloadedModelsAndThreeHubRecommendations() {
+        let installed = [
+            imageModelOption("org/local-b"),
+            imageModelOption("org/local-a"),
+        ]
+        let downloadable = (1...5).map {
+            imageModelOption(
+                "org/remote-\($0)",
+                availability: .downloadable(sizeBytes: Int64($0) * 1_000)
+            )
+        }
+
+        let options = ChatImageModelSelection.displayOptions(
+            for: .generate,
+            installedModels: installed,
+            downloadableModels: downloadable
+        )
+
+        XCTAssertEqual(options.count, 5)
+        XCTAssertEqual(Array(options.prefix(2).map(\.modelID)), ["org/local-a", "org/local-b"])
+        XCTAssertEqual(options.filter { !$0.isInstalled }.count, 3)
+    }
+
+    func testPickerAlwaysShowsEveryDownloadedModel() {
+        let installed = (1...7).map { imageModelOption("org/local-\($0)") }
+        let downloadable = (1...5).map {
+            imageModelOption(
+                "org/remote-\($0)",
+                availability: .downloadable(sizeBytes: Int64($0) * 1_000)
+            )
+        }
+
+        let options = ChatImageModelSelection.displayOptions(
+            for: .generate,
+            installedModels: installed,
+            downloadableModels: downloadable
+        )
+
+        XCTAssertEqual(options.count, 10)
+        XCTAssertEqual(options.filter(\.isInstalled).count, 7)
+        XCTAssertEqual(options.filter { !$0.isInstalled }.count, 3)
+    }
+
+    func testOfflinePickerShowsOnlyDownloadedModels() {
+        let installed = [imageModelOption("org/local")]
+
+        let options = ChatImageModelSelection.displayOptions(
+            for: .generate,
+            installedModels: installed,
+            downloadableModels: []
+        )
+
+        XCTAssertEqual(options, installed)
+    }
+
+    func testOfflineRecommendationFailureReturnsAnEmptyPicker() async throws {
+        let missingPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .path
+        let options = try await ChatImageModelSelection.availableOptions(
+            for: .generate,
+            modelSearchPath: missingPath,
+            additionalModelSearchPaths: [],
+            huggingFaceToken: nil,
+            recommendationLoader: { _, _ in
+                throw URLError(.notConnectedToInternet)
+            }
+        )
+
+        XCTAssertTrue(options.isEmpty)
+    }
+
+    func testRecommendationsOnlyAcceptSupportedMLXImageFamilies() {
+        XCTAssertEqual(
+            ChatImageModelSelection.downloadableCapabilities(
+                modelID: "mlx-community/flux2-klein-4b-8bit",
+                tags: ["mlx"]
+            ),
+            [.imageGeneration, .imageEditing]
+        )
+        XCTAssertEqual(
+            ChatImageModelSelection.downloadableCapabilities(
+                modelID: "mlx-community/stable-diffusion-xl",
+                tags: ["mlx"]
+            ),
+            []
+        )
+        XCTAssertEqual(
+            ChatImageModelSelection.downloadableCapabilities(
+                modelID: "MLXBits/ideogram-4-mlx-q4",
+                tags: ["gguf"]
+            ),
+            []
+        )
+    }
+
+    func testDownloadedModelIsValidatedBeforeToolExecution() {
+        let model = imageModelOption("org/generator")
+
+        XCTAssertTrue(ChatImageModelSelection.isPrepared(
+            modelID: model.modelID,
+            for: .generate,
+            installedModels: [model]
+        ))
+        XCTAssertFalse(ChatImageModelSelection.isPrepared(
+            modelID: model.modelID,
+            for: .edit,
+            installedModels: [model]
+        ))
+    }
+
+    func testExploreModelsUsesTheRequestedImageCapability() {
+        XCTAssertEqual(ChatImageOperation.generate.requiredCapability, .imageGeneration)
+        XCTAssertEqual(ChatImageOperation.edit.requiredCapability, .imageEditing)
+    }
+
+    func testPickerDoesNotRecommendAnAlreadyDownloadedModel() {
+        let installed = [imageModelOption("org/shared")]
+        let downloadable = [
+            imageModelOption(
+                "org/shared",
+                availability: .downloadable(sizeBytes: nil)
+            ),
+            imageModelOption(
+                "org/remote",
+                availability: .downloadable(sizeBytes: nil)
+            ),
+        ]
+
+        let options = ChatImageModelSelection.displayOptions(
+            for: .generate,
+            installedModels: installed,
+            downloadableModels: downloadable
+        )
+
+        XCTAssertEqual(options.map(\.modelID), ["org/shared", "org/remote"])
+    }
+
+    func testSavedDownloadableModelStillRequiresUserSelection() {
+        let downloadable = imageModelOption(
+            "org/remote",
+            availability: .downloadable(sizeBytes: nil)
+        )
+
+        let resolution = ChatImageModelSelection.resolve(
+            operation: .generate,
+            selectedModelID: downloadable.modelID,
+            availableModels: [downloadable]
+        )
+
+        guard case .selectionRequired(let request) = resolution else {
+            return XCTFail("a remote recommendation must not download without consent")
+        }
+        XCTAssertEqual(request.models, [downloadable])
+    }
+
+    func testPreselectedDownloadedModelSkipsHubRecommendations() {
+        let installed = [imageModelOption("org/local")]
+
+        XCTAssertFalse(ChatImageModelSelection.needsRecommendations(
+            preferredInstalledModelID: "org/local",
+            installedModels: installed
+        ))
+        XCTAssertTrue(ChatImageModelSelection.needsRecommendations(
+            preferredInstalledModelID: "org/missing",
+            installedModels: installed
+        ))
     }
 
     func testNativeSelectionRejectsAnIdentifierOutsideItsRequest() throws {
@@ -256,6 +512,17 @@ final class ChatToolRegistryTests: XCTestCase {
             .path
         var didStartExecution = false
         var imageContext = makeContext(modelSearchPath: missingPath)
+        imageContext.imageToolDependencies = ChatImageToolDependencies(
+            discoverModels: { _, path, additionalPaths, _, _ in
+                try await ChatImageModelSelection.installedOptions(
+                    modelSearchPath: path,
+                    additionalModelSearchPaths: additionalPaths
+                )
+            },
+            execute: { _, _, _, _, _ in
+                throw FakeToolError()
+            }
+        )
         imageContext.imageExecutionWillStart = { _ in
             didStartExecution = true
         }
@@ -294,7 +561,7 @@ final class ChatToolRegistryTests: XCTestCase {
         var sessionModelID: String?
         var context = makeContext()
         context.imageToolDependencies = ChatImageToolDependencies(
-            discoverModels: { _, _ in [selectedModel, languageModel] },
+            discoverModels: { _, _, _, _, _ in [selectedModel, languageModel] },
             execute: { _, modelID, _, _, _ in
                 await recorder.record(modelID: modelID)
                 return ChatImageToolExecution(content: #"{"ok":true}"#, attachments: [])
@@ -341,7 +608,7 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testRoundGateAdvertisesToolsUnderTheCapAndStopsAtIt() {
-        XCTAssertEqual(ChatToolRoundGate.maximumRounds, 4)
+        XCTAssertEqual(ChatToolRoundGate.maximumRounds, 32)
         for round in 0..<ChatToolRoundGate.maximumRounds {
             XCTAssertTrue(ChatToolRoundGate.advertisesTools(atRound: round), "round \(round) should still advertise tools")
         }
@@ -385,6 +652,51 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "fake failure")
         XCTAssertNil(object["cpu_usage_percent"])
+    }
+
+    @MainActor
+    func testSystemMonitorReportsThermalAndPower() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.thermal.dieTemperatureCelsius = 62.37
+        snapshot.thermal.hottestSensorName = "PMU tdie1"
+        snapshot.thermal.fanSpeedsRPM = [1200, 2400]
+        snapshot.thermal.thermalPressure = .fair
+        snapshot.power.cpuWatts = 3.44
+        snapshot.power.gpuWatts = 8.06
+        snapshot.power.socWatts = 14.92
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["die_temperature_c"] as? Double, 62.4)
+        XCTAssertEqual(object["hottest_sensor"] as? String, "PMU tdie1")
+        XCTAssertEqual(object["fan_rpm"] as? Int, 2400, "should report the fastest fan")
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Fair")
+        XCTAssertEqual(object["cpu_watts"] as? Double, 3.4)
+        XCTAssertEqual(object["gpu_watts"] as? Double, 8.1)
+        XCTAssertEqual(object["package_watts"] as? Double, 14.9)
+    }
+
+    @MainActor
+    func testSystemMonitorOmitsUnavailableSensors() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.power.systemInputWatts = 21.5
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertNil(object["die_temperature_c"], "machines without a die sensor report null")
+        XCTAssertNil(object["fan_rpm"], "fanless machines report null")
+        XCTAssertEqual(
+            object["package_watts"] as? Double,
+            21.5,
+            "falls back to battery-controller input power when SoC rails are absent"
+        )
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Nominal")
     }
 
     func testModelLibraryFailurePayloadShape() throws {
@@ -447,6 +759,40 @@ final class ChatToolRegistryTests: XCTestCase {
                 capabilities: [.text, .tools]
             ),
         ]
+    }
+
+    private func imageModelOption(
+        _ modelID: String,
+        availability: ChatImageModelOption.Availability = .installed
+    ) -> ChatImageModelOption {
+        ChatImageModelOption(
+            displayName: modelID.split(separator: "/").last.map(String.init) ?? modelID,
+            modelID: modelID,
+            capabilities: [.imageGeneration],
+            availability: availability
+        )
+    }
+
+    func testUnknownToolNameGetsAGenericFailurePayloadNotAnImageOne() throws {
+        let payload = ChatToolDispatcher.failurePayload(
+            toolName: "websearch",
+            error: ChatUnknownToolError.unknownTool("websearch")
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "Unknown tool: websearch")
+        XCTAssertNil(object["operation"], "must not fall through to the image-tool shape")
+    }
+
+    func testDispatcherExecuteThrowsUnknownToolErrorForAnUnrecognizedName() async {
+        do {
+            _ = try await ChatToolDispatcher.execute(call: makeCall(name: "websearch"), context: makeContext())
+            XCTFail("an unrecognized tool name must not execute")
+        } catch let error as ChatUnknownToolError {
+            XCTAssertEqual(error.errorDescription, "Unknown tool: websearch")
+        } catch {
+            XCTFail("expected ChatUnknownToolError, got \(error)")
+        }
     }
 }
 
@@ -671,6 +1017,42 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "Model switch",
                 .awaitingConsent: "Switch model?", .declined: "Model switch declined",
             ],
+            ChatReadFileToolRegistry.toolName: [
+                nil: "File read", .preparing: "Reading file…",
+                .running: "Reading file…", .succeeded: "Read file",
+                .failed: "File read", .cancelled: "File read",
+                .awaitingImageModelSelection: "File read",
+                .awaitingConsent: "File read", .declined: "File read",
+            ],
+            ChatSearchFilesToolRegistry.toolName: [
+                nil: "File search", .preparing: "Searching files…",
+                .running: "Searching files…", .succeeded: "Searched files",
+                .failed: "File search", .cancelled: "File search",
+                .awaitingImageModelSelection: "File search",
+                .awaitingConsent: "File search", .declined: "File search",
+            ],
+            ChatFileWriteToolRegistry.writeToolName: [
+                nil: "File write", .preparing: "Writing file…",
+                .running: "Writing file…", .succeeded: "Wrote file",
+                .failed: "File write", .cancelled: "File write",
+                .awaitingImageModelSelection: "File write",
+                .awaitingConsent: "Write protected file?", .declined: "File write declined",
+            ],
+            ChatFileWriteToolRegistry.patchToolName: [
+                nil: "File patch", .preparing: "Patching files…",
+                .running: "Patching files…", .succeeded: "Patched files",
+                .failed: "File patch", .cancelled: "File patch",
+                .awaitingImageModelSelection: "File patch",
+                .awaitingConsent: "Patch protected file?", .declined: "Patch declined",
+            ],
+            ChatTerminalToolRegistry.toolName: [
+                nil: "Terminal", .preparing: "Running terminal command…",
+                .running: "Running terminal command…", .succeeded: "Ran terminal command",
+                .failed: "Terminal command", .cancelled: "Terminal command",
+                .awaitingImageModelSelection: "Terminal command",
+                .awaitingConsent: "Run terminal command?",
+                .declined: "Terminal command declined",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -701,6 +1083,10 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
+            ChatSearchFilesToolRegistry.toolName,
+            ChatFileWriteToolRegistry.writeToolName, ChatFileWriteToolRegistry.patchToolName,
+            ChatTerminalToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -710,6 +1096,11 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            ChatReadFileToolRegistry.toolName: "doc.text",
+            ChatSearchFilesToolRegistry.toolName: "doc.text.magnifyingglass",
+            ChatFileWriteToolRegistry.writeToolName: "square.and.pencil",
+            ChatFileWriteToolRegistry.patchToolName: "square.and.pencil",
+            ChatTerminalToolRegistry.toolName: "terminal",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -887,6 +1278,19 @@ final class ChatSystemMonitorToolExecutorTests: XCTestCase {
         XCTAssertNil(object["gpu_usage_percent"], "no GPU reading must omit the field, not report 0")
     }
 
+    func testDiskUsageOmittedWhenCapacityIsUnavailable() async throws {
+        let snapshot = SystemMonitorSnapshot()
+
+        let content = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(content)
+
+        XCTAssertNil(object["disk_used_gb"], "no disk reading must omit the field, not report 0")
+        XCTAssertNil(object["disk_total_gb"], "no disk reading must omit the field, not report 0")
+    }
+
     private func decode(_ json: String) throws -> [String: Any] {
         let data = try XCTUnwrap(json.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -910,6 +1314,22 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.imageGenerationModelID, "org/image")
     }
 
+    func testChatSessionPersistsScheduledTaskOrigin() throws {
+        let session = ChatSession(
+            id: UUID(),
+            title: "Scheduled result",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            messages: [],
+            scheduledTaskID: "task-1"
+        )
+
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
+
+        XCTAssertEqual(decoded.scheduledTaskID, "task-1")
+    }
+
     func testOldChatSessionWithoutImageModelSelectionStillDecodes() throws {
         let oldJSON = #"{"id":"8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B","title":"Old","createdAt":0,"updatedAt":0,"messages":[]}"#
         let session = try JSONDecoder().decode(
@@ -918,6 +1338,7 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         )
 
         XCTAssertNil(session.imageGenerationModelID)
+        XCTAssertNil(session.scheduledTaskID)
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {

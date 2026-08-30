@@ -1,32 +1,33 @@
 import Foundation
 
 @MainActor
-final class HubModelSizeResolver: ObservableObject {
+final class HubModelSizeResolver {
     static let shared = HubModelSizeResolver()
 
-    @Published private(set) var sizes: [String: Int64] = [:]
-    private var inFlight: Set<String> = []
+    private var sizes: [String: Int64] = [:]
 
-    func resolvedSize(for repoID: String) -> Int64? {
-        sizes[repoID]
-    }
+    func resolveSize(for repoID: String) async -> Int64? {
+        if let size = sizes[repoID] {
+            return size
+        }
 
-    func prefetch(_ repoID: String) async {
-        if sizes[repoID] != nil || inFlight.contains(repoID) {
-            return
+        do {
+            try await Task.sleep(nanoseconds: 250_000_000)
+        } catch {
+            return nil
         }
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        if Task.isCancelled || sizes[repoID] != nil || inFlight.contains(repoID) {
-            return
+        guard !Task.isCancelled else { return nil }
+
+        if let size = sizes[repoID] {
+            return size
         }
-        inFlight.insert(repoID)
-        Task {
-            let bytes = await Self.fetchTotalBytes(repoID: repoID)
-            inFlight.remove(repoID)
-            if let bytes {
-                sizes[repoID] = bytes
-            }
+
+        let bytes = await Self.fetchTotalBytes(repoID: repoID)
+        guard !Task.isCancelled else { return nil }
+        if let bytes {
+            sizes[repoID] = bytes
         }
+        return bytes
     }
 
     private nonisolated static func fetchTotalBytes(repoID: String) async -> Int64? {
@@ -46,7 +47,10 @@ final class HubModelSizeResolver: ObservableObject {
             return nil
         }
         let total = payload.siblings?.reduce(Int64(0)) { partial, sibling in
-            partial + (sibling.lfs?.size ?? sibling.size ?? 0)
+            guard !HuggingFaceDownloadFilePolicy.shouldIgnore(path: sibling.rfilename) else {
+                return partial
+            }
+            return partial + (sibling.lfs?.size ?? sibling.size ?? 0)
         } ?? 0
         return total > 0 ? total : nil
     }
@@ -56,6 +60,7 @@ final class HubModelSizeResolver: ObservableObject {
             struct LFS: Decodable {
                 let size: Int64?
             }
+            let rfilename: String
             let size: Int64?
             let lfs: LFS?
         }

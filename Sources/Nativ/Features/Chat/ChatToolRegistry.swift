@@ -1,62 +1,277 @@
 import Foundation
 import NativServerKit
 
-typealias ChatImageModelSelectionHandler = @MainActor @Sendable (
-    ChatImageModelSelectionRequest
-) async throws -> String
+typealias ChatImageModelSelectionHandler =
+    @MainActor @Sendable (
+        ChatImageModelSelectionRequest
+    ) async throws -> String
 
-struct ChatToolExecutionContext {
+struct ChatToolExecutionContext: Sendable {
     let imageGenerationModelID: String?
     let baseURL: URL
     let apiKey: String?
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
+    var huggingFaceToken: String? = nil
     var analyticsDatabaseURL: URL? = nil
     var imageToolDependencies = ChatImageToolDependencies.live
+    var fileReadRootPath: String? = nil
+    var fileReadTracker: ChatReadFileTracker? = nil
+    var fileReadMaximumResultCharacters = ChatReadFileToolRegistry.defaultMaximumResultCharacters
+    var fileReadToolDependencies = ChatReadFileToolDependencies.live
+    var fileSearchTracker: ChatSearchFilesTracker? = nil
+    var fileSearchMaximumResultCharacters =
+        ChatSearchFilesToolRegistry.defaultMaximumResultCharacters
+    var fileSearchToolDependencies = ChatSearchFilesToolDependencies.live
+    var fileWriteRootPath: String? = nil
+    var fileWriteApprovalGranted = false
+    var fileOperationRunID = UUID()
+    var fileMutationState = FileMutationState.shared
+    var fileWriteToolDependencies = ChatFileWriteToolDependencies.live
+    var terminalApprovalGranted = false
+    var terminalToolDependencies = ChatTerminalToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
 
-struct ChatToolExecutionOutcome {
+struct ChatToolExecutionOutcome: Sendable {
     let content: String
     let attachments: [ChatImageAttachment]
 }
 
 enum ChatToolRoundGate {
-    static let maximumRounds = 4
+    static let maximumRounds = 32
 
     static func advertisesTools(atRound round: Int) -> Bool {
         round < maximumRounds
     }
 }
 
+enum ChatNativeToolConfiguration: Hashable {
+    case webSearch
+    case webRead
+    case fileRead
+    case fileWrite
+
+    var displayName: String {
+        switch self {
+        case .webSearch:
+            "Web Search"
+        case .webRead:
+            "Web Read"
+        case .fileRead:
+            "File Read"
+        case .fileWrite:
+            "File Write"
+        }
+    }
+
+    var isConfigured: Bool {
+        switch self {
+        case .webSearch:
+            ChatWebSearchToolRegistry.isConfigured()
+        case .webRead:
+            ChatWebReadToolRegistry.isConfigured()
+        case .fileRead:
+            FileReadAccessPolicy.isConfigured(
+                rootPath: NativSettings.load().fileReadRootPath
+            )
+        case .fileWrite:
+            FileWriteAccessPolicy.isConfigured(
+                rootPath: NativSettings.load().fileWriteRootPath
+            )
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .webSearch:
+            "globe"
+        case .webRead:
+            "doc.text.magnifyingglass"
+        case .fileRead:
+            "doc.text"
+        case .fileWrite:
+            "square.and.pencil"
+        }
+    }
+
+    var toolNames: [String] {
+        switch self {
+        case .webSearch:
+            [ChatWebSearchToolRegistry.toolName]
+        case .webRead:
+            [ChatWebReadToolRegistry.toolName]
+        case .fileRead:
+            ChatReadFileToolRegistry.toolNames
+        case .fileWrite:
+            ChatFileWriteToolRegistry.toolNames
+        }
+    }
+}
+
+struct ChatNativeToolDescriptor {
+    let definition: MLXChatToolDefinition
+    let displayDescription: String
+    let configuration: ChatNativeToolConfiguration?
+}
+
 enum ChatToolRegistry {
     static func definitions(canEditImage: Bool) -> [MLXChatToolDefinition] {
-        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage)
-        tools.append(contentsOf: ChatSystemMonitorToolRegistry.definitions())
-        tools.append(contentsOf: ChatModelLibraryToolRegistry.definitions())
-        tools.append(contentsOf: ChatServerStatsToolRegistry.definitions())
-        tools.append(contentsOf: ChatSwitchModelToolRegistry.definitions())
+        descriptors(canEditImage: canEditImage).map(\.definition)
+    }
+
+    static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
+        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: $0.function.name == ChatImageToolRegistry.editToolName
+                    ? "Edit an attached image by describing the changes."
+                    : "Create an image from a written description.",
+                configuration: nil
+            )
+        }
+        tools += ChatModelLibraryToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "List the models downloaded on this device.",
+                configuration: nil
+            )
+        }
+        tools += ChatSwitchModelToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Change which model this chat uses.",
+                configuration: nil
+            )
+        }
+        tools += ChatSystemMonitorToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Check this device’s CPU, GPU, memory, and disk usage.",
+                configuration: nil
+            )
+        }
+        tools += ChatServerStatsToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "See the server’s speed, requests, and token usage.",
+                configuration: nil
+            )
+        }
+        tools.append(
+            ChatNativeToolDescriptor(
+                definition: ChatReadFileToolRegistry.definition,
+                displayDescription: "Read and search files in the folder you authorize.",
+                configuration: .fileRead
+            ))
+        tools.append(
+            ChatNativeToolDescriptor(
+                definition: ChatSearchFilesToolRegistry.definition,
+                displayDescription: "Read and search files in the folder you authorize.",
+                configuration: .fileRead
+            ))
+        tools += ChatFileWriteToolRegistry.definitions.map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Create and edit files in the folder you authorize.",
+                configuration: .fileWrite
+            )
+        }
+        tools.append(
+            ChatNativeToolDescriptor(
+                definition: ChatTerminalToolRegistry.definition,
+                displayDescription:
+                    "Run approved shell commands locally on this Mac.",
+                configuration: nil
+            ))
+        tools.append(
+            ChatNativeToolDescriptor(
+                definition: ChatWebSearchToolRegistry.definition,
+                displayDescription: "Search the web for current information and sources.",
+                configuration: .webSearch
+            ))
+        tools.append(
+            ChatNativeToolDescriptor(
+                definition: ChatWebReadToolRegistry.definition,
+                displayDescription: "Read and find relevant information on public web pages.",
+                configuration: .webRead
+            ))
         return tools
     }
 }
 
+enum ChatUnknownToolError: LocalizedError {
+    case unknownTool(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unknownTool(let name):
+            return "Unknown tool: \(name)"
+        }
+    }
+}
+
+private struct ChatUnknownToolResultPayload: Encodable {
+    let ok: Bool
+    let error: String?
+}
+
 enum ChatToolDispatcher {
-    private typealias Handler = (MLXChatToolCall, ChatToolExecutionContext) async throws -> ChatToolExecutionOutcome
-    private typealias FailureHandler = (String, Error) -> String
+    private typealias Handler =
+        @Sendable (
+            MLXChatToolCall,
+            ChatToolExecutionContext
+        ) async throws -> ChatToolExecutionOutcome
+    private typealias FailureHandler = @Sendable (String, Error) -> String
 
     private static let handlers: [String: Handler] = [
-        ChatImageToolRegistry.generateToolName: executeImageTool,
-        ChatImageToolRegistry.editToolName: executeImageTool,
-        ChatSystemMonitorToolRegistry.toolName: executeSystemMonitorTool,
-        ChatModelLibraryToolRegistry.toolName: executeModelLibraryTool,
-        ChatServerStatsToolRegistry.toolName: executeServerStatsTool,
+        ChatImageToolRegistry.generateToolName: { call, context in
+            try await executeImageTool(call: call, context: context)
+        },
+        ChatImageToolRegistry.editToolName: { call, context in
+            try await executeImageTool(call: call, context: context)
+        },
+        ChatSystemMonitorToolRegistry.toolName: { call, context in
+            try await executeSystemMonitorTool(call: call, context: context)
+        },
+        ChatModelLibraryToolRegistry.toolName: { call, context in
+            try await executeModelLibraryTool(call: call, context: context)
+        },
+        ChatServerStatsToolRegistry.toolName: { call, context in
+            try await executeServerStatsTool(call: call, context: context)
+        },
+        ChatWebSearchToolRegistry.toolName: { call, context in
+            try await executeWebSearchTool(call: call, context: context)
+        },
+        ChatWebReadToolRegistry.toolName: { call, context in
+            try await executeWebReadTool(call: call, context: context)
+        },
+        ChatReadFileToolRegistry.toolName: { call, context in
+            try await executeReadFileTool(call: call, context: context)
+        },
+        ChatSearchFilesToolRegistry.toolName: { call, context in
+            try await executeSearchFilesTool(call: call, context: context)
+        },
+        ChatFileWriteToolRegistry.writeToolName: { call, context in
+            try await executeFileWriteTool(call: call, context: context)
+        },
+        ChatFileWriteToolRegistry.patchToolName: { call, context in
+            try await executeFileWriteTool(call: call, context: context)
+        },
+        ChatTerminalToolRegistry.toolName: { call, context in
+            try await executeTerminalTool(call: call, context: context)
+        },
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
-        ChatImageToolRegistry.generateToolName: failurePayloadForImageTool,
-        ChatImageToolRegistry.editToolName: failurePayloadForImageTool,
+        ChatImageToolRegistry.generateToolName: { name, error in
+            failurePayloadForImageTool(name: name, error: error)
+        },
+        ChatImageToolRegistry.editToolName: { name, error in
+            failurePayloadForImageTool(name: name, error: error)
+        },
         ChatSystemMonitorToolRegistry.toolName: { name, error in
             ChatSystemMonitorToolExecutor().failurePayload(operation: name, error: error)
         },
@@ -69,6 +284,27 @@ enum ChatToolDispatcher {
         ChatSwitchModelToolRegistry.toolName: { name, error in
             ChatSwitchModelToolExecutor().failurePayload(operation: name, error: error)
         },
+        ChatWebSearchToolRegistry.toolName: { _, error in
+            ChatWebSearchToolExecutor().failurePayload(error: error)
+        },
+        ChatWebReadToolRegistry.toolName: { _, error in
+            ChatWebReadToolExecutor().failurePayload(error: error)
+        },
+        ChatReadFileToolRegistry.toolName: { _, error in
+            ChatReadFileToolExecutor().failurePayload(error: error)
+        },
+        ChatSearchFilesToolRegistry.toolName: { _, error in
+            ChatSearchFilesToolExecutor().failurePayload(error: error)
+        },
+        ChatFileWriteToolRegistry.writeToolName: { _, error in
+            ChatFileWriteToolExecutor().failurePayload(error: error)
+        },
+        ChatFileWriteToolRegistry.patchToolName: { _, error in
+            ChatFileWriteToolExecutor().failurePayload(error: error)
+        },
+        ChatTerminalToolRegistry.toolName: { _, error in
+            ChatTerminalToolExecutor().failurePayload(error: error)
+        },
     ]
 
     static func execute(
@@ -76,16 +312,27 @@ enum ChatToolDispatcher {
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         guard let name = call.function?.name, let handler = handlers[name] else {
-            throw ChatImageToolError.unsupportedTool(call.function?.name ?? "unknown")
+            throw ChatUnknownToolError.unknownTool(call.function?.name ?? "unknown")
         }
         return try await handler(call, context)
     }
 
     static func failurePayload(toolName: String?, error: Error) -> String {
         guard let toolName, let handler = failureHandlers[toolName] else {
-            return ChatImageToolExecutor().failurePayload(operation: toolName ?? "tool", error: error)
+            return unknownToolFailurePayload(error: error)
         }
         return handler(toolName, error)
+    }
+
+    private static func unknownToolFailurePayload(error: Error) -> String {
+        let payload = ChatUnknownToolResultPayload(ok: false, error: error.localizedDescription)
+        return (try? encodedPayload(payload)) ?? #"{"ok":false,"error":"Unknown tool."}"#
+    }
+
+    private static func encodedPayload(_ payload: ChatUnknownToolResultPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(payload), as: UTF8.self)
     }
 
     private static func executeImageTool(
@@ -96,32 +343,37 @@ enum ChatToolDispatcher {
             call: call,
             hasImageReference: !context.imageReferences.isEmpty
         )
-        let installedModels = try await context.imageToolDependencies.discoverModels(
+        let availableModels = try await context.imageToolDependencies.discoverModels(
+            imageRequest.operation,
             context.modelSearchPath,
-            context.additionalModelSearchPaths
+            context.additionalModelSearchPaths,
+            context.huggingFaceToken,
+            context.imageGenerationModelID
         )
         let imageModelID: String
         switch ChatImageModelSelection.resolve(
             operation: imageRequest.operation,
             selectedModelID: context.imageGenerationModelID,
-            installedModels: installedModels
+            availableModels: availableModels
         ) {
         case .selected(let model):
             imageModelID = model.modelID
         case .selectionRequired(let selectionRequest):
             guard let requestSelection = context.imageModelSelection else {
-                throw ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
+                throw selectionRequest.models.isEmpty
+                    ? ChatImageToolError.noCompatibleModels(imageRequest.operation)
+                    : ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
             }
             let selectedModelID = try await requestSelection(selectionRequest)
-            guard let selectedModel = ChatImageModelSelection.selectedModel(
-                withID: selectedModelID,
-                from: selectionRequest
-            ) else {
+            guard
+                let selectedModel = ChatImageModelSelection.selectedModel(
+                    withID: selectedModelID,
+                    from: selectionRequest
+                )
+            else {
                 throw ChatImageToolError.modelSelectionUnavailable(imageRequest.operation)
             }
             imageModelID = selectedModel.modelID
-        case .installationRequired:
-            throw ChatImageToolError.noCompatibleModels(imageRequest.operation)
         }
         await context.imageExecutionWillStart?(imageModelID)
         let result = try await context.imageToolDependencies.execute(
@@ -161,6 +413,62 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeWebSearchTool(
+        call: MLXChatToolCall,
+        context _: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatWebSearchToolExecutor().execute(call: call)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeWebReadTool(
+        call: MLXChatToolCall,
+        context _: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatWebReadToolExecutor().execute(call: call)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeReadFileTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatReadFileToolExecutor().execute(
+            call: call,
+            context: context
+        )
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeSearchFilesTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatSearchFilesToolExecutor().execute(
+            call: call,
+            context: context
+        )
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeFileWriteTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatFileWriteToolExecutor().execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
+    private static func executeTerminalTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatTerminalToolExecutor(
+            dependencies: context.terminalToolDependencies
+        ).execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -183,16 +491,19 @@ final class ChatToolConsentGate {
     }
 
     func awaitDecision(for id: UUID) async -> Bool {
-        await withTaskCancellationHandler {
+        let denyRequest: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.deny(id)
+        }
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 pending[id] = continuation
                 if Task.isCancelled {
                     pending.removeValue(forKey: id)?.resume(returning: false)
                 }
             }
-        } onCancel: { [weak self] in
+        } onCancel: {
             Task { @MainActor in
-                self?.pending.removeValue(forKey: id)?.resume(returning: false)
+                denyRequest()
             }
         }
     }
@@ -228,6 +539,20 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case ChatWebSearchToolRegistry.toolName:
+            return webSearchTitle(status: status)
+        case ChatWebReadToolRegistry.toolName:
+            return webReadTitle(status: status)
+        case ChatReadFileToolRegistry.toolName:
+            return readFileTitle(status: status)
+        case ChatSearchFilesToolRegistry.toolName:
+            return searchFilesTitle(status: status)
+        case ChatFileWriteToolRegistry.writeToolName:
+            return fileWriteTitle(isPatch: false, status: status)
+        case ChatFileWriteToolRegistry.patchToolName:
+            return fileWriteTitle(isPatch: true, status: status)
+        case ChatTerminalToolRegistry.toolName:
+            return terminalTitle(status: status)
         default:
             return genericTitle(toolName: toolName, status: status)
         }
@@ -248,7 +573,7 @@ enum ChatToolPresentation {
         case .succeeded, .running, nil:
             switch toolName {
             case ChatImageToolRegistry.generateToolName,
-                 ChatImageToolRegistry.editToolName:
+                ChatImageToolRegistry.editToolName:
                 return "photo"
             case ChatSystemMonitorToolRegistry.toolName:
                 return "cpu"
@@ -258,13 +583,28 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case ChatWebSearchToolRegistry.toolName:
+                return "globe"
+            case ChatWebReadToolRegistry.toolName:
+                return "doc.text.magnifyingglass"
+            case ChatReadFileToolRegistry.toolName:
+                return "doc.text"
+            case ChatSearchFilesToolRegistry.toolName:
+                return "doc.text.magnifyingglass"
+            case ChatFileWriteToolRegistry.writeToolName,
+                ChatFileWriteToolRegistry.patchToolName:
+                return "square.and.pencil"
+            case ChatTerminalToolRegistry.toolName:
+                return "terminal"
             default:
                 return "wrench.and.screwdriver"
             }
         }
     }
 
-    private static func imageTitle(isEdit: Bool, status: ChatTranscriptMessage.ToolStatus?) -> String {
+    private static func imageTitle(isEdit: Bool, status: ChatTranscriptMessage.ToolStatus?)
+        -> String
+    {
         switch status {
         case .preparing:
             return "Checking image model…"
@@ -339,7 +679,98 @@ enum ChatToolPresentation {
         }
     }
 
-    private static func genericTitle(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
+    private static func webSearchTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Searching the web…"
+        case .succeeded:
+            return "Searched the web"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Web search"
+        case nil:
+            return "Web search"
+        }
+    }
+
+    private static func webReadTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Reading web pages…"
+        case .succeeded:
+            return "Read web pages"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Web read"
+        case nil:
+            return "Web read"
+        }
+    }
+
+    private static func readFileTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Reading file…"
+        case .succeeded:
+            return "Read file"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "File read"
+        case nil:
+            return "File read"
+        }
+    }
+
+    private static func searchFilesTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Searching files…"
+        case .succeeded:
+            return "Searched files"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "File search"
+        case nil:
+            return "File search"
+        }
+    }
+
+    private static func fileWriteTitle(
+        isPatch: Bool,
+        status: ChatTranscriptMessage.ToolStatus?
+    ) -> String {
+        switch status {
+        case .awaitingConsent:
+            return isPatch ? "Patch protected file?" : "Write protected file?"
+        case .preparing, .running:
+            return isPatch ? "Patching files…" : "Writing file…"
+        case .succeeded:
+            return isPatch ? "Patched files" : "Wrote file"
+        case .declined:
+            return isPatch ? "Patch declined" : "File write declined"
+        case .failed, .cancelled, .awaitingImageModelSelection:
+            return isPatch ? "File patch" : "File write"
+        case nil:
+            return isPatch ? "File patch" : "File write"
+        }
+    }
+
+    private static func terminalTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .awaitingConsent:
+            return "Run terminal command?"
+        case .preparing, .running:
+            return "Running terminal command…"
+        case .succeeded:
+            return "Ran terminal command"
+        case .declined:
+            return "Terminal command declined"
+        case .failed, .cancelled, .awaitingImageModelSelection:
+            return "Terminal command"
+        case nil:
+            return "Terminal"
+        }
+    }
+
+    private static func genericTitle(toolName: String?, status: ChatTranscriptMessage.ToolStatus?)
+        -> String
+    {
         let name = toolName ?? "tool"
         switch status {
         case .preparing, .running:

@@ -70,7 +70,7 @@ enum ChatSwitchModelToolError: LocalizedError {
         case .mismatchedModel(let requested, let active):
             return "Requested \(requested) but the active model is now \(active ?? "unknown")."
         case .appModelUnavailable:
-            return "The app isn't ready to switch models right now."
+            return "The app isn’t ready to switch models right now."
         }
     }
 }

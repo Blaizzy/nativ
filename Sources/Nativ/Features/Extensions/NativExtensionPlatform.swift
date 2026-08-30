@@ -1,6 +1,6 @@
 import AppKit
 import AVFoundation
-import ExtensionFoundation
+@preconcurrency import ExtensionFoundation
 import Foundation
 import NativExtensionSDK
 import Observation
@@ -33,7 +33,8 @@ struct NativExtensionPageContext {
 }
 
 struct NativExtensionHostContext {
-    let transcriptionConfiguration: () -> VoiceTranscriptionConfiguration?
+    let transcriptionConfiguration:
+        @MainActor @Sendable () -> VoiceTranscriptionConfiguration?
     let openSpeechModels: () -> Void
     let showMainWindow: () -> Void
 }
@@ -398,7 +399,8 @@ final class NativExtensionManager: ObservableObject {
             markPermissionRequested(permission)
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .notDetermined:
-                NativSystemPermissionController.requestMicrophone { [weak self] _ in
+                Task { [weak self] in
+                    _ = await NativSystemPermissionController.requestMicrophone()
                     self?.refreshPermissionStatuses()
                 }
             case .denied, .restricted:
@@ -792,13 +794,6 @@ enum NativExtensionPermissionStatus: Hashable {
         }
     }
 
-    var color: Color {
-        switch self {
-        case .granted: .green
-        case .denied: .red
-        case .notRequested: .secondary
-        }
-    }
 }
 
 extension AppExtensionPoint {

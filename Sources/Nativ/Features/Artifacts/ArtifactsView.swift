@@ -1,10 +1,9 @@
 import AppKit
 import AVFoundation
-import PDFKit
 import SwiftUI
 import Vision
 
-enum ArtifactLayout {
+enum ArtifactLayout: Hashable {
     case grid
     case list
 }
@@ -67,6 +66,8 @@ struct ArtifactGroup: Identifiable {
 }
 
 struct ArtifactsView: View {
+    private static let pdfTextExtractor = PDFDocumentTextExtractor()
+
     @ObservedObject var store: ArtifactStore
     let semanticSearch: ArtifactSemanticSearchConfig?
     var titleLeadingInset: CGFloat = 0
@@ -78,6 +79,7 @@ struct ArtifactsView: View {
     @State private var semanticMatches: [UUID]?
     @State private var searchDebounce: Task<Void, Never>?
     @State private var showsSemanticPopover = false
+    @State private var isConfirmingSemanticModelRemoval = false
     @AppStorage("artifactSemanticSearchOffered") private var semanticSearchOffered = false
     @AppStorage("smartSearchEnabled") private var smartSearchEnabled = true
 
@@ -112,6 +114,26 @@ struct ArtifactsView: View {
 
     private var smartSearchActive: Bool {
         smartSearchEnabled && (semanticSearch?.isModelInstalled == true)
+    }
+
+    private var availableKinds: [ArtifactKind] {
+        ArtifactKind.allCases.filter { kind in
+            store.artifacts.contains { $0.kind == kind }
+        }
+    }
+
+    private var availableSources: [ArtifactSource] {
+        ArtifactSource.allCases.filter { source in
+            store.artifacts.contains { $0.source == source }
+        }
+    }
+
+    private var activeFilterCount: Int {
+        (kindFilter == nil ? 0 : 1)
+            + (sourceFilter == nil ? 0 : 1)
+            + (favoritesOnly ? 1 : 0)
+            + (dateFilter == .all ? 0 : 1)
+            + (groupByChat ? 1 : 0)
     }
 
     private var filtered: [Artifact] {
@@ -171,10 +193,10 @@ struct ArtifactsView: View {
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Turn on Smart search")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Install a \(config.sizeLabel) on-device model to find artifacts by what's inside them. You can also do this later from the settings.")
-                        .font(.system(size: 11))
+                    Text("Turn On Smart Search")
+                        .nativTextStyle(.sectionTitle)
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents. You can also do this later in Settings.")
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
@@ -184,12 +206,12 @@ struct ArtifactsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                Button("Not now") {
+                Button("Not Now") {
                     semanticSearchOffered = true
                 }
                 .controlSize(.small)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 24)
             .padding(.vertical, 10)
             .background(Color(nsColor: .windowBackgroundColor))
             Divider()
@@ -203,11 +225,11 @@ struct ArtifactsView: View {
         } label: {
             Image(systemName: "gearshape")
         }
-        .help("Smart search settings")
+        .help("Smart Search settings")
         .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Smart search", systemImage: "sparkle.magnifyingglass")
-                    .font(.system(size: 13, weight: .semibold))
+                Label("Smart Search", systemImage: "sparkle.magnifyingglass")
+                    .nativTextStyle(.sectionTitle)
                 if config.isModelInstalled {
                     Toggle("Enabled", isOn: $smartSearchEnabled)
                         .toggleStyle(.switch)
@@ -215,27 +237,26 @@ struct ArtifactsView: View {
                     Text(smartSearchEnabled
                         ? "Searching by image, video and document contents."
                         : "Turned off. The model stays installed.")
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
-                    Text("Runs on-device — results are fastest when your Mac isn't busy generating.")
-                        .font(.system(size: 10))
+                    Text("Runs on-device — results are fastest when your Mac isn’t busy generating.")
+                        .nativTextStyle(.metadata)
                         .foregroundStyle(.tertiary)
                     Divider()
-                    Button("Remove model", role: .destructive) {
-                        config.onRemove()
-                        showsSemanticPopover = false
+                    Button("Remove Model", role: .destructive) {
+                        isConfirmingSemanticModelRemoval = true
                     }
                     .controlSize(.small)
-                    .help("Deletes the model and turns Smart search off")
+                    .help("Deletes the model and turns Smart Search off")
                 } else if config.isDownloading {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Downloading model… \(Int((config.downloadProgress * 100).rounded()))%")
-                            .font(.system(size: 11))
+                            .nativTextStyle(.supporting)
                     }
                 } else {
-                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by what's inside them.")
-                        .font(.system(size: 11))
+                    Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents.")
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                     Button("Install") {
                         config.onEnable()
@@ -247,7 +268,7 @@ struct ArtifactsView: View {
                     .disabled(!config.canInstall)
                     if let reason = config.insufficientReason {
                         Text(reason)
-                            .font(.system(size: 10))
+                            .nativTextStyle(.metadata)
                             .foregroundStyle(.orange)
                     }
                 }
@@ -273,6 +294,7 @@ struct ArtifactsView: View {
             if Task.isCancelled {
                 return
             }
+            await Task.detached { config.prepareModel() }.value
             let matches = await searchIndex.search(query: query, model: config.modelID, client: config.client)
             if Task.isCancelled {
                 return
@@ -286,6 +308,7 @@ struct ArtifactsView: View {
             return
         }
         Task {
+            await Task.detached { config.prepareModel() }.value
             await searchIndex.index(
                 artifacts: store.artifacts,
                 model: config.modelID,
@@ -309,21 +332,41 @@ struct ArtifactsView: View {
             return []
         case .document:
             let ext = artifact.fileExtension.lowercased()
+            if ext == "pdf" {
+                return await Self.pdfTextChunks(
+                    at: url,
+                    filename: artifact.filename,
+                    mimeType: artifact.mimeType
+                )
+            }
             return await Task.detached(priority: .utility) {
-                let raw: String
-                if ext == "pdf" {
-                    guard let document = PDFDocument(url: url), let string = document.string else {
-                        return []
-                    }
-                    raw = string
-                } else {
-                    guard let string = try? String(contentsOf: url, encoding: .utf8) else {
-                        return []
-                    }
-                    raw = string
+                guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+                    return []
                 }
                 return Self.chunkedText(raw, maxChunks: 8, chunkSize: 1200)
             }.value
+        }
+    }
+
+    private static func pdfTextChunks(
+        at url: URL,
+        filename: String,
+        mimeType: String
+    ) async -> [String] {
+        do {
+            let data = try await Task.detached(priority: .utility) {
+                try Data(contentsOf: url, options: .mappedIfSafe)
+            }.value
+            let content = try await pdfTextExtractor.extract(
+                data: data,
+                filename: filename,
+                mimeType: mimeType
+            )
+            return await Task.detached(priority: .utility) {
+                Self.chunkedText(content.text, maxChunks: 8, chunkSize: 1200)
+            }.value
+        } catch {
+            return []
         }
     }
 
@@ -344,7 +387,11 @@ struct ArtifactsView: View {
         }.value
     }
 
-    private static func chunkedText(_ text: String, maxChunks: Int, chunkSize: Int) -> [String] {
+    nonisolated private static func chunkedText(
+        _ text: String,
+        maxChunks: Int,
+        chunkSize: Int
+    ) -> [String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return []
@@ -416,11 +463,11 @@ struct ArtifactsView: View {
         VStack(spacing: 0) {
             header
             semanticBanner
+            filterBar
+            Divider()
             if isSelecting {
                 selectionBar
             }
-            filterBar
-            Divider()
             contentView
         }
         .focusable()
@@ -459,16 +506,27 @@ struct ArtifactsView: View {
         }
         .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
-                store.delete(pendingDelete)
-                selection.subtract(pendingDelete.map(\.id))
+                let deletedIDs = store.delete(pendingDelete)
+                selection.subtract(deletedIDs)
                 pendingDelete = []
                 if selection.isEmpty {
                     isSelecting = false
                 }
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
-            Text("This removes the file from the artifact and from its chat history. It can't be undone.")
+            Text("This removes the file from the artifact and from its chat history. It can’t be undone.")
+        }
+        .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
+            Button("Remove Model", role: .destructive) {
+                semanticSearch?.onRemove()
+                showsSemanticPopover = false
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the on-device Smart Search model and turns Smart Search off.")
         }
         .overlay {
             if let albumSessionID {
@@ -515,6 +573,7 @@ struct ArtifactsView: View {
                 }
                 renameTarget = nil
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { renameTarget = nil }
         }
     }
@@ -653,43 +712,10 @@ struct ArtifactsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 24)
 
-            Button(isSelecting ? "Done" : "Select") {
-                isSelecting.toggle()
-                if !isSelecting {
-                    selection.removeAll()
-                }
-            }
-
-            Toggle(isOn: Binding(get: { showingByChat }, set: { groupByChat = $0 })) {
-                Label("By Chat", systemImage: "bubble.left.and.bubble.right")
-            }
-            .toggleStyle(.button)
-            .disabled(isSearching)
-            .help(isSearching ? "Grouping is off while searching" : "Group artifacts by chat")
-
-            if !showingByChat {
-                Menu {
-                    Picker("Sort", selection: $sort) {
-                        ForEach(ArtifactSort.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Text(sort.rawValue)
-                }
-                .fixedSize()
-
-                Picker("", selection: $layout) {
-                    Image(systemName: "square.grid.2x2").tag(ArtifactLayout.grid)
-                    Image(systemName: "list.bullet").tag(ArtifactLayout.list)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 84)
-            }
+            searchField
+                .frame(width: 280)
 
             Button(action: store.refresh) {
                 Image(systemName: "arrow.clockwise")
@@ -702,16 +728,16 @@ struct ArtifactsView: View {
                 semanticSettingsButton(config)
             }
         }
-        .padding(.horizontal, 22)
+        .padding(.horizontal, 24)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
+        .controlPanelDetailHeaderTopPadding()
+        .padding(.bottom, 12)
     }
 
     private var selectionBar: some View {
         HStack(spacing: 10) {
             Text("\(selection.count) selected")
-                .font(.system(size: 12, weight: .medium))
+                .nativTextStyle(.supportingEmphasized)
                 .foregroundStyle(.secondary)
 
             Button(selection.count == filtered.count ? "Deselect All" : "Select All") {
@@ -721,7 +747,7 @@ struct ArtifactsView: View {
                     selection = Set(filtered.map(\.id))
                 }
             }
-            .font(.system(size: 12))
+            .nativTextStyle(.supporting)
 
             Spacer(minLength: 0)
 
@@ -756,112 +782,178 @@ struct ArtifactsView: View {
     }
 
     private var filterBar: some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-            filterChip(title: "All", isOn: kindFilter == nil && sourceFilter == nil) {
-                kindFilter = nil
-                sourceFilter = nil
-            }
-
-            ForEach(ArtifactKind.allCases) { kind in
-                let count = store.artifacts.filter { $0.kind == kind }.count
-                filterChip(title: "\(kind.pluralLabel) \(count)", systemImage: kind.systemImage, isOn: kindFilter == kind) {
-                    kindFilter = kindFilter == kind ? nil : kind
+        VStack(spacing: 7) {
+            HStack(spacing: 8) {
+                filterChip(title: "All", isOn: kindFilter == nil) {
+                    kindFilter = nil
                 }
-            }
 
-            Divider().frame(height: 16)
-
-            ForEach(ArtifactSource.allCases) { source in
-                let count = store.artifacts.filter { $0.source == source }.count
-                filterChip(title: "\(source.label) \(count)", systemImage: source.systemImage, isOn: sourceFilter == source) {
-                    sourceFilter = sourceFilter == source ? nil : source
-                }
-            }
-
-            Divider().frame(height: 16)
-
-            filterChip(title: "Favorites", systemImage: favoritesOnly ? "star.fill" : "star", isOn: favoritesOnly) {
-                favoritesOnly.toggle()
-            }
-
-            Menu {
-                Picker("Date", selection: $dateFilter) {
-                    ForEach(ArtifactDateFilter.allCases) { option in
-                        Text(option.rawValue).tag(option)
+                ForEach(availableKinds) { kind in
+                    let count = store.artifacts.filter { $0.kind == kind }.count
+                    filterChip(title: "\(kind.pluralLabel) \(count)", systemImage: kind.systemImage, isOn: kindFilter == kind) {
+                        kindFilter = kindFilter == kind ? nil : kind
                     }
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "calendar")
-                    Text(dateFilter == .all ? "Date" : dateFilter.rawValue)
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(dateFilter != .all ? Color.white : Color.primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(dateFilter != .all ? Color.accentColor : Color(nsColor: .controlBackgroundColor), in: Capsule())
-            }
-            .menuIndicator(.hidden)
-            .fixedSize()
-                }
-                .padding(.vertical, 2)
-            }
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.88),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                if smartSearchActive {
-                    Circle()
-                        .fill(Color.green.opacity(0.7))
-                        .frame(width: 7, height: 7)
-                        .help("Smart search is on")
+                filterChip(
+                    title: "Favorites",
+                    systemImage: favoritesOnly ? "star.fill" : "star",
+                    isOn: favoritesOnly
+                ) {
+                    favoritesOnly.toggle()
                 }
-                TextField("Search name or prompt", text: $search)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .frame(width: 200)
-                if !search.isEmpty {
-                    Button {
-                        search = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+
+                Spacer(minLength: 16)
+
+                Button(isSelecting ? "Done" : "Select") {
+                    isSelecting.toggle()
+                    if !isSelecting {
+                        selection.removeAll()
+                    }
+                }
+
+                Menu {
+                    Toggle(isOn: $groupByChat) {
+                        Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .disabled(isSearching)
+
+                    if !availableSources.isEmpty {
+                        Picker("Source", selection: $sourceFilter) {
+                            Text("All sources").tag(nil as ArtifactSource?)
+                            ForEach(availableSources) { source in
+                                Text(source.label).tag(source as ArtifactSource?)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
+
+                    Divider()
+
+                    Picker("Date", selection: $dateFilter) {
+                        ForEach(ArtifactDateFilter.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label(
+                        activeFilterCount == 0 ? "Group by" : "Group by \(activeFilterCount)",
+                        systemImage: "line.3.horizontal.decrease"
+                    )
+                }
+                .help(isSearching ? "Grouping by chat is off while searching" : "Group artifacts")
+                .fixedSize()
+
+                Menu {
+                    Picker("Sort", selection: $sort) {
+                        ForEach(ArtifactSort.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Sort: \(sort.rawValue)", systemImage: "arrow.up.arrow.down")
+                }
+                .help("Sort artifacts")
+                .fixedSize()
+
+                if !showingByChat {
+                    layoutToggle
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            if activeFilterCount > 0 {
+                HStack {
+                    Text("\(activeFilterCount) \(activeFilterCount == 1 ? "filter" : "filters") applied")
+                        .nativTextStyle(.metadata)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("Clear All Filters") {
+                        kindFilter = nil
+                        sourceFilter = nil
+                        favoritesOnly = false
+                        dateFilter = .all
+                        groupByChat = false
                     }
                     .buttonStyle(.plain)
+                    .nativTextStyle(.badge)
+                    .foregroundStyle(Color.accentColor)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.12), radius: 6, x: -3, y: 0)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
-        .padding(.bottom, 12)
+        .padding(.vertical, 10)
+    }
+
+    private var layoutToggle: some View {
+        HStack(spacing: 0) {
+            layoutButton(.grid, systemImage: "square.grid.2x2", help: "Grid view")
+            layoutButton(.list, systemImage: "list.bullet", help: "List view")
+        }
+        .padding(2)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    private func layoutButton(_ option: ArtifactLayout, systemImage: String, help: String) -> some View {
+        Button {
+            layout = option
+        } label: {
+            Image(systemName: systemImage)
+                .frame(width: 28, height: 24)
+                .foregroundStyle(layout == option ? Color.white : Color.primary)
+                .background(layout == option ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            if smartSearchActive {
+                Circle()
+                    .fill(Color.green.opacity(0.7))
+                    .frame(width: 7, height: 7)
+                    .help("Smart Search is on")
+            }
+            TextField("Search name or prompt", text: $search)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .nativTextStyle(.sectionTitle)
             Text("\(count)")
-                .font(.system(size: 11).monospacedDigit())
+                .nativTextStyle(.metadataNumeric)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
@@ -949,7 +1041,7 @@ struct ArtifactsView: View {
                         .font(.system(size: 10))
                 }
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                    .nativTextStyle(.supportingEmphasized)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -970,9 +1062,9 @@ struct ArtifactsView: View {
                 .font(.system(size: 42))
                 .foregroundStyle(.secondary.opacity(0.5))
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .nativTextStyle(.cardTitle)
             Text(message)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -1139,7 +1231,7 @@ struct ArtifactTile: View {
             .overlay(alignment: .bottom) {
                 if isHovering, !isSelecting {
                     Text(store.displayName(for: artifact))
-                        .font(.system(size: 11, weight: .medium))
+                        .nativTextStyle(.supportingEmphasized)
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .shadow(radius: 2)
@@ -1224,22 +1316,22 @@ struct ArtifactRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(artifact.filename)
-                    .font(.system(size: 13, weight: .medium))
+                    .nativTextStyle(.rowTitle)
                     .lineLimit(1)
                 Text("\(artifact.typeLabel) · \(artifact.source.label)")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.metadata)
                     .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
 
             Text(Int64(artifact.byteSize).formatted(.byteCount(style: .file)))
-                .font(.system(size: 11).monospacedDigit())
+                .nativTextStyle(.metadataNumeric)
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .trailing)
 
             Text(artifact.createdAt.formatted(date: .abbreviated, time: .omitted))
-                .font(.system(size: 11))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.secondary)
                 .frame(width: 90, alignment: .trailing)
         }
@@ -1324,7 +1416,7 @@ private struct ArtifactThumbnail: View {
                 VStack(spacing: 8) {
                     FileTypeIcon(fileExtension: artifact.fileExtension, size: min(size.width, size.height) * 0.42)
                     Text(FileTypeStyle.resolve(fileExtension: artifact.fileExtension).label)
-                        .font(.system(size: 10, weight: .bold))
+                        .nativTextStyle(.badgeStrong)
                         .foregroundStyle(.secondary)
                 }
             } else {
@@ -1334,7 +1426,7 @@ private struct ArtifactThumbnail: View {
                         .foregroundStyle(.secondary)
                     if !artifact.fileExtension.isEmpty {
                         Text(artifact.fileExtension)
-                            .font(.system(size: 10, weight: .bold))
+                            .nativTextStyle(.badgeStrong)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1354,7 +1446,7 @@ struct ArtifactInspector: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Details")
-                    .font(.system(size: 15, weight: .semibold))
+                    .nativTextStyle(.cardTitle)
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -1382,10 +1474,10 @@ struct ArtifactInspector: View {
                         if let prompt = artifact.prompt, !prompt.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Prompt")
-                                    .font(.system(size: 11, weight: .medium))
+                                    .nativTextStyle(.supportingEmphasized)
                                     .foregroundStyle(.secondary)
                                 Text(prompt)
-                                    .font(.system(size: 12))
+                                    .nativTextStyle(.body)
                                     .textSelection(.enabled)
                             }
                         }
@@ -1408,11 +1500,11 @@ struct ArtifactInspector: View {
     private func detailRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(label)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
                 .frame(width: 68, alignment: .leading)
             Text(value)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
                 .textSelection(.enabled)
@@ -1474,10 +1566,10 @@ struct ChatDeck: View {
             .frame(height: 190)
 
             Text(group.title)
-                .font(.system(size: 13, weight: .semibold))
+                .nativTextStyle(.sectionTitle)
                 .lineLimit(1)
             Text("\(group.items.count) \(group.items.count == 1 ? "item" : "items")")
-                .font(.system(size: 11))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.secondary)
         }
     }
@@ -1502,7 +1594,7 @@ struct ChatDeck: View {
             Image(systemName: "square.on.square")
             Text("\(group.items.count)")
         }
-        .font(.system(size: 11, weight: .semibold))
+        .nativTextStyle(.statusBadge)
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1533,7 +1625,7 @@ struct ArtifactAlbum: View {
                     }
                     Spacer()
                     Text(title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .nativTextStyle(.cardTitle)
                         .lineLimit(1)
                     Spacer()
                     if let first = artifacts.first {

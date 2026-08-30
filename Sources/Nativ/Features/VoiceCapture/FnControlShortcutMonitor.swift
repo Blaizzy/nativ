@@ -27,48 +27,43 @@ struct FnRetryShortcutState {
 }
 
 struct VoiceModifierToggleShortcutState {
-    static let doubleTapWindow: TimeInterval = 0.4
-
     private(set) var isHeld = false
     private(set) var wasUsedAsChord = false
-    private var lastCleanTapTime: Date?
+    private(set) var isAwaitingFullRelease = false
 
     mutating func update(
         activeModifiers: VoiceShortcutModifiers,
-        shortcutModifiers: VoiceShortcutModifiers,
-        now: Date = Date()
+        shortcutModifiers: VoiceShortcutModifiers
     ) -> Bool {
         guard !shortcutModifiers.isEmpty else {
             reset()
             return false
         }
 
-        let containsShortcut =
-            activeModifiers.intersection(shortcutModifiers) == shortcutModifiers
+        let activeShortcutModifiers = activeModifiers.intersection(shortcutModifiers)
+        let containsShortcut = activeShortcutModifiers == shortcutModifiers
+        if isAwaitingFullRelease {
+            if activeShortcutModifiers.isEmpty {
+                isAwaitingFullRelease = false
+            }
+            return false
+        }
+
         if isHeld {
             guard containsShortcut else {
                 let wasCleanTap = !wasUsedAsChord
                 isHeld = false
                 wasUsedAsChord = false
-                guard wasCleanTap else {
-                    lastCleanTapTime = nil
-                    return false
-                }
-                if let previous = lastCleanTapTime,
-                   now.timeIntervalSince(previous) <= Self.doubleTapWindow {
-                    lastCleanTapTime = nil
-                    return true
-                }
-                lastCleanTapTime = now
-                return false
-            }
-            if activeModifiers != shortcutModifiers {
-                wasUsedAsChord = true
+                // Modifier flags can arrive from both NSEvent and the polling
+                // fallback. Do not let a stale fully-held sample re-arm this
+                // gesture while another shortcut modifier is still down.
+                isAwaitingFullRelease = !activeShortcutModifiers.isEmpty
+                return wasCleanTap
             }
             return false
         }
 
-        if activeModifiers == shortcutModifiers {
+        if containsShortcut {
             isHeld = true
             wasUsedAsChord = false
         }
@@ -84,7 +79,44 @@ struct VoiceModifierToggleShortcutState {
     mutating func reset() {
         isHeld = false
         wasUsedAsChord = false
-        lastCleanTapTime = nil
+        isAwaitingFullRelease = false
+    }
+}
+
+struct PushToTalkHoldState {
+    static let releaseGrace: TimeInterval = 0.12
+
+    private(set) var isHeld = false
+    private var releaseTime: Date?
+
+    mutating func update(rawHeld: Bool, now: Date = Date()) -> Bool? {
+        if rawHeld {
+            releaseTime = nil
+            guard !isHeld else {
+                return nil
+            }
+            isHeld = true
+            return true
+        }
+        guard isHeld else {
+            releaseTime = nil
+            return nil
+        }
+        guard let since = releaseTime else {
+            releaseTime = now
+            return nil
+        }
+        guard now.timeIntervalSince(since) >= Self.releaseGrace else {
+            return nil
+        }
+        releaseTime = nil
+        isHeld = false
+        return false
+    }
+
+    mutating func reset() {
+        isHeld = false
+        releaseTime = nil
     }
 }
 
@@ -129,6 +161,7 @@ final class FnControlShortcutMonitor {
     private var retryModifierIsHeld = false
     private var retryState = FnRetryShortcutState()
     private var recordModifierToggleState = VoiceModifierToggleShortcutState()
+    private var recordPushToTalkState = PushToTalkHoldState()
     private var recordKeyToggleState = FnRetryShortcutState()
     private var hotKeys: [UInt32: EventHotKeyRef] = [:]
     private var hotKeyEventHandler: EventHandlerRef?
@@ -197,6 +230,7 @@ final class FnControlShortcutMonitor {
         uninstallHotKeys()
         retryState = FnRetryShortcutState()
         recordModifierToggleState.reset()
+        recordPushToTalkState.reset()
         recordKeyToggleState = FnRetryShortcutState()
     }
 
@@ -206,6 +240,7 @@ final class FnControlShortcutMonitor {
         retryModifierIsHeld = false
         retryState = FnRetryShortcutState()
         recordModifierToggleState.reset()
+        recordPushToTalkState.reset()
         recordKeyToggleState = FnRetryShortcutState()
 
         if recordWasHeld {
@@ -263,17 +298,21 @@ final class FnControlShortcutMonitor {
                 }
             } else {
                 recordModifierToggleState.reset()
-                let isHeld =
-                    activeModifiers == preferences.recordShortcut.modifiers
-                    && !activeModifiers.isEmpty
-                updateRecordState(isHeld)
+                let shortcut = preferences.recordShortcut.modifiers
+                let rawHeld =
+                    !shortcut.isEmpty
+                    && activeModifiers.intersection(shortcut) == shortcut
+                if let change = recordPushToTalkState.update(rawHeld: rawHeld) {
+                    updateRecordState(change)
+                }
             }
         }
 
         if preferences.retryShortcut.keyCode == nil {
+            let shortcut = preferences.retryShortcut.modifiers
             let isHeld =
-                activeModifiers == preferences.retryShortcut.modifiers
-                && !activeModifiers.isEmpty
+                !shortcut.isEmpty
+                && activeModifiers.intersection(shortcut) == shortcut
             if isHeld && !retryModifierIsHeld {
                 onRetry?()
             }
@@ -325,6 +364,7 @@ final class FnControlShortcutMonitor {
         retryModifierIsHeld = false
         retryState = FnRetryShortcutState()
         recordModifierToggleState.reset()
+        recordPushToTalkState.reset()
         recordKeyToggleState = FnRetryShortcutState()
         uninstallHotKeys()
         installHotKeys()

@@ -16,11 +16,12 @@ enum WelcomePreferences {
 struct WelcomeGateView: View {
     @AppStorage(WelcomePreferences.completionKey) private var hasCompletedWelcome = false
 
-    @ObservedObject var model: NativModel
-    @ObservedObject var navigation: ControlPanelNavigation
-    @ObservedObject var runtime: SystemRuntimeMonitor
-    @ObservedObject var extensionManager: NativExtensionManager
+    let model: NativModel
+    let navigation: ControlPanelNavigation
+    let runtime: SystemRuntimeMonitor
+    let extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
+    let controlPanelDependencies: ControlPanelDependencies
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
 
     var body: some View {
@@ -31,7 +32,8 @@ struct WelcomeGateView: View {
                     navigation: navigation,
                     runtime: runtime,
                     extensionManager: extensionManager,
-                    softwareUpdater: softwareUpdater
+                    softwareUpdater: softwareUpdater,
+                    dependencies: controlPanelDependencies
                 )
             } else {
                 WelcomeView(model: model) { modelID, serverAPIKey in
@@ -70,7 +72,7 @@ enum WelcomeModelCatalog {
         switch tier {
         case .fast:
             return [
-                "mlx-community/LFM2.5-VL-1.6B-8bit",
+                "mlx-community/LFM2.5-2.6B-8bit",
                 "mlx-community/Qwen3.5-0.8B-8bit",
                 "mlx-community/Qwen3-VL-2B-Instruct-4bit"
             ]
@@ -122,7 +124,7 @@ private struct WelcomeView: View {
         case permissions
     }
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @StateObject private var modelLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
@@ -176,8 +178,8 @@ private struct WelcomeView: View {
             .padding(.vertical, 32)
         }
         .frame(minWidth: 900, minHeight: 760)
-        .task(id: modelSearchPath) {
-            modelLibrary.scan(path: model.settings.modelSearchPath)
+        .task(id: model.settings.localModelSearchPaths) {
+            modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
         .task(id: step) {
             guard step == .permissions else { return }
@@ -213,7 +215,7 @@ private struct WelcomeView: View {
 
             VStack(spacing: 6) {
                 Text("Welcome to Nativ")
-                    .font(.system(size: 32, weight: .semibold))
+                    .nativTextStyle(.displayTitle)
                 Text(stepSubtitle)
                     .font(.body)
                     .foregroundStyle(.secondary)
@@ -256,7 +258,7 @@ private struct WelcomeView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Select your first model")
+                            Text("Choose Your First Model")
                                 .font(.headline)
                             Text("You can change this at any time.")
                                 .font(.caption)
@@ -286,7 +288,7 @@ private struct WelcomeView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             WelcomeModelPickerRow(
-                                title: "Load on demand",
+                                title: "Load on Demand",
                                 detail: "Start without preloading a model",
                                 systemImage: "bolt.badge.clock",
                                 isSelected: selectedModelID == nil
@@ -353,7 +355,7 @@ private struct WelcomeView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Hugging Face")
+                Text("Hugging Face Hub")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -467,7 +469,7 @@ private struct WelcomeView: View {
                 sizeBytes: hubModel.sizeBytes,
                 cachePath: model.settings.modelSearchPath
             ),
-            downloadError: downloadManager.errorByModelID[hubModel.id],
+            downloadError: downloadManager.errorByModelID[hubModel.id]?.localizedDescription,
             onSelect: { selectedModelID = hubModel.id },
             onDownload: { downloadRecommendedModel(hubModel) },
             onCancel: { downloadManager.removeDownload(hubModel.id) }
@@ -486,9 +488,9 @@ private struct WelcomeView: View {
                             .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Protect management access")
+                            Text("Protect Management Access")
                                 .font(.headline)
-                            Text("An API key provides basic security if you're running Nativ on a shared network.")
+                            Text("An API key provides basic security if you’re running Nativ on a shared network.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -579,7 +581,7 @@ private struct WelcomeView: View {
                             )
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Optional permissions")
+                            Text("Optional Permissions")
                                 .font(.headline)
                             Text(
                                 "Nativ works fully without any of these. Enable them only if you want to dictate with \(VoiceShortcut.recordDefault.displayName), take voice notes, or capture meetings — audio and transcription stay local to your Mac."
@@ -766,7 +768,7 @@ private struct WelcomeView: View {
     }
 
     private func refreshModelChoices() {
-        modelLibrary.scan(path: model.settings.modelSearchPath)
+        modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         requestRecommendedModels()
     }
 
@@ -790,7 +792,7 @@ private struct WelcomeView: View {
             cachePath: model.settings.modelSearchPath,
             token: model.effectiveHuggingFaceToken
         ) {
-            modelLibrary.scan(path: model.settings.modelSearchPath)
+            modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
             if selectedModelID == nil {
                 selectedModelID = hubModel.id
             }
@@ -1097,19 +1099,8 @@ private struct WelcomeDownloadModelRow: View {
         if let sizeBytes = model.sizeBytes {
             details.append(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))
         }
-        details.append("\(compactCount(model.downloads)) downloads")
+        details.append("\(NativFormatting.compactCount(model.downloads).display) downloads")
         return details.joined(separator: " · ")
-    }
-
-    private func compactCount(_ value: Int) -> String {
-        switch value {
-        case 1_000_000...:
-            return String(format: "%.1fM", Double(value) / 1_000_000)
-        case 1_000...:
-            return String(format: "%.1fK", Double(value) / 1_000)
-        default:
-            return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-        }
     }
 }
 

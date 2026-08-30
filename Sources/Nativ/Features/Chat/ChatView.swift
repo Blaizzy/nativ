@@ -1,33 +1,22 @@
 import AppKit
 import Foundation
 import NativServerKit
+import QuickLookThumbnailing
 import SwiftUI
 import Textual
 import UniformTypeIdentifiers
 
-struct ChatQueuedPrompt: Identifiable, Equatable {
-    let id: UUID
-    let content: String
-    let attachmentCount: Int
-    let position: Int
-}
-
-struct ChatPromptEditContext: Equatable {
-    let messageID: UUID
-    let discardedMessageCount: Int
-}
-
-private struct ChatSessionBootstrap {
-    let sessions: [ChatSession]
-}
-
 struct ChatView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
+    @ObservedObject var extensionManager: NativExtensionManager
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
-    let conversationWidthReduction: CGFloat
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
+    @State private var previewedAttachment: ChatImageAttachment?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -37,10 +26,14 @@ struct ChatView: View {
             ChatTranscriptView(
                 model: model,
                 chat: chat,
-                conversationWidthReduction: conversationWidthReduction
+                extensionManager: extensionManager,
+                workspaceMode: workspaceMode,
+                onSelectWorkspaceMode: onSelectWorkspaceMode,
+                onExploreImageModels: onExploreImageModels,
+                onPreviewAttachment: { previewedAttachment = $0 }
             )
             .dropDestination(for: URL.self) { urls, _ in
-                chat.attachImages(fromURLs: urls)
+                chat.attachFiles(fromURLs: urls)
             } isTargeted: { isDropTargeted = $0 }
             .overlay {
                 if isDropTargeted {
@@ -52,7 +45,28 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
-        .onAppear { chat.mcpHost = mcpHost }
+        .overlay {
+            if let previewedAttachment {
+                ChatAttachmentPreview(
+                    attachment: previewedAttachment,
+                    onClose: { self.previewedAttachment = nil }
+                )
+            }
+        }
+        .onAppear {
+            chat.mcpHost = mcpHost
+            mcpHost.reload(servers: model.settings.mcpServers)
+            chat.refreshPendingImageModelSelections()
+        }
+        .onChange(of: model.settings.mcpServers) { _, servers in
+            mcpHost.reload(servers: servers)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
+            chat.reloadPersistedSessions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            chat.refreshPendingImageModelSelections()
+        }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
@@ -63,7 +77,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .font(.system(size: 15, weight: .medium))
+                    .nativTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)
@@ -80,17 +94,27 @@ struct ChatView: View {
     }
 }
 
-private struct ChatTranscriptView: View {
-    private enum Layout {
-        static let conversationMaxWidth: CGFloat = 680
-        static let horizontalPadding: CGFloat = 32
-    }
+private enum ChatTranscriptLayout {
+    static let conversationMaxWidth: CGFloat = 680
+    static let horizontalPadding: CGFloat = 32
+    static let messageHorizontalInset: CGFloat = 32
+    static let composerClearance: CGFloat = 48
+    static let composerFadeExtension: CGFloat = 40
+    static let scrollIndicatorClearance: CGFloat = 17
+}
 
-    @ObservedObject var model: NativModel
+private struct ChatTranscriptView: View {
+
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
-    let conversationWidthReduction: CGFloat
+    @ObservedObject var extensionManager: NativExtensionManager
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
+    @State private var composerBackdropHeight: CGFloat = 0
     @State private var followsLatestMessage = true
     @State private var isUserScrollingTranscript = false
 
@@ -99,6 +123,9 @@ private struct ChatTranscriptView: View {
     }
 
     var body: some View {
+        let forkableAssistantResponseIDs = chat.forkableAssistantResponseIDs
+        let latestUserMessageID = chat.latestUserMessageID
+
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
@@ -113,49 +140,78 @@ private struct ChatTranscriptView: View {
                     }
                 } else {
                     ForEach(chat.visibleMessages) { message in
-                        let editUnavailableReason = userPromptEditingUnavailableReason(for: message)
+                        let showsEditUserMessage = message.id == latestUserMessageID
+                        let editUnavailableReason = showsEditUserMessage
+                            ? userPromptEditingUnavailableReason(for: message)
+                            : nil
                         ChatMessageRow(
                             message: message,
                             imageModelSelectionRequest: chat.imageModelSelectionRequest(
                                 for: message.id
                             ),
+                            showsEditUserMessage: showsEditUserMessage,
                             canEditUserMessage: editUnavailableReason == nil,
                             editUserMessageUnavailableReason: editUnavailableReason,
                             isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
+                            canForkAssistantResponse: forkableAssistantResponseIDs.contains(
+                                message.id
+                            ),
                             onEditUserMessage: chat.beginEditingUserMessage,
+                            onForkAssistantResponse: chat.forkAssistantResponse,
                             onConfirmToolConsent: chat.confirmToolConsent,
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
-                            onCancelImageModelSelection: chat.cancelImageModelSelection
+                            onCancelImageModelSelection: chat.cancelImageModelSelection,
+                            onExploreImageModels: onExploreImageModels,
+                            onPreviewAttachment: onPreviewAttachment
                         )
                         .equatable()
                         .id(message.id)
                     }
                 }
             }
-            .frame(maxWidth: Layout.conversationMaxWidth - conversationWidthReduction)
+            .frame(
+                maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                    - (ChatTranscriptLayout.messageHorizontalInset * 2)
+            )
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, Layout.horizontalPadding)
+            .padding(
+                .horizontal,
+                ChatTranscriptLayout.horizontalPadding
+                    + ChatTranscriptLayout.messageHorizontalInset
+            )
             .padding(.top, 18)
-            .padding(.bottom, max(18, composerHeight))
+            .padding(
+                .bottom,
+                max(18, composerHeight + ChatTranscriptLayout.composerClearance)
+            )
         }
         .scrollPosition($transcriptScrollPosition)
         .overlay(alignment: .bottom) {
-            ChatComposerContainer(
-                model: model,
-                chat: chat,
-                conversationWidthReduction: conversationWidthReduction,
-                onHeightChange: { height in
-                    let isInitialMeasurement = composerHeight == 0
-                    composerHeight = height
-                    if isInitialMeasurement {
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(50))
-                            transcriptScrollPosition.scrollTo(edge: .bottom)
+            ZStack(alignment: .bottom) {
+                composerBackdrop
+
+                ChatComposerContainer(
+                    model: model,
+                    chat: chat,
+                    extensionManager: extensionManager,
+                    workspaceMode: workspaceMode,
+                    onSelectWorkspaceMode: onSelectWorkspaceMode,
+                    onHeightChange: { height in
+                        let isInitialMeasurement = composerHeight == 0
+                        composerHeight = height
+                        if isInitialMeasurement {
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(50))
+                                transcriptScrollPosition.scrollTo(edge: .bottom)
+                            }
                         }
+                    },
+                    onBackdropHeightChange: { height in
+                        composerBackdropHeight = height
                     }
-                }
-            )
+                )
+            }
         }
         .onScrollPhaseChange { _, newPhase, context in
             switch newPhase {
@@ -201,6 +257,27 @@ private struct ChatTranscriptView: View {
         geometry.visibleRect.maxY >= geometry.contentSize.height - 8
     }
 
+    private var composerBackdrop: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [
+                    Color.nativMainContentBackground.opacity(0),
+                    Color.nativMainContentBackground.opacity(0.84),
+                    Color.nativMainContentBackground,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: ChatTranscriptLayout.composerFadeExtension)
+
+            Color.nativMainContentBackground
+                .frame(height: max(72, composerBackdropHeight))
+        }
+        .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private func userPromptEditingUnavailableReason(
         for message: ChatTranscriptMessage
     ) -> String? {
@@ -217,7 +294,7 @@ private struct ChatTranscriptView: View {
             return "Wait for the model to finish loading"
         }
         guard selectedModelID?.isEmpty == false else {
-            return "Select a language model before editing a prompt"
+            return "Choose a language model before editing a prompt"
         }
         if let validationError = model.settings.structuredOutputValidationError {
             return validationError
@@ -227,10 +304,13 @@ private struct ChatTranscriptView: View {
 }
 
 private struct ChatComposerContainer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
-    let conversationWidthReduction: CGFloat
+    @ObservedObject var extensionManager: NativExtensionManager
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onHeightChange: (CGFloat) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -240,26 +320,31 @@ private struct ChatComposerContainer: View {
         ChatComposer(
             model: model,
             viewModel: chat,
+            extensionManager: extensionManager,
             unavailableReason: model.modelLoadingStatusText
                 ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
                 ?? model.settings.structuredOutputValidationError,
-            canCompose: model.isRunning
-                && !model.isModelLoading
+            canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
-                && model.settings.structuredOutputValidationError == nil,
+                && model.settings.structuredOutputValidationError == nil
+                && !chat.isCurrentSessionActiveInAnotherWindow,
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
-            onSend: { languageModelSupportsTools in
+            workspaceMode: workspaceMode,
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,
-                    languageModelSupportsTools: languageModelSupportsTools
+                    languageModelSupportsTools: languageModelSupportsTools,
+                    languageModelSupportsVision: languageModelSupportsVision
                 )
-            }
+            },
+            onBackdropHeightChange: onBackdropHeightChange
         )
-        .frame(maxWidth: 680 - conversationWidthReduction)
+        .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 32)
+        .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
@@ -268,1783 +353,35 @@ private struct ChatComposerContainer: View {
     }
 }
 
-@MainActor
-final class ChatViewModel: ObservableObject {
-    /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
-    weak var mcpHost: MCPHostManager?
-    private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
-
-    private struct QueuedChatRequest {
-        let id: UUID
-        let sessionID: UUID
-        let userMessageID: UUID
-        let assistantMessageID: UUID
-        let settings: NativSettings
-        let imageGenerationModelID: String?
-        let languageModelSupportsTools: Bool
-    }
-
-    private struct ComposerSnapshot {
-        let draft: String
-        let attachments: [ChatImageAttachment]
-    }
-
-    @Published private(set) var sessions: [ChatSessionSummary] = []
-    @Published private(set) var folders: [ChatFolder] = []
-    @Published private(set) var currentSessionID: UUID?
-    @Published private(set) var messages: [ChatTranscriptMessage] = []
-    @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = []
-    @Published var draft = ""
-    @Published private(set) var promptEditContext: ChatPromptEditContext?
-    @Published private(set) var composerFocusToken = 0
-    @Published private(set) var activeRequestSessionID: UUID?
-    @Published private(set) var sendingStartedAt: Date?
-    @Published private(set) var scrollToken = 0
-    @Published var scrollTargetMessageID: UUID?
-    @Published private(set) var isLoadingSessions = true
-    @Published private(set) var imageModelSelectionRequests: [
-        UUID: ChatImageModelSelectionRequest
-    ] = [:]
-
-    private let sessionStore = ChatSessionStore()
-    private var sessionLoadTask: Task<Void, Never>?
-    private var activeTask: Task<Void, Never>?
-    private var activeRequestID: UUID?
-    private var activeAssistantMessageID: UUID?
-    @Published private var requestQueue: [QueuedChatRequest] = []
-    private var storedSessions: [ChatSession] = []
-    private var currentSession: ChatSession?
-    private var liveDecodeRateRefreshDates: [UUID: Date] = [:]
-    private var pendingStreamContent: [UUID: String] = [:]
-    private var pendingStreamReasoning: [UUID: String] = [:]
-    private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
-    private var streamFlushDates: [UUID: Date] = [:]
-    private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
-    private weak var appModel: NativModel?
-    private let toolConsentGate = ChatToolConsentGate()
-    private let imageModelSelectionGate = ChatImageModelSelectionGate()
-    private var composerSnapshot: ComposerSnapshot?
-
-    init() {
-        folders = sessionStore.loadFolders()
-        let now = Date()
-        applyCurrentSession(
-            ChatSession(
-                id: UUID(),
-                title: ChatSession.timestampTitle(for: now),
-                createdAt: now,
-                updatedAt: now,
-                messages: []
-            )
-        )
-
-        let loadTask = Task.detached(priority: .userInitiated) {
-            ChatSessionBootstrap(sessions: ChatSessionStore().loadSessions())
-        }
-        sessionLoadTask = Task { @MainActor [weak self] in
-            let bootstrap = await loadTask.value
-            guard let self, !Task.isCancelled else { return }
-            finishLoadingSessions(bootstrap)
-        }
-    }
-
-    deinit {
-        activeTask?.cancel()
-        sessionLoadTask?.cancel()
-    }
-
-    var isCurrentSessionSending: Bool {
-        guard let activeRequestSessionID else {
-            return false
-        }
-        return activeRequestSessionID == currentSessionID
-    }
-
-    var hasPendingRequests: Bool {
-        activeRequestSessionID != nil || !requestQueue.isEmpty
-    }
-
-    var visibleMessages: [ChatTranscriptMessage] {
-        let queuedMessageIDs = Set(
-            requestQueue.lazy
-                .filter { $0.sessionID == self.currentSessionID }
-                .map(\.userMessageID)
-        )
-        return messages.filter {
-            !queuedMessageIDs.contains($0.id)
-                && !($0.role == .assistant
-                    && $0.content.isEmpty
-                    && $0.reasoningContent.isEmpty
-                    && !$0.toolCalls.isEmpty)
-        }
-    }
-
-    var currentSessionQueuedPrompts: [ChatQueuedPrompt] {
-        requestQueue.enumerated().compactMap { index, queuedRequest in
-            guard queuedRequest.sessionID == currentSessionID,
-                  let message = message(queuedRequest.userMessageID, in: queuedRequest.sessionID)
-            else {
-                return nil
-            }
-            return ChatQueuedPrompt(
-                id: queuedRequest.id,
-                content: message.content,
-                attachmentCount: message.imageAttachments.count,
-                position: index + 1
-            )
-        }
-    }
-
-    func isSessionBusy(_ sessionID: UUID) -> Bool {
-        activeRequestSessionID == sessionID
-            || requestQueue.contains(where: { $0.sessionID == sessionID })
-    }
-
-    func canSend(isRunning: Bool, selectedModelID: String?) -> Bool {
-        isRunning
-            && selectedModelID?.isEmpty == false
-            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !pendingImageAttachments.isEmpty)
-    }
-
-    func canEditUserMessage(_ messageID: UUID) -> Bool {
-        guard let currentSessionID,
-              !isSessionBusy(currentSessionID),
-              let message = messages.first(where: { $0.id == messageID })
-        else {
-            return false
-        }
-        return message.role == .user
-    }
-
-    func beginEditingUserMessage(_ messageID: UUID) {
-        guard canEditUserMessage(messageID),
-              let message = messages.first(where: { $0.id == messageID }),
-              let discardedMessageCount = ChatPromptRevision.discardedMessageCount(
-                after: messageID,
-                in: messages
-              )
-        else {
-            return
-        }
-
-        if promptEditContext?.messageID == messageID {
-            composerFocusToken += 1
-            return
-        }
-
-        cancelPromptEditing()
-        composerSnapshot = ComposerSnapshot(
-            draft: draft,
-            attachments: pendingImageAttachments
-        )
-        promptEditContext = ChatPromptEditContext(
-            messageID: messageID,
-            discardedMessageCount: discardedMessageCount
-        )
-        draft = message.content
-        pendingImageAttachments = message.imageAttachments
-        composerFocusToken += 1
-    }
-
-    func cancelPromptEditing() {
-        guard promptEditContext != nil else {
-            return
-        }
-        if let composerSnapshot {
-            draft = composerSnapshot.draft
-            pendingImageAttachments = composerSnapshot.attachments
-        }
-        promptEditContext = nil
-        composerSnapshot = nil
-    }
-
-    func unavailableReason(isRunning: Bool, selectedModelID: String?) -> String? {
-        if !isRunning {
-            return "Server is stopped."
-        }
-        if selectedModelID?.isEmpty != false {
-            return "Select a model in Models."
-        }
-        if activeRequestSessionID == currentSessionID {
-            return "Working..."
-        }
-        return nil
-    }
-
-    func createSession() {
-        if canReuseCurrentEmptySession {
-            if let currentSession {
-                applyCurrentSession(currentSession)
-            }
-            return
-        }
-
-        let createdAt = Date()
-        let session = ChatSession(
-            id: UUID(),
-            title: ChatSession.timestampTitle(for: createdAt),
-            createdAt: createdAt,
-            updatedAt: createdAt,
-            messages: []
-        )
-
-        persistCurrentSession(updateTimestamp: false)
-        storedSessions.append(session)
-        pruneRedundantEmptySessions()
-        sessionStore.saveSession(session)
-        discardPromptEditing()
-        draft = ""
-        pendingImageAttachments.removeAll()
-        applyCurrentSession(session)
-    }
-
-    func stageAttachment(_ attachment: ChatImageAttachment) {
-        pendingImageAttachments.append(attachment)
-    }
-
-    func removeAttachment(sessionID: UUID, messageID: UUID, attachmentID: UUID) {
-        if sessionID == currentSessionID {
-            for index in messages.indices where messages[index].id == messageID {
-                messages[index].imageAttachments.removeAll { $0.id == attachmentID }
-            }
-            persistCurrentSession(updateTimestamp: false)
-            return
-        }
-
-        guard var session = storedSessions.first(where: { $0.id == sessionID })
-            ?? sessionStore.loadSession(id: sessionID)
-        else {
-            return
-        }
-        for index in session.messages.indices where session.messages[index].id == messageID {
-            session.messages[index].imageAttachments.removeAll { $0.id == attachmentID }
-        }
-        upsertStoredSession(session)
-        sessionStore.saveSession(session)
-        refreshSessionList()
-    }
-
-    func selectSession(_ sessionID: UUID) {
-        guard sessionID != currentSessionID else {
-            return
-        }
-
-        if let session = storedSessions.first(where: { $0.id == sessionID }) {
-            persistCurrentSession(updateTimestamp: false)
-            discardPromptEditing()
-            draft = ""
-            pendingImageAttachments.removeAll()
-            applyCurrentSession(session)
-            return
-        }
-
-        if let session = sessionStore.loadSession(id: sessionID) {
-            persistCurrentSession(updateTimestamp: false)
-            upsertStoredSession(session)
-            discardPromptEditing()
-            draft = ""
-            pendingImageAttachments.removeAll()
-            applyCurrentSession(session)
-        }
-    }
-
-    func renameSession(_ sessionID: UUID, to newTitle: String) {
-        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-            return
-        }
-        storedSessions[index].customTitle = trimmed.isEmpty ? nil : trimmed
-        if currentSession?.id == sessionID {
-            currentSession?.customTitle = trimmed.isEmpty ? nil : trimmed
-        }
-        sessionStore.saveSession(storedSessions[index])
-        refreshSessionList()
-    }
-
-    func setPinned(_ sessionID: UUID, pinned: Bool) {
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-            return
-        }
-        let order = pinned ? nextPinnedOrder() : nil
-        storedSessions[index].pinned = pinned
-        storedSessions[index].pinnedOrder = order
-        if currentSession?.id == sessionID {
-            currentSession?.pinned = pinned
-            currentSession?.pinnedOrder = order
-        }
-        sessionStore.saveSession(storedSessions[index])
-        refreshSessionList()
-    }
-
-    @discardableResult
-    func createFolder(name: String) -> UUID {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed, isCollapsed: true)
-        folders.append(folder)
-        sessionStore.saveFolders(folders)
-        return folder.id
-    }
-
-    func renameFolder(_ folderID: UUID, to newName: String) {
-        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
-            return
-        }
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return
-        }
-        folders[index].name = trimmed
-        sessionStore.saveFolders(folders)
-    }
-
-    func deleteFolder(_ folderID: UUID) {
-        folders.removeAll { $0.id == folderID }
-        sessionStore.saveFolders(folders)
-        for index in storedSessions.indices where storedSessions[index].folderID == folderID {
-            storedSessions[index].folderID = nil
-            sessionStore.saveSession(storedSessions[index])
-        }
-        if currentSession?.folderID == folderID {
-            currentSession?.folderID = nil
-        }
-        refreshSessionList()
-    }
-
-    func setFolderCollapsed(_ folderID: UUID, collapsed: Bool) {
-        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
-            return
-        }
-        folders[index].isCollapsed = collapsed
-        sessionStore.saveFolders(folders)
-    }
-
-    func setAllFoldersCollapsed(_ collapsed: Bool) {
-        guard folders.contains(where: { $0.isCollapsed != collapsed }) else {
-            return
-        }
-        for index in folders.indices {
-            folders[index].isCollapsed = collapsed
-        }
-        sessionStore.saveFolders(folders)
-    }
-
-    func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-            return
-        }
-        storedSessions[index].folderID = folderID
-        if currentSession?.id == sessionID {
-            currentSession?.folderID = folderID
-        }
-        sessionStore.saveSession(storedSessions[index])
-        refreshSessionList()
-    }
-
-    func setFolderPinned(_ folderID: UUID, pinned: Bool) {
-        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
-            return
-        }
-        folders[index].isPinned = pinned
-        sessionStore.saveFolders(folders)
-    }
-
-    func applyFolderOrder(_ orderedFolderIDs: [UUID]) {
-        var reordered: [ChatFolder] = []
-        for id in orderedFolderIDs {
-            if let folder = folders.first(where: { $0.id == id }) {
-                reordered.append(folder)
-            }
-        }
-        for folder in folders where !orderedFolderIDs.contains(folder.id) {
-            reordered.append(folder)
-        }
-        folders = reordered
-        sessionStore.saveFolders(folders)
-    }
-
-    func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
-        for (order, sessionID) in orderedSessionIDs.enumerated() {
-            guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-                continue
-            }
-            storedSessions[index].pinned = true
-            storedSessions[index].pinnedOrder = order
-            if currentSession?.id == sessionID {
-                currentSession?.pinned = true
-                currentSession?.pinnedOrder = order
-            }
-            sessionStore.saveSession(storedSessions[index])
-        }
-        refreshSessionList()
-    }
-
-    func applySessionOrder(_ orderedSessionIDs: [UUID]) {
-        for (order, sessionID) in orderedSessionIDs.enumerated() {
-            guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-                continue
-            }
-            storedSessions[index].pinned = false
-            storedSessions[index].pinnedOrder = nil
-            storedSessions[index].sessionOrder = order
-            if currentSession?.id == sessionID {
-                currentSession?.pinned = false
-                currentSession?.pinnedOrder = nil
-                currentSession?.sessionOrder = order
-            }
-            sessionStore.saveSession(storedSessions[index])
-        }
-        refreshSessionList()
-    }
-
-    private func nextPinnedOrder() -> Int {
-        (storedSessions.compactMap(\.pinnedOrder).max() ?? -1) + 1
-    }
-
-    func deleteSession(_ sessionID: UUID) {
-        guard !isSessionBusy(sessionID) else {
-            return
-        }
-
-        storedSessions.removeAll { $0.id == sessionID }
-        sessionStore.deleteSession(id: sessionID)
-        pruneRedundantEmptySessions()
-
-        guard sessionID == currentSessionID else {
-            refreshSessionList()
-            return
-        }
-
-        discardPromptEditing()
-        draft = ""
-        pendingImageAttachments.removeAll()
-
-        if let nextSession = storedSessions.sorted(by: ChatSession.recencySort).first {
-            applyCurrentSession(nextSession)
-        } else {
-            currentSession = nil
-            currentSessionID = nil
-            messages = []
-            refreshSessionList()
-        }
-    }
-
-    func sessionDataFileURL(for sessionID: UUID) -> URL? {
-        guard storedSessions.contains(where: { $0.id == sessionID }) else {
-            return nil
-        }
-        if sessionID == currentSessionID {
-            persistCurrentSession(updateTimestamp: false)
-        }
-        let url = sessionStore.sessionURL(for: sessionID)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-
-    func conversationText(for sessionID: UUID) -> String? {
-        guard let session = storedSessions.first(where: { $0.id == sessionID }) else {
-            return nil
-        }
-        var lines = [session.displayTitle, ""]
-        for message in session.messages {
-            let speaker: String
-            switch message.role {
-            case .user:
-                speaker = "You"
-            case .assistant:
-                speaker = message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 60) } ?? "Assistant"
-            case .tool:
-                speaker = message.toolName == ChatImageToolRegistry.editToolName
-                    ? "Image edit"
-                    : "Image generation"
-            case .error:
-                speaker = "Error"
-            }
-            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if content.isEmpty && message.imageAttachments.isEmpty {
-                continue
-            }
-            lines.append("\(speaker):")
-            if !message.imageAttachments.isEmpty {
-                let count = message.imageAttachments.count
-                lines.append("[\(count) attachment\(count == 1 ? "" : "s")]")
-            }
-            if !content.isEmpty {
-                lines.append(content)
-            }
-            lines.append("")
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    func send(using appModel: NativModel, languageModelSupportsTools: Bool) {
-        let settings = appModel.settings.normalized()
-        guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
-              let modelID = settings.languageModelID,
-              let currentSession
-        else {
-            return
-        }
-
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let imageAttachments = pendingImageAttachments
-
-        if let promptEditContext {
-            guard canEditUserMessage(promptEditContext.messageID),
-                  let revision = ChatPromptRevision.make(
-                    messageID: promptEditContext.messageID,
-                    content: prompt,
-                    attachments: imageAttachments,
-                    modelID: modelID,
-                    in: messages
-                  )
-            else {
-                return
-            }
-
-            messages = revision.messages
-            restoreComposerAfterPromptEditing()
-            persistCurrentSession(updateTimestamp: true)
-            enqueueGeneration(
-                for: promptEditContext.messageID,
-                in: currentSession.id,
-                settings: settings,
-                languageModelSupportsTools: languageModelSupportsTools,
-                appModel: appModel
-            )
-            return
-        }
-
-        draft = ""
-        pendingImageAttachments.removeAll()
-
-        let userMessage = ChatTranscriptMessage(
-            role: .user,
-            content: prompt,
-            modelID: modelID,
-            imageAttachments: imageAttachments
-        )
-        messages.append(userMessage)
-        persistCurrentSession(updateTimestamp: true)
-        enqueueGeneration(
-            for: userMessage.id,
-            in: currentSession.id,
-            settings: settings,
-            languageModelSupportsTools: languageModelSupportsTools,
-            appModel: appModel
-        )
-    }
-
-    private func enqueueGeneration(
-        for userMessageID: UUID,
-        in sessionID: UUID,
-        settings: NativSettings,
-        languageModelSupportsTools: Bool,
-        appModel: NativModel
-    ) {
-        if let modelID = settings.languageModelID {
-            appModel.clearModelLoadFailure(for: modelID)
-        }
-        self.appModel = appModel
-        requestQueue.append(QueuedChatRequest(
-            id: UUID(),
-            sessionID: sessionID,
-            userMessageID: userMessageID,
-            assistantMessageID: UUID(),
-            settings: settings,
-            imageGenerationModelID: imageGenerationModelID(for: sessionID)
-                ?? settings.imageGenerationModelID,
-            languageModelSupportsTools: languageModelSupportsTools
-        ))
-        bumpScroll()
-        startNextRequestIfNeeded()
-    }
-
-    func confirmToolConsent(_ toolMessageID: UUID) {
-        toolConsentGate.confirm(toolMessageID)
-    }
-
-    func denyToolConsent(_ toolMessageID: UUID) {
-        toolConsentGate.deny(toolMessageID)
-    }
-
-    func imageModelSelectionRequest(
-        for toolMessageID: UUID
-    ) -> ChatImageModelSelectionRequest? {
-        imageModelSelectionRequests[toolMessageID]
-    }
-
-    func selectImageModel(_ toolMessageID: UUID, _ modelID: String) {
-        guard let request = imageModelSelectionRequests[toolMessageID],
-              ChatImageModelSelection.selectedModel(
-                  withID: modelID,
-                  from: request
-              ) != nil
-        else {
-            return
-        }
-        imageModelSelectionGate.select(modelID: modelID, for: toolMessageID)
-    }
-
-    func cancelImageModelSelection(_ toolMessageID: UUID) {
-        guard imageModelSelectionRequests[toolMessageID] != nil else {
-            return
-        }
-        imageModelSelectionGate.cancel(toolMessageID)
-    }
-
-    private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
-        await toolConsentGate.awaitDecision(for: toolMessageID)
-    }
-
-    func cancel() {
-        activeTask?.cancel()
-    }
-
-    func prioritizeQueuedRequest(_ requestID: UUID) {
-        guard let index = requestQueue.firstIndex(where: { $0.id == requestID }), index > 0 else {
-            return
-        }
-        let queuedRequest = requestQueue.remove(at: index)
-        requestQueue.insert(queuedRequest, at: 0)
-    }
-
-    func steerQueuedRequest(_ requestID: UUID) {
-        guard requestQueue.contains(where: { $0.id == requestID }) else {
-            return
-        }
-        prioritizeQueuedRequest(requestID)
-        activeTask?.cancel()
-    }
-
-    func removeQueuedRequest(_ requestID: UUID) {
-        guard let index = requestQueue.firstIndex(where: { $0.id == requestID }) else {
-            return
-        }
-        let queuedRequest = requestQueue.remove(at: index)
-        removeMessage(queuedRequest.userMessageID, from: queuedRequest.sessionID)
-        persistSession(queuedRequest.sessionID, updateTimestamp: true)
-        if currentSessionID == queuedRequest.sessionID {
-            bumpScroll()
-        }
-    }
-
-    func chooseImageAttachments() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image, .movie, .pdf, .plainText, .rtf, .spreadsheet, .presentation]
-
-        guard panel.runModal() == .OK else {
-            return
-        }
-
-        let attachments = panel.urls.compactMap { url in
-            try? ChatImageAttachment(contentsOf: url)
-        }
-        guard !attachments.isEmpty else {
-            return
-        }
-
-        pendingImageAttachments.append(contentsOf: attachments)
-    }
-
-    var canPasteImage: Bool {
-        ChatImageAttachment.canReadImages(from: .general)
-    }
-
-    @discardableResult
-    func attachImages(from pasteboard: NSPasteboard) -> Bool {
-        let attachments = ChatImageAttachment.imageAttachments(from: pasteboard)
-        guard !attachments.isEmpty else {
-            return false
-        }
-        pendingImageAttachments.append(contentsOf: attachments)
-        return true
-    }
-
-    @discardableResult
-    func attachImages(fromURLs urls: [URL]) -> Bool {
-        let attachments = urls.compactMap { try? ChatImageAttachment(contentsOf: $0) }
-        guard !attachments.isEmpty else {
-            return false
-        }
-        pendingImageAttachments.append(contentsOf: attachments)
-        return true
-    }
-
-    func pasteImageFromClipboard() {
-        attachImages(from: .general)
-    }
-
-    func captureScreenshot() {
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Nativ-Screenshot-\(UUID().uuidString).png")
-
-        Task { [weak self] in
-            let captured = await ChatScreenCapture.captureInteractive(to: fileURL)
-            guard captured, let attachment = try? ChatImageAttachment(contentsOf: fileURL) else {
-                return
-            }
-            self?.pendingImageAttachments.append(attachment)
-            try? FileManager.default.removeItem(at: fileURL)
-        }
-    }
-
-    func removePendingImageAttachment(_ id: UUID) {
-        pendingImageAttachments.removeAll { $0.id == id }
-    }
-
-    func clear() {
-        activeTask?.cancel()
-        activeTask = nil
-        activeRequestID = nil
-        activeAssistantMessageID = nil
-        activeRequestSessionID = nil
-        requestQueue.removeAll()
-        sendingStartedAt = nil
-        discardPromptEditing()
-        draft = ""
-        pendingImageAttachments.removeAll()
-        messages.removeAll()
-        persistCurrentSession(updateTimestamp: true)
-        bumpScroll()
-    }
-
-    private func restoreComposerAfterPromptEditing() {
-        if let composerSnapshot {
-            draft = composerSnapshot.draft
-            pendingImageAttachments = composerSnapshot.attachments
-        } else {
-            draft = ""
-            pendingImageAttachments.removeAll()
-        }
-        promptEditContext = nil
-        composerSnapshot = nil
-    }
-
-    private func discardPromptEditing() {
-        promptEditContext = nil
-        composerSnapshot = nil
-    }
-
-    private func startNextRequestIfNeeded() {
-        guard activeTask == nil else {
-            return
-        }
-
-        while !requestQueue.isEmpty {
-            let queuedRequest = requestQueue.removeFirst()
-            guard insertAssistantMessage(for: queuedRequest) else {
-                continue
-            }
-
-            activeRequestID = queuedRequest.id
-            activeAssistantMessageID = queuedRequest.assistantMessageID
-            activeRequestSessionID = queuedRequest.sessionID
-            sendingStartedAt = Date()
-            if currentSessionID == queuedRequest.sessionID {
-                bumpScroll()
-            }
-
-            activeTask = Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
-                do {
-                    try await runChatLoop(queuedRequest)
-                    appModel?.refreshMetricsIfRunning(force: true)
-                } catch is CancellationError {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
-                } catch let error as URLError where error.code == .cancelled {
-                    finishActiveAssistantAsCancelled(in: queuedRequest.sessionID)
-                } catch {
-                    appModel?.reportModelLoadFailure(
-                        modelID: queuedRequest.settings.languageModelID,
-                        error: error
-                    )
-                    if let activeAssistantMessageID {
-                        failAssistantMessage(
-                            activeAssistantMessageID,
-                            in: queuedRequest.sessionID,
-                            error: error
-                        )
-                    }
-                    appModel?.refreshMetricsIfRunning(force: true)
-                }
-
-                guard activeRequestID == queuedRequest.id else {
-                    return
-                }
-                activeRequestID = nil
-                activeAssistantMessageID = nil
-                activeRequestSessionID = nil
-                sendingStartedAt = nil
-                activeTask = nil
-                if currentSessionID == queuedRequest.sessionID {
-                    bumpScroll()
-                }
-                startNextRequestIfNeeded()
-            }
-            return
-        }
-    }
-
-    private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
-        let client = NativChatClient(
-            baseURL: queuedRequest.settings.serverBaseURL,
-            apiKey: queuedRequest.settings.serverAPIKey
-        )
-        var assistantMessageID = queuedRequest.assistantMessageID
-        var toolRounds = 0
-        var activeSettings = queuedRequest.settings
-        var activeImageModelID = queuedRequest.imageGenerationModelID
-
-        while true {
-            try Task.checkCancellation()
-            let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
-            guard let request = makeCompletionRequest(
-                for: queuedRequest,
-                before: assistantMessageID,
-                advertisesTools: advertisesTools,
-                settings: activeSettings
-            ) else {
-                throw NativChatError.invalidResponse
-            }
-
-            let completion = try await client.streamChat(request, onEvent: { [weak self] event in
-                await MainActor.run {
-                    self?.append(
-                        event: event,
-                        to: assistantMessageID,
-                        in: queuedRequest.sessionID
-                    )
-                }
-            })
-            let toolCalls = normalizedToolCalls(completion.toolCalls)
-            finishAssistantMessage(
-                assistantMessageID,
-                in: queuedRequest.sessionID,
-                fallbackContent: completion.content,
-                fallbackReasoningContent: completion.reasoningContent,
-                responseMetrics: ChatResponseMetrics(completion: completion),
-                toolCalls: toolCalls,
-                isCancelled: false
-            )
-
-            guard advertisesTools, !toolCalls.isEmpty else {
-                return
-            }
-
-            var insertionAnchor = assistantMessageID
-            for (index, toolCall) in toolCalls.enumerated() {
-                try Task.checkCancellation()
-                let toolMessageID = UUID()
-                let initialToolStatus: ChatTranscriptMessage.ToolStatus = switch toolCall.function?.name {
-                case ChatImageToolRegistry.generateToolName,
-                     ChatImageToolRegistry.editToolName: .preparing
-                default: .running
-                }
-                guard insertToolMessage(
-                    id: toolMessageID,
-                    call: toolCall,
-                    after: insertionAnchor,
-                    in: queuedRequest.sessionID,
-                    status: initialToolStatus
-                ) else {
-                    throw NativChatError.invalidResponse
-                }
-                insertionAnchor = toolMessageID
-
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: ChatSwitchModelToolExecutor().declinedPayload(),
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
-                    }
-                    guard let appModel else {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: ChatSwitchModelToolError.appModelUnavailable
-                            ),
-                            attachments: []
-                        )
-                        continue
-                    }
-                    do {
-                        let content = try await ChatSwitchModelToolExecutor().execute(call: toolCall, appModel: appModel)
-                        activeSettings.languageModelID = appModel.settings.normalized().languageModelID
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .succeeded,
-                            content: content,
-                            attachments: []
-                        )
-                        appModel.refreshMetricsIfRunning(force: true)
-                    } catch {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatSwitchModelToolExecutor().failurePayload(
-                                operation: ChatSwitchModelToolRegistry.toolName,
-                                error: error
-                            ),
-                            attachments: []
-                        )
-                    }
-                    continue
-                }
-
-                do {
-                    let references = latestImageReferences(
-                        beforeOrAt: toolMessageID,
-                        in: queuedRequest.sessionID
-                    )
-                    let context = ChatToolExecutionContext(
-                        imageGenerationModelID: activeImageModelID,
-                        baseURL: queuedRequest.settings.serverBaseURL,
-                        apiKey: queuedRequest.settings.serverAPIKey,
-                        imageReferences: references,
-                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
-                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
-                        imageModelSelection: { [weak self] request in
-                            guard let self else {
-                                throw CancellationError()
-                            }
-                            defer {
-                                self.imageModelSelectionRequests.removeValue(
-                                    forKey: toolMessageID
-                                )
-                            }
-
-                            let selectedModelID = await self.imageModelSelectionGate
-                                .awaitSelection(for: toolMessageID) {
-                                    self.imageModelSelectionRequests[toolMessageID] = request
-                                    self.setToolMessageStatus(
-                                        toolMessageID,
-                                        in: queuedRequest.sessionID,
-                                        status: .awaitingImageModelSelection
-                                    )
-                                }
-                            guard let selectedModelID else {
-                                throw CancellationError()
-                            }
-                            return selectedModelID
-                        },
-                        imageExecutionWillStart: { [weak self] selectedModelID in
-                            activeImageModelID = selectedModelID
-                            self?.beginImageExecution(
-                                toolMessageID,
-                                modelID: selectedModelID,
-                                in: queuedRequest.sessionID
-                            )
-                        }
-                    )
-                    let outcome: ChatToolExecutionOutcome
-                    if let host = mcpHost, let toolName = toolCall.function?.name, host.handlesTool(named: toolName) {
-                        let result = try await host.callTool(named: toolName, argumentsJSON: toolCall.function?.arguments)
-                        outcome = ChatToolExecutionOutcome(content: result, attachments: [])
-                    } else {
-                        outcome = try await ChatToolDispatcher.execute(call: toolCall, context: context)
-                    }
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .succeeded,
-                        content: outcome.content,
-                        attachments: outcome.attachments
-                    )
-                    appModel?.refreshMetricsIfRunning(force: true)
-                } catch is CancellationError {
-                    cancelToolMessages(
-                        currentID: toolMessageID,
-                        currentCall: toolCall,
-                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                        after: insertionAnchor,
-                        in: queuedRequest.sessionID
-                    )
-                    throw CancellationError()
-                } catch let error as URLError where error.code == .cancelled {
-                    cancelToolMessages(
-                        currentID: toolMessageID,
-                        currentCall: toolCall,
-                        remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                        after: insertionAnchor,
-                        in: queuedRequest.sessionID
-                    )
-                    throw CancellationError()
-                } catch {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .failed,
-                        content: ChatToolDispatcher.failurePayload(
-                            toolName: toolCall.function?.name,
-                            error: error
-                        ),
-                        attachments: []
-                    )
-                }
-            }
-
-            toolRounds += 1
-            assistantMessageID = UUID()
-            activeAssistantMessageID = assistantMessageID
-            guard insertAssistantMessage(
-                id: assistantMessageID,
-                after: insertionAnchor,
-                in: queuedRequest.sessionID,
-                settings: activeSettings
-            ) else {
-                throw NativChatError.invalidResponse
-            }
-        }
-    }
-
-    private func makeCompletionRequest(
-        for queuedRequest: QueuedChatRequest,
-        before assistantMessageID: UUID,
-        advertisesTools: Bool,
-        settings: NativSettings
-    ) -> MLXChatCompletionRequest? {
-        guard let modelID = settings.languageModelID,
-              let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
-              let assistantIndex = sessionMessages.firstIndex(where: { $0.id == assistantMessageID })
-        else {
-            return nil
-        }
-
-        let precedingMessages = sessionMessages[..<assistantIndex]
-        var requestMessages = precedingMessages.compactMap(\.apiMessage)
-
-        let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        var toolDefinitions: [MLXChatToolDefinition] = advertisesToolsForModel
-            ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { !$0.imageAttachments.isEmpty }
-            )
-            : []
-        if advertisesToolsForModel {
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            // Honor the per-tool switches from the Tools section for every
-            // source, built-in and MCP alike.
-            toolDefinitions.removeAll { settings.disabledToolNames.contains($0.function.name) }
-        }
-        let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
-
-        var systemParts: [String] = []
-        if !settings.systemPrompt.isEmpty {
-            systemParts.append(settings.systemPrompt)
-        }
-        // Inject the built-in tool-use skill when tools are available.
-        if !toolDefinitions.isEmpty {
-            systemParts.append(NativSkill.builtInToolGuide.instructions)
-        }
-        for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
-            systemParts.append(skill.instructions)
-        }
-        if !systemParts.isEmpty {
-            requestMessages.insert(
-                MLXChatMessage(role: "system", content: systemParts.joined(separator: "\n\n")),
-                at: 0
-            )
-        }
-        return MLXChatCompletionRequest(
-            model: modelID,
-            messages: requestMessages,
-            maxTokens: settings.maxTokens,
-            temperature: settings.temperature,
-            topK: settings.topK,
-            topP: settings.topP,
-            minP: settings.minP,
-            repetitionPenalty: settings.repetitionPenaltyEnabled ? settings.repetitionPenalty : nil,
-            enableThinking: settings.thinkingEnabled,
-            thinkingBudget: settings.thinkingEnabled
-                && settings.thinkingBudgetEnabled
-                && !settings.speculativeDecodingActive
-                ? settings.thinkingBudget
-                : nil,
-            thinkingStartToken: settings.thinkingEnabled ? settings.thinkingStartToken : nil,
-            thinkingEndToken: settings.thinkingEnabled ? settings.thinkingEndToken : nil,
-            responseFormat: tools == nil ? settings.chatResponseFormat : nil,
-            tools: tools,
-            toolChoice: tools == nil ? nil : "auto",
-            stream: true
-        )
-    }
-
-    private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {
-        insertAssistantMessage(
-            id: queuedRequest.assistantMessageID,
-            after: queuedRequest.userMessageID,
-            in: queuedRequest.sessionID,
-            settings: queuedRequest.settings
-        )
-    }
-
-    private func insertAssistantMessage(
-        id: UUID,
-        after messageID: UUID,
-        in sessionID: UUID,
-        settings: NativSettings
-    ) -> Bool {
-        insertMessage(
-            ChatTranscriptMessage(
-                id: id,
-                role: .assistant,
-                content: "",
-                modelID: settings.languageModelID,
-                isStreaming: true,
-                isThinkingEnabled: settings.thinkingEnabled
-            ),
-            after: messageID,
-            in: sessionID
-        )
-    }
-
-    private func insertToolMessage(
-        id: UUID,
-        call: MLXChatToolCall,
-        after messageID: UUID,
-        in sessionID: UUID,
-        status: ChatTranscriptMessage.ToolStatus = .running
-    ) -> Bool {
-        insertMessage(
-            ChatTranscriptMessage(
-                id: id,
-                role: .tool,
-                content: "",
-                isStreaming: true,
-                toolCallID: call.id,
-                toolName: call.function?.name,
-                toolStatus: status,
-                toolArguments: call.function?.arguments
-            ),
-            after: messageID,
-            in: sessionID
-        )
-    }
-
-    private func insertMessage(
-        _ message: ChatTranscriptMessage,
-        after anchorID: UUID,
-        in sessionID: UUID
-    ) -> Bool {
-        if currentSessionID == sessionID {
-            guard let anchorIndex = messages.firstIndex(where: { $0.id == anchorID }) else {
-                return false
-            }
-            messages.insert(message, at: anchorIndex + 1)
-            return true
-        }
-
-        guard let sessionIndex = storedSessions.firstIndex(where: { $0.id == sessionID }),
-              let anchorIndex = storedSessions[sessionIndex].messages.firstIndex(
-                where: { $0.id == anchorID }
-              )
-        else {
-            return false
-        }
-        storedSessions[sessionIndex].messages.insert(message, at: anchorIndex + 1)
-        return true
-    }
-
-    private func normalizedToolCalls(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {
-        toolCalls.enumerated().map { index, call in
-            var normalized = call
-            normalized.index = index
-            if normalized.id?.isEmpty != false {
-                normalized.id = "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
-            }
-            if normalized.type?.isEmpty != false {
-                normalized.type = "function"
-            }
-            return normalized
-        }
-    }
-
-    private func latestImageReferences(
-        beforeOrAt messageID: UUID,
-        in sessionID: UUID
-    ) -> [ChatImageAttachment] {
-        guard let sessionMessages = sessionMessages(for: sessionID),
-              let messageIndex = sessionMessages.firstIndex(where: { $0.id == messageID })
-        else {
-            return []
-        }
-        return sessionMessages[...messageIndex]
-            .reversed()
-            .first(where: { !$0.imageAttachments.isEmpty })?
-            .imageAttachments ?? []
-    }
-
-    private func updateToolMessage(
-        _ id: UUID,
-        in sessionID: UUID,
-        status: ChatTranscriptMessage.ToolStatus,
-        content: String,
-        attachments: [ChatImageAttachment]
-    ) {
-        updateMessage(id, in: sessionID) { message in
-            message.content = content
-            message.imageAttachments = attachments
-            message.toolStatus = status
-            message.isStreaming = false
-        }
-        if status != .awaitingImageModelSelection {
-            imageModelSelectionRequests.removeValue(forKey: id)
-        }
-        persistSession(sessionID, updateTimestamp: true)
-        if currentSessionID == sessionID {
-            bumpScroll()
-        }
-    }
-
-    private func setToolMessageStatus(
-        _ id: UUID,
-        in sessionID: UUID,
-        status: ChatTranscriptMessage.ToolStatus
-    ) {
-        updateMessage(id, in: sessionID) { message in
-            message.toolStatus = status
-        }
-        if status != .awaitingImageModelSelection {
-            imageModelSelectionRequests.removeValue(forKey: id)
-        }
-        persistSession(sessionID, updateTimestamp: true)
-        if currentSessionID == sessionID {
-            bumpScroll()
-        }
-    }
-
-    private func cancelToolMessages(
-        currentID: UUID,
-        currentCall: MLXChatToolCall,
-        remainingCalls: [MLXChatToolCall],
-        after anchorID: UUID,
-        in sessionID: UUID
-    ) {
-        let cancellation = CancellationError()
-        updateToolMessage(
-            currentID,
-            in: sessionID,
-            status: .cancelled,
-            content: ChatToolDispatcher.failurePayload(
-                toolName: currentCall.function?.name,
-                error: cancellation
-            ),
-            attachments: []
-        )
-
-        var anchorID = anchorID
-        for call in remainingCalls {
-            let id = UUID()
-            guard insertToolMessage(id: id, call: call, after: anchorID, in: sessionID) else {
-                continue
-            }
-            updateToolMessage(
-                id,
-                in: sessionID,
-                status: .cancelled,
-                content: ChatToolDispatcher.failurePayload(
-                    toolName: call.function?.name,
-                    error: cancellation
-                ),
-                attachments: []
-            )
-            anchorID = id
-        }
-    }
-
-    private func finishActiveAssistantAsCancelled(in sessionID: UUID) {
-        guard let activeAssistantMessageID,
-              message(activeAssistantMessageID, in: sessionID)?.isStreaming == true
-        else {
-            return
-        }
-        finishAssistantMessage(
-            activeAssistantMessageID,
-            in: sessionID,
-            fallbackContent: "Response cancelled.",
-            fallbackReasoningContent: nil,
-            responseMetrics: nil,
-            isCancelled: true
-        )
-    }
-
-    private func sessionMessages(for sessionID: UUID) -> [ChatTranscriptMessage]? {
-        if currentSessionID == sessionID {
-            return messages
-        }
-        return storedSessions.first(where: { $0.id == sessionID })?.messages
-    }
-
-    private func imageGenerationModelID(for sessionID: UUID) -> String? {
-        if currentSessionID == sessionID {
-            return currentSession?.imageGenerationModelID
-        }
-        return storedSessions.first(where: { $0.id == sessionID })?
-            .imageGenerationModelID
-    }
-
-    private func beginImageExecution(
-        _ toolMessageID: UUID,
-        modelID: String,
-        in sessionID: UUID
-    ) {
-        if currentSessionID == sessionID {
-            currentSession?.imageGenerationModelID = modelID
-        } else {
-            guard let sessionIndex = storedSessions.firstIndex(where: {
-                $0.id == sessionID
-            }) else {
-                return
-            }
-            storedSessions[sessionIndex].imageGenerationModelID = modelID
-        }
-
-        updateMessage(toolMessageID, in: sessionID) { message in
-            message.toolStatus = .running
-        }
-        imageModelSelectionRequests.removeValue(forKey: toolMessageID)
-        persistSession(sessionID, updateTimestamp: true)
-        if currentSessionID == sessionID {
-            bumpScroll()
-        }
-    }
-
-    private func message(_ messageID: UUID, in sessionID: UUID) -> ChatTranscriptMessage? {
-        sessionMessages(for: sessionID)?.first(where: { $0.id == messageID })
-    }
-
-    private func removeMessage(_ messageID: UUID, from sessionID: UUID) {
-        if currentSessionID == sessionID {
-            messages.removeAll { $0.id == messageID }
-            return
-        }
-        guard let sessionIndex = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-            return
-        }
-        storedSessions[sessionIndex].messages.removeAll { $0.id == messageID }
-    }
-
-    private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
-        // Accumulate deltas into buffers and flush to the published message at a
-        // capped cadence. Applying every token synchronously starves the main
-        // run loop, which freezes the transcript, thinking bubble, and "Working"
-        // animation until an input event (issue #11).
-        if let reasoningContent = event.reasoningContent, !reasoningContent.isEmpty {
-            pendingStreamReasoning[id, default: ""] += reasoningContent
-        }
-        if let content = event.content, !content.isEmpty {
-            pendingStreamContent[id, default: ""] += content
-        }
-        if shouldRefreshLiveMetrics(event, for: id) {
-            pendingStreamMetrics[id] = event
-        }
-
-        guard hasPendingStreamUpdate(id) else {
-            return
-        }
-
-        let now = Date()
-        if let lastFlush = streamFlushDates[id],
-           now.timeIntervalSince(lastFlush) < Self.streamFlushInterval {
-            scheduleStreamFlush(id, in: sessionID)
-            return
-        }
-        flushStream(id, in: sessionID)
-    }
-
-    private func hasPendingStreamUpdate(_ id: UUID) -> Bool {
-        pendingStreamContent[id]?.isEmpty == false
-            || pendingStreamReasoning[id]?.isEmpty == false
-            || pendingStreamMetrics[id] != nil
-    }
-
-    private func scheduleStreamFlush(_ id: UUID, in sessionID: UUID) {
-        guard streamFlushTasks[id] == nil else {
-            return
-        }
-        streamFlushTasks[id] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.streamFlushInterval * 1_000_000_000))
-            guard let self, !Task.isCancelled else {
-                return
-            }
-            self.streamFlushTasks[id] = nil
-            self.flushStream(id, in: sessionID)
-        }
-    }
-
-    private func flushStream(_ id: UUID, in sessionID: UUID) {
-        streamFlushTasks[id]?.cancel()
-        streamFlushTasks[id] = nil
-
-        let content = pendingStreamContent.removeValue(forKey: id) ?? ""
-        let reasoning = pendingStreamReasoning.removeValue(forKey: id) ?? ""
-        let metrics = pendingStreamMetrics.removeValue(forKey: id)
-        guard !content.isEmpty || !reasoning.isEmpty || metrics != nil else {
-            return
-        }
-
-        updateMessage(id, in: sessionID) { message in
-            if !reasoning.isEmpty {
-                message.reasoningContent.append(reasoning)
-            }
-            if !content.isEmpty {
-                if !message.reasoningContent.isEmpty, message.thinkingDuration == nil {
-                    message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
-                }
-                message.content.append(content)
-            }
-            if let metrics {
-                message.responseMetrics = ChatResponseMetrics(
-                    totalTokens: message.responseMetrics?.totalTokens,
-                    generatedTokens: metrics.generatedTokens
-                        ?? message.responseMetrics?.generatedTokens,
-                    decodeTokensPerSecond: metrics.decodeTokensPerSecond
-                        ?? message.responseMetrics?.decodeTokensPerSecond,
-                    peakMemoryGB: message.responseMetrics?.peakMemoryGB,
-                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
-                )
-            }
-        }
-        streamFlushDates[id] = Date()
-        if (!content.isEmpty || !reasoning.isEmpty), currentSessionID == sessionID {
-            bumpScroll()
-        }
-    }
-
-    private func clearStreamBuffers(_ id: UUID) {
-        streamFlushTasks[id]?.cancel()
-        streamFlushTasks.removeValue(forKey: id)
-        pendingStreamContent.removeValue(forKey: id)
-        pendingStreamReasoning.removeValue(forKey: id)
-        pendingStreamMetrics.removeValue(forKey: id)
-        streamFlushDates.removeValue(forKey: id)
-    }
-
-    private func shouldRefreshLiveMetrics(
-        _ event: MLXChatStreamDelta,
-        for messageID: UUID
-    ) -> Bool {
-        let hasGeneratedTokens = event.generatedTokens.map { $0 > 0 } == true
-        let hasDecodeRate = event.decodeTokensPerSecond.map {
-            $0 > 0 && $0.isFinite
-        } == true
-        guard hasGeneratedTokens || hasDecodeRate else {
-            return false
-        }
-
-        let now = Date()
-        if let lastRefresh = liveDecodeRateRefreshDates[messageID],
-           now.timeIntervalSince(lastRefresh) < Self.liveDecodeRateRefreshInterval {
-            return false
-        }
-
-        liveDecodeRateRefreshDates[messageID] = now
-        return true
-    }
-
-    private func finishAssistantMessage(
-        _ id: UUID,
-        in sessionID: UUID,
-        fallbackContent: String,
-        fallbackReasoningContent: String?,
-        responseMetrics: ChatResponseMetrics?,
-        toolCalls: [MLXChatToolCall] = [],
-        isCancelled: Bool
-    ) {
-        flushStream(id, in: sessionID)
-        clearStreamBuffers(id)
-        liveDecodeRateRefreshDates.removeValue(forKey: id)
-        updateMessage(id, in: sessionID) { message in
-            message.isStreaming = false
-            if message.content.isEmpty {
-                message.content = fallbackContent
-            }
-            if message.reasoningContent.isEmpty,
-               let fallbackReasoningContent {
-                message.reasoningContent = fallbackReasoningContent
-            }
-            message.toolCalls = toolCalls
-            if !message.reasoningContent.isEmpty,
-               message.thinkingDuration == nil {
-                message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
-            }
-            if isCancelled,
-               message.content == fallbackContent,
-               message.reasoningContent.isEmpty {
-                message.role = .error
-            }
-            message.responseMetrics = responseMetrics?.hasVisibleValues == true
-                ? responseMetrics
-                : nil
-        }
-        persistSession(sessionID, updateTimestamp: true)
-    }
-
-    private func failAssistantMessage(_ id: UUID, in sessionID: UUID, error: Error) {
-        clearStreamBuffers(id)
-        liveDecodeRateRefreshDates.removeValue(forKey: id)
-        guard updateMessage(id, in: sessionID, mutate: { message in
-            message.role = .error
-            message.content = error.localizedDescription
-            message.isStreaming = false
-            if !message.reasoningContent.isEmpty,
-               message.thinkingDuration == nil {
-                message.thinkingDuration = Date().timeIntervalSince(message.createdAt)
-            }
-        }) else {
-            return
-        }
-        persistSession(sessionID, updateTimestamp: true)
-    }
-
-    @discardableResult
-    private func updateMessage(
-        _ messageID: UUID,
-        in sessionID: UUID,
-        mutate: (inout ChatTranscriptMessage) -> Void
-    ) -> Bool {
-        if currentSessionID == sessionID {
-            guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }) else {
-                return false
-            }
-            mutate(&messages[messageIndex])
-            return true
-        }
-
-        guard let sessionIndex = storedSessions.firstIndex(where: { $0.id == sessionID }),
-              let messageIndex = storedSessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID })
-        else {
-            return false
-        }
-
-        mutate(&storedSessions[sessionIndex].messages[messageIndex])
-        return true
-    }
-
-    private func bumpScroll() {
-        scrollToken += 1
-    }
-
-    private func applyCurrentSession(_ session: ChatSession) {
-        currentSession = session
-        currentSessionID = session.id
-        messages = ChatSessionLoadPolicy.shouldNormalizeOnApply(
-            sessionID: session.id,
-            activeRequestSessionID: activeRequestSessionID
-        ) ? normalizedForLoad(session.messages) : session.messages
-        refreshSessionList()
-        bumpScroll()
-    }
-
-    private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {
-        let localSession = currentSession
-        let localSessionHasWork = localSession.map { session in
-            !session.messages.isEmpty
-                || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !pendingImageAttachments.isEmpty
-                || activeRequestID != nil
-        } == true
-
-        storedSessions = bootstrap.sessions
-        if localSessionHasWork, let localSession {
-            upsertStoredSession(localSession)
-        }
-
-        pruneRedundantEmptySessions()
-        isLoadingSessions = false
-
-        guard !localSessionHasWork else {
-            refreshSessionList()
-            return
-        }
-
-        if let latestSession = storedSessions.sorted(by: ChatSession.recencySort).first {
-            applyCurrentSession(latestSession)
-        } else if let localSession {
-            storedSessions = [localSession]
-            sessionStore.saveSession(localSession)
-            refreshSessionList()
-        } else {
-            createSession()
-        }
-    }
-
-    private func normalizedForLoad(_ messages: [ChatTranscriptMessage]) -> [ChatTranscriptMessage] {
-        messages.map { message in
-            var message = message
-            if message.toolStatus == .awaitingConsent
-                || message.toolStatus == .awaitingImageModelSelection
-                || message.toolStatus == .preparing
-                || message.toolStatus == .running
-            {
-                message.toolStatus = .cancelled
-                message.content = ChatToolDispatcher.failurePayload(
-                    toolName: message.toolName,
-                    error: CancellationError()
-                )
-                message.isStreaming = false
-            }
-            return message
-        }
-    }
-
-    private func persistCurrentSession(updateTimestamp: Bool) {
-        guard var session = currentSession else {
-            return
-        }
-
-        session.messages = messages
-        session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
-        if updateTimestamp {
-            session.updatedAt = Date()
-        }
-
-        currentSession = session
-        upsertStoredSession(session)
-        sessionStore.saveSession(session)
-        refreshSessionList()
-    }
-
-    private func persistSession(_ sessionID: UUID, updateTimestamp: Bool) {
-        if sessionID == currentSessionID {
-            persistCurrentSession(updateTimestamp: updateTimestamp)
-            return
-        }
-
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
-            return
-        }
-
-        storedSessions[index].title = ChatSession.defaultTitle(
-            for: storedSessions[index].messages,
-            createdAt: storedSessions[index].createdAt
-        )
-        if updateTimestamp {
-            storedSessions[index].updatedAt = Date()
-        }
-        sessionStore.saveSession(storedSessions[index])
-        refreshSessionList()
-    }
-
-    private func upsertStoredSession(_ session: ChatSession) {
-        if let index = storedSessions.firstIndex(where: { $0.id == session.id }) {
-            storedSessions[index] = session
-        } else {
-            storedSessions.append(session)
-        }
-    }
-
-    private func refreshSessionList() {
-        sessions = storedSessions
-            .map(\.summary)
-            .sorted(by: ChatSessionSummary.recencySort)
-    }
-
-    private var canReuseCurrentEmptySession: Bool {
-        guard let currentSession else {
-            return false
-        }
-
-        return currentSession.messages.isEmpty
-            && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && pendingImageAttachments.isEmpty
-    }
-
-    private func pruneRedundantEmptySessions() {
-        let sortedSessions = storedSessions.sorted(by: ChatSession.recencySort)
-        var seenIDs = Set<UUID>()
-        var keptSessions: [ChatSession] = []
-        var keptEmptySession = false
-        var removedSessionIDs: [UUID] = []
-
-        for session in sortedSessions {
-            guard seenIDs.insert(session.id).inserted else {
-                removedSessionIDs.append(session.id)
-                continue
-            }
-
-            if session.messages.isEmpty {
-                if keptEmptySession {
-                    removedSessionIDs.append(session.id)
-                    continue
-                }
-                keptEmptySession = true
-            }
-
-            keptSessions.append(session)
-        }
-
-        storedSessions = keptSessions
-        for sessionID in removedSessionIDs {
-            sessionStore.deleteSession(id: sessionID)
-        }
-    }
-}
-
-private struct ChatMessageRow: View, Equatable {
+private struct ChatMessageRow: View, @MainActor Equatable {
     private static let maximumUserBubbleWidth: CGFloat = 560
 
     let message: ChatTranscriptMessage
     let imageModelSelectionRequest: ChatImageModelSelectionRequest?
+    let showsEditUserMessage: Bool
     let canEditUserMessage: Bool
     let editUserMessageUnavailableReason: String?
     let isEditingUserMessage: Bool
+    let canForkAssistantResponse: Bool
     let onEditUserMessage: (UUID) -> Void
+    let onForkAssistantResponse: (UUID) -> Void
     let onConfirmToolConsent: (UUID) -> Void
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
             && lhs.imageModelSelectionRequest == rhs.imageModelSelectionRequest
+            && lhs.showsEditUserMessage == rhs.showsEditUserMessage
             && lhs.canEditUserMessage == rhs.canEditUserMessage
             && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
             && lhs.isEditingUserMessage == rhs.isEditingUserMessage
+            && lhs.canForkAssistantResponse == rhs.canForkAssistantResponse
     }
 
     var body: some View {
@@ -2062,7 +399,8 @@ private struct ChatMessageRow: View, Equatable {
                     onConfirm: onConfirmToolConsent,
                     onDeny: onDenyToolConsent,
                     onSelectImageModel: onSelectImageModel,
-                    onCancelImageModelSelection: onCancelImageModelSelection
+                    onCancelImageModelSelection: onCancelImageModelSelection,
+                    onExploreImageModels: onExploreImageModels
                 )
             }
 
@@ -2071,7 +409,8 @@ private struct ChatMessageRow: View, Equatable {
                     ChatImageAttachmentStack(
                         attachments: message.imageAttachments,
                         isUserMessage: message.role == .user,
-                        showsSaveButton: message.role == .tool
+                        showsSaveButton: message.role == .tool,
+                        onPreview: onPreviewAttachment
                     )
                 }
 
@@ -2079,6 +418,7 @@ private struct ChatMessageRow: View, Equatable {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
                         isThinking: message.isStreaming && message.content.isEmpty,
+                        isStreaming: message.isStreaming,
                         thinkingDuration: message.thinkingDuration
                     )
                 }
@@ -2106,14 +446,25 @@ private struct ChatMessageRow: View, Equatable {
                             )
                         }
 
-                        if message.role == .user {
+                        if showsEditUserMessage {
                             ChatMessageActionButton(
-                                systemImage: "square.and.pencil",
+                                icon: .system("square.and.pencil"),
                                 title: editActionTitle,
                                 isActive: isEditingUserMessage,
                                 isEnabled: canEditUserMessage
                             ) {
                                 onEditUserMessage(message.id)
+                            }
+                        }
+
+                        if canForkAssistantResponse {
+                            ChatMessageActionButton(
+                                icon: .asset("ChatForkIcon"),
+                                title: "Fork chat from this response",
+                                isActive: false,
+                                isEnabled: true
+                            ) {
+                                onForkAssistantResponse(message.id)
                             }
                         }
                     }
@@ -2299,7 +650,7 @@ private struct ChatMessageRow: View, Equatable {
     }
 
     private var showsMessageActions: Bool {
-        message.role == .user || canCopyMessage
+        message.role == .user || canCopyMessage || canForkAssistantResponse
     }
 
     private var editActionTitle: String {
@@ -2337,6 +688,7 @@ private struct ChatAgentStepCell: View {
     let onDeny: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isExpanded = false
 
     private var isAwaitingConsent: Bool {
@@ -2431,7 +783,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             NativStatusBadge(text: "Failed", tone: .danger)
         case .cancelled:
-            NativStatusBadge(text: "Cancelled", tone: .neutral)
+            NativStatusBadge(text: "Canceled", tone: .neutral)
         case .declined:
             NativStatusBadge(text: "Declined", tone: .neutral)
         case .preparing, .running, .awaitingConsent,
@@ -2442,12 +794,14 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            (Text("The model wants to switch to ")
-                + Text(verbatim: requestedModelID).bold()
-                + Text(". The server restarts briefly; your session is kept."))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let terminalRequest {
+                terminalConsentPrompt(for: terminalRequest)
+            } else {
+                consentDescription
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -2464,6 +818,50 @@ private struct ChatAgentStepCell: View {
         .padding(.top, 7)
     }
 
+    private func terminalConsentPrompt(for request: ChatTerminalToolRequest) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(
+                "The model wants to run this command on your Mac. Review it carefully before confirming."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let cwd = request.cwd {
+                LabeledContent("Working directory") {
+                    Text(cwd)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                .font(.caption)
+            }
+
+            NativCodeBlock(raw: request.command, lineLimit: 10)
+
+            ForEach(terminalAssessment.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var consentDescription: Text {
+        if message.toolName == ChatSwitchModelToolRegistry.toolName {
+            return Text(
+                "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
+        }
+        if let toolName = message.toolName,
+           ChatFileWriteToolRegistry.toolNames.contains(toolName) {
+            return Text(
+                "The model wants to modify a protected instruction or credential configuration file in your authorized folder. Confirm to allow this change."
+            )
+        }
+        return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
+    }
+
     @ViewBuilder
     private var imageModelSelectionPrompt: some View {
         if let request = imageModelSelectionRequest {
@@ -2472,54 +870,57 @@ private struct ChatAgentStepCell: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(request.models) { model in
-                        Button {
-                            onSelectImageModel(message.id, model.modelID)
-                        } label: {
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(model.displayName)
-                                        .font(.callout.weight(.medium))
-                                        .foregroundStyle(.primary)
-                                    Text(model.modelID)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer(minLength: 12)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .contentShape(.rect)
-                            .background(
-                                Color(nsColor: .controlBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 7)
-                                    .stroke(
-                                        Color(nsColor: .separatorColor),
-                                        lineWidth: 0.5
-                                    )
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Use \(model.displayName)")
-                    }
+                if request.models.isEmpty {
+                    Text("No compatible downloaded models are available.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
 
-                Button("Cancel") {
-                    onCancelImageModelSelection(message.id)
+                if !request.installedModels.isEmpty {
+                    imageModelSection(
+                        title: "Downloaded",
+                        models: request.installedModels
+                    )
                 }
-                .buttonStyle(.bordered)
+
+                if !request.downloadableModels.isEmpty {
+                    imageModelSection(
+                        title: "Available to download",
+                        models: request.downloadableModels
+                    )
+                }
+
+                HStack(spacing: 8) {
+                    Button("Cancel") {
+                        onCancelImageModelSelection(message.id)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Open Models") {
+                        onExploreImageModels(request.operation)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 7)
+        }
+    }
+
+    private func imageModelSection(
+        title: String,
+        models: [ChatImageModelOption]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            ForEach(models) { model in
+                ChatImageModelOptionRow(model: model) {
+                    onSelectImageModel(message.id, model.modelID)
+                }
+            }
         }
     }
 
@@ -2531,6 +932,18 @@ private struct ChatAgentStepCell: View {
             return "a different model"
         }
         return modelID
+    }
+
+    private var terminalRequest: ChatTerminalToolRequest? {
+        guard message.toolName == ChatTerminalToolRegistry.toolName else { return nil }
+        return try? ChatTerminalToolRequest(argumentsJSON: message.toolArguments)
+    }
+
+    private var terminalAssessment: TerminalCommandAssessment {
+        guard let terminalRequest else {
+            return TerminalCommandAssessment(blockedReason: nil, warnings: [])
+        }
+        return TerminalCommandSafetyPolicy.assess(command: terminalRequest.command)
     }
 
     @ViewBuilder
@@ -2611,7 +1024,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             "failed"
         case .cancelled:
-            "cancelled"
+            "canceled"
         case .awaitingConsent:
             "awaiting your confirmation"
         case .awaitingImageModelSelection:
@@ -2630,6 +1043,92 @@ private struct ChatAgentStepCell: View {
             return nil
         }
         return object["error"] as? String
+    }
+}
+
+private struct ChatImageModelOptionRow: View {
+    private static let downloadButtonLabelWidth: CGFloat = 180
+
+    @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+
+    let model: ChatImageModelOption
+    let onChoose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.displayName)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(model.modelID)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 12)
+                trailingControl
+            }
+
+            if let error = downloadManager.errorByModelID[model.modelID] {
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControl: some View {
+        if model.isInstalled {
+            Button(action: onChoose) {
+                Label("Use", systemImage: "chevron.right")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Use \(model.displayName)")
+        } else if downloadManager.isDownloading(model.modelID) {
+            ModelDownloadProgressControl(
+                progress: downloadManager.progress(for: model.modelID),
+                isPaused: downloadManager.isPaused(for: model.modelID),
+                onPauseResume: {
+                    if downloadManager.isPaused(for: model.modelID) {
+                        downloadManager.resumeDownload(model.modelID)
+                    } else {
+                        downloadManager.pauseDownload(model.modelID)
+                    }
+                },
+                onRemove: { downloadManager.removeDownload(model.modelID) }
+            )
+        } else {
+            Button(action: onChoose) {
+                Label(downloadTitle, systemImage: "arrow.down.circle")
+                    .frame(width: Self.downloadButtonLabelWidth)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Download and use \(model.displayName)")
+        }
+    }
+
+    private var downloadTitle: String {
+        guard let sizeBytes = model.downloadSizeBytes else {
+            return "Download"
+        }
+        let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        return "Download · \(size)"
     }
 }
 
@@ -2717,7 +1216,12 @@ private struct ChatCopyMessageButton: View {
 }
 
 private struct ChatMessageActionButton: View {
-    let systemImage: String
+    enum Icon {
+        case system(String)
+        case asset(String)
+    }
+
+    let icon: Icon
     let title: String
     let isActive: Bool
     let isEnabled: Bool
@@ -2726,8 +1230,7 @@ private struct ChatMessageActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .medium))
+            iconView
                 .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
                 .frame(width: 30, height: 28)
                 .contentShape(.rect)
@@ -2740,11 +1243,29 @@ private struct ChatMessageActionButton: View {
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: isActive)
     }
+
+    @ViewBuilder
+    private var iconView: some View {
+        switch icon {
+        case let .system(name):
+            Image(systemName: name)
+                .font(.system(size: 13, weight: .medium))
+        case let .asset(name):
+            Image(name)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
+                .offset(y: 1)
+        }
+    }
 }
 
 private struct ChatThinkingBubble: View {
+    private static let collapsedPreviewCharacterLimit = 1_000
+
     let content: String
     let isThinking: Bool
+    let isStreaming: Bool
     let thinkingDuration: TimeInterval?
     @State private var isExpanded = false
 
@@ -2785,8 +1306,8 @@ private struct ChatThinkingBubble: View {
                     if isExpanded {
                         ChatMessageText(
                             content: content,
-                            rendersMarkdown: !isThinking,
-                            isStreaming: isThinking
+                            rendersMarkdown: true,
+                            isStreaming: isStreaming
                         )
                         .font(.callout)
                         .lineSpacing(2)
@@ -2795,7 +1316,7 @@ private struct ChatThinkingBubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(12)
                     } else {
-                        Text(content)
+                        Text(collapsedPreviewContent)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineSpacing(2)
@@ -2827,6 +1348,10 @@ private struct ChatThinkingBubble: View {
             return "Worked"
         }
         return "Worked for \(NativFormatting.elapsedDuration(thinkingDuration))"
+    }
+
+    private var collapsedPreviewContent: String {
+        String(content.suffix(Self.collapsedPreviewCharacterLimit))
     }
 }
 
@@ -2925,7 +1450,7 @@ private struct ChatResponseMetricsRow: View {
         }
         ChatResponseMetricPill(
             label: "Peak memory",
-            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? "--"
+            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? NativFormatting.missingValue
         )
     }
 }
@@ -2962,13 +1487,15 @@ private struct ChatImageAttachmentStack: View {
     let attachments: [ChatImageAttachment]
     let isUserMessage: Bool
     let showsSaveButton: Bool
+    let onPreview: (ChatImageAttachment) -> Void
 
     var body: some View {
         VStack(alignment: isUserMessage ? .trailing : .leading, spacing: 6) {
             ForEach(attachments) { attachment in
                 ChatImageAttachmentView(
                     attachment: attachment,
-                    showsSaveButton: showsSaveButton
+                    showsSaveButton: showsSaveButton,
+                    onPreview: { onPreview(attachment) }
                 )
             }
         }
@@ -2978,17 +1505,26 @@ private struct ChatImageAttachmentStack: View {
 private struct ChatImageAttachmentView: View {
     let attachment: ChatImageAttachment
     let showsSaveButton: Bool
+    let onPreview: () -> Void
     @State private var saveErrorMessage: String?
     @State private var showsSaveError = false
     @State private var isSaveButtonHovered = false
+    @State private var documentThumbnail: NSImage?
 
     private let maximumSideLength: CGFloat = 300
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            preview
+            Button(action: onPreview) {
+                preview
+            }
+            .buttonStyle(.plain)
+            .help("Open \(attachment.filename)")
+            .accessibilityLabel("Open \(attachment.filename)")
 
-            if showsSaveButton, attachment.imageData != nil {
+            if showsSaveButton,
+               attachment.chatAttachmentKind == .image,
+               attachment.imageData != nil {
                 Button(action: saveImage) {
                     Image(systemName: "square.and.arrow.down")
                         .foregroundStyle(
@@ -3017,28 +1553,31 @@ private struct ChatImageAttachmentView: View {
         }
         .help(attachment.filename)
         .accessibilityLabel(attachment.filename)
-        .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
+        .alert("Couldn’t save image", isPresented: $showsSaveError) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {
             Text(saveErrorMessage ?? "The image could not be saved.")
+        }
+        .task(id: attachment.id) {
+            await loadDocumentThumbnail()
         }
     }
 
     @ViewBuilder
     private var preview: some View {
         Group {
-            if let image {
+            if let image = image ?? documentThumbnail {
                 let size = displaySize(for: image)
 
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(width: size.width, height: size.height)
+                    .background(Color.white)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
-                        .font(.title2)
+                    FileTypeIcon(fileExtension: attachment.fileExtension, size: 48)
                     Text(attachment.filename)
                         .font(.caption)
                         .lineLimit(2)
@@ -3057,10 +1596,34 @@ private struct ChatImageAttachmentView: View {
     }
 
     private var image: NSImage? {
-        guard let data = attachment.imageData else {
+        guard attachment.chatAttachmentKind == .image,
+              let data = attachment.imageData else {
             return nil
         }
         return NSImage(data: data)
+    }
+
+    private func loadDocumentThumbnail() async {
+        documentThumbnail = nil
+        guard attachment.chatAttachmentKind != .image,
+              let file = try? await ChatAttachmentPreviewFile.create(for: attachment) else {
+            return
+        }
+        defer { file.remove() }
+
+        let size = CGSize(width: maximumSideLength, height: maximumSideLength)
+        let request = QLThumbnailGenerator.Request(
+            fileAt: file.url,
+            size: size,
+            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail
+        )
+        guard let representation = try? await QLThumbnailGenerator.shared
+            .generateBestRepresentation(for: request),
+              !Task.isCancelled else {
+            return
+        }
+        documentThumbnail = NSImage(cgImage: representation.cgImage, size: .zero)
     }
 
     private func displaySize(for image: NSImage) -> CGSize {
@@ -3112,11 +1675,15 @@ private struct ChatMessageText: View {
     @ViewBuilder
     var body: some View {
         if isUserPrompt {
-            ChatSelectablePromptText(
+            Text(verbatim: content)
+                .textSelection(.enabled)
+                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+        } else if rendersMarkdown && isStreaming {
+            ChatStreamingMarkdownText(
                 content: content,
                 fontScale: chatFontScale
             )
-        } else if rendersMarkdown && !isStreaming {
+        } else if rendersMarkdown {
             StructuredText(
                 markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
                 syntaxExtensions: [.math]
@@ -3145,77 +1712,58 @@ private struct ChatMessageText: View {
     }
 }
 
-private struct ChatSelectablePromptText: NSViewRepresentable {
-    let content: String
+private struct ChatStreamingMarkdownText: View {
+    private static let chunkSpacing: CGFloat = 16
+
+    let document: NativStreamingMarkdownDocument
     let fontScale: Double
 
-    func makeNSView(context: Context) -> NSTextView {
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.heightTracksTextView = false
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        update(textView)
-        return textView
+    init(content: String, fontScale: Double) {
+        document = NativMarkdownFormatting.streamingDocument(in: content)
+        self.fontScale = fontScale
     }
 
-    func updateNSView(_ textView: NSTextView, context: Context) {
-        update(textView)
-    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: Self.chunkSpacing) {
+            ForEach(document.completedChunks) { chunk in
+                ChatStreamingMarkdownChunk(chunk: chunk)
+                    .equatable()
+            }
 
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        nsView textView: NSTextView,
-        context: Context
-    ) -> CGSize? {
-        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
-        let bounds = (content as NSString).boundingRect(
-            with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: textAttributes(font: font)
-        )
-        let measuredWidth = max(1, ceil(bounds.width))
-        let width = proposal.width.map { min($0, measuredWidth) } ?? measuredWidth
-        return CGSize(width: width, height: max(1, ceil(bounds.height)))
-    }
-
-    private func update(_ textView: NSTextView) {
-        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        if textView.string != content || textView.font != font {
-            textView.textStorage?.setAttributedString(NSAttributedString(
-                string: content,
-                attributes: textAttributes(font: font)
-            ))
+            if !document.tail.isEmpty {
+                InlineText(
+                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                        in: document.tail
+                    ),
+                    syntaxExtensions: [.math]
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        textView.setAccessibilityLabel(content)
+        .textual.structuredTextStyle(.gitHub)
+        .textual.textSelection(.enabled)
+        .font(ChatFontMetrics.bodyFont(scale: fontScale))
     }
+}
 
-    private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.lineSpacing = 2
-        return [
-            .font: font,
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraphStyle
-        ]
+private struct ChatStreamingMarkdownChunk: View, Equatable {
+    let chunk: NativStreamingMarkdownDocument.Chunk
+
+    var body: some View {
+        StructuredText(
+            markdown: NativMarkdownFormatting.normalizedMathDelimiters(
+                in: chunk.markdown
+            ),
+            syntaxExtensions: [.math]
+        )
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 private extension Color {
     static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark ? NSColor.black : NSColor(white: 0.86, alpha: 1)
+        return isDark ? NSColor(white: 0.5, alpha: 1) : NSColor(white: 0.25, alpha: 1)
     })
 }
 
@@ -3282,7 +1830,10 @@ private struct ChatEmptyTranscriptView: View {
         model: .init(),
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
+        extensionManager: NativExtensionManager(builtInExtensions: []),
+        workspaceMode: .chat,
+        onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        conversationWidthReduction: 0
+        onExploreImageModels: { _ in }
     )
 }

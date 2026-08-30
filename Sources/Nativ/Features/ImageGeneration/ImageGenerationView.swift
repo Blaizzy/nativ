@@ -5,11 +5,16 @@ import UniformTypeIdentifiers
 struct ImageGenerationView: View {
     private enum Layout {
         static let conversationMaxWidth: CGFloat = 860
+        static let composerMaxWidth: CGFloat = 680
         static let horizontalPadding: CGFloat = 32
     }
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onExploreImageModels: () -> Void
+    @StateObject private var localLibrary = LocalModelLibrary()
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var followsLatestTurn = true
@@ -17,8 +22,17 @@ struct ImageGenerationView: View {
     var body: some View {
         transcript
             .overlay(alignment: .bottom) {
-                ImageGenerationComposer(model: model, viewModel: viewModel)
-                    .frame(maxWidth: Layout.conversationMaxWidth)
+                ImageGenerationComposer(
+                    model: model,
+                    viewModel: viewModel,
+                    localModels: localLibrary.models,
+                    isScanningForModels: localLibrary.isScanning,
+                    modelScanError: localLibrary.error,
+                    workspaceMode: workspaceMode,
+                    onSelectWorkspaceMode: onSelectWorkspaceMode,
+                    onExploreImageModels: onExploreImageModels
+                )
+                    .frame(maxWidth: Layout.composerMaxWidth)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, Layout.horizontalPadding)
                     .onGeometryChange(for: CGFloat.self) { proxy in
@@ -35,21 +49,59 @@ struct ImageGenerationView: View {
                     }
             }
             .background(Color.nativMainContentBackground)
+            .task(id: modelScanKey) {
+                localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+                localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
+            }
+            .onChange(of: imageModels.map(\.repoID)) { _, modelIDs in
+                viewModel.applyDefaultModel(
+                    model.settings.normalized().imageGenerationModelID,
+                    installedImageModelIDs: modelIDs
+                )
+            }
             .onAppear {
                 viewModel.applyDefaultModel(model.settings.normalized().imageGenerationModelID)
                 followsLatestTurn = true
                 transcriptScrollPosition.scrollTo(edge: .bottom)
             }
             .onDisappear {
+                localLibrary.cancel()
                 viewModel.persistDraftState()
             }
+    }
+
+    private var imageModels: [LocalModel] {
+        localLibrary.models.filter {
+            !$0.capabilities.isDisjoint(
+                with: [.imageGeneration, .imageEditing]
+            )
+        }
+    }
+
+    private var selectedModelID: String? {
+        imageModels.contains { $0.repoID == viewModel.modelID }
+            ? viewModel.modelID
+            : nil
+    }
+
+    private var modelScanKey: String {
+        model.settings.localModelSearchPaths.cacheKey
     }
 
     private var transcript: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if viewModel.turns.isEmpty {
-                    ImageGenerationEmptyView(isRunning: model.isRunning)
+                    ImageGenerationEmptyView(
+                        isRunning: model.isRunning,
+                        selectedModelID: selectedModelID,
+                        modelLoadingProgress: model.isModelLoading
+                            && model.modelLoadingID == selectedModelID
+                            ? model.modelLoadingProgress
+                            : nil
+                    )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 120)
                 } else {
@@ -92,9 +144,14 @@ struct ImageGenerationView: View {
 }
 
 private struct ImageGenerationComposer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
-    @StateObject private var localLibrary = LocalModelLibrary()
+    let localModels: [LocalModel]
+    let isScanningForModels: Bool
+    let modelScanError: String?
+    let workspaceMode: ChatWorkspaceMode
+    let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onExploreImageModels: () -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var showsSettings = false
     @State private var isDropTargeted = false
@@ -105,6 +162,14 @@ private struct ImageGenerationComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let unavailableReason {
+                Text(unavailableReason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, textInset.leading + 4)
+            }
+
             VStack(alignment: .leading, spacing: 0) {
                 ZStack(alignment: .topLeading) {
                     ChatComposerTextEditor(
@@ -139,6 +204,11 @@ private struct ImageGenerationComposer: View {
                     .frame(width: 30, height: 30)
                     .help("Add a reference image")
 
+                    ChatWorkspacePicker(
+                        selection: workspaceMode,
+                        onSelect: onSelectWorkspaceMode
+                    )
+
                     Button {
                         showsSettings.toggle()
                     } label: {
@@ -147,6 +217,7 @@ private struct ImageGenerationComposer: View {
                     }
                     .buttonStyle(.plain)
                     .help("Image settings")
+                    .disabled(viewModel.isCurrentSessionActiveInAnotherWindow)
                     .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
                         ImageGenerationSettingsView(viewModel: viewModel)
                     }
@@ -185,35 +256,6 @@ private struct ImageGenerationComposer: View {
             )
         }
         .padding(.vertical, 18)
-        .task(id: modelScanKey) {
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
-            localLibrary.scan(
-                path: model.settings.modelSearchPath,
-                additionalPaths: model.settings.normalized().additionalModelSearchPaths
-            )
-        }
-        .onChange(of: localLibrary.models) { _, models in
-            let generationModels = models.filter {
-                $0.capabilities.contains(.imageGeneration)
-            }
-            let editOnlyModels = models.filter {
-                $0.capabilities.contains(.imageEditing)
-                    && !$0.capabilities.contains(.imageGeneration)
-            }
-            viewModel.applyDefaultModel(
-                model.settings.normalized().imageGenerationModelID,
-                installedImageModelIDs: (generationModels + editOnlyModels)
-                    .map(\.repoID)
-            )
-        }
-        .onDisappear {
-            localLibrary.cancel()
-        }
     }
 
     @ViewBuilder
@@ -247,11 +289,16 @@ private struct ImageGenerationComposer: View {
     }
 
     private var canCompose: Bool {
-        model.isRunning && !viewModel.isGenerating
+        model.isRunning
+            && selectedModelID != nil
+            && !viewModel.isGenerating
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
     }
 
     private var canSubmit: Bool {
-        viewModel.canSubmit(isRunning: model.isRunning)
+        selectedModelID != nil
+            && viewModel.canSubmit(isRunning: model.isRunning)
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
             && (!selectedModelIsEditOnly || viewModel.nextRequestIsEdit)
     }
 
@@ -269,13 +316,17 @@ private struct ImageGenerationComposer: View {
     }
 
     private var modelLabel: String {
-        viewModel.modelID.split(separator: "/").last.map(String.init) ?? viewModel.modelID
+        guard let selectedModelID else {
+            return "Choose Model"
+        }
+        return selectedModelID.split(separator: "/").last.map(String.init)
+            ?? selectedModelID
     }
 
     private var modelPicker: some View {
         ComposerModelPicker(
             models: imageModels,
-            selectedModelID: viewModel.modelID,
+            selectedModelID: selectedModelID,
             selectedModelLabel: modelLabel,
             selectedModelProvider: selectedModelProvider,
             selectedModelDetail: nil,
@@ -284,47 +335,47 @@ private struct ImageGenerationComposer: View {
             modelLoadingPercentage: isSelectedModelLoading
                 ? model.modelLoadingPercentage
                 : nil,
-            isDisabled: model.isModelLoading || viewModel.isGenerating,
+            isDisabled: model.isModelLoading || model.inferenceActivityInProgress,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelLabel,
-            shortcutLabel: nil,
+            shortcutLabel: "⌃⇧M",
+            emptyStateActionTitle: "Browse Image Models…",
+            onEmptyStateAction: onExploreImageModels,
             onSelectModel: selectImageModel,
             onSwitchModel: selectImageModel
         )
     }
 
     private var imageModels: [LocalModel] {
-        localLibrary.models.filter {
+        localModels.filter {
             !$0.capabilities.isDisjoint(
                 with: [.imageGeneration, .imageEditing]
             )
         }
     }
 
+    private var selectedModelID: String? {
+        imageModels.contains { $0.repoID == viewModel.modelID }
+            ? viewModel.modelID
+            : nil
+    }
+
     private var selectedModelIsEditOnly: Bool {
-        if let selectedModel = imageModels.first(where: {
-            $0.repoID == viewModel.modelID
-        }) {
-            return selectedModel.capabilities.contains(.imageEditing)
-                && !selectedModel.capabilities.contains(.imageGeneration)
-        }
-        return MLXImageModelResolver.isKnownImageEditOnlyModelID(
-            viewModel.modelID
-        )
+        guard let selectedModelID,
+              let selectedModel = imageModels.first(where: {
+                  $0.repoID == selectedModelID
+              })
+        else { return false }
+        return selectedModel.capabilities.contains(.imageEditing)
+            && !selectedModel.capabilities.contains(.imageGeneration)
     }
 
     private var selectedModelProvider: LocalModelProvider? {
-        if let provider = imageModels.first(where: {
-            $0.repoID == viewModel.modelID
-        })?.provider {
-            return provider
-        }
-        return LocalModelProviderResolver.resolve(
-            repoID: viewModel.modelID,
-            modelType: nil,
-            architectures: []
-        )
+        guard let selectedModelID else { return nil }
+        return imageModels.first(where: {
+            $0.repoID == selectedModelID
+        })?.provider
     }
 
     private var isSelectedModelLoading: Bool {
@@ -332,15 +383,15 @@ private struct ImageGenerationComposer: View {
     }
 
     private var localModelStatusLabel: String {
-        if localLibrary.isScanning {
+        if isScanningForModels {
             return "Scanning for models…"
         }
-        return localLibrary.error ?? "No installed image models"
+        return modelScanError ?? "No compatible image models"
     }
 
     private var modelPickerHelp: String {
-        if viewModel.isGenerating {
-            return "Model switching is unavailable while generating"
+        if viewModel.isGenerating || model.inferenceActivityInProgress {
+            return "Models can’t be changed while a response is being generated."
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(modelLabel)"
@@ -351,10 +402,14 @@ private struct ImageGenerationComposer: View {
         return "Change image model"
     }
 
-    private var modelScanKey: String {
-        let settings = model.settings.normalized()
-        return ([settings.expandedModelSearchPath] + settings.additionalModelSearchPaths)
-            .joined(separator: "\u{0}")
+    private var unavailableReason: String? {
+        if !model.isRunning {
+            return "Server is stopped."
+        }
+        if viewModel.isCurrentSessionActiveInAnotherWindow {
+            return "This image session is active in another window."
+        }
+        return nil
     }
 
     private var actionButtonColor: Color {
@@ -390,7 +445,7 @@ private struct ImageGenerationComposer: View {
         model.requestPreloadedModelSwitch(
             to: localModel,
             for: .imageGeneration,
-            availableModels: localLibrary.models
+            availableModels: localModels
         ) {
             viewModel.applyDefaultModel(localModel.repoID)
         }
@@ -671,19 +726,57 @@ private struct ImageAttachmentPreview: View {
 
 private struct ImageGenerationEmptyView: View {
     let isRunning: Bool
+    let selectedModelID: String?
+    let modelLoadingProgress: Double?
 
     var body: some View {
-        ContentUnavailableView {
-            Label("Create with Images", systemImage: "photo.artframe")
-        } description: {
-            Text(description)
+        VStack(spacing: 16) {
+            Image("NativMark")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 64)
+                .foregroundStyle(.secondary)
+
+            if let modelLoadingProgress {
+                ProgressView(value: modelLoadingProgress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 180)
+            }
+
+            VStack(spacing: 7) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: 520)
     }
 
-    private var description: String {
+    private var title: String {
+        if modelLoadingProgress != nil {
+            return "Loading image model"
+        }
         if !isRunning {
-            return "Start the server, then describe an image below. Attach a reference to edit it."
+            return "Server is stopped"
+        }
+        if selectedModelID == nil {
+            return "No image model downloaded"
+        }
+        return "Create with Images"
+    }
+
+    private var detail: String {
+        if let modelLoadingProgress {
+            let percentage = Int((modelLoadingProgress * 100).rounded())
+            return "\(selectedModelID ?? "Image model") · \(percentage)%"
+        }
+        if !isRunning {
+            return "Start the server to create images."
+        }
+        if selectedModelID == nil {
+            return "Download an image model in Models."
         }
         return "Describe an image below. Attach a reference to edit it, then continue iterating from any result."
     }

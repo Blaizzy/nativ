@@ -46,8 +46,10 @@ struct ChatModelLibraryToolExecutor {
         }
 
         let models = try await LocalModelDiscovery.scan(
-            path: context.modelSearchPath,
-            additionalPaths: context.additionalModelSearchPaths
+            searchPaths: LocalModelSearchPaths(
+                primary: context.modelSearchPath,
+                additional: context.additionalModelSearchPaths
+            )
         )
         let payload = ChatModelLibraryToolResultPayload(
             ok: true,

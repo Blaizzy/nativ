@@ -3,20 +3,34 @@ import SwiftUI
 
 struct ToolsSectionView: View {
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var inspecting: ToolItem?
+    @State private var showsAddTool = false
+    @State private var editingTool: CustomTool?
+    @State private var toolPendingRemoval: CustomTool?
+    @State private var toolManagementError: String?
+    @State private var configurationPendingEnablement: String?
 
     var body: some View {
         HubSectionScaffold(
             title: "Tools",
-            subtitle: "Capabilities tool-capable models can call. Select a tool to inspect or try it."
+            subtitle: "Built-in capabilities, custom tools, and tools from connected servers."
         ) {
-            EmptyView()
+            Button {
+                showsAddTool = true
+            } label: {
+                Label("Add Tool", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
         } content: {
             VStack(alignment: .leading, spacing: 22) {
                 toolGroup(title: "Built-in", tools: nativeTools)
 
-                ForEach(enabledServers) { server in
+                if !customTools.isEmpty {
+                    toolGroup(title: "Custom", tools: customTools)
+                }
+
+                ForEach(configuredServers) { server in
                     let tools = mcpTools(for: server)
                     if !tools.isEmpty {
                         toolGroup(title: server.name, tools: tools)
@@ -24,61 +38,264 @@ struct ToolsSectionView: View {
                 }
             }
         }
-        .sheet(item: $inspecting) { tool in
-            ToolInspectorView(tool: tool, host: host)
+        .onAppear {
+            synchronizeConfiguredToolAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .webBrowsingConfigurationDidChange)) {
+            _ in
+            synchronizeConfiguredToolAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fileReadConfigurationDidChange)) {
+            _ in
+            synchronizeConfiguredToolAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fileWriteConfigurationDidChange)) {
+            _ in
+            synchronizeConfiguredToolAvailability()
+        }
+        .sheet(item: $inspecting, onDismiss: finishToolConfiguration) { tool in
+            switch tool.configuration {
+            case .webSearch:
+                BrowsingToolConfigurationView(
+                    toolName: tool.title,
+                    capability: .search,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case .webRead:
+                BrowsingToolConfigurationView(
+                    toolName: tool.title,
+                    capability: .read,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case .fileRead:
+                FileReadConfigurationView(
+                    model: model,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case .fileWrite:
+                FileWriteConfigurationView(
+                    model: model,
+                    onConfigurationChanged: { _ in
+                        reconcileConfiguredTool(tool)
+                    }
+                )
+            case nil:
+                ToolInspectorView(tool: tool, host: host)
+            }
+        }
+        .sheet(isPresented: $showsAddTool) {
+            CustomToolEditorSheet(model: model)
+        }
+        .sheet(item: $editingTool) { tool in
+            CustomToolEditorSheet(model: model, tool: tool)
+        }
+        .alert(
+            "Remove \(toolPendingRemoval?.name ?? "tool")?",
+            isPresented: Binding(
+                get: { toolPendingRemoval != nil },
+                set: { if !$0 { toolPendingRemoval = nil } }
+            )
+        ) {
+            Button("Remove", role: .destructive) {
+                removePendingTool()
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                toolPendingRemoval = nil
+            }
+        } message: {
+            if toolPendingRemoval?.kind == .endpoint {
+                Text("This removes the tool and its saved request credential.")
+            } else {
+                Text("This removes the tool.")
+            }
+        }
+        .alert(
+            "Couldn’t remove tool",
+            isPresented: Binding(
+                get: { toolManagementError != nil },
+                set: { if !$0 { toolManagementError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                toolManagementError = nil
+            }
+            .keyboardShortcut(.defaultAction)
+        } message: {
+            Text(toolManagementError ?? "An unexpected error occurred.")
         }
     }
 
-    private var enabledServers: [MCPServerConfig] {
-        model.settings.mcpServers.filter(\.isEnabled)
+    private var configuredServers: [MCPServerConfig] {
+        model.settings.mcpServers.filter {
+            !$0.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     @ViewBuilder
     private func toolGroup(title: String, tools: [ToolItem]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
+                .nativTextStyle(.badge)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                 if index > 0 { Divider() }
                 ToolRow(
                     tool: tool,
-                    isOn: binding(for: tool.name),
-                    onInspect: { inspecting = tool }
+                    onInspect: { inspect(tool) },
+                    onEdit: editAction(for: tool),
+                    onRemove: removeAction(for: tool),
+                    isEnabled: enabledBinding(for: tool)
                 )
             }
         }
     }
 
-    private func binding(for name: String) -> Binding<Bool> {
-        Binding(
-            get: { !model.settings.disabledToolNames.contains(name) },
+    private func enabledBinding(for tool: ToolItem) -> Binding<Bool>? {
+        guard tool.isBuiltIn else { return nil }
+        return Binding(
+            get: {
+                tool.toolNames.allSatisfy(model.settings.isToolEnabled)
+                    && (tool.configuration?.isConfigured ?? true)
+            },
             set: { enabled in
-                if enabled {
-                    model.settings.disabledToolNames.removeAll { $0 == name }
-                } else if !model.settings.disabledToolNames.contains(name) {
-                    model.settings.disabledToolNames.append(name)
+                guard enabled else {
+                    setEnabled(false, for: tool)
+                    return
                 }
+                guard let configuration = tool.configuration else {
+                    setEnabled(true, for: tool)
+                    return
+                }
+                guard configuration.isConfigured else {
+                    setEnabled(false, for: tool)
+                    configurationPendingEnablement = tool.name
+                    inspecting = tool
+                    return
+                }
+                setEnabled(true, for: tool)
             }
         )
     }
 
+    private func inspect(_ tool: ToolItem) {
+        if let configuration = tool.configuration,
+            configuration.isConfigured,
+            tool.toolNames.allSatisfy(model.settings.isToolEnabled)
+        {
+            configurationPendingEnablement = tool.name
+        }
+        inspecting = tool
+    }
+
+    private func reconcileConfiguredTool(_ tool: ToolItem) {
+        guard let configuration = tool.configuration else { return }
+        let isConfigured = configuration.isConfigured
+        if !isConfigured || configurationPendingEnablement == tool.name {
+            setEnabled(isConfigured, for: tool)
+        }
+    }
+
+    private func synchronizeConfiguredToolAvailability() {
+        for tool in nativeTools where tool.configuration != nil {
+            reconcileConfiguredTool(tool)
+        }
+    }
+
+    private func finishToolConfiguration() {
+        guard let toolName = configurationPendingEnablement,
+            let tool = nativeTools.first(where: { $0.toolNames.contains(toolName) }),
+            let configuration = tool.configuration
+        else {
+            configurationPendingEnablement = nil
+            return
+        }
+        setEnabled(configuration.isConfigured, for: tool)
+        configurationPendingEnablement = nil
+    }
+
     private var nativeTools: [ToolItem] {
-        var definitions: [MLXChatToolDefinition] = []
-        definitions += ChatSystemMonitorToolRegistry.definitions()
-        definitions += ChatModelLibraryToolRegistry.definitions()
-        definitions += ChatServerStatsToolRegistry.definitions()
-        definitions += ChatSwitchModelToolRegistry.definitions()
-        definitions += ChatImageToolRegistry.definitions(canEdit: false)
-        return definitions.map {
-            ToolItem(
-                name: $0.function.name,
-                title: $0.function.name,
-                detail: $0.function.description,
-                parameters: $0.function.parameters,
-                isRunnable: false
+        var seenConfigurations = Set<ChatNativeToolConfiguration>()
+        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+            let configuration = descriptor.configuration
+            if let configuration,
+                configuration.toolNames.count > 1,
+                !seenConfigurations.insert(configuration).inserted
+            {
+                return nil
+            }
+            let name = descriptor.definition.function.name
+            return ToolItem(
+                name: name,
+                toolNames: configuration?.toolNames ?? [name],
+                title: configuration?.displayName ?? humanized(name),
+                detail: descriptor.displayDescription,
+                parameters: descriptor.definition.function.parameters,
+                isRunnable: false,
+                isBuiltIn: true,
+                configuration: configuration
             )
+        }
+    }
+
+    private func setEnabled(_ enabled: Bool, for tool: ToolItem) {
+        for toolName in tool.toolNames {
+            model.settings.setToolEnabled(enabled, toolName: toolName)
+        }
+    }
+
+    private func humanized(_ name: String) -> String {
+        name.split(separator: "_")
+            .map { String($0).capitalized }
+            .joined(separator: " ")
+    }
+
+    private var customTools: [ToolItem] {
+        model.settings.customTools.map {
+            ToolItem(
+                name: $0.toolName,
+                title: $0.name,
+                detail: $0.displaySummary,
+                parameters: try? $0.definition().function.parameters,
+                customToolID: $0.id,
+                executionHint: $0.executionHint
+            )
+        }
+    }
+
+    private func editAction(for tool: ToolItem) -> (() -> Void)? {
+        guard let id = tool.customToolID else { return nil }
+        return {
+            editingTool = model.settings.customTools.first { $0.id == id }
+        }
+    }
+
+    private func removeAction(for tool: ToolItem) -> (() -> Void)? {
+        guard let id = tool.customToolID else { return nil }
+        return {
+            toolPendingRemoval = model.settings.customTools.first { $0.id == id }
+        }
+    }
+
+    private func removePendingTool() {
+        guard let tool = toolPendingRemoval else { return }
+        do {
+            if tool.kind == .endpoint {
+                try CustomToolKeychain().save(nil, for: tool.id)
+            }
+            model.settings.customTools.removeAll { $0.id == tool.id }
+            model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
+            toolPendingRemoval = nil
+        } catch {
+            toolPendingRemoval = nil
+            toolManagementError = "The saved request credential could not be removed from Keychain."
         }
     }
 
@@ -100,47 +317,112 @@ struct ToolsSectionView: View {
 struct ToolItem: Identifiable {
     var id: String { name }
     let name: String
+    var toolNames: [String] = []
     let title: String
     let detail: String
     var parameters: MLXJSONValue?
     var isRunnable: Bool = false
+    var isBuiltIn: Bool = false
+    var customToolID: UUID?
+    var executionHint: String?
+    var configuration: ChatNativeToolConfiguration? = nil
 }
 
 private struct ToolRow: View {
     let tool: ToolItem
-    @Binding var isOn: Bool
     let onInspect: () -> Void
+    var onEdit: (() -> Void)?
+    var onRemove: (() -> Void)?
+    var isEnabled: Binding<Bool>?
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(tool.title)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                HStack(spacing: 6) {
+                    Text(tool.title)
+                        .nativTextStyle(.technicalLabel)
+                }
                 if !tool.detail.isEmpty {
                     Text(tool.detail)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
             }
             Spacer(minLength: 12)
             Button(action: onInspect) {
-                Image(systemName: "info.circle")
+                Image(systemName: tool.configuration == nil ? "info.circle" : "gearshape")
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0.35)
-            .help("Inspect / try")
-            Toggle("", isOn: $isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
+            .help(tool.configuration == nil ? "Inspect / try" : "Configure")
+            if let isEnabled {
+                Toggle("", isOn: isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help(isEnabled.wrappedValue ? "Disable \(tool.title)" : "Enable \(tool.title)")
+                    .accessibilityLabel("Enable \(tool.title)")
+            }
+            if let onEdit, let onRemove {
+                Menu {
+                    Button("Edit", action: onEdit)
+                    Divider()
+                    Button("Remove", role: .destructive, action: onRemove)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 18)
+                .help("Manage tool")
+            }
         }
         .padding(.vertical, 9)
         .contentShape(.rect)
         .onHover { hovering = $0 }
         .onTapGesture(perform: onInspect)
+    }
+}
+
+private struct BrowsingToolConfigurationView: View {
+    let toolName: String
+    let capability: WebBrowsingCapability
+    let onConfigurationChanged: (Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(toolName)
+                        .nativTextStyle(.technicalDisplayTitle)
+                    Text(
+                        capability == .search
+                            ? "Choose the provider used for web search."
+                            : "Choose the provider used to read source pages."
+                    )
+                        .nativTextStyle(.supporting)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 16)
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            WebBrowsingSettingsView(
+                initialCapability: capability,
+                onConfigurationChanged: onConfigurationChanged
+            )
+        }
+        .padding(20)
+        .frame(width: 720)
     }
 }
 
@@ -161,10 +443,10 @@ private struct ToolInspectorView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(tool.title)
-                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                        .nativTextStyle(.technicalTitle)
                     if !tool.detail.isEmpty {
                         Text(tool.detail)
-                            .font(.system(size: 12))
+                            .nativTextStyle(.supporting)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -180,7 +462,7 @@ private struct ToolInspectorView: View {
             section("Input schema") {
                 ScrollView {
                     Text(schemaText)
-                        .font(.system(size: 11, design: .monospaced))
+                        .nativTextStyle(.code)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
@@ -192,7 +474,7 @@ private struct ToolInspectorView: View {
             if tool.isRunnable {
                 section("Try it — arguments (JSON)") {
                     TextEditor(text: $argumentsJSON)
-                        .font(.system(size: 12, design: .monospaced))
+                        .nativTextStyle(.code)
                         .frame(height: 70)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
@@ -209,25 +491,29 @@ private struct ToolInspectorView: View {
                     Spacer()
                 }
                 if let errorText {
-                    Text(errorText).font(.system(size: 11)).foregroundStyle(.red)
+                    Text(errorText).nativTextStyle(.supporting).foregroundStyle(.red)
                 }
                 if let result {
                     section("Result") {
                         ScrollView {
                             Text(result)
-                                .font(.system(size: 11, design: .monospaced))
+                                .nativTextStyle(.code)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(8)
                         }
                         .frame(height: 130)
-                        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+                        .background(
+                            Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
             } else {
-                Text("Built-in tools run inside a chat when a tool-capable model calls them.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                Text(
+                    tool.executionHint
+                        ?? "Built-in tools run inside a chat when a tool-capable model calls them."
+                )
+                .nativTextStyle(.supporting)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(20)
@@ -235,9 +521,11 @@ private struct ToolInspectorView: View {
     }
 
     @ViewBuilder
-    private func section<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
+    private func section<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            Text(label).nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
             content()
         }
     }
@@ -247,7 +535,8 @@ private struct ToolInspectorView: View {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(parameters),
-              let text = String(data: data, encoding: .utf8) else {
+            let text = String(data: data, encoding: .utf8)
+        else {
             return "No schema provided."
         }
         return text
@@ -273,5 +562,397 @@ private struct ToolInspectorView: View {
                 }
             }
         }
+    }
+}
+
+private struct CustomToolEditorSheet: View {
+    var model: NativModel
+    let tool: CustomTool?
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String
+    @State private var summary: String
+    @State private var kind: CustomToolKind
+    @State private var endpoint: String
+    @State private var script: String
+    @State private var scriptLanguage: CustomToolScriptLanguage
+    @State private var headerName: String
+    @State private var headerValue = ""
+    @State private var parametersJSON: String
+    @State private var testArgumentsJSON = #"{"query":"test"}"#
+    @State private var showsAdvanced = false
+    @State private var revealsHeaderValue = false
+    @State private var validationError: String?
+    @State private var testResult: String?
+    @State private var testing = false
+    @State private var verifiedScriptSignature: String?
+
+    init(model: NativModel, tool: CustomTool? = nil) {
+        self.model = model
+        self.tool = tool
+        _name = State(initialValue: tool?.name ?? "")
+        _summary = State(initialValue: tool?.summary ?? "")
+        _kind = State(initialValue: tool?.kind ?? .endpoint)
+        _endpoint = State(initialValue: tool?.endpoint ?? "")
+        _scriptLanguage = State(initialValue: tool?.scriptLanguage ?? .python)
+        _script = State(initialValue: tool?.script ?? CustomToolScriptLanguage.python.template)
+        _headerName = State(initialValue: tool?.headerName ?? "")
+        _parametersJSON = State(
+            initialValue: tool?.parametersJSON ?? CustomTool.defaultParametersJSON)
+        _verifiedScriptSignature = State(
+            initialValue: tool?.kind == .script
+                ? Self.scriptSignature(
+                    language: tool?.scriptLanguage ?? .python, script: tool?.script ?? "")
+                : nil)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tool == nil ? "Add Tool" : "Edit Tool")
+                    .nativTextStyle(.sheetTitle)
+                Text(
+                    kind == .endpoint
+                        ? "Send model-provided JSON to an HTTP endpoint."
+                        : "Run a local script with model-provided JSON."
+                )
+                .nativTextStyle(.supporting)
+                .foregroundStyle(.secondary)
+            }
+
+            form
+
+            if let validationError {
+                Text(validationError)
+                    .nativTextStyle(.supporting)
+                    .foregroundStyle(.red)
+            }
+            if let testResult {
+                Text(testResult)
+                    .nativTextStyle(.supporting)
+                    .foregroundStyle(validationError == nil ? .green : .red)
+                    .lineLimit(2)
+            }
+
+            HStack {
+                Button("Cancel", action: dismiss.callAsFunction)
+                Spacer()
+                if kind == .script, isScriptVerified {
+                    Label("Verified", systemImage: "checkmark.circle.fill")
+                        .nativTextStyle(.actionLabel)
+                        .foregroundStyle(.green)
+                }
+                Button(testing ? "Testing…" : testButtonTitle, action: test)
+                    .disabled(!canTest)
+                Button(tool == nil ? "Add Tool" : "Save", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+        .onAppear(perform: loadCredential)
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("Name") {
+                TextField("Weather lookup", text: $name)
+            }
+            field("Description") {
+                TextField("Looks up a forecast for a place.", text: $summary)
+            }
+            Picker("Type", selection: kindBinding) {
+                ForEach(CustomToolKind.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if kind == .endpoint {
+                endpointFields
+            } else {
+                scriptFields
+            }
+
+            DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if kind == .endpoint {
+                        credentialFields
+                    }
+
+                    field("Parameters") {
+                        TextEditor(text: $parametersJSON)
+                            .nativTextStyle(.code)
+                            .frame(height: 120)
+                            .padding(6)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                            )
+                    }
+                    field("Test arguments") {
+                        TextField(#"{"query":"test"}"#, text: $testArgumentsJSON)
+                            .nativTextStyle(.code)
+                    }
+                }
+                .padding(.top, 6)
+            }
+            .nativTextStyle(.supportingEmphasized)
+        }
+    }
+
+    @ViewBuilder
+    private var endpointFields: some View {
+        field("Endpoint") {
+            TextField("https://example.com/tools/weather", text: $endpoint)
+                .textContentType(.URL)
+        }
+        Text("Uses POST with a JSON request body.")
+            .nativTextStyle(.supporting)
+            .foregroundStyle(.secondary)
+    }
+
+    private var scriptFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("Language") {
+                Picker("Language", selection: languageBinding) {
+                    ForEach(CustomToolScriptLanguage.allCases) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(scriptLanguage.availabilityNote)
+                .nativTextStyle(.supporting)
+                .foregroundStyle(.secondary)
+            field("Script") {
+                TextEditor(text: $script)
+                    .nativTextStyle(.code)
+                    .frame(height: 180)
+                    .padding(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            }
+            Text("Arguments arrive as JSON on stdin. Return the tool result on stdout.")
+                .nativTextStyle(.supporting)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var credentialFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            field("Header name") {
+                TextField("Authorization", text: $headerName)
+            }
+            if !headerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                field("Header value") {
+                    HStack(spacing: 6) {
+                        Group {
+                            if revealsHeaderValue {
+                                TextField("Bearer …", text: $headerValue)
+                            } else {
+                                SecureField("Bearer …", text: $headerValue)
+                            }
+                        }
+                        Button {
+                            revealsHeaderValue.toggle()
+                        } label: {
+                            Image(systemName: revealsHeaderValue ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help(revealsHeaderValue ? "Hide value" : "Show value")
+                    }
+                }
+            }
+            Text("The header value is saved only in Keychain.")
+                .nativTextStyle(.supporting)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var kindBinding: Binding<CustomToolKind> {
+        Binding(
+            get: { kind },
+            set: { newKind in
+                kind = newKind
+                if newKind == .script
+                    && script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    script = scriptLanguage.template
+                }
+                resetFeedback()
+            }
+        )
+    }
+
+    private var languageBinding: Binding<CustomToolScriptLanguage> {
+        Binding(
+            get: { scriptLanguage },
+            set: { newLanguage in
+                let shouldReplaceTemplate =
+                    script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || script == scriptLanguage.template
+                scriptLanguage = newLanguage
+                if shouldReplaceTemplate {
+                    script = newLanguage.template
+                }
+                resetFeedback()
+            }
+        )
+    }
+
+    private var testButtonTitle: String {
+        kind == .endpoint ? "Test request" : "Test script"
+    }
+
+    private var hasName: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasImplementation: Bool {
+        switch kind {
+        case .endpoint:
+            return !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .script:
+            return !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private var canTest: Bool {
+        !testing && hasName && hasImplementation
+    }
+
+    private var canSave: Bool {
+        hasName && hasImplementation && (kind == .endpoint || isScriptVerified)
+    }
+
+    private var isScriptVerified: Bool {
+        verifiedScriptSignature == Self.scriptSignature(language: scriptLanguage, script: script)
+    }
+
+    @ViewBuilder
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
+        -> some View
+    {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .nativTextStyle(.supportingEmphasized)
+            content()
+        }
+    }
+
+    private func save() {
+        do {
+            guard kind == .endpoint || isScriptVerified else {
+                validationError = "Test the current script before adding it."
+                return
+            }
+            let savedTool = try makeTool()
+            guard
+                !model.settings.customTools.contains(where: {
+                    $0.id != savedTool.id && $0.toolName == savedTool.toolName
+                })
+            else {
+                validationError = "A tool with that name already exists."
+                return
+            }
+            try CustomToolKeychain().save(
+                savedTool.kind == .endpoint ? headerValue : nil, for: savedTool.id)
+            if let index = model.settings.customTools.firstIndex(where: { $0.id == savedTool.id }) {
+                model.settings.customTools[index] = savedTool
+            } else {
+                model.settings.customTools.append(savedTool)
+            }
+            dismiss()
+        } catch {
+            validationError = credentialErrorMessage(for: error)
+        }
+    }
+
+    private func test() {
+        do {
+            let draft = try makeTool()
+            validationError = nil
+            testResult = nil
+            testing = true
+            let arguments = testArgumentsJSON
+            let credential = headerValue
+            let testedScriptSignature = Self.scriptSignature(
+                language: draft.scriptLanguage,
+                script: draft.script
+            )
+            Task {
+                do {
+                    _ = try await CustomToolExecutor.execute(
+                        draft,
+                        argumentsJSON: arguments,
+                        headerValue: credential
+                    )
+                    await MainActor.run {
+                        if draft.kind == .script {
+                            verifiedScriptSignature = testedScriptSignature
+                            testResult = "Script compiled and ran successfully."
+                        } else {
+                            testResult = "Request succeeded."
+                        }
+                        testing = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        validationError = credentialErrorMessage(for: error)
+                        testing = false
+                    }
+                }
+            }
+        } catch {
+            validationError = credentialErrorMessage(for: error)
+        }
+    }
+
+    private func makeTool() throws -> CustomTool {
+        try CustomTool.make(
+            name: name,
+            summary: summary,
+            kind: kind,
+            endpoint: endpoint,
+            script: script,
+            scriptLanguage: scriptLanguage,
+            parametersJSON: parametersJSON,
+            headerName: headerName,
+            id: tool?.id ?? UUID()
+        )
+    }
+
+    private func loadCredential() {
+        guard let tool, tool.kind == .endpoint else { return }
+        do {
+            headerValue = try CustomToolKeychain().load(for: tool.id) ?? ""
+        } catch {
+            validationError = "Couldn’t load the saved header value."
+        }
+    }
+
+    private func credentialErrorMessage(for error: Error) -> String {
+        if error is CustomToolCredentialPersistenceError {
+            return "Couldn’t save the header value in Keychain."
+        }
+        return error.localizedDescription
+    }
+
+    private func resetFeedback() {
+        validationError = nil
+        testResult = nil
+    }
+
+    private static func scriptSignature(language: CustomToolScriptLanguage, script: String)
+        -> String
+    {
+        "\(language.rawValue)\u{0}\(script)"
     }
 }

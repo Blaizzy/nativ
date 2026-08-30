@@ -5,11 +5,13 @@ on:
   push:
     paths:
       - "Sources/Nativ/Resources/MCPCatalog.json"
+      - "scripts/install_github_mcp_server.sh"
       - "scripts/verify_mcp_catalog.py"
       - ".github/workflows/verify-mcp-catalog.yml"
   pull_request:
     paths:
       - "Sources/Nativ/Resources/MCPCatalog.json"
+      - "scripts/install_github_mcp_server.sh"
       - "scripts/verify_mcp_catalog.py"
       - ".github/workflows/verify-mcp-catalog.yml"
   schedule:
@@ -45,5 +47,10 @@ jobs:
       - name: Install verifier dependencies
         run: pip install "mcp>=1.0"
 
+      - name: Install bundled MCP servers
+        run: ./scripts/install_github_mcp_server.sh "$RUNNER_TEMP/nativ-mcp-servers"
+
       - name: Verify MCP catalog
-        run: python scripts/verify_mcp_catalog.py
+        run: >
+          python scripts/verify_mcp_catalog.py
+          --bundled-directory "$RUNNER_TEMP/nativ-mcp-servers"

@@ -138,8 +138,11 @@ struct ChatImageToolExecution: Sendable {
 
 struct ChatImageToolDependencies: Sendable {
     typealias ModelDiscovery = @Sendable (
+        ChatImageOperation,
         String,
-        [String]
+        [String],
+        String?,
+        String?
     ) async throws -> [ChatImageModelOption]
     typealias Execution = @Sendable (
         ChatImageToolRequest,
@@ -153,10 +156,13 @@ struct ChatImageToolDependencies: Sendable {
     let execute: Execution
 
     static let live = Self(
-        discoverModels: { path, additionalPaths in
-            try await ChatImageModelSelection.installedOptions(
+        discoverModels: { operation, path, additionalPaths, token, preferredModelID in
+            try await ChatImageModelSelection.availableOptions(
+                for: operation,
                 modelSearchPath: path,
-                additionalModelSearchPaths: additionalPaths
+                additionalModelSearchPaths: additionalPaths,
+                huggingFaceToken: token,
+                preferredInstalledModelID: preferredModelID
             )
         },
         execute: { request, modelID, baseURL, apiKey, references in

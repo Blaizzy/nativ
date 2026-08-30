@@ -119,19 +119,26 @@ enum VoiceAudioRetention {
     }
 }
 
+struct VoiceAudioBufferMeasurement: Sendable {
+    let level: Float
+    let duration: TimeInterval
+}
+
+protocol VoiceAudioBufferWriting: Sendable {
+    func append(_ buffer: AVAudioPCMBuffer) -> VoiceAudioBufferMeasurement
+}
+
 @MainActor
 final class VoiceAudioRecorder {
-    private static let meterPublishInterval: TimeInterval = 1.0 / 15.0
-
-    var onMeterUpdate: ((Float, TimeInterval) -> Void)?
+    var onMeterUpdate: (@MainActor @Sendable (Float, TimeInterval) -> Void)?
 
     private(set) var isRecording = false
     private(set) var lastRecordingDuration: TimeInterval?
     private var audioEngine: AVAudioEngine?
     private var recordingWriter: VoiceAudioRecordingWriter?
     private var recordingURL: URL?
-    private var smoothedLevel: Float = 0
-    private var lastMeterUpdateElapsed = -Double.infinity
+    private var realtimeMeter: RealtimeAudioMeter?
+    private var meterPublisherTask: Task<Void, Never>?
 
     static var recordingsDirectory: URL {
         get throws {
@@ -193,19 +200,14 @@ final class VoiceAudioRecorder {
             audioFile: audioFile,
             sampleRate: inputFormat.sampleRate
         )
+        let realtimeMeter = RealtimeAudioMeter(profile: .recording)
+        let tap = Self.makeTap(writer: writer, realtimeMeter: realtimeMeter)
         inputNode.installTap(
             onBus: 0,
             bufferSize: 1_024,
-            format: inputFormat
-        ) { [weak self, writer] buffer, _ in
-            let measurement = writer.append(buffer)
-            Task { @MainActor [weak self] in
-                self?.updateMeter(
-                    level: measurement.level,
-                    elapsed: measurement.duration
-                )
-            }
-        }
+            format: inputFormat,
+            block: tap
+        )
 
         do {
             audioEngine.prepare()
@@ -221,8 +223,7 @@ final class VoiceAudioRecorder {
         recordingURL = outputURL
         isRecording = true
         lastRecordingDuration = nil
-        smoothedLevel = 0
-        lastMeterUpdateElapsed = -Double.infinity
+        startMeterPublisher(realtimeMeter: realtimeMeter)
         return outputURL
     }
 
@@ -235,13 +236,12 @@ final class VoiceAudioRecorder {
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         let duration = recordingWriter.duration
+        stopMeterPublisher()
         self.audioEngine = nil
         self.recordingWriter = nil
         self.recordingURL = nil
         isRecording = false
         lastRecordingDuration = duration
-        smoothedLevel = 0
-        lastMeterUpdateElapsed = -Double.infinity
         onMeterUpdate?(0, duration)
 
         guard duration > 0 else {
@@ -259,17 +259,40 @@ final class VoiceAudioRecorder {
         lastRecordingDuration = nil
     }
 
-    private func updateMeter(level: Float, elapsed: TimeInterval) {
-        guard isRecording else {
-            return
+    private func startMeterPublisher(realtimeMeter: RealtimeAudioMeter) {
+        self.realtimeMeter = realtimeMeter
+        meterPublisherTask = Task { [weak self, realtimeMeter] in
+            await RealtimeAudioMeterPublisher.run(meter: realtimeMeter) {
+                [weak self, realtimeMeter] snapshot in
+                guard
+                    let self,
+                    self.realtimeMeter === realtimeMeter,
+                    self.isRecording
+                else {
+                    return
+                }
+                self.onMeterUpdate?(snapshot.level, snapshot.elapsed)
+            }
         }
-        let shapedLevel = pow(max(0, min(1, level)), 0.72)
-        smoothedLevel = (smoothedLevel * 0.68) + (shapedLevel * 0.32)
-        guard elapsed - lastMeterUpdateElapsed >= Self.meterPublishInterval else {
-            return
+    }
+
+    private func stopMeterPublisher() {
+        realtimeMeter = nil
+        meterPublisherTask?.cancel()
+        meterPublisherTask = nil
+    }
+
+    nonisolated static func makeTap(
+        writer: any VoiceAudioBufferWriting,
+        realtimeMeter: RealtimeAudioMeter
+    ) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+        { buffer, _ in
+            let measurement = writer.append(buffer)
+            realtimeMeter.submit(
+                level: measurement.level,
+                elapsed: measurement.duration
+            )
         }
-        lastMeterUpdateElapsed = elapsed
-        onMeterUpdate?(smoothedLevel, elapsed)
     }
 
     private static func makeOutputURL() throws -> URL {
@@ -281,7 +304,7 @@ final class VoiceAudioRecorder {
     }
 }
 
-private final class VoiceAudioRecordingWriter: @unchecked Sendable {
+final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Sendable {
     private let audioFile: AVAudioFile
     private let sampleRate: Double
     private let lock = NSLock()
@@ -301,7 +324,7 @@ private final class VoiceAudioRecordingWriter: @unchecked Sendable {
         }
     }
 
-    func append(_ buffer: AVAudioPCMBuffer) -> (level: Float, duration: TimeInterval) {
+    func append(_ buffer: AVAudioPCMBuffer) -> VoiceAudioBufferMeasurement {
         lock.withLock {
             do {
                 try audioFile.write(from: buffer)
@@ -322,7 +345,10 @@ private final class VoiceAudioRecordingWriter: @unchecked Sendable {
                 }
             }
             let elapsed = sampleRate > 0 ? Double(writtenFrames) / sampleRate : 0
-            return (min(1, peak * 3.5), elapsed)
+            return VoiceAudioBufferMeasurement(
+                level: min(1, peak * 3.5),
+                duration: elapsed
+            )
         }
     }
 }

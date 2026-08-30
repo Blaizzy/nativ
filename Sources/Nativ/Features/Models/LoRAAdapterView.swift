@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct LoRAAdapterSheet: View {
-    @ObservedObject var model: NativModel
+    let model: NativModel
     @ObservedObject var catalog: LoRAAdapterCatalog
     let baseModelID: String
 

@@ -1,10 +1,10 @@
 import AppKit
-import Combine
 import CoreGraphics
 import Darwin
 import Foundation
 import IOKit
 import Metal
+import Observation
 import QuartzCore
 
 struct SystemHistorySample: Identifiable, Equatable, Sendable {
@@ -59,20 +59,60 @@ struct SystemMemoryMetrics: Equatable, Sendable {
 }
 
 struct SystemDiskMetrics: Equatable, Sendable {
-    var totalBytes: UInt64 = 0
-    var availableBytes: UInt64 = 0
+    var totalBytes: UInt64?
+    var availableBytes: UInt64?
     var readBytesPerSecond: Double = 0
     var writeBytesPerSecond: Double = 0
     var cumulativeReadBytes: UInt64 = 0
     var cumulativeWriteBytes: UInt64 = 0
 
-    var usedBytes: UInt64 {
-        totalBytes > availableBytes ? totalBytes - availableBytes : 0
+    var usedBytes: UInt64? {
+        guard let totalBytes, let availableBytes, availableBytes <= totalBytes else {
+            return nil
+        }
+        return totalBytes - availableBytes
     }
 
-    var usage: Double {
-        guard totalBytes > 0 else { return 0 }
-        return min(max(Double(usedBytes) / Double(totalBytes), 0), 1)
+    var usage: Double? {
+        guard let totalBytes, totalBytes > 0, let usedBytes else { return nil }
+        return Double(usedBytes) / Double(totalBytes)
+    }
+
+    /// Resolves the capacities used by macOS storage UI.
+    ///
+    /// Important-usage capacity includes space the system can reclaim, such as
+    /// purgeable APFS data. Raw available capacity is retained as a fallback for
+    /// file systems that do not expose the preferred value. Inconsistent values
+    /// are rejected so a failed capacity read is not presented as an empty disk.
+    static func resolvedCapacity(
+        total: Int?,
+        availableForImportantUsage: Int64?,
+        available: Int?
+    ) -> (total: UInt64, available: UInt64)? {
+        guard let total = validatedBytes(total), total > 0 else { return nil }
+
+        if let important = validatedBytes(
+            availableForImportantUsage,
+            notExceeding: total
+        ) {
+            return (total, important)
+        }
+        guard let fallback = validatedBytes(available, notExceeding: total) else {
+            return nil
+        }
+        return (total, fallback)
+    }
+
+    private static func validatedBytes<Value: BinaryInteger>(
+        _ value: Value?,
+        notExceeding upperBound: UInt64 = .max
+    ) -> UInt64? {
+        guard let value,
+              let bytes = UInt64(exactly: value),
+              bytes <= upperBound else {
+            return nil
+        }
+        return bytes
     }
 }
 
@@ -80,7 +120,7 @@ struct SystemDiskIdentity: Equatable, Sendable {
     var volumeName = "Macintosh HD"
     var fileSystem = "APFS"
     var mountPoint = "/"
-    var deviceIdentifier = "--"
+    var deviceIdentifier = NativFormatting.missingValue
     var model = "Internal storage"
     var connection = "Internal"
     var isEncrypted: Bool?
@@ -99,10 +139,10 @@ struct SystemDiskIdentity: Equatable, Sendable {
 
 struct SystemMonitorIdentity: Equatable, Sendable {
     var computerName = Host.current().localizedName ?? "This Mac"
-    var modelIdentifier = "--"
+    var modelIdentifier = NativFormatting.missingValue
     var modelNumber: String?
     var productionYear: Int?
-    var serialNumber = "--"
+    var serialNumber = NativFormatting.missingValue
     var chipName = "Apple silicon"
     var physicalCoreCount = ProcessInfo.processInfo.processorCount
     var logicalCoreCount = ProcessInfo.processInfo.activeProcessorCount
@@ -114,7 +154,7 @@ struct SystemMonitorIdentity: Equatable, Sendable {
     var nominalCPUFrequencyHz: UInt64?
     var operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
     var displayName = "Built-in display"
-    var displayResolution = "--"
+    var displayResolution = NativFormatting.missingValue
     var displayRefreshRate: Double?
     var disk = SystemDiskIdentity()
 }
@@ -126,33 +166,86 @@ struct SystemMonitorSnapshot: Equatable, Sendable {
     var gpu = SystemGPUMetrics()
     var memory = SystemMemoryMetrics()
     var disk = SystemDiskMetrics()
+    var thermal = SystemThermalMetrics()
+    var power = SystemPowerMetrics()
     var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 }
 
+struct SystemMonitorObservationPolicy {
+    private var observerIDs: Set<UUID> = []
+    private(set) var isPaused = false
+
+    mutating func begin(_ observerID: UUID) -> Bool {
+        let inserted = observerIDs.insert(observerID).inserted
+        return inserted && observerIDs.count == 1 && !isPaused
+    }
+
+    mutating func end(_ observerID: UUID) -> Bool {
+        guard observerIDs.remove(observerID) != nil else { return false }
+        return observerIDs.isEmpty && !isPaused
+    }
+
+    mutating func pause() -> Bool {
+        guard !isPaused else { return false }
+        isPaused = true
+        return !observerIDs.isEmpty
+    }
+
+    mutating func resume() -> Bool {
+        guard isPaused else { return false }
+        isPaused = false
+        return !observerIDs.isEmpty
+    }
+}
+
 @MainActor
-final class SystemMonitorStore: ObservableObject {
-    @Published private(set) var snapshot = SystemMonitorSnapshot()
-    @Published private(set) var cpuHistory: [SystemHistorySample] = []
-    @Published private(set) var gpuHistory: [SystemHistorySample] = []
-    @Published private(set) var aneHistory: [SystemHistorySample] = []
-    @Published private(set) var fpsHistory: [SystemHistorySample] = []
-    @Published private(set) var memoryHistory: [SystemHistorySample] = []
-    @Published private(set) var swapHistory: [SystemHistorySample] = []
-    @Published private(set) var diskReadHistory: [SystemHistorySample] = []
-    @Published private(set) var diskWriteHistory: [SystemHistorySample] = []
-    @Published private(set) var isSampling = false
+@Observable
+final class SystemMonitorStore {
+    private(set) var snapshot = SystemMonitorSnapshot()
+    private(set) var cpuHistory: [SystemHistorySample] = []
+    private(set) var gpuHistory: [SystemHistorySample] = []
+    private(set) var aneHistory: [SystemHistorySample] = []
+    private(set) var fpsHistory: [SystemHistorySample] = []
+    private(set) var memoryHistory: [SystemHistorySample] = []
+    private(set) var swapHistory: [SystemHistorySample] = []
+    private(set) var diskReadHistory: [SystemHistorySample] = []
+    private(set) var diskWriteHistory: [SystemHistorySample] = []
+    private(set) var temperatureHistory: [SystemHistorySample] = []
+    private(set) var powerHistory: [SystemHistorySample] = []
+    private(set) var isSampling = false
 
     private let collector = SystemMetricsCollector()
     private let displayFPSSampler = SystemDisplayFPSSampler()
     private let aneSampler = SystemANEUtilizationSampler()
     private var samplingTask: Task<Void, Never>?
+    private var observationPolicy = SystemMonitorObservationPolicy()
     private let historyLimit = 300
 
-    deinit {
+    isolated deinit {
         samplingTask?.cancel()
     }
 
-    func start() {
+    func beginObservation(_ observerID: UUID) {
+        guard observationPolicy.begin(observerID) else { return }
+        startSampling()
+    }
+
+    func endObservation(_ observerID: UUID) {
+        guard observationPolicy.end(observerID) else { return }
+        stopSampling()
+    }
+
+    func pause() {
+        guard observationPolicy.pause() else { return }
+        stopSampling()
+    }
+
+    func resume() {
+        guard observationPolicy.resume() else { return }
+        startSampling()
+    }
+
+    private func startSampling() {
         guard samplingTask == nil else { return }
         isSampling = true
         displayFPSSampler.start()
@@ -174,7 +267,7 @@ final class SystemMonitorStore: ObservableObject {
         }
     }
 
-    func stop() {
+    private func stopSampling() {
         samplingTask?.cancel()
         samplingTask = nil
         displayFPSSampler.stop()
@@ -216,6 +309,14 @@ final class SystemMonitorStore: ObservableObject {
             swapUsage = 0
         }
         append(swapUsage, at: nextSnapshot.recordedAt, to: &swapHistory)
+
+        if let value = nextSnapshot.thermal.dieTemperatureCelsius {
+            append(value, at: nextSnapshot.recordedAt, to: &temperatureHistory)
+        }
+        if let value = nextSnapshot.power.headlineWatts {
+            append(value, at: nextSnapshot.recordedAt, to: &powerHistory)
+        }
+
         append(
             nextSnapshot.disk.readBytesPerSecond,
             at: nextSnapshot.recordedAt,
@@ -391,6 +492,8 @@ private actor SystemMetricsCollector {
     private var previousCPUTicks: [SystemCPUTicks] = []
     private var previousDiskCounters: SystemDiskCounters?
     private var previousDiskSampleDate: Date?
+    /// Holds the IOReport subscription and SMC connection open across samples.
+    private let sensors = SystemSensorSampler()
 
     func collect() -> SystemMonitorSnapshot {
         let now = Date()
@@ -423,6 +526,8 @@ private actor SystemMetricsCollector {
             gpu: Self.gpuMetrics(),
             memory: Self.memoryMetrics(),
             disk: disk,
+            thermal: sensors.thermalMetrics(),
+            power: sensors.powerMetrics(),
             uptime: ProcessInfo.processInfo.systemUptime
         )
     }
@@ -584,7 +689,11 @@ private actor SystemMetricsCollector {
             return SystemMemoryMetrics(totalBytes: ProcessInfo.processInfo.physicalMemory)
         }
 
-        let pageSize = UInt64(vm_kernel_page_size)
+        var kernelPageSize: vm_size_t = 0
+        guard host_page_size(mach_host_self(), &kernelPageSize) == KERN_SUCCESS else {
+            return SystemMemoryMetrics(totalBytes: ProcessInfo.processInfo.physicalMemory)
+        }
+        let pageSize = UInt64(kernelPageSize)
         let total = ProcessInfo.processInfo.physicalMemory
         let active = UInt64(statistics.active_count) * pageSize
         let wired = UInt64(statistics.wire_count) * pageSize
@@ -653,10 +762,14 @@ private actor SystemMetricsCollector {
         let rootURL = URL(fileURLWithPath: "/")
         let values = try? rootURL.resourceValues(forKeys: [
             .volumeTotalCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey,
             .volumeAvailableCapacityKey,
         ])
-        let total = UInt64(max(values?.volumeTotalCapacity ?? 0, 0))
-        let available = UInt64(max(values?.volumeAvailableCapacity ?? 0, 0))
+        let capacity = SystemDiskMetrics.resolvedCapacity(
+            total: values?.volumeTotalCapacity,
+            availableForImportantUsage: values?.volumeAvailableCapacityForImportantUsage,
+            available: values?.volumeAvailableCapacity
+        )
 
         let interval = max(elapsed ?? 0, 0)
         let readRate: Double
@@ -678,8 +791,8 @@ private actor SystemMetricsCollector {
         }
 
         return SystemDiskMetrics(
-            totalBytes: total,
-            availableBytes: available,
+            totalBytes: capacity?.total,
+            availableBytes: capacity?.available,
             readBytesPerSecond: readRate,
             writeBytesPerSecond: writeRate,
             cumulativeReadBytes: current.readBytes,
@@ -744,7 +857,7 @@ private actor SystemMetricsCollector {
                 ?? volume["FilesystemType"] as? String
                 ?? "APFS",
             mountPoint: volume["MountPoint"] as? String ?? "/",
-            deviceIdentifier: volume["DeviceIdentifier"] as? String ?? "--",
+            deviceIdentifier: volume["DeviceIdentifier"] as? String ?? NativFormatting.missingValue,
             model: device?["MediaName"] as? String ?? "Internal storage",
             connection: device?["BusProtocol"] as? String
                 ?? volume["BusProtocol"] as? String
@@ -873,7 +986,8 @@ private actor SystemMetricsCollector {
         guard sysctlbyname(name, &value, &size, nil, 0) == 0 else {
             return nil
         }
-        return String(cString: value)
+        let bytes = value.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func sysctlInteger(_ name: String) -> Int? {

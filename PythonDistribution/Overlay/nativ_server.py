@@ -954,6 +954,12 @@ def current_runtime_snapshot() -> dict[str, Any]:
     config = cache.get("config")
     text_config = getattr(config, "text_config", None)
     loaded_context_size = getattr(text_config, "max_position_embeddings", None)
+    configured_context_limit = base_generation.get_configured_context_limit()
+    effective_context_limit = (
+        min(loaded_context_size, configured_context_limit)
+        if loaded_context_size is not None and configured_context_limit is not None
+        else configured_context_limit or loaded_context_size
+    )
 
     upstream_snapshot: dict[str, Any] = {}
     snapshot_factory = getattr(base, "_server_runtime_snapshot", None)
@@ -1357,12 +1363,17 @@ def install_metrics_overlay() -> None:
 
         if isinstance(payload, dict) and apply_per_model_request_defaults(payload):
             body = json.dumps(payload).encode("utf-8")
+            # Serve the modified body downstream through the cached-body branch of
+            # starlette's BaseHTTPMiddleware `_CachedRequest.wrapped_receive`, which
+            # reads `request._body` and never touches the underlying receive.
+            #
+            # Do NOT also replace `request._receive`: `wrapped_receive` falls back
+            # to `self.receive()` in its "body consumed, waiting for disconnect"
+            # state (used by StreamingResponse.listen_for_disconnect), and a fake
+            # receive that always returns http.request raises
+            # `RuntimeError: Unexpected message received: http.request`, killing
+            # every streaming response when a per-model config is applied.
             request._body = body
-
-            async def _receive() -> dict[str, Any]:
-                return {"type": "http.request", "body": body, "more_body": False}
-
-            request._receive = _receive
 
         observation = parse_request_observation(request, payload)
         TRACKER.record_started(observation)
@@ -1545,6 +1556,27 @@ def install_metrics_overlay() -> None:
             "adapter_validation": snapshot.get("adapter_validation"),
             "loaded_models": snapshot.get("loaded_models", {}),
         }
+
+    @base.app.post("/routines/{routine_id}/run", include_in_schema=False)
+    @base.app.post("/v1/routines/{routine_id}/run")
+    def run_routine_endpoint(routine_id: str, request: Request):
+        """Queue a routine for the Nativ app to run."""
+        require_api_key = getattr(base, "_require_management_api_key", None)
+        if require_api_key is not None:
+            require_api_key(request)
+
+        if not routine_id.strip():
+            raise HTTPException(status_code=400, detail="A routine id is required.")
+
+        directory = os.path.expanduser(
+            "~/Library/Application Support/Nativ/Routines/triggers"
+        )
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{uuid.uuid4().hex}.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"routineID": routine_id, "requestedAt": time.time()}, handle)
+
+        return {"status": "queued", "routine_id": routine_id}
 
 
 def main() -> None:

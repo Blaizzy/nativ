@@ -4,6 +4,27 @@ extension Notification.Name {
     static let localModelLibraryDidChange = Notification.Name("LocalModelLibraryDidChange")
 }
 
+struct LocalModelSearchPaths: Hashable, Sendable {
+    let primary: String
+    let additional: [String]
+
+    init(primary: String, additional: [String] = []) {
+        let expandedPrimary = LocalModelDiscovery.expandedPath(primary)
+        self.primary = expandedPrimary
+
+        var seen = Set([expandedPrimary])
+        self.additional = additional
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map(LocalModelDiscovery.expandedPath)
+            .filter { seen.insert($0).inserted }
+    }
+
+    var all: [String] { [primary] + additional }
+
+    var cacheKey: String { all.joined(separator: "\u{0}") }
+}
+
 enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case text
     case vision
@@ -14,6 +35,7 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case speechToText
     case textToSpeech
     case embeddings
+    case reranking
     case reasoning
     case tools
     case drafter
@@ -33,11 +55,13 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
         case .imageEditing:
             "Image Editing"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .embeddings:
             "Embeddings"
+        case .reranking:
+            "Reranking"
         case .reasoning:
             "Reasoning"
         case .tools:
@@ -92,7 +116,7 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     var isEligibleForLanguageModelPicker: Bool {
         // Any text-generative model qualifies (chat + omni), even if it also carries an
         // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
-        guard !capabilities.contains(.drafter) else {
+        guard !capabilities.contains(.drafter), !capabilities.contains(.reranking) else {
             return false
         }
         return capabilities.contains(.text)
@@ -179,9 +203,9 @@ struct LocalModel: Identifiable, Equatable, Sendable {
 
     private static func compactCount(_ value: Double, suffix: String) -> String {
         if value.rounded() == value {
-            return "\(Int(value))\(suffix)"
+            return Int(value).formatted() + suffix
         }
-        return String(format: "%.1f%@", value, suffix)
+        return value.formatted(.number.precision(.fractionLength(1))) + suffix
     }
 }
 
@@ -303,11 +327,12 @@ enum LocalModelDiscovery {
 
     private static let scanCache = ScanCache()
 
-    static func scan(path: String, additionalPaths: [String] = []) async throws -> [LocalModel] {
-        let expandedPath = Self.expandedPath(path)
-        let expandedAdditionalPaths = additionalPaths.map(Self.expandedPath)
+    static func scan(searchPaths: LocalModelSearchPaths) async throws -> [LocalModel] {
         return try await scanCache.scan(
-            key: ScanCache.Key(path: expandedPath, additionalPaths: expandedAdditionalPaths)
+            key: ScanCache.Key(
+                path: searchPaths.primary,
+                additionalPaths: searchPaths.additional
+            )
         )
     }
 
@@ -544,6 +569,57 @@ enum LocalModelDiscovery {
         )
     }
 
+    static let speechToTextModelTypesRequiringPreprocessor: Set<String> = [
+        "mms",
+        "moss_transcribe_diarize",
+        "qwen2_audio",
+        "qwen3_asr",
+        "voxtral"
+    ]
+
+    static func speechToTextPreloadIssue(repoID: String, path: String) -> String? {
+        let fileManager = FileManager.default
+        guard let snapshotURL = modelSnapshotURL(
+            repoID: repoID,
+            path: expandedPath(path),
+            fileManager: fileManager
+        ) else {
+            return nil
+        }
+
+        let configURL = snapshotURL.appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: configURL),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelType = (config["model_type"] as? String)?.lowercased(),
+              speechToTextModelTypesRequiringPreprocessor.contains(modelType)
+        else {
+            return nil
+        }
+
+        let preprocessorURL = snapshotURL.appendingPathComponent("preprocessor_config.json")
+        guard !fileManager.fileExists(atPath: preprocessorURL.path) else {
+            return nil
+        }
+
+        return "\(repoID) is missing preprocessor_config.json, which \(modelType) speech models need in order to load."
+    }
+
+    private static func modelSnapshotURL(
+        repoID: String,
+        path: String,
+        fileManager: FileManager
+    ) -> URL? {
+        if repoID.hasPrefix("/") {
+            let directURL = URL(fileURLWithPath: repoID, isDirectory: true)
+            return isDirectoryURL(directURL, fileManager: fileManager) ? directURL : nil
+        }
+
+        let repositoryName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
+        let repositoryURL = URL(fileURLWithPath: path, isDirectory: true)
+            .appendingPathComponent(repositoryName, isDirectory: true)
+        return preferredSnapshotURL(for: repositoryURL, fileManager: fileManager)
+    }
+
     private static func configurationMetadataSynchronously(
         repoID: String,
         path: String
@@ -655,9 +731,18 @@ enum LocalModelDiscovery {
             return false
         }
 
-        let indexURL = snapshotURL.appendingPathComponent("model.safetensors.index.json")
-        if fileManager.fileExists(atPath: indexURL.path) {
+        switch safetensorsShardIndexStatus(at: snapshotURL, fileManager: fileManager) {
+        case .complete:
             return true
+        case .incomplete:
+            return false
+        case .stale:
+            // The index describes a different build of the model, so fall back
+            // to the shards on disk — but only accept a set that is complete on
+            // its own, so a partially downloaded snapshot stays hidden.
+            return safetensorsShardsLookComplete(at: snapshotURL, fileManager: fileManager)
+        case .absent:
+            break
         }
 
         guard let contents = try? fileManager.contentsOfDirectory(
@@ -680,6 +765,144 @@ enum LocalModelDiscovery {
             at: snapshotURL,
             fileManager: fileManager
         )
+    }
+
+    private enum SafetensorsShardIndexStatus {
+        case absent
+        case complete
+        case incomplete
+        /// The index references shards, none of whose filenames exist in the
+        /// snapshot. The index describes a different build of the model rather
+        /// than a download that is still in flight.
+        case stale
+    }
+
+    private struct SafetensorsShardIndex: Decodable {
+        let weightMap: [String: String]
+
+        private enum CodingKeys: String, CodingKey {
+            case weightMap = "weight_map"
+        }
+    }
+
+    /// Decides whether the `.safetensors` files in a snapshot form a complete
+    /// set on their own, without consulting a shard index. A snapshot qualifies
+    /// when it holds a single unsharded file, or every shard of one
+    /// `model-0000N-of-0000M` series.
+    private static func safetensorsShardsLookComplete(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: snapshotURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        var shardTotals: Set<Int> = []
+        var shardNumbers: Set<Int> = []
+        var hasUnshardedWeights = false
+
+        for fileURL in contents where fileURL.pathExtension == "safetensors" {
+            guard let values = try? fileURL.resolvingSymlinksInPath().resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey]
+                  ),
+                  values.isRegularFile == true,
+                  let fileSize = values.fileSize,
+                  fileSize > 0
+            else {
+                continue
+            }
+
+            if let numbering = shardNumbering(forFilename: fileURL.lastPathComponent) {
+                shardTotals.insert(numbering.total)
+                shardNumbers.insert(numbering.index)
+            } else {
+                hasUnshardedWeights = true
+            }
+        }
+
+        // Shards from more than one series mean the snapshot holds leftovers of
+        // another build, which is not a set this check can vouch for.
+        if let total = shardTotals.first, shardTotals.count == 1 {
+            return shardNumbers == Set(1...total)
+        }
+        return shardTotals.isEmpty && hasUnshardedWeights
+    }
+
+    /// Parses the `model-00001-of-00004.safetensors` shard naming convention.
+    private static func shardNumbering(forFilename filename: String) -> (index: Int, total: Int)? {
+        let components = (filename as NSString).deletingPathExtension.components(separatedBy: "-")
+        guard components.count >= 4,
+              components[components.count - 2] == "of",
+              let index = Int(components[components.count - 3]),
+              let total = Int(components[components.count - 1]),
+              index >= 1,
+              total >= 1,
+              index <= total
+        else {
+            return nil
+        }
+        return (index, total)
+    }
+
+    /// A shard index is downloaded before the weight shards it describes. Treat
+    /// the snapshot as usable only after every referenced shard is a non-empty
+    /// regular file inside the snapshot directory.
+    ///
+    /// When none of the referenced filenames are present the index is reporting
+    /// on a different build of the model, so it says nothing about whether this
+    /// snapshot finished downloading; that case is reported as `.stale` and the
+    /// shards themselves are inspected instead.
+    private static func safetensorsShardIndexStatus(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> SafetensorsShardIndexStatus {
+        let indexURL = snapshotURL.appendingPathComponent("model.safetensors.index.json")
+        guard fileManager.fileExists(atPath: indexURL.path) else {
+            return .absent
+        }
+
+        guard let data = try? Data(contentsOf: indexURL),
+              let index = try? JSONDecoder().decode(SafetensorsShardIndex.self, from: data)
+        else {
+            return .incomplete
+        }
+
+        let shardFilenames = Set(index.weightMap.values)
+        guard !shardFilenames.isEmpty else {
+            return .incomplete
+        }
+
+        let snapshotPath = snapshotURL.standardizedFileURL.path
+        let snapshotPrefix = snapshotPath.hasSuffix("/") ? snapshotPath : snapshotPath + "/"
+        let availableShardCount = shardFilenames.filter { filename in
+            guard !filename.isEmpty,
+                  !(filename as NSString).isAbsolutePath
+            else {
+                return false
+            }
+
+            let shardURL = snapshotURL.appendingPathComponent(filename).standardizedFileURL
+            guard shardURL.path.hasPrefix(snapshotPrefix),
+                  let values = try? shardURL.resolvingSymlinksInPath().resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey]
+                  ),
+                  values.isRegularFile == true,
+                  let fileSize = values.fileSize,
+                  fileSize > 0
+            else {
+                return false
+            }
+            return true
+        }.count
+
+        if availableShardCount == shardFilenames.count {
+            return .complete
+        }
+        return availableShardCount == 0 ? .stale : .incomplete
     }
 
     private static func snapshotSize(at snapshotURL: URL, fileManager: FileManager) -> Int64? {
@@ -1166,6 +1389,12 @@ enum LocalModelDiscovery {
             }
         }
 
+        if model.localizedCaseInsensitiveContains("rerank")
+            || descriptors.contains("reranker")
+            || descriptors.contains("reranking") {
+            capabilities.insert(.reranking)
+        }
+
         if capabilities.contains(.text)
             && (descriptors.contains("reasoning")
                 || descriptors.contains("thinking")
@@ -1491,14 +1720,14 @@ final class LocalModelLibrary: ObservableObject {
         scanTask?.cancel()
     }
 
-    func scan(path: String, additionalPaths: [String] = []) {
+    func scan(searchPaths: LocalModelSearchPaths) {
         scanTask?.cancel()
         isScanning = true
         error = nil
 
         scanTask = Task { [weak self] in
             do {
-                let models = try await LocalModelDiscovery.scan(path: path, additionalPaths: additionalPaths)
+                let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
                 guard !Task.isCancelled else {
                     return
                 }

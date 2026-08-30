@@ -1,7 +1,14 @@
 import AppKit
 import Foundation
 import NativServerKit
+import OSLog
 import UniformTypeIdentifiers
+
+struct ChatPersistenceFailure: Equatable, Sendable {
+    let operation: String
+    let sessionID: UUID?
+    let message: String
+}
 
 struct ChatSession: Identifiable, Equatable, Codable {
     var id: UUID
@@ -15,6 +22,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var sessionOrder: Int?
     var folderID: UUID?
     var imageGenerationModelID: String?
+    var scheduledTaskID: String?
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -26,13 +34,17 @@ struct ChatSession: Identifiable, Equatable, Codable {
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
-            folderID: folderID
+            folderID: folderID,
+            scheduledTaskID: scheduledTaskID
         )
     }
 
     var displayTitle: String {
         if let customTitle, !customTitle.isEmpty {
             return customTitle
+        }
+        if scheduledTaskID != nil, !title.isEmpty {
+            return title
         }
         return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
     }
@@ -65,7 +77,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
                 if firstUserMessage.imageAttachments.count == 1 {
                     return firstUserMessage.imageAttachments[0].filename
                 }
-                return "\(firstUserMessage.imageAttachments.count) images"
+                return "\(firstUserMessage.imageAttachments.count) attachments"
             }
         }
 
@@ -95,8 +107,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
             return value
         }
 
-        let keep = max(1, maxLength - 3)
-        return "\(value.prefix(keep))..."
+        let keep = max(1, maxLength - 1)
+        return "\(value.prefix(keep))…"
     }
 }
 
@@ -110,6 +122,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let scheduledTaskID: String?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
@@ -284,21 +297,31 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     }
 
     var apiMessage: MLXChatMessage? {
+        apiMessage(documentContext: nil)
+    }
+
+    func apiMessage(
+        documentContext: String?,
+        includesImages: Bool = true
+    ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let imageParts = imageAttachments.filter {
-                ArtifactKind.resolve(mimeType: $0.mimeType, filename: $0.filename) == .image
-            }
+            let requestContent = [content, documentContext ?? ""]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            let imageParts = includesImages
+                ? imageAttachments.filter { $0.chatAttachmentKind == .image }
+                : []
             if !imageParts.isEmpty {
                 var parts: [MLXChatContentPart] = []
-                if !content.isEmpty {
-                    parts.append(MLXChatContentPart(text: content))
+                if !requestContent.isEmpty {
+                    parts.append(MLXChatContentPart(text: requestContent))
                 }
                 parts.append(contentsOf: imageParts.map { MLXChatContentPart(imageURL: $0.dataURL) })
                 return MLXChatMessage(role: "user", content: .parts(parts))
             }
 
-            return MLXChatMessage(role: "user", content: content)
+            return MLXChatMessage(role: "user", content: requestContent)
         case .assistant:
             guard !content.isEmpty || !reasoningContent.isEmpty || !toolCalls.isEmpty else {
                 return nil
@@ -456,6 +479,29 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 
 struct ChatSessionStore {
     private let fileManager = FileManager.default
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Nativ",
+        category: "ChatPersistence"
+    )
+
+    var onFailure: ((ChatPersistenceFailure) -> Void)?
+
+    private func reportFailure(
+        _ operation: String,
+        sessionID: UUID? = nil,
+        error: Error
+    ) {
+        Self.logger.error(
+            "\(operation, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
+        )
+        onFailure?(
+            ChatPersistenceFailure(
+                operation: operation,
+                sessionID: sessionID,
+                message: error.localizedDescription
+            )
+        )
+    }
 
     init() {}
 
@@ -479,7 +525,8 @@ struct ChatSessionStore {
         loadSession(from: sessionURL(for: id))
     }
 
-    func saveSession(_ session: ChatSession) {
+    @discardableResult
+    func saveSession(_ session: ChatSession) -> Bool {
         do {
             try fileManager.createDirectory(
                 at: sessionsDirectory,
@@ -491,13 +538,21 @@ struct ChatSessionStore {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(session)
             try data.write(to: sessionURL(for: session.id), options: .atomic)
+            return true
         } catch {
-            // Chat persistence should not block the local server UI.
+            reportFailure("saveSession", sessionID: session.id, error: error)
+            return false
         }
     }
 
     func deleteSession(id: UUID) {
-        try? fileManager.removeItem(at: sessionURL(for: id))
+        do {
+            try fileManager.removeItem(at: sessionURL(for: id))
+        } catch CocoaError.fileNoSuchFile {
+            return
+        } catch {
+            reportFailure("deleteSession", sessionID: id, error: error)
+        }
     }
 
     func loadFolders() -> [ChatFolder] {
@@ -519,6 +574,7 @@ struct ChatSessionStore {
             let data = try encoder.encode(folders)
             try data.write(to: foldersURL, options: .atomic)
         } catch {
+            reportFailure("saveFolders", error: error)
         }
     }
 

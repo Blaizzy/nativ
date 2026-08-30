@@ -12,15 +12,13 @@ final class AudioInputLevelState: ObservableObject {
 
 @MainActor
 final class AudioInputLevelMonitor: ObservableObject {
-    private static let publishInterval: TimeInterval = 1.0 / 15.0
-
     let meterState = AudioInputLevelState()
     @Published private(set) var isMonitoring = false
     @Published private(set) var errorMessage: String?
 
     private var audioEngine: AVAudioEngine?
-    private var smoothedLevel: Float = 0
-    private var lastPublishedAt = Date.distantPast
+    private var realtimeMeter: RealtimeAudioMeter?
+    private var meterPublisherTask: Task<Void, Never>?
 
     func start(deviceUniqueID: String?) async {
         stop()
@@ -48,20 +46,19 @@ final class AudioInputLevelMonitor: ObservableObject {
                 throw VoiceAudioRecorderError.couldNotStart
             }
 
+            let realtimeMeter = RealtimeAudioMeter(profile: .inputMonitor)
+            let tap = Self.makeTap(realtimeMeter: realtimeMeter)
             inputNode.installTap(
                 onBus: 0,
                 bufferSize: 1_024,
-                format: format
-            ) { [weak self] buffer, _ in
-                let level = Self.normalizedLevel(from: buffer)
-                Task { @MainActor [weak self] in
-                    self?.update(level: level)
-                }
-            }
+                format: format,
+                block: tap
+            )
             engine.prepare()
             try engine.start()
             audioEngine = engine
             isMonitoring = true
+            startMeterPublisher(realtimeMeter: realtimeMeter)
         } catch {
             errorMessage = error.localizedDescription
             stop(resetError: false)
@@ -86,25 +83,45 @@ final class AudioInputLevelMonitor: ObservableObject {
         }
         audioEngine = nil
         isMonitoring = false
-        smoothedLevel = 0
-        lastPublishedAt = .distantPast
+        stopMeterPublisher()
         meterState.update(0)
         if resetError {
             errorMessage = nil
         }
     }
 
-    private func update(level newLevel: Float) {
-        guard isMonitoring else {
-            return
+    private func startMeterPublisher(realtimeMeter: RealtimeAudioMeter) {
+        self.realtimeMeter = realtimeMeter
+        meterPublisherTask = Task { [weak self, realtimeMeter] in
+            await RealtimeAudioMeterPublisher.run(meter: realtimeMeter) {
+                [weak self, realtimeMeter] snapshot in
+                guard
+                    let self,
+                    self.realtimeMeter === realtimeMeter,
+                    self.isMonitoring
+                else {
+                    return
+                }
+                self.meterState.update(snapshot.level)
+            }
         }
-        smoothedLevel = (smoothedLevel * 0.65) + (newLevel * 0.35)
-        let now = Date()
-        guard now.timeIntervalSince(lastPublishedAt) >= Self.publishInterval else {
-            return
+    }
+
+    private func stopMeterPublisher() {
+        realtimeMeter = nil
+        meterPublisherTask?.cancel()
+        meterPublisherTask = nil
+    }
+
+    nonisolated static func makeTap(
+        realtimeMeter: RealtimeAudioMeter
+    ) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+        { buffer, _ in
+            realtimeMeter.submit(
+                level: normalizedLevel(from: buffer),
+                elapsed: 0
+            )
         }
-        lastPublishedAt = now
-        meterState.update(smoothedLevel)
     }
 
     private nonisolated static func normalizedLevel(

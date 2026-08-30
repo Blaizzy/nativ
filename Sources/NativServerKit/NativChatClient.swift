@@ -534,26 +534,41 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     }
 }
 
-public final class NativChatClient {
+public struct MLXPromptTokenCount: Decodable, Equatable, Sendable {
+    public let inputTokens: Int
+
+    enum CodingKeys: String, CodingKey {
+        case inputTokens = "input_tokens"
+    }
+}
+
+public final class NativChatClient: @unchecked Sendable {
     private let baseURL: URL
     private let apiKey: String?
     private let session: URLSession
     private let timeout: TimeInterval
-    private let decoder = JSONDecoder()
-    private let encoder = JSONEncoder()
+
+
+    public static let defaultIdleTimeout: TimeInterval = 600
+
+    /// Total budget for one request. Long generations legitimately run for many
+    /// minutes, so this only exists to stop a connection leaking forever; stalls
+    /// are caught by `idleTimeout`, not here.
+    public static let defaultResourceTimeout: TimeInterval = 3_600
 
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:8080")!,
         apiKey: String? = nil,
-        timeout: TimeInterval = 600
+        idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
+        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout
     ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
-        self.timeout = timeout
+        self.timeout = idleTimeout
 
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
+        configuration.timeoutIntervalForRequest = idleTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: configuration)
     }
@@ -578,7 +593,7 @@ public final class NativChatClient {
             throw NativChatError.httpStatus(httpResponse.statusCode, String(decoding: data, as: UTF8.self))
         }
 
-        let decoded = try decoder.decode(ChatCompletionResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
         guard let choice = decoded.choices.first else {
             throw NativChatError.missingAssistantContent
         }
@@ -599,9 +614,26 @@ public final class NativChatClient {
         )
     }
 
+    public func countPromptTokens(
+        for request: MLXChatCompletionRequest
+    ) async throws -> MLXPromptTokenCount {
+        let urlRequest = try makePromptTokenCountURLRequest(for: request)
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativChatError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NativChatError.httpStatus(
+                httpResponse.statusCode,
+                String(decoding: data, as: UTF8.self)
+            )
+        }
+        return try JSONDecoder().decode(MLXPromptTokenCount.self, from: data)
+    }
+
     public func streamChat(
         _ request: MLXChatCompletionRequest,
-        onDelta: @escaping (String) async -> Void
+        onDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> MLXChatCompletion {
         try await streamChat(request, onEvent: { event in
             if let content = event.content, !content.isEmpty {
@@ -612,8 +644,9 @@ public final class NativChatClient {
 
     public func streamChat(
         _ request: MLXChatCompletionRequest,
-        onEvent: @escaping (MLXChatStreamDelta) async -> Void
+        onEvent: @escaping @Sendable (MLXChatStreamDelta) async -> Void
     ) async throws -> MLXChatCompletion {
+        let decoder = JSONDecoder()
         var payload = request
         payload.stream = true
         payload.streamOptions = MLXChatStreamOptions(includeUsage: true)
@@ -770,8 +803,24 @@ public final class NativChatClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accepts, forHTTPHeaderField: "Accept")
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
-        request.httpBody = try encoder.encode(payload)
+        request.httpBody = try JSONEncoder().encode(payload)
         return request
+    }
+
+    func makePromptTokenCountURLRequest(
+        for request: MLXChatCompletionRequest
+    ) throws -> URLRequest {
+        var urlRequest = URLRequest(
+            url: baseURL.appendingPathComponent("v1/responses/input_tokens")
+        )
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = timeout
+        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        NativServerAuthorization.authorize(&urlRequest, apiKey: apiKey)
+        urlRequest.httpBody = try JSONEncoder().encode(PromptTokenCountRequest(request))
+        return urlRequest
     }
 
     private func resolvedUsage(
@@ -816,6 +865,39 @@ public final class NativChatClient {
         }
 
         return body
+    }
+}
+
+private struct PromptTokenCountRequest: Encodable {
+    let input: [MLXChatMessage]
+    let model: String
+    let tools: [MLXChatToolDefinition]?
+    let toolChoice: String?
+    let enableThinking: Bool?
+    let thinkingBudget: Int?
+    let thinkingStartToken: String?
+    let thinkingEndToken: String?
+
+    init(_ request: MLXChatCompletionRequest) {
+        input = request.messages
+        model = request.model
+        tools = request.tools
+        toolChoice = request.toolChoice
+        enableThinking = request.enableThinking
+        thinkingBudget = request.thinkingBudget
+        thinkingStartToken = request.thinkingStartToken
+        thinkingEndToken = request.thinkingEndToken
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case input
+        case model
+        case tools
+        case toolChoice = "tool_choice"
+        case enableThinking = "enable_thinking"
+        case thinkingBudget = "thinking_budget"
+        case thinkingStartToken = "thinking_start_token"
+        case thinkingEndToken = "thinking_end_token"
     }
 }
 
