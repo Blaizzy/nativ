@@ -72,6 +72,7 @@ private final class ModelsNativState: ObservableObject {
         var settings: NativSettings
         var isRunning: Bool
         var modelSwitchInProgress: Bool
+        var inferenceActivityInProgress: Bool
         var modelSwitchTargetID: String?
         var modelLoadingProgress: Double?
         var metricsLoading: Bool
@@ -89,6 +90,7 @@ private final class ModelsNativState: ObservableObject {
             settings: model.settings,
             isRunning: model.isRunning,
             modelSwitchInProgress: model.modelSwitchInProgress,
+            inferenceActivityInProgress: model.inferenceActivityInProgress,
             modelSwitchTargetID: model.modelSwitchTargetID,
             modelLoadingProgress: model.modelLoadingProgress,
             metricsLoading: model.metricsLoading,
@@ -113,6 +115,7 @@ private final class ModelsNativState: ObservableObject {
             $0.settings = model.settings
             $0.isRunning = model.isRunning
             $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.inferenceActivityInProgress = model.inferenceActivityInProgress
             $0.modelSwitchTargetID = model.modelSwitchTargetID
             $0.modelLoadingProgress = model.modelLoadingProgress
             $0.metricsLoading = model.metricsLoading
@@ -132,6 +135,7 @@ private final class ModelsNativState: ObservableObject {
     var settings: NativSettings { snapshot.settings }
     var isRunning: Bool { snapshot.isRunning }
     var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var inferenceActivityInProgress: Bool { snapshot.inferenceActivityInProgress }
     var modelSwitchTargetID: String? { snapshot.modelSwitchTargetID }
     var modelLoadingProgress: Double? { snapshot.modelLoadingProgress }
     var metricsLoading: Bool { snapshot.metricsLoading }
@@ -539,7 +543,8 @@ struct ModelsView: View {
                     preferredPreloadSlot: preferredPreloadSlot(
                         among: preloadSlots
                     ),
-                    isSelectionDisabled: modelState.modelSwitchInProgress,
+                    isSelectionDisabled: modelState.modelSwitchInProgress
+                        || modelState.inferenceActivityInProgress,
                     isModelLoading: modelState.modelLoadingID
                         == localModel.repoID,
                     modelLoadingPercentage: modelState.modelLoadingPercentage,

@@ -6,6 +6,7 @@ final class ControlPanelSharedDependencies {
     let systemMonitor = SystemMonitorStore()
     let launchAtLogin = LaunchAtLoginController()
     let persistedDataChanges = PersistedDataChangeHub()
+    let inferenceActivity = InferenceActivityCoordinator()
 }
 
 @MainActor
@@ -15,14 +16,17 @@ final class ControlPanelDependencies: ObservableObject {
     let launchAtLogin: LaunchAtLoginController
     let windowID: UUID
     let persistedDataChanges: PersistedDataChangeHub
+    let inferenceActivity: InferenceActivityCoordinator
 
     lazy var chat = ChatViewModel(
         windowID: windowID,
-        persistedDataChanges: persistedDataChanges
+        persistedDataChanges: persistedDataChanges,
+        inferenceActivity: inferenceActivity
     )
     lazy var imageGeneration = ImageGenerationViewModel(
         windowID: windowID,
-        persistedDataChanges: persistedDataChanges
+        persistedDataChanges: persistedDataChanges,
+        inferenceActivity: inferenceActivity
     )
     lazy var artifacts = ArtifactStore()
     lazy var dashboard = DashboardViewModel()
@@ -39,5 +43,6 @@ final class ControlPanelDependencies: ObservableObject {
         launchAtLogin = shared.launchAtLogin
         self.windowID = windowID
         persistedDataChanges = shared.persistedDataChanges
+        inferenceActivity = shared.inferenceActivity
     }
 }

@@ -41,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private var downloadShutdownTask: Task<Void, Never>?
     private var didFinishDownloadShutdown = false
 
+    override init() {
+        super.init()
+        model.observeInferenceActivity(controlPanelSharedDependencies.inferenceActivity)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
             self?.updateStatusItemButton()

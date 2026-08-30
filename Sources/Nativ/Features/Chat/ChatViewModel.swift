@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import NativServerKit
+import Observation
 import UniformTypeIdentifiers
 
 struct ChatQueuedPrompt: Identifiable, Equatable {
@@ -82,6 +83,7 @@ final class ChatViewModel: ObservableObject {
     private let sessionStore = ChatSessionStore()
     private let windowID: UUID
     private let persistedDataChanges: PersistedDataChangeHub
+    private let inferenceActivity: InferenceActivityCoordinator
     private let documentContextBuilder: ChatDocumentContextBuilder
     private let attachmentValidator: ChatAttachmentValidator
     private var sessionLoadTask: Task<Void, Never>?
@@ -110,10 +112,12 @@ final class ChatViewModel: ObservableObject {
 
     init(
         windowID: UUID = UUID(),
-        persistedDataChanges: PersistedDataChangeHub = .init()
+        persistedDataChanges: PersistedDataChangeHub = .init(),
+        inferenceActivity: InferenceActivityCoordinator = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
+        self.inferenceActivity = inferenceActivity
         let documentExtractionCache = ChatDocumentExtractionCache()
         documentContextBuilder = ChatDocumentContextBuilder(
             extractionCache: documentExtractionCache
@@ -145,12 +149,27 @@ final class ChatViewModel: ObservableObject {
             .sink { [weak self] change in
                 self?.handlePersistedDataChange(change)
             }
+        observeInferenceActivity()
     }
 
     deinit {
         activeTask?.cancel()
         sessionLoadTask?.cancel()
         attachmentValidationTasks.values.forEach { $0.cancel() }
+    }
+
+    private func observeInferenceActivity() {
+        withObservationTracking {
+            _ = inferenceActivity.hasActiveOperations
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.observeInferenceActivity()
+                self.startNextRequestIfNeeded()
+            }
+        }
     }
 
     var isCurrentSessionSending: Bool {
@@ -162,6 +181,13 @@ final class ChatViewModel: ObservableObject {
 
     var hasPendingRequests: Bool {
         activeRequestSessionID != nil || !requestQueue.isEmpty
+    }
+
+    var isCurrentSessionActiveInAnotherWindow: Bool {
+        guard let currentSessionID else {
+            return false
+        }
+        return !canModifySession(currentSessionID)
     }
 
     var visibleMessages: [ChatTranscriptMessage] {
@@ -238,6 +264,7 @@ final class ChatViewModel: ObservableObject {
     func canEditUserMessage(_ messageID: UUID) -> Bool {
         guard let currentSessionID,
             !isSessionBusy(currentSessionID),
+            canModifySession(currentSessionID),
             latestUserMessageID == messageID
         else {
             return false
@@ -311,6 +338,9 @@ final class ChatViewModel: ObservableObject {
         if activeRequestSessionID == currentSessionID {
             return "Working…"
         }
+        if isCurrentSessionActiveInAnotherWindow {
+            return "This chat is active in another window."
+        }
         return nil
     }
 
@@ -346,6 +376,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func removeAttachment(sessionID: UUID, messageID: UUID, attachmentID: UUID) {
+        guard canModifySession(sessionID) else {
+            return
+        }
         if sessionID == currentSessionID {
             for index in messages.indices where messages[index].id == messageID {
                 messages[index].imageAttachments.removeAll { $0.id == attachmentID }
@@ -394,7 +427,9 @@ final class ChatViewModel: ObservableObject {
 
     func renameSession(_ sessionID: UUID, to newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+        guard canModifySession(sessionID),
+            let index = storedSessions.firstIndex(where: { $0.id == sessionID })
+        else {
             return
         }
         storedSessions[index].customTitle = trimmed.isEmpty ? nil : trimmed
@@ -406,7 +441,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func setPinned(_ sessionID: UUID, pinned: Bool) {
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+        guard canModifySession(sessionID),
+            let index = storedSessions.firstIndex(where: { $0.id == sessionID })
+        else {
             return
         }
         let order = pinned ? nextPinnedOrder() : nil
@@ -442,6 +479,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     func deleteFolder(_ folderID: UUID) {
+        let affectedSessionIDs = storedSessions.lazy
+            .filter { $0.folderID == folderID }
+            .map(\.id)
+        guard affectedSessionIDs.allSatisfy(canModifySession) else {
+            return
+        }
         folders.removeAll { $0.id == folderID }
         saveFolders()
         for index in storedSessions.indices where storedSessions[index].folderID == folderID {
@@ -473,7 +516,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
-        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
+        guard canModifySession(sessionID),
+            let index = storedSessions.firstIndex(where: { $0.id == sessionID })
+        else {
             return
         }
         storedSessions[index].folderID = folderID
@@ -507,6 +552,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
+        guard orderedSessionIDs.allSatisfy(canModifySession) else {
+            return
+        }
         for (order, sessionID) in orderedSessionIDs.enumerated() {
             guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
                 continue
@@ -523,6 +571,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func applySessionOrder(_ orderedSessionIDs: [UUID]) {
+        guard orderedSessionIDs.allSatisfy(canModifySession) else {
+            return
+        }
         for (order, sessionID) in orderedSessionIDs.enumerated() {
             guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }) else {
                 continue
@@ -545,6 +596,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func deleteSession(_ sessionID: UUID) {
+        guard canModifySession(sessionID) else {
+            return
+        }
         // A busy session used to be undeletable, so a chat whose stream never
         // finished could not be removed at all. Cancel its work and delete it.
         if isSessionBusy(sessionID) {
@@ -590,6 +644,9 @@ final class ChatViewModel: ObservableObject {
         case .keepChats:
             for index in storedSessions.indices where sessionIDs.contains(storedSessions[index].id)
             {
+                guard canModifySession(storedSessions[index].id) else {
+                    continue
+                }
                 let session = ScheduledTaskChatLinker.makeIndependentSession(
                     from: storedSessions[index]
                 )
@@ -667,7 +724,8 @@ final class ChatViewModel: ObservableObject {
         guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
             languageModelSupportsVision || !hasPendingImageAttachments,
             let modelID = settings.languageModelID,
-            let currentSession
+            let currentSession,
+            canModifySession(currentSession.id)
         else {
             return
         }
@@ -1126,6 +1184,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func clear() {
+        if let currentSessionID, !canModifySession(currentSessionID) {
+            return
+        }
         activeTask?.cancel()
         activeTask = nil
         activeRequestID = nil
@@ -1153,7 +1214,22 @@ final class ChatViewModel: ObservableObject {
 
         while !requestQueue.isEmpty {
             let queuedRequest = requestQueue.removeFirst()
+            let resource = InferenceActivityCoordinator.Resource.chat(
+                queuedRequest.sessionID
+            )
+            guard inferenceActivity.begin(
+                resource: resource,
+                windowID: windowID,
+                operationID: queuedRequest.id
+            ) else {
+                requestQueue.insert(queuedRequest, at: 0)
+                return
+            }
             guard insertAssistantMessage(for: queuedRequest) else {
+                inferenceActivity.end(
+                    resource: resource,
+                    operationID: queuedRequest.id
+                )
                 continue
             }
 
@@ -1165,24 +1241,30 @@ final class ChatViewModel: ObservableObject {
                 bumpScroll()
             }
 
-            activeTask = Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
+            activeTask = Task { @MainActor [weak self, inferenceActivity] in
                 // Release the in-flight slot on every exit path. Clearing it only
                 // after the request returned normally meant a stalled stream left
                 // the session marked busy forever, which is what made a frozen
                 // chat impossible to delete, stop, or switch away from.
                 defer {
-                    let ownedRequest = ownsActiveRequest(queuedRequest.id)
-                    releaseActiveRequestSlot(matching: queuedRequest.id)
-                    if ownedRequest {
-                        if currentSessionID == queuedRequest.sessionID {
-                            bumpScroll()
+                    inferenceActivity.end(
+                        resource: resource,
+                        operationID: queuedRequest.id
+                    )
+                    if let self {
+                        let ownedRequest = self.ownsActiveRequest(queuedRequest.id)
+                        self.releaseActiveRequestSlot(matching: queuedRequest.id)
+                        if ownedRequest {
+                            if self.currentSessionID == queuedRequest.sessionID {
+                                self.bumpScroll()
+                            }
+                            self.startNextRequestIfNeeded()
                         }
-                        startNextRequestIfNeeded()
                     }
+                }
+
+                guard let self else {
+                    return
                 }
 
                 do {
@@ -2455,7 +2537,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func persistCurrentSession(updateTimestamp: Bool) {
-        guard var session = currentSession else {
+        guard var session = currentSession, canModifySession(session.id) else {
             return
         }
 
@@ -2494,6 +2576,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func persistSession(_ sessionID: UUID, updateTimestamp: Bool) {
+        guard canModifySession(sessionID) else {
+            return
+        }
         if sessionID == currentSessionID {
             persistCurrentSession(updateTimestamp: updateTimestamp)
             return
@@ -2565,8 +2650,18 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func saveSession(_ session: ChatSession) {
+        guard canModifySession(session.id) else {
+            return
+        }
         sessionStore.saveSession(session)
         persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
+    }
+
+    func canModifySession(_ sessionID: UUID) -> Bool {
+        !inferenceActivity.isOwnedByAnotherWindow(
+            .chat(sessionID),
+            windowID: windowID
+        )
     }
 
     private func deletePersistedSession(_ sessionID: UUID) {
