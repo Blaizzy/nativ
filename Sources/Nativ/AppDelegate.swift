@@ -32,10 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private var statusItem: NSStatusItem?
     private lazy var statusMenuController = StatusMenuController(
         model: model,
-        navigation: controlPanelNavigation,
         extensionManager: extensionManager,
-        showMainWindow: { [weak self] in
-            self?.showMainWindow()
+        performWindowIntent: { [weak self] intent in
+            self?.performWindowIntent(intent)
         }
     )
     private var downloadShutdownTask: Task<Void, Never>?
@@ -83,10 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
                     )
                 },
                 openSpeechModels: { [weak self] in
-                    self?.controlPanelNavigation.openSpeechModelDiscovery()
+                    self?.performWindowIntent(.openSpeechModels)
                 },
                 showMainWindow: { [weak self] in
-                    self?.showMainWindow()
+                    self?.performWindowIntent(.activate)
                 }
             )
         )
@@ -122,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        showMainWindow()
+        performWindowIntent(.activate)
         return true
     }
 
@@ -155,21 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
 
     func registerMainWindowOpener(_ opener: @escaping () -> Void) {
         mainWindowOpener = opener
-    }
-
-    func openSettings() {
-        controlPanelNavigation.open(.settings)
-        showMainWindow()
-    }
-
-    func createNewChat() {
-        controlPanelNavigation.createChat()
-        showMainWindow()
-    }
-
-    func toggleSidebar() {
-        controlPanelNavigation.toggleSidebar()
-        showMainWindow()
     }
 
     private func setUpRoutines() {
@@ -209,20 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     ) {
         let sessionID = (response.notification.request.content.userInfo["sessionID"] as? String)
             .flatMap(UUID.init(uuidString:))
-        DispatchQueue.main.async { [weak self] in
-            if let sessionID {
-                self?.controlPanelNavigation.openChatSession(sessionID)
-            } else {
-                self?.controlPanelNavigation.open(.chat)
-            }
-            self?.showMainWindow()
+        if let sessionID {
+            performWindowIntent(.openChat(sessionID))
+        } else {
+            performWindowIntent(.openTab(.chat))
         }
         completionHandler()
-    }
-
-    func toggleAllSidebarSections() {
-        controlPanelNavigation.collapseAllSections()
-        showMainWindow()
     }
 
     func increaseChatFontSize() {
@@ -243,6 +219,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         var settings = model.settings
         settings.stepChatFontScale(by: delta)
         model.settings = settings.normalized()
+    }
+
+    func performWindowIntent(_ intent: NativWindowIntent) {
+        controlPanelNavigation.perform(intent)
+        showMainWindow()
     }
 
     private func showMainWindow() {
