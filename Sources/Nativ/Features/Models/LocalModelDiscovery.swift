@@ -354,11 +354,18 @@ enum LocalModelDiscovery {
         }
     }
 
-    static func delete(repoID: String, path: String) async throws {
+    static func delete(
+        repoID: String,
+        path: String,
+        volumeIdentifier: String?
+    ) async throws {
         let expandedPath = Self.expandedPath(path)
         try await Task.detached(priority: .utility) {
+            let cacheURL = try ExternalModelCacheReference.validateForUse(
+                path: expandedPath,
+                expectedVolumeIdentifier: volumeIdentifier
+            )
             let directoryName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
-            let cacheURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
             let fileManager = FileManager.default
             let repositoryURL = cacheURL.appendingPathComponent(directoryName, isDirectory: true)
             let lockURL = cacheURL
@@ -1759,6 +1766,7 @@ final class LocalModelLibrary: ObservableObject {
     func delete(
         model: LocalModel,
         path: String,
+        volumeIdentifier: String?,
         onCompletion: @escaping () -> Void
     ) {
         guard !deletingModelIDs.contains(model.repoID) else { return }
@@ -1767,7 +1775,11 @@ final class LocalModelLibrary: ObservableObject {
 
         Task { [weak self] in
             do {
-                try await LocalModelDiscovery.delete(repoID: model.repoID, path: path)
+                try await LocalModelDiscovery.delete(
+                    repoID: model.repoID,
+                    path: path,
+                    volumeIdentifier: volumeIdentifier
+                )
                 self?.models.removeAll { $0.repoID == model.repoID }
                 self?.deletingModelIDs.remove(model.repoID)
                 onCompletion()
