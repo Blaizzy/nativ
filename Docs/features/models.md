@@ -13,6 +13,22 @@ Installed models are found by scanning the Hugging Face cache plus any additiona
 - Capabilities are derived per model from its `config.json` (or `model_index.json` for
   diffusion pipelines) — see [`LocalModelDiscovery`](../../Sources/Nativ/Features/Models/LocalModelDiscovery.swift).
 
+## External model storage
+
+The primary Hugging Face cache can live on a locally attached APFS external drive. Open
+**Models → Sources → Choose External Location** and select a folder on that drive. Nativ records
+the drive identity as well as the folder, so reconnecting the same drive restores the location
+even if the volume is renamed.
+
+Changing locations stops and restarts the model server and clears its preloaded model selections.
+Active downloads must finish or be cancelled first. Existing model files are not moved or deleted;
+they remain in their original cache. Use **Restore System Default** to return to the cache selected
+by `HF_HUB_CACHE`, `HF_HOME`, or Nativ's per-user default.
+
+If the drive is disconnected, Nativ stops downloads using it, stops the model server, and marks the
+cache unavailable. Reconnect the original drive before downloading, deleting, or loading models.
+A different drive mounted at the same path is rejected.
+
 ## Capabilities
 
 Each model carries a set of capabilities (`LocalModelCapability`):

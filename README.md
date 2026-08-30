@@ -38,7 +38,7 @@ Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)*
 |---|---|
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Image generation and editing** | Generate and edit images locally with compatible MLX image models in a dedicated Images tab. |
-| **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, speech, and embedding models at once, with a warning if the combination would exceed your Mac's memory. |
+| **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, store the cache on an external APFS drive, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, speech, and embedding models at once, with a warning if the combination would exceed your Mac's memory. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
 | **System monitor** | Inspect live per-core CPU load, GPU utilization, unified memory and swap pressure, disk throughput, capacity, SMART health, and thermal and power sensors. |
 | **Local APIs** | OpenAI-compatible chat, Responses, image, audio, embeddings, and model endpoints, plus Anthropic Messages endpoints. |
