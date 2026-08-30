@@ -10,7 +10,19 @@ final class ControlPanelDependencyOwnershipTests: XCTestCase {
         XCTAssertTrue(first.mcpHost === second.mcpHost)
         XCTAssertTrue(first.systemMonitor === second.systemMonitor)
         XCTAssertTrue(first.launchAtLogin === second.launchAtLogin)
+        XCTAssertTrue(first.persistedDataChanges === second.persistedDataChanges)
         XCTAssertTrue(first.downloads === second.downloads)
+    }
+
+    func testControlPanelsReceiveDistinctWindowIdentifiers() {
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+
+        let first = ControlPanelDependencies(windowID: firstWindowID)
+        let second = ControlPanelDependencies(windowID: secondWindowID)
+
+        XCTAssertEqual(first.windowID, firstWindowID)
+        XCTAssertEqual(second.windowID, secondWindowID)
     }
 
     func testControlPanelStateIsIndependent() {

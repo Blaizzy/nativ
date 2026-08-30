@@ -166,17 +166,25 @@ final class ImageGenerationViewModel: ObservableObject {
     @Published private(set) var scrollToken = 0
 
     private let sessionStore = ImageGenerationSessionStore()
+    private let windowID: UUID
+    private let persistedDataChanges: PersistedDataChangeHub
     private var activeTask: Task<Void, Never>?
     private var activeTurnID: UUID?
     private var storedSessions: [ImageGenerationSession] = []
     private var currentSession: ImageGenerationSession?
+    private var persistedDataChangeCancellable: AnyCancellable?
 
     private let imageSizeMultiple = 16
     private let minImageDimension = 64
     private let maxRequestDimension = 4_096
     private let maxAutoEditLongestSide = 2_048
 
-    init() {
+    init(
+        windowID: UUID = UUID(),
+        persistedDataChanges: PersistedDataChangeHub = .init()
+    ) {
+        self.windowID = windowID
+        self.persistedDataChanges = persistedDataChanges
         storedSessions = sessionStore.loadSessions().map { session in
             var repaired = session
             for index in repaired.turns.indices where repaired.turns[index].status == .inProgress {
@@ -187,6 +195,10 @@ final class ImageGenerationViewModel: ObservableObject {
         }
 
         refreshSessionList()
+        persistedDataChangeCancellable = persistedDataChanges.changes
+            .sink { [weak self] change in
+                self?.handlePersistedDataChange(change)
+            }
     }
 
     deinit {
@@ -308,7 +320,7 @@ final class ImageGenerationViewModel: ObservableObject {
         }
 
         storedSessions.removeAll { $0.id == sessionID }
-        sessionStore.deleteSession(id: sessionID)
+        deletePersistedSession(sessionID)
 
         guard sessionID == currentSessionID else {
             refreshSessionList()
@@ -722,7 +734,7 @@ final class ImageGenerationViewModel: ObservableObject {
             session.turns[turnIndex].outputs.removeAll { $0.id == outputID }
         }
         upsertStoredSession(session)
-        sessionStore.saveSession(session)
+        saveSession(session)
         refreshSessionList()
     }
 
@@ -746,7 +758,7 @@ final class ImageGenerationViewModel: ObservableObject {
 
         currentSession = session
         upsertStoredSession(session)
-        sessionStore.saveSession(session)
+        saveSession(session)
         refreshSessionList()
     }
 
@@ -762,6 +774,53 @@ final class ImageGenerationViewModel: ObservableObject {
         sessions = storedSessions
             .map(\.summary)
             .sorted(by: ImageGenerationSessionSummary.recencySort)
+    }
+
+    private func handlePersistedDataChange(_ change: PersistedDataChange) {
+        guard change.originWindowID != windowID else { return }
+        guard case .imageGenerationSession = change.kind else { return }
+
+        storedSessions = sessionStore.loadSessions()
+        if let currentSession {
+            if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
+                if !isGenerating, fresh != currentSession {
+                    applyCurrentSession(fresh)
+                }
+            } else if !isGenerating {
+                prompt = ""
+                pendingImageAttachments.removeAll()
+                if let replacement = storedSessions.sorted(
+                    by: ImageGenerationSession.recencySort
+                ).first {
+                    applyCurrentSession(replacement)
+                } else {
+                    self.currentSession = nil
+                    currentSessionID = nil
+                    turns = []
+                    activeReference = nil
+                    statusText = nil
+                }
+            } else {
+                upsertStoredSession(currentSession)
+            }
+        }
+        refreshSessionList()
+    }
+
+    private func saveSession(_ session: ImageGenerationSession) {
+        sessionStore.saveSession(session)
+        persistedDataChanges.send(
+            .imageGenerationSession(session.id),
+            originWindowID: windowID
+        )
+    }
+
+    private func deletePersistedSession(_ sessionID: UUID) {
+        sessionStore.deleteSession(id: sessionID)
+        persistedDataChanges.send(
+            .imageGenerationSession(sessionID),
+            originWindowID: windowID
+        )
     }
 
     private func bumpScroll() {
