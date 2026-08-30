@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         builtInExtensions: [voiceDictationExtension]
     )
     private let controlPanelNavigation = ControlPanelNavigation()
+    private let controlPanelSharedDependencies = ControlPanelSharedDependencies()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
     private let routineSessionStore = ChatSessionStore()
@@ -129,13 +130,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         model.applicationWillTerminate()
     }
 
-    var rootView: some View {
+    func makeControlPanelDependencies() -> ControlPanelDependencies {
+        ControlPanelDependencies(shared: controlPanelSharedDependencies)
+    }
+
+    func rootView(controlPanelDependencies: ControlPanelDependencies) -> some View {
         WelcomeGateView(
             model: model,
             navigation: controlPanelNavigation,
             runtime: runtime,
             extensionManager: extensionManager,
             softwareUpdater: softwareUpdater,
+            controlPanelDependencies: controlPanelDependencies,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)
             }

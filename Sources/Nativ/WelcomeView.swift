@@ -15,13 +15,13 @@ enum WelcomePreferences {
 
 struct WelcomeGateView: View {
     @AppStorage(WelcomePreferences.completionKey) private var hasCompletedWelcome = false
-    @StateObject private var controlPanelDependencies = ControlPanelDependencies()
 
     let model: NativModel
     let navigation: ControlPanelNavigation
     let runtime: SystemRuntimeMonitor
     let extensionManager: NativExtensionManager
     let softwareUpdater: SoftwareUpdater
+    let controlPanelDependencies: ControlPanelDependencies
     let onComplete: (_ modelID: String?, _ serverAPIKey: String?) -> Void
 
     var body: some View {
