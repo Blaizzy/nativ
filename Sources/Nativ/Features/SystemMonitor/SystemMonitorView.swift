@@ -51,6 +51,7 @@ struct SystemMonitorView: View {
     var store: SystemMonitorStore
     @ObservedObject var menuBarPreferences: SystemMenuBarPreferences
     var titleLeadingInset: CGFloat = 0
+    @State private var observationID = UUID()
     @State private var destination: SystemMonitorDestination = .overview
     @State private var isMenuBarControlHovered = false
 
@@ -65,10 +66,10 @@ struct SystemMonitorView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear {
-            store.start()
+            store.beginObservation(observationID)
         }
         .onDisappear {
-            store.stop()
+            store.endObservation(observationID)
         }
     }
 
@@ -97,9 +98,9 @@ struct SystemMonitorView: View {
 
             Button {
                 if store.isSampling {
-                    store.stop()
+                    store.pause()
                 } else {
-                    store.start()
+                    store.resume()
                 }
             } label: {
                 Image(systemName: store.isSampling ? "pause.fill" : "play.fill")
