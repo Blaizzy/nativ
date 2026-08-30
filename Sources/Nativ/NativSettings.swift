@@ -86,6 +86,85 @@ struct ServerAPIKeychain: ServerAPICredentialStoring {
     }
 }
 
+protocol HuggingFaceCredentialStoring {
+    func load() throws -> String?
+    func save(_ token: String?) throws
+}
+
+struct HuggingFaceCredentialKeychain: HuggingFaceCredentialStoring {
+    let service: String
+    let account: String
+
+    init(
+        service: String = "dev.local.Nativ.huggingface-token",
+        account: String = "nativ-huggingface"
+    ) {
+        self.service = service
+        self.account = account
+    }
+
+    func load() throws -> String? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return nil
+        }
+        guard status == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(status)
+        }
+        guard let data = item as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            throw ServerAPICredentialPersistenceError.invalidKeychainData
+        }
+        return HuggingFaceAuthentication.normalizedToken(token)
+    }
+
+    func save(_ token: String?) throws {
+        guard let token = HuggingFaceAuthentication.normalizedToken(token) else {
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw ServerAPICredentialPersistenceError.keychain(status)
+            }
+            return
+        }
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw ServerAPICredentialPersistenceError.keychain(updateStatus)
+        }
+
+        var item = baseQuery
+        attributes.forEach { item[$0.key] = $0.value }
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw ServerAPICredentialPersistenceError.keychain(addStatus)
+        }
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+}
+
 struct ServerAPITokenInfo: Equatable, Sendable {
     let maskedValue: String
     let characterCount: Int
@@ -144,9 +223,9 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
         case .imageGeneration:
             "Image Generation"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .embeddings:
             "Embeddings"
         }
@@ -328,6 +407,8 @@ struct NativSettings: Codable, Equatable {
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
     var disabledToolNames: [String]
+    var fileReadRootPath: String?
+    var fileWriteRootPath: String?
     var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
@@ -379,6 +460,8 @@ struct NativSettings: Codable, Equatable {
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
         disabledToolNames: [String] = [],
+        fileReadRootPath: String? = nil,
+        fileWriteRootPath: String? = nil,
         skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
@@ -429,6 +512,8 @@ struct NativSettings: Codable, Equatable {
         self.mcpServers = mcpServers
         self.customTools = customTools
         self.disabledToolNames = disabledToolNames
+        self.fileReadRootPath = fileReadRootPath
+        self.fileWriteRootPath = fileWriteRootPath
         self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
@@ -481,6 +566,8 @@ struct NativSettings: Codable, Equatable {
         case mcpServers
         case customTools
         case disabledToolNames
+        case fileReadRootPath
+        case fileWriteRootPath
         case skills
         case imageGenerationModelID
         case textToSpeechModelID
@@ -538,6 +625,8 @@ struct NativSettings: Codable, Equatable {
         mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
         customTools = try container.decodeIfPresent([CustomTool].self, forKey: .customTools) ?? defaults.customTools
         disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
+        fileReadRootPath = try container.decodeIfPresent(String.self, forKey: .fileReadRootPath) ?? defaults.fileReadRootPath
+        fileWriteRootPath = try container.decodeIfPresent(String.self, forKey: .fileWriteRootPath) ?? defaults.fileWriteRootPath
         skills = try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
@@ -591,12 +680,13 @@ struct NativSettings: Codable, Equatable {
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
         try container.encode(disabledToolNames, forKey: .disabledToolNames)
+        try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
+        try container.encodeIfPresent(fileWriteRootPath, forKey: .fileWriteRootPath)
         try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
-        try container.encodeIfPresent(huggingFaceToken, forKey: .huggingFaceToken)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
         try container.encode(maxTokens, forKey: .maxTokens)
@@ -668,7 +758,8 @@ struct NativSettings: Codable, Equatable {
 
     static func load(
         from url: URL = storageURL,
-        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain()
+        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain(),
+        huggingFaceStore: HuggingFaceCredentialStoring = HuggingFaceCredentialKeychain()
     ) -> Self {
         let storedSettings: Self
         if let data = try? Data(contentsOf: url),
@@ -704,6 +795,34 @@ struct NativSettings: Codable, Equatable {
             settings.serverAPIKey = legacyToken
         }
 
+        let legacyHuggingFaceToken = HuggingFaceAuthentication.normalizedToken(
+            storedSettings.huggingFaceToken
+        )
+
+        do {
+            if let keychainToken = try huggingFaceStore.load() {
+                settings.huggingFaceToken = keychainToken
+                if storedSettings.huggingFaceToken != nil {
+                    try? settings.writePropertyList(to: url)
+                }
+            } else if let legacyHuggingFaceToken {
+                try huggingFaceStore.save(legacyHuggingFaceToken)
+                guard try huggingFaceStore.load() == legacyHuggingFaceToken else {
+                    throw ServerAPICredentialPersistenceError.invalidKeychainData
+                }
+                settings.huggingFaceToken = legacyHuggingFaceToken
+                try? settings.writePropertyList(to: url)
+            } else {
+                settings.huggingFaceToken = nil
+                if storedSettings.huggingFaceToken != nil {
+                    try? settings.writePropertyList(to: url)
+                }
+            }
+        } catch {
+            // Keep the legacy value until it can be migrated without data loss.
+            settings.huggingFaceToken = legacyHuggingFaceToken
+        }
+
         if MCPServerCatalog.bundled.migrateConfigurations(in: &settings.mcpServers) {
             try? settings.writePropertyList(to: url)
         }
@@ -713,11 +832,13 @@ struct NativSettings: Codable, Equatable {
 
     func save(
         to url: URL = storageURL,
-        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain()
+        credentialStore: ServerAPICredentialStoring = ServerAPIKeychain(),
+        huggingFaceStore: HuggingFaceCredentialStoring = HuggingFaceCredentialKeychain()
     ) {
         let settings = normalized()
         try? settings.writePropertyList(to: url)
         try? credentialStore.save(settings.serverAPIKey)
+        try? huggingFaceStore.save(settings.huggingFaceToken)
     }
 
     private func writePropertyList(to url: URL) throws {
@@ -737,6 +858,21 @@ struct NativSettings: Codable, Equatable {
         settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
+        let trimmedFileReadRoot = settings.fileReadRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        settings.fileReadRootPath = trimmedFileReadRoot.isEmpty
+            ? nil
+            : NSString(string: trimmedFileReadRoot).expandingTildeInPath
+        let trimmedFileWriteRoot = settings.fileWriteRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        settings.fileWriteRootPath = trimmedFileWriteRoot.isEmpty
+            ? nil
+            : NSString(string: trimmedFileWriteRoot).expandingTildeInPath
+        if settings.disabledToolNames.contains("read_file"),
+            !settings.disabledToolNames.contains("search_files")
+        {
+            settings.disabledToolNames.append("search_files")
+        }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         if let imageModelID = settings.imageGenerationModelID,

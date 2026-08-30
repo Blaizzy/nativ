@@ -2,6 +2,39 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
+        let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
+
+        XCTAssertFalse(settings.isToolEnabled("read_file"))
+        XCTAssertFalse(settings.isToolEnabled("search_files"))
+    }
+
+    func testFileReadRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileReadRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileReadRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileReadRootPath, directory.path)
+    }
+
+    func testFileWriteRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileWriteRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileWriteRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileWriteRootPath, directory.path)
+    }
+
     func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
         var settings = NativSettings()
 
@@ -281,6 +314,98 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(try propertyList(at: url)["serverAPIKey"])
     }
 
+    func testHuggingFaceTokenIsOmittedFromEncodedSettings() throws {
+        let data = try PropertyListEncoder().encode(
+            NativSettings(huggingFaceToken: "hf_secret")
+        )
+        let propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+
+        XCTAssertNil(propertyList["huggingFaceToken"])
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("hf_secret"))
+    }
+
+    func testSavingSettingsStoresHuggingFaceTokenInCredentialStore() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let credentialStore = TestServerAPICredentialStore()
+
+        NativSettings(huggingFaceToken: "  hf_secret\n").save(
+            to: url,
+            huggingFaceStore: credentialStore
+        )
+
+        XCTAssertEqual(credentialStore.token, "hf_secret")
+        XCTAssertNil(try propertyList(at: url)["huggingFaceToken"] as? String)
+    }
+
+    func testSavingWritesPropertyListEvenWhenHuggingFaceStoreFails() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let huggingFaceStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        NativSettings(languageModelID: "org/model").save(
+            to: url,
+            huggingFaceStore: huggingFaceStore
+        )
+
+        XCTAssertEqual(
+            try propertyList(at: url)["languageModelID"] as? String,
+            "org/model",
+            "a Keychain failure must not block persisting the rest of settings to disk"
+        )
+    }
+
+    func testLoadingMigratesLegacyHuggingFaceTokenIntoCredentialStore() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(huggingFaceToken: "hf_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore()
+
+        let settings = NativSettings.load(from: url, huggingFaceStore: credentialStore)
+
+        XCTAssertEqual(settings.huggingFaceToken, "hf_legacy")
+        XCTAssertEqual(credentialStore.token, "hf_legacy")
+        XCTAssertNil(try propertyList(at: url)["huggingFaceToken"])
+    }
+
+    func testFailedHuggingFaceMigrationRetainsRecoverableToken() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(huggingFaceToken: "hf_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore(
+            saveError: TestCredentialStoreError.unavailable
+        )
+
+        let settings = NativSettings.load(from: url, huggingFaceStore: credentialStore)
+
+        XCTAssertEqual(settings.huggingFaceToken, "hf_legacy")
+        XCTAssertEqual(
+            try propertyList(at: url)["huggingFaceToken"] as? String,
+            "hf_legacy"
+        )
+    }
+
+    func testHuggingFaceCredentialTakesPrecedenceOverLegacyToken() throws {
+        let url = temporarySettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try writeLegacySettings(huggingFaceToken: "hf_legacy", to: url)
+        let credentialStore = TestServerAPICredentialStore(token: "hf_keychain")
+
+        let settings = NativSettings.load(from: url, huggingFaceStore: credentialStore)
+
+        XCTAssertEqual(settings.huggingFaceToken, "hf_keychain")
+        XCTAssertEqual(credentialStore.token, "hf_keychain")
+        XCTAssertNil(try propertyList(at: url)["huggingFaceToken"])
+    }
+
     func testServerAuthorizationAddsBearerHeader() {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:8080/health")!)
 
@@ -300,7 +425,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
     }
 
-    func testChatClientAddsServerAuthorization() throws {
+    func testChatClientConfiguresRequest() throws {
         let client = NativChatClient(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
             apiKey: "nativ_chat_token"
@@ -317,10 +442,38 @@ final class NativSettingsTests: XCTestCase {
 
         let request = try client.makeURLRequest(payload: payload, accepts: "application/json")
 
+        XCTAssertEqual(request.timeoutInterval, 600)
         XCTAssertEqual(
             request.value(forHTTPHeaderField: "Authorization"),
             "Bearer nativ_chat_token"
         )
+    }
+
+    func testPromptTokenCountRequestUsesServerTokenizerEndpoint() throws {
+        let client = NativChatClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_chat_token"
+        )
+        let payload = MLXChatCompletionRequest(
+            model: "org/model",
+            messages: [MLXChatMessage(role: "user", content: "Hello")],
+            maxTokens: 512,
+            temperature: 0,
+            topK: 0,
+            topP: 1,
+            minP: 0,
+            enableThinking: true
+        )
+
+        let request = try client.makePromptTokenCountURLRequest(for: payload)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+
+        XCTAssertEqual(request.url?.path, "/v1/responses/input_tokens")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer nativ_chat_token")
+        XCTAssertEqual(json["model"] as? String, "org/model")
+        XCTAssertEqual(json["enable_thinking"] as? Bool, true)
+        XCTAssertNil(json["max_tokens"])
     }
 
     func testImageClientAddsServerAuthorization() throws {
@@ -598,7 +751,11 @@ final class NativSettingsTests: XCTestCase {
         )
     }
 
-    private func writeLegacySettings(serverAPIKey: String, to url: URL) throws {
+    private func writeLegacySettings(
+        serverAPIKey: String? = nil,
+        huggingFaceToken: String? = nil,
+        to url: URL
+    ) throws {
         let encoded = try PropertyListEncoder().encode(NativSettings())
         var propertyList = try XCTUnwrap(
             PropertyListSerialization.propertyList(
@@ -607,7 +764,12 @@ final class NativSettingsTests: XCTestCase {
                 format: nil
             ) as? [String: Any]
         )
-        propertyList["serverAPIKey"] = serverAPIKey
+        if let serverAPIKey {
+            propertyList["serverAPIKey"] = serverAPIKey
+        }
+        if let huggingFaceToken {
+            propertyList["huggingFaceToken"] = huggingFaceToken
+        }
         let data = try PropertyListSerialization.data(
             fromPropertyList: propertyList,
             format: .binary,
@@ -625,7 +787,7 @@ private enum TestCredentialStoreError: Error {
     case unavailable
 }
 
-private final class TestServerAPICredentialStore: ServerAPICredentialStoring {
+private final class TestServerAPICredentialStore: ServerAPICredentialStoring, HuggingFaceCredentialStoring {
     var token: String?
     var loadError: Error?
     var saveError: Error?
@@ -819,6 +981,21 @@ final class NativChatToolProtocolTests: XCTestCase {
         XCTAssertNil(
             NativServerErrorMessage.modelLoadFailure(
                 in: "Chat endpoint returned HTTP 400: Prompt is too long."
+            )
+        )
+    }
+
+    func testPortConflictFailureIsDetectedFromServerLogs() {
+        let output = """
+            INFO:     Application startup complete.
+            ERROR:    [Errno 48] error while attempting to bind on address ('127.0.0.1', 8080): [errno 48] address already in use
+            INFO:     Waiting for application shutdown.
+            """
+
+        XCTAssertTrue(NativServerErrorMessage.isPortConflictFailure(in: output))
+        XCTAssertFalse(
+            NativServerErrorMessage.isPortConflictFailure(
+                in: "ERROR: Application startup failed."
             )
         )
     }

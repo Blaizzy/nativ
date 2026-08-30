@@ -209,6 +209,53 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(models.contains { $0.repoID == repoID })
     }
 
+    func testDiscoversCompleteSnapshotWhoseIndexDescribesAnotherBuild() async throws {
+        try makeSnapshotWithIndependentShardIndex(
+            repoID: "org/stale-index-complete",
+            indexedShardFilenames: (1...13).map {
+                String(format: "model-%05d-of-00013.safetensors", $0)
+            },
+            onDiskShardFilenames: (1...4).map {
+                String(format: "model-%05d-of-00004.safetensors", $0)
+            }
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertTrue(models.contains { $0.repoID == "org/stale-index-complete" })
+    }
+
+    func testHidesPartialDownloadWhoseIndexDescribesAnotherBuild() async throws {
+        try makeSnapshotWithIndependentShardIndex(
+            repoID: "org/stale-index-partial",
+            indexedShardFilenames: (1...13).map {
+                String(format: "model-%05d-of-00013.safetensors", $0)
+            },
+            onDiskShardFilenames: (1...2).map {
+                String(format: "model-%05d-of-00004.safetensors", $0)
+            }
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertFalse(models.contains { $0.repoID == "org/stale-index-partial" })
+    }
+
+    func testHidesSnapshotWithShardIndexButNoWeightsYet() async throws {
+        try makeSnapshotWithIndependentShardIndex(
+            repoID: "org/index-without-weights",
+            indexedShardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+            onDiskShardFilenames: []
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertFalse(models.contains { $0.repoID == "org/index-without-weights" })
+    }
+
     func testSelectsAnyInstalledSpeechToTextModelWithoutKnownModelNames() {
         let models = [
             makeModel(repoID: "owner/text-only", capabilities: [.text]),
@@ -446,6 +493,40 @@ final class LocalModelDiscoveryTests: XCTestCase {
             ["weight_map": weightMap],
             to: snapshot.appendingPathComponent("model.safetensors.index.json")
         )
+    }
+
+    /// Builds a snapshot whose shard index and on-disk shards are unrelated,
+    /// which is what a quantized repo looks like when it ships the source
+    /// model's `model.safetensors.index.json`.
+    private func makeSnapshotWithIndependentShardIndex(
+        repoID: String,
+        indexedShardFilenames: [String],
+        onDiskShardFilenames: [String]
+    ) throws {
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let revision = snapshot.lastPathComponent
+
+        try write(revision, to: repository.appendingPathComponent("refs/main"))
+        try writeJSON(
+            ["model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]],
+            to: snapshot.appendingPathComponent("config.json")
+        )
+
+        var weightMap: [String: String] = [:]
+        for (index, filename) in indexedShardFilenames.enumerated() {
+            weightMap["model.layers.\(index).weight"] = filename
+        }
+        try writeJSON(
+            ["weight_map": weightMap],
+            to: snapshot.appendingPathComponent("model.safetensors.index.json")
+        )
+
+        for filename in onDiskShardFilenames {
+            try write("weights", to: snapshot.appendingPathComponent(filename))
+        }
     }
 
     private func snapshotURL(repoID: String) -> URL {

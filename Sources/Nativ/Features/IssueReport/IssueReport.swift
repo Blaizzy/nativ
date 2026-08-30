@@ -82,7 +82,7 @@ enum IssueDiagnostics {
     }
 
     static func serverOutputTail(model: NativModel, maxLines: Int = 60) -> [String] {
-        let lines = model.logText
+        let lines = model.serverLogs.text
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -127,7 +127,7 @@ enum IssueDiagnostics {
         if model.settingsRequireRestart {
             lines.append("Pending settings change: server restart required")
         }
-        return IssueDiagnosticsSection(title: "Model & server", lines: lines)
+        return IssueDiagnosticsSection(title: "Model & Server", lines: lines)
     }
 
     private static func downloadSection(model: NativModel) -> IssueDiagnosticsSection {
@@ -163,7 +163,7 @@ enum IssueDiagnostics {
     private static func crashSection() -> IssueDiagnosticsSection? {
         let nativReports = newestNativReports()
         guard !nativReports.isEmpty else {
-            return IssueDiagnosticsSection(title: "Crash reports", lines: ["No Nativ crash reports found in ~/Library/Logs/DiagnosticReports."])
+            return IssueDiagnosticsSection(title: "Crash Reports", lines: ["No Nativ crash reports found in ~/Library/Logs/DiagnosticReports."])
         }
 
         let formatter = ISO8601DateFormatter()
@@ -187,7 +187,7 @@ enum IssueDiagnostics {
                 lines.append(contentsOf: excerpt)
             }
         }
-        return IssueDiagnosticsSection(title: "Crash reports", lines: lines)
+        return IssueDiagnosticsSection(title: "Crash Reports", lines: lines)
     }
 
     static func latestCrashRawReport() -> String? {

@@ -74,7 +74,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         switch self {
         case .pi: "Minimal, extensible coding agent"
         case .codex: "OpenAI coding agent for the terminal"
-        case .claudeCode: "Anthropic's agentic coding tool"
+        case .claudeCode: "Anthropic’s agentic coding tool"
         case .hermes: "Open agent with tools, skills, and memory"
         case .openCode: "Open-source coding agent"
         case .aider: "AI pair programming in your terminal"
@@ -86,7 +86,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .continueDev: "Open-source AI code assistant"
         case .vscode: "Copilot BYOK via an OpenAI-compatible endpoint"
         case .cline: "OpenAI-compatible provider in the Cline extension"
-        case .cursor: "OpenAI-compatible endpoint in Cursor's AI panel"
+        case .cursor: "OpenAI-compatible endpoint in Cursor’s AI panel"
         case .jetbrains: "OpenAI-compatible endpoint in JetBrains AI Assistant"
         case .buzz: "Self-hostable workspace for people and AI agents"
         case .openInterpreter: "Codex-compatible terminal coding agent"
@@ -146,35 +146,35 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         switch self {
         case .vscode:
             [
-                "Start Nativ's server and load a model from the Models page.",
+                "Start Nativ’s server and load a model from the Models page.",
                 "In VS Code, open the Command Palette and run \u{201C}Chat: Manage Language Models\u{201D}.",
-                "Choose \u{201C}OpenAI Compatible\u{201D}, set the Base URL and API key shown above, then pick your model.",
+                "Choose \u{201C}OpenAI Compatible\u{201D}, set the Base URL and API key shown above, then choose your model.",
                 "Or install a community \u{201C}OpenAI Compatible\u{201D} chat extension and point it at the same Base URL and key."
             ]
         case .cline:
             [
-                "Start Nativ's server and load a model from the Models page.",
+                "Start Nativ’s server and load a model from the Models page.",
                 "Install the Cline extension in VS Code (or a compatible editor).",
                 "Open Cline's settings and add an API Provider of type \u{201C}OpenAI Compatible\u{201D}.",
-                "Set the Base URL and API key shown above, then select your model."
+                "Set the Base URL and API key shown above, then choose your model."
             ]
         case .cursor:
             [
-                "Start Nativ's server and load a model from the Models page.",
+                "Start Nativ’s server and load a model from the Models page.",
                 "In Cursor, open Settings \u{2192} Models.",
                 "Enable \u{201C}Override OpenAI Base URL\u{201D} and set the Base URL and API key shown above.",
-                "Add your model name, then select it in the chat model picker."
+                "Add your model name, then choose it in the language model picker."
             ]
         case .jetbrains:
             [
-                "Start Nativ's server and load a model from the Models page.",
+                "Start Nativ’s server and load a model from the Models page.",
                 "In your JetBrains IDE, open Settings \u{2192} Tools \u{2192} AI Assistant \u{2192} Models.",
                 "Under Providers & API keys, add an \u{201C}OpenAI Compatible\u{201D} provider with the Base URL and API key shown above.",
-                "Select your model, then use it from the AI Assistant chat."
+                "Choose your model, then use it from the AI Assistant chat."
             ]
         case .buzz:
             [
-                "Start Nativ's server and load a model from the Models page.",
+                "Start Nativ’s server and load a model from the Models page.",
                 "Install Buzz from github.com/block/buzz, then set the variables below where its agent runs.",
                 "Set BUZZ_AGENT_PROVIDER to \u{201C}openai\u{201D}, OPENAI_COMPAT_BASE_URL to the Base URL above, and OPENAI_COMPAT_API_KEY to the API key above.",
                 "Set OPENAI_COMPAT_MODEL to your model ID, then start Buzz \u{2014} its agent will use your local model."
@@ -188,9 +188,9 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         switch self {
         case .vscode: "Copilot BYOK requires the GitHub Copilot extension, signed in."
         case .cline: "Cline runs inside VS Code and compatible editors."
-        case .cursor: "Only Cursor's chat/AI panel honors a custom OpenAI endpoint \u{2014} Tab and inline edits stay on Cursor's own models."
+        case .cursor: "Only Cursor’s chat/AI panel honors a custom OpenAI endpoint \u{2014} Tab and inline edits stay on Cursor’s own models."
         case .jetbrains: "Requires the AI Assistant plugin (recent JetBrains IDE versions)."
-        case .buzz: "These variables configure Buzz's agent runtime; set them where Buzz runs its agent."
+        case .buzz: "These variables configure Buzz’s agent runtime; set them where Buzz runs its agent."
         default: nil
         }
     }
@@ -229,7 +229,7 @@ enum IntegrationServiceError: LocalizedError {
         case .invalidConfiguration(let url):
             return "The existing configuration at \(url.path) is not valid JSON. It was left unchanged."
         case .noModel:
-            return "Choose an installed chat model first."
+            return "Choose an installed language model first."
         case .serverUnavailable:
             return "The local model server did not become ready in time."
         case .modelLoadFailed(let model, let message):

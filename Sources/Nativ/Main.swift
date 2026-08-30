@@ -126,6 +126,7 @@ private struct NativApplication: App {
         .defaultSize(width: 1240, height: 720)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowBackgroundDragBehavior(.enabled)
         .commands {
             CommandGroup(after: .appInfo) {
@@ -179,10 +180,18 @@ private struct NativApplication: App {
 private struct NativRootView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
+    @StateObject private var controlPanelDependencies: ControlPanelDependencies
     let appDelegate: AppDelegate
 
+    init(appDelegate: AppDelegate) {
+        self.appDelegate = appDelegate
+        _controlPanelDependencies = StateObject(
+            wrappedValue: appDelegate.makeControlPanelDependencies()
+        )
+    }
+
     var body: some View {
-        appDelegate.rootView
+        appDelegate.rootView(controlPanelDependencies: controlPanelDependencies)
             .onAppear {
                 applyAppearance(appearance)
                 appDelegate.registerMainWindowOpener {

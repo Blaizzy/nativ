@@ -16,7 +16,7 @@ struct DeveloperView: View {
     private static let contentBottomPadding: CGFloat = 22
     private static let logPanelMinimumHeight: CGFloat = 320
 
-    @ObservedObject var model: NativModel
+    @Bindable var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
     var titleLeadingInset: CGFloat = 0
@@ -36,7 +36,7 @@ struct DeveloperView: View {
                 VStack(spacing: 0) {
                     pageHeader
                         .padding(.horizontal, 22)
-                        .padding(.top, 20)
+                        .controlPanelDetailHeaderTopPadding()
                         .padding(.bottom, 16)
 
                     Divider()
@@ -173,7 +173,7 @@ struct DeveloperView: View {
 
     private var logPanel: some View {
         let output = LogOutput.filtered(
-            model.logText,
+            model.serverLogs.text,
             query: logQuery,
             level: logLevelFilter
         )
@@ -186,7 +186,7 @@ struct DeveloperView: View {
             ZStack {
                 LogTextView(text: output.text, searchQuery: logQuery)
 
-                if model.logText.isEmpty {
+                if model.serverLogs.text.isEmpty {
                     ContentUnavailableView(
                         "No server output",
                         systemImage: "terminal",
@@ -529,7 +529,7 @@ struct DeveloperView: View {
     private func logPanelActions(_ output: LogOutput) -> some View {
         HStack(spacing: 8) {
             LogToolbarActionButton(
-                title: "Copy visible logs",
+                title: "Copy Visible Logs",
                 systemImage: "doc.on.doc",
                 hoverTint: .blue,
                 isDisabled: output.visibleLineCount == 0
@@ -538,10 +538,10 @@ struct DeveloperView: View {
             }
 
             LogToolbarActionButton(
-                title: "Clear logs",
+                title: "Clear Logs",
                 systemImage: "trash",
                 hoverTint: .red,
-                isDisabled: model.logText.isEmpty
+                isDisabled: model.serverLogs.text.isEmpty
             ) {
                 model.clearLogs()
             }
@@ -560,7 +560,7 @@ struct DeveloperView: View {
     }
 
     private func logSummary(_ output: LogOutput) -> String {
-        if model.logText.isEmpty {
+        if model.serverLogs.text.isEmpty {
             return "No output yet"
         }
         if !logQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || logLevelFilter != .all {
@@ -786,7 +786,7 @@ private struct ServerAPIAuthenticationPanel: View {
             ) {
                 credentialAttribute(
                     title: "Token",
-                    value: tokenInfo?.maskedValue ?? "Not available",
+                    value: tokenInfo?.maskedValue ?? NativFormatting.missingValue,
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
@@ -1011,6 +1011,7 @@ private struct ServerAPIAuthenticationPanel: View {
                         ? .caption.monospaced().weight(.medium)
                         : .callout.weight(.medium)
                 )
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
                 .lineLimit(1)
         }
     }
@@ -1103,7 +1104,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
                 if isAddingToken {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Add Hugging Face token")
+                        Text("Add Hugging Face Token")
                             .font(.caption.weight(.semibold))
 
                         tokenEditor
@@ -1137,7 +1138,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             Text(logoutConfirmationMessage)
         }
         .alert(
-            "Hugging Face Authentication Error",
+            "Hugging Face authentication error",
             isPresented: Binding(
                 get: { managementError != nil },
                 set: { if !$0 { managementError = nil } }
@@ -1242,7 +1243,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             ) {
                 credentialAttribute(
                     title: "Token",
-                    value: activeTokenInfo?.maskedValue ?? "Not available",
+                    value: activeTokenInfo?.maskedValue ?? NativFormatting.missingValue,
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
@@ -1330,7 +1331,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
     private var manageTokensLink: some View {
         Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
-            Label("HF Hub", systemImage: "arrow.up.right")
+            Label("Hugging Face Hub", systemImage: "arrow.up.right")
         }
         .buttonStyle(.bordered)
     }
@@ -1408,9 +1409,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         case .loading:
             "Checking…"
         case .loaded(let metadata):
-            metadata.name ?? "Not reported"
+            metadata.name ?? NativFormatting.missingValue
         case .unavailable:
-            "Unavailable"
+            NativFormatting.missingValue
         }
     }
 
@@ -1421,9 +1422,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         case .loading:
             "Checking…"
         case .loaded(let metadata):
-            metadata.permission ?? "Not reported"
+            metadata.permission ?? NativFormatting.missingValue
         case .unavailable:
-            "Unavailable"
+            NativFormatting.missingValue
         }
     }
 
@@ -1444,6 +1445,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                         ? .caption.monospaced().weight(.medium)
                         : .callout.weight(.medium)
                 )
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
                 .lineLimit(1)
         }
     }
@@ -1646,12 +1648,12 @@ private struct ServerEndpointRow: View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
                 Text(endpoint.method.displayTitle)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .nativTextStyle(.codeEmphasized)
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .font(.system(size: 12, design: .monospaced))
+                    .nativTextStyle(.code)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -1855,6 +1857,7 @@ private struct RuntimeInfoCard: View {
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .accessibilityLabel(NativFormatting.accessibleValue(value))
 
                 if let progress {
                     HStack(spacing: 8) {
@@ -1997,7 +2000,7 @@ private enum SystemRuntimeInfo {
 
     static let mlxVLMVersion: String = {
         guard let distributionURL = try? Nativ.distributionURL() else {
-            return "Unavailable"
+            return NativFormatting.missingValue
         }
         let libraryURL = distributionURL.appendingPathComponent("python/lib", isDirectory: true)
         guard let pythonDirectories = try? FileManager.default.contentsOfDirectory(
@@ -2005,7 +2008,7 @@ private enum SystemRuntimeInfo {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return "Unavailable"
+            return NativFormatting.missingValue
         }
 
         for pythonDirectory in pythonDirectories where pythonDirectory.lastPathComponent.hasPrefix("python") {
@@ -2025,7 +2028,7 @@ private enum SystemRuntimeInfo {
                 return String(name.dropFirst("mlx_vlm-".count).dropLast(".dist-info".count))
             }
         }
-        return "Unavailable"
+        return NativFormatting.missingValue
     }()
 
     static var usedMemoryBytes: UInt64 {

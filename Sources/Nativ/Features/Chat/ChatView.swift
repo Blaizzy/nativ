@@ -1,21 +1,22 @@
 import AppKit
 import Foundation
 import NativServerKit
+import QuickLookThumbnailing
 import SwiftUI
 import Textual
 import UniformTypeIdentifiers
 
 struct ChatView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isDropTargeted = false
+    @State private var previewedAttachment: ChatImageAttachment?
 
     var body: some View {
         ModelConfigurationLayout(
@@ -28,8 +29,8 @@ struct ChatView: View {
                 extensionManager: extensionManager,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
-                conversationWidthReduction: conversationWidthReduction,
-                onExploreImageModels: onExploreImageModels
+                onExploreImageModels: onExploreImageModels,
+                onPreviewAttachment: { previewedAttachment = $0 }
             )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachFiles(fromURLs: urls)
@@ -44,6 +45,14 @@ struct ChatView: View {
             .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
+        .overlay {
+            if let previewedAttachment {
+                ChatAttachmentPreview(
+                    attachment: previewedAttachment,
+                    onClose: { self.previewedAttachment = nil }
+                )
+            }
+        }
         .onAppear {
             chat.mcpHost = mcpHost
             mcpHost.reload(servers: model.settings.mcpServers)
@@ -68,7 +77,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .font(.system(size: 15, weight: .medium))
+                    .nativTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)
@@ -91,17 +100,18 @@ private enum ChatTranscriptLayout {
     static let messageHorizontalInset: CGFloat = 32
     static let composerClearance: CGFloat = 48
     static let composerFadeExtension: CGFloat = 40
+    static let scrollIndicatorClearance: CGFloat = 17
 }
 
 private struct ChatTranscriptView: View {
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
@@ -152,7 +162,8 @@ private struct ChatTranscriptView: View {
                             onDenyToolConsent: chat.denyToolConsent,
                             onSelectImageModel: chat.selectImageModel,
                             onCancelImageModelSelection: chat.cancelImageModelSelection,
-                            onExploreImageModels: onExploreImageModels
+                            onExploreImageModels: onExploreImageModels,
+                            onPreviewAttachment: onPreviewAttachment
                         )
                         .equatable()
                         .id(message.id)
@@ -161,7 +172,6 @@ private struct ChatTranscriptView: View {
             }
             .frame(
                 maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                    - conversationWidthReduction
                     - (ChatTranscriptLayout.messageHorizontalInset * 2)
             )
             .frame(maxWidth: .infinity)
@@ -187,7 +197,6 @@ private struct ChatTranscriptView: View {
                     extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
-                    conversationWidthReduction: conversationWidthReduction,
                     onHeightChange: { height in
                         let isInitialMeasurement = composerHeight == 0
                         composerHeight = height
@@ -264,6 +273,7 @@ private struct ChatTranscriptView: View {
             Color.nativMainContentBackground
                 .frame(height: max(72, composerBackdropHeight))
         }
+        .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -284,7 +294,7 @@ private struct ChatTranscriptView: View {
             return "Wait for the model to finish loading"
         }
         guard selectedModelID?.isEmpty == false else {
-            return "Select a language model before editing a prompt"
+            return "Choose a language model before editing a prompt"
         }
         if let validationError = model.settings.structuredOutputValidationError {
             return validationError
@@ -294,12 +304,11 @@ private struct ChatTranscriptView: View {
 }
 
 private struct ChatComposerContainer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onHeightChange: (CGFloat) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
@@ -332,10 +341,7 @@ private struct ChatComposerContainer: View {
             },
             onBackdropHeightChange: onBackdropHeightChange
         )
-        .frame(
-            maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                - conversationWidthReduction
-        )
+        .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -363,6 +369,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -401,7 +408,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     ChatImageAttachmentStack(
                         attachments: message.imageAttachments,
                         isUserMessage: message.role == .user,
-                        showsSaveButton: message.role == .tool
+                        showsSaveButton: message.role == .tool,
+                        onPreview: onPreviewAttachment
                     )
                 }
 
@@ -451,7 +459,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                         if canForkAssistantResponse {
                             ChatMessageActionButton(
                                 icon: .asset("ChatForkIcon"),
-                                title: "Fork conversation from this response",
+                                title: "Fork chat from this response",
                                 isActive: false,
                                 isEnabled: true
                             ) {
@@ -774,7 +782,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             NativStatusBadge(text: "Failed", tone: .danger)
         case .cancelled:
-            NativStatusBadge(text: "Cancelled", tone: .neutral)
+            NativStatusBadge(text: "Canceled", tone: .neutral)
         case .declined:
             NativStatusBadge(text: "Declined", tone: .neutral)
         case .preparing, .running, .awaitingConsent,
@@ -785,10 +793,14 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            consentDescription
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let terminalRequest {
+                terminalConsentPrompt(for: terminalRequest)
+            } else {
+                consentDescription
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -805,10 +817,45 @@ private struct ChatAgentStepCell: View {
         .padding(.top, 7)
     }
 
+    private func terminalConsentPrompt(for request: ChatTerminalToolRequest) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(
+                "The model wants to run this command on your Mac. Review it carefully before confirming."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let cwd = request.cwd {
+                LabeledContent("Working directory") {
+                    Text(cwd)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                .font(.caption)
+            }
+
+            NativCodeBlock(raw: request.command, lineLimit: 10)
+
+            ForEach(terminalAssessment.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private var consentDescription: Text {
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
             return Text(
                 "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
+        }
+        if let toolName = message.toolName,
+           ChatFileWriteToolRegistry.toolNames.contains(toolName) {
+            return Text(
+                "The model wants to modify a protected instruction or credential configuration file in your authorized folder. Confirm to allow this change."
             )
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
@@ -848,7 +895,7 @@ private struct ChatAgentStepCell: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Explore models") {
+                    Button("Open Models") {
                         onExploreImageModels(request.operation)
                     }
                     .buttonStyle(.bordered)
@@ -884,6 +931,18 @@ private struct ChatAgentStepCell: View {
             return "a different model"
         }
         return modelID
+    }
+
+    private var terminalRequest: ChatTerminalToolRequest? {
+        guard message.toolName == ChatTerminalToolRegistry.toolName else { return nil }
+        return try? ChatTerminalToolRequest(argumentsJSON: message.toolArguments)
+    }
+
+    private var terminalAssessment: TerminalCommandAssessment {
+        guard let terminalRequest else {
+            return TerminalCommandAssessment(blockedReason: nil, warnings: [])
+        }
+        return TerminalCommandSafetyPolicy.assess(command: terminalRequest.command)
     }
 
     @ViewBuilder
@@ -964,7 +1023,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             "failed"
         case .cancelled:
-            "cancelled"
+            "canceled"
         case .awaitingConsent:
             "awaiting your confirmation"
         case .awaitingImageModelSelection:
@@ -1013,7 +1072,7 @@ private struct ChatImageModelOptionRow: View {
             }
 
             if let error = downloadManager.errorByModelID[model.modelID] {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1390,7 +1449,7 @@ private struct ChatResponseMetricsRow: View {
         }
         ChatResponseMetricPill(
             label: "Peak memory",
-            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? "--"
+            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? NativFormatting.missingValue
         )
     }
 }
@@ -1427,13 +1486,15 @@ private struct ChatImageAttachmentStack: View {
     let attachments: [ChatImageAttachment]
     let isUserMessage: Bool
     let showsSaveButton: Bool
+    let onPreview: (ChatImageAttachment) -> Void
 
     var body: some View {
         VStack(alignment: isUserMessage ? .trailing : .leading, spacing: 6) {
             ForEach(attachments) { attachment in
                 ChatImageAttachmentView(
                     attachment: attachment,
-                    showsSaveButton: showsSaveButton
+                    showsSaveButton: showsSaveButton,
+                    onPreview: { onPreview(attachment) }
                 )
             }
         }
@@ -1443,17 +1504,26 @@ private struct ChatImageAttachmentStack: View {
 private struct ChatImageAttachmentView: View {
     let attachment: ChatImageAttachment
     let showsSaveButton: Bool
+    let onPreview: () -> Void
     @State private var saveErrorMessage: String?
     @State private var showsSaveError = false
     @State private var isSaveButtonHovered = false
+    @State private var documentThumbnail: NSImage?
 
     private let maximumSideLength: CGFloat = 300
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            preview
+            Button(action: onPreview) {
+                preview
+            }
+            .buttonStyle(.plain)
+            .help("Open \(attachment.filename)")
+            .accessibilityLabel("Open \(attachment.filename)")
 
-            if showsSaveButton, attachment.imageData != nil {
+            if showsSaveButton,
+               attachment.chatAttachmentKind == .image,
+               attachment.imageData != nil {
                 Button(action: saveImage) {
                     Image(systemName: "square.and.arrow.down")
                         .foregroundStyle(
@@ -1482,28 +1552,31 @@ private struct ChatImageAttachmentView: View {
         }
         .help(attachment.filename)
         .accessibilityLabel(attachment.filename)
-        .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
+        .alert("Couldn’t save image", isPresented: $showsSaveError) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {
             Text(saveErrorMessage ?? "The image could not be saved.")
+        }
+        .task(id: attachment.id) {
+            await loadDocumentThumbnail()
         }
     }
 
     @ViewBuilder
     private var preview: some View {
         Group {
-            if let image {
+            if let image = image ?? documentThumbnail {
                 let size = displaySize(for: image)
 
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(width: size.width, height: size.height)
+                    .background(Color.white)
             } else {
                 VStack(spacing: 8) {
-                    Image(systemName: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename).systemImage)
-                        .font(.title2)
+                    FileTypeIcon(fileExtension: attachment.fileExtension, size: 48)
                     Text(attachment.filename)
                         .font(.caption)
                         .lineLimit(2)
@@ -1522,10 +1595,34 @@ private struct ChatImageAttachmentView: View {
     }
 
     private var image: NSImage? {
-        guard let data = attachment.imageData else {
+        guard attachment.chatAttachmentKind == .image,
+              let data = attachment.imageData else {
             return nil
         }
         return NSImage(data: data)
+    }
+
+    private func loadDocumentThumbnail() async {
+        documentThumbnail = nil
+        guard attachment.chatAttachmentKind != .image,
+              let file = try? await ChatAttachmentPreviewFile.create(for: attachment) else {
+            return
+        }
+        defer { file.remove() }
+
+        let size = CGSize(width: maximumSideLength, height: maximumSideLength)
+        let request = QLThumbnailGenerator.Request(
+            fileAt: file.url,
+            size: size,
+            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail
+        )
+        guard let representation = try? await QLThumbnailGenerator.shared
+            .generateBestRepresentation(for: request),
+              !Task.isCancelled else {
+            return
+        }
+        documentThumbnail = NSImage(cgImage: representation.cgImage, size: .zero)
     }
 
     private func displaySize(for image: NSImage) -> CGSize {
@@ -1577,10 +1674,9 @@ private struct ChatMessageText: View {
     @ViewBuilder
     var body: some View {
         if isUserPrompt {
-            ChatSelectablePromptText(
-                content: content,
-                fontScale: chatFontScale
-            )
+            Text(verbatim: content)
+                .textSelection(.enabled)
+                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else if rendersMarkdown && isStreaming {
             ChatStreamingMarkdownText(
                 content: content,
@@ -1663,73 +1759,6 @@ private struct ChatStreamingMarkdownChunk: View, Equatable {
     }
 }
 
-private struct ChatSelectablePromptText: NSViewRepresentable {
-    let content: String
-    let fontScale: Double
-
-    func makeNSView(context: Context) -> NSTextView {
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.heightTracksTextView = false
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        update(textView)
-        return textView
-    }
-
-    func updateNSView(_ textView: NSTextView, context: Context) {
-        update(textView)
-    }
-
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        nsView textView: NSTextView,
-        context: Context
-    ) -> CGSize? {
-        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
-        let bounds = (content as NSString).boundingRect(
-            with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: textAttributes(font: font)
-        )
-        let measuredWidth = max(1, ceil(bounds.width))
-        let width = proposal.width.map { min($0, measuredWidth) } ?? measuredWidth
-        return CGSize(width: width, height: max(1, ceil(bounds.height)))
-    }
-
-    private func update(_ textView: NSTextView) {
-        let font = ChatFontMetrics.bodyNSFont(scale: fontScale)
-        if textView.string != content || textView.font != font {
-            textView.textStorage?.setAttributedString(NSAttributedString(
-                string: content,
-                attributes: textAttributes(font: font)
-            ))
-        }
-        textView.setAccessibilityLabel(content)
-    }
-
-    private func textAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.lineSpacing = 2
-        return [
-            .font: font,
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraphStyle
-        ]
-    }
-}
-
 private extension Color {
     static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -1804,7 +1833,6 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        conversationWidthReduction: 0,
         onExploreImageModels: { _ in }
     )
 }

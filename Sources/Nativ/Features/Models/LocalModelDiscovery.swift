@@ -55,9 +55,9 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
         case .imageEditing:
             "Image Editing"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .embeddings:
             "Embeddings"
         case .reranking:
@@ -203,9 +203,9 @@ struct LocalModel: Identifiable, Equatable, Sendable {
 
     private static func compactCount(_ value: Double, suffix: String) -> String {
         if value.rounded() == value {
-            return "\(Int(value))\(suffix)"
+            return Int(value).formatted() + suffix
         }
-        return String(format: "%.1f%@", value, suffix)
+        return value.formatted(.number.precision(.fractionLength(1))) + suffix
     }
 }
 
@@ -736,6 +736,11 @@ enum LocalModelDiscovery {
             return true
         case .incomplete:
             return false
+        case .stale:
+            // The index describes a different build of the model, so fall back
+            // to the shards on disk — but only accept a set that is complete on
+            // its own, so a partially downloaded snapshot stays hidden.
+            return safetensorsShardsLookComplete(at: snapshotURL, fileManager: fileManager)
         case .absent:
             break
         }
@@ -766,6 +771,10 @@ enum LocalModelDiscovery {
         case absent
         case complete
         case incomplete
+        /// The index references shards, none of whose filenames exist in the
+        /// snapshot. The index describes a different build of the model rather
+        /// than a download that is still in flight.
+        case stale
     }
 
     private struct SafetensorsShardIndex: Decodable {
@@ -776,9 +785,77 @@ enum LocalModelDiscovery {
         }
     }
 
+    /// Decides whether the `.safetensors` files in a snapshot form a complete
+    /// set on their own, without consulting a shard index. A snapshot qualifies
+    /// when it holds a single unsharded file, or every shard of one
+    /// `model-0000N-of-0000M` series.
+    private static func safetensorsShardsLookComplete(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: snapshotURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        var shardTotals: Set<Int> = []
+        var shardNumbers: Set<Int> = []
+        var hasUnshardedWeights = false
+
+        for fileURL in contents where fileURL.pathExtension == "safetensors" {
+            guard let values = try? fileURL.resolvingSymlinksInPath().resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey]
+                  ),
+                  values.isRegularFile == true,
+                  let fileSize = values.fileSize,
+                  fileSize > 0
+            else {
+                continue
+            }
+
+            if let numbering = shardNumbering(forFilename: fileURL.lastPathComponent) {
+                shardTotals.insert(numbering.total)
+                shardNumbers.insert(numbering.index)
+            } else {
+                hasUnshardedWeights = true
+            }
+        }
+
+        // Shards from more than one series mean the snapshot holds leftovers of
+        // another build, which is not a set this check can vouch for.
+        if let total = shardTotals.first, shardTotals.count == 1 {
+            return shardNumbers == Set(1...total)
+        }
+        return shardTotals.isEmpty && hasUnshardedWeights
+    }
+
+    /// Parses the `model-00001-of-00004.safetensors` shard naming convention.
+    private static func shardNumbering(forFilename filename: String) -> (index: Int, total: Int)? {
+        let components = (filename as NSString).deletingPathExtension.components(separatedBy: "-")
+        guard components.count >= 4,
+              components[components.count - 2] == "of",
+              let index = Int(components[components.count - 3]),
+              let total = Int(components[components.count - 1]),
+              index >= 1,
+              total >= 1,
+              index <= total
+        else {
+            return nil
+        }
+        return (index, total)
+    }
+
     /// A shard index is downloaded before the weight shards it describes. Treat
     /// the snapshot as usable only after every referenced shard is a non-empty
     /// regular file inside the snapshot directory.
+    ///
+    /// When none of the referenced filenames are present the index is reporting
+    /// on a different build of the model, so it says nothing about whether this
+    /// snapshot finished downloading; that case is reported as `.stale` and the
+    /// shards themselves are inspected instead.
     private static func safetensorsShardIndexStatus(
         at snapshotURL: URL,
         fileManager: FileManager
@@ -801,7 +878,7 @@ enum LocalModelDiscovery {
 
         let snapshotPath = snapshotURL.standardizedFileURL.path
         let snapshotPrefix = snapshotPath.hasSuffix("/") ? snapshotPath : snapshotPath + "/"
-        let allShardsAreAvailable = shardFilenames.allSatisfy { filename in
+        let availableShardCount = shardFilenames.filter { filename in
             guard !filename.isEmpty,
                   !(filename as NSString).isAbsolutePath
             else {
@@ -820,8 +897,12 @@ enum LocalModelDiscovery {
                 return false
             }
             return true
+        }.count
+
+        if availableShardCount == shardFilenames.count {
+            return .complete
         }
-        return allShardsAreAvailable ? .complete : .incomplete
+        return availableShardCount == 0 ? .stale : .incomplete
     }
 
     private static func snapshotSize(at snapshotURL: URL, fileManager: FileManager) -> Int64? {

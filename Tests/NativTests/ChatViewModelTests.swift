@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 @MainActor
@@ -46,6 +47,17 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(subject.canSend(isRunning: true, selectedModelID: "model"))
     }
 
+    func testPastingTextDoesNotSetAttachmentImportError() {
+        let subject = ChatViewModel()
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.clearContents()
+        pasteboard.setString("Plain text", forType: .string)
+
+        XCTAssertFalse(subject.attachImages(from: pasteboard))
+        XCTAssertNil(subject.attachmentImportError)
+        XCTAssertTrue(subject.pendingImageAttachments.isEmpty)
+    }
+
     func testUnavailableReasonUsesServerAndModelPreconditions() {
         let subject = ChatViewModel()
 
@@ -55,8 +67,18 @@ final class ChatViewModelTests: XCTestCase {
         )
         XCTAssertEqual(
             subject.unavailableReason(isRunning: true, selectedModelID: nil),
-            "Select a model in Models."
+            "Choose a model in Models."
         )
         XCTAssertNil(subject.unavailableReason(isRunning: true, selectedModelID: "model"))
+    }
+
+    func testGeneratedChatTitlesUseTypographicEllipsis() {
+        let title = ChatSession.defaultTitle(
+            for: [ChatTranscriptMessage(role: .user, content: String(repeating: "a", count: 80))],
+            createdAt: .now
+        )
+
+        XCTAssertEqual(title.count, 56)
+        XCTAssertTrue(title.hasSuffix("…"))
     }
 }

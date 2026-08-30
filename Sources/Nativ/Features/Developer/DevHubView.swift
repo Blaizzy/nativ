@@ -18,7 +18,7 @@ struct DevHubView: View {
     }
 
     @Binding var section: Section
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var runtime: SystemRuntimeMonitor
     @Binding var showsConfiguration: Bool
 
@@ -26,6 +26,7 @@ struct DevHubView: View {
         HStack(spacing: 0) {
             subnav
             Divider()
+                .ignoresSafeArea(.container, edges: .top)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -41,7 +42,7 @@ struct DevHubView: View {
                         Image(systemName: item.systemImage)
                             .frame(width: 18)
                         Text(item.rawValue)
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.sidebarItem)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10)
@@ -57,7 +58,9 @@ struct DevHubView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .controlPanelDetailHeaderTopPadding()
+        .padding(.bottom, 12)
         .frame(width: 188)
     }
 

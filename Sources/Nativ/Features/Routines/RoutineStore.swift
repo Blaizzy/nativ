@@ -10,32 +10,43 @@ final class RoutineStore: ObservableObject {
     var onRoutinesChanged: (() -> Void)?
 
     private static let maxRunsPerRoutine = 50
+    private let persistenceEnabled: Bool
 
     init() {
+        persistenceEnabled = true
         routines = Self.loadRoutines()
         runs = Self.loadRuns()
+    }
+
+    init(routines: [Routine], runs: [RoutineRun]) {
+        persistenceEnabled = false
+        self.routines = routines
+        self.runs = runs
     }
 
     func routine(id: String) -> Routine? {
         routines.first { $0.id == id }
     }
 
-    func routine(forSession sessionID: UUID) -> Routine? {
-        routines.first { $0.sourceSessionID == sessionID }
-    }
-
-    func deleteRoutine(forSession sessionID: UUID) {
-        guard let routine = routine(forSession: sessionID) else {
-            return
+    func detachSession(_ sessionID: UUID) {
+        var didChangeRoutines = false
+        for index in routines.indices where routines[index].sourceSessionID == sessionID {
+            routines[index].sourceSessionID = nil
+            didChangeRoutines = true
         }
-        delete(id: routine.id)
-    }
 
-    func isRoutineRunning(forSession sessionID: UUID) -> Bool {
-        guard let routine = routine(forSession: sessionID) else {
-            return false
+        var didChangeRuns = false
+        for index in runs.indices where runs[index].sessionID == sessionID {
+            runs[index].sessionID = nil
+            didChangeRuns = true
         }
-        return runs.contains { $0.routineID == routine.id && $0.status == .running }
+
+        if didChangeRoutines {
+            persistRoutines()
+        }
+        if didChangeRuns {
+            persistRuns()
+        }
     }
 
     func upsert(_ routine: Routine) {
@@ -100,10 +111,12 @@ final class RoutineStore: ObservableObject {
     }
 
     private func persistRoutines() {
+        guard persistenceEnabled else { return }
         Self.write(routines, to: Self.routinesURL)
     }
 
     private func persistRuns() {
+        guard persistenceEnabled else { return }
         Self.write(runs, to: Self.runsURL)
     }
 

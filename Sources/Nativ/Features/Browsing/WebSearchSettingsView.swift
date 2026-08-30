@@ -212,7 +212,7 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
             } catch {
                 connectionStates[provider] = .disconnected
                 if provider == selectedProvider {
-                    status = .failure("Nativ could not read this provider's API key from Keychain.")
+                    status = .failure("Nativ could not read this provider’s API key from Keychain.")
                 }
             }
         }
@@ -296,7 +296,7 @@ struct WebBrowsingSettingsView: View {
     private var providerPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Providers")
-                .font(.system(size: 13, weight: .semibold))
+                .nativTextStyle(.sectionTitle)
 
             ForEach(viewModel.availableProviders) { provider in
                 providerRow(provider)
@@ -365,12 +365,7 @@ struct WebBrowsingSettingsView: View {
     }
 
     private func routeBadge(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 8, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.1), in: Capsule())
+        NativStatusBadge(text: text, tone: .active)
     }
 
     @ViewBuilder
@@ -379,22 +374,22 @@ struct WebBrowsingSettingsView: View {
         case .disconnected:
             EmptyView()
         case .connected:
-            Circle()
-                .fill(Color.green)
-                .frame(width: 6, height: 6)
+            NativStatusDot(tone: .success, diameter: 6)
                 .help("Connected")
+                .accessibilityLabel("Connected")
         case .issue:
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(.orange)
+                .font(.caption2)
+                .foregroundStyle(NativStatusTone.warning.color)
                 .help("This connection needs attention")
+                .accessibilityLabel("Connection needs attention")
         }
     }
 
     private var keySetup: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(viewModel.selectedProvider.metadata.displayName)
-                .font(.system(size: 13, weight: .semibold))
+                .nativTextStyle(.sectionTitle)
 
             routingActions
 
@@ -409,7 +404,7 @@ struct WebBrowsingSettingsView: View {
             }
 
             HStack {
-                Button(viewModel.isTesting ? "Testing…" : "Test & connect") {
+                Button(viewModel.isTesting ? "Testing…" : "Test & Connect") {
                     Task {
                         if await viewModel.testAndConnect() {
                             onConfigurationChanged(true)
@@ -419,7 +414,7 @@ struct WebBrowsingSettingsView: View {
                 .disabled(!viewModel.canConnect)
 
                 if viewModel.selectedConnectionState != .disconnected {
-                    Button("Remove key", role: .destructive) {
+                    Button("Remove Key", role: .destructive) {
                         if viewModel.removeKey() {
                             onConfigurationChanged(false)
                         }
@@ -434,12 +429,12 @@ struct WebBrowsingSettingsView: View {
             if viewModel.selectedCapability == .read,
                let status = viewModel.pageReaderStatus {
                 Label(status, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.orange)
             }
 
-            Text("Browsing requests are sent to the selected third-party providers. API keys stay in macOS Keychain.")
-                .font(.system(size: 10))
+            Text("Browsing requests are sent to the selected third-party providers. API keys stay in Keychain.")
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -453,10 +448,10 @@ struct WebBrowsingSettingsView: View {
             case .search:
                 if viewModel.searchProvider == viewModel.selectedProvider {
                     Label("Search", systemImage: "checkmark")
-                        .font(.system(size: 11, weight: .medium))
+                        .nativTextStyle(.actionLabel)
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Use for search") {
+                    Button("Use for Search") {
                         viewModel.setSearchProvider(viewModel.selectedProvider)
                     }
                     .buttonStyle(.bordered)
@@ -465,10 +460,10 @@ struct WebBrowsingSettingsView: View {
             case .read:
                 if viewModel.resolvedPageReaderProvider == viewModel.selectedProvider {
                     Label("Page reading", systemImage: "checkmark")
-                        .font(.system(size: 11, weight: .medium))
+                        .nativTextStyle(.actionLabel)
                         .foregroundStyle(.secondary)
                 } else {
-                    Button("Use for page reading") {
+                    Button("Use for Page Reading") {
                         let provider = viewModel.selectedProvider
                         viewModel.setPageReaderProvider(
                             provider == viewModel.searchProvider ? nil : provider
@@ -516,11 +511,11 @@ struct WebBrowsingSettingsView: View {
         }
         switch viewModel.selectedConnectionState {
         case .disconnected:
-            return "Test & connect"
+            return "Test & Connect"
         case .connected:
-            return "Test & replace"
+            return "Test & Replace"
         case .issue:
-            return "Test & reconnect"
+            return "Test & Reconnect"
         }
     }
     @ViewBuilder
@@ -529,11 +524,11 @@ struct WebBrowsingSettingsView: View {
             switch status {
             case .connected(let message):
                 Label(message, systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.green)
             case .failure(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.red)
             }
         } else {
@@ -542,11 +537,11 @@ struct WebBrowsingSettingsView: View {
                 EmptyView()
             case .connected:
                 Label("Connected", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.green)
             case .issue(let issue):
                 Label(issue.message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.orange)
             }
         }
@@ -593,11 +588,11 @@ private extension WebSearchCredentialIssue {
     var message: String {
         switch self {
         case .invalidAuthentication:
-            "Replace this provider's API key."
+            "Replace this provider’s API key."
         case .insufficientFunds:
             "This provider needs additional credits."
         case .planAccess:
-            "This provider's plan does not allow API search."
+            "This provider’s plan does not allow API search."
         }
     }
 }

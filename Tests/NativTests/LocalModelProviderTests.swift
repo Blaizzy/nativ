@@ -418,6 +418,31 @@ final class HuggingFaceDownloadOutputTests: XCTestCase {
         XCTAssertNil(HuggingFaceDownloadOutput(line: "__NATIV_PROGRESS__:34:0"))
         XCTAssertNil(HuggingFaceDownloadOutput(line: "ordinary log output"))
     }
+
+    func testClassifiesGatedRepositoryFailure() {
+        let failure = HuggingFaceDownloadFailure(processOutput: """
+        huggingface_hub.errors.GatedRepoError: 403 Client Error.
+        Cannot access gated repo for url https://huggingface.co/org/model/resolve/main/config.json.
+        Access to model org/model is restricted and you are not in the authorized list.
+        """)
+
+        XCTAssertEqual(failure, .gatedRepository)
+    }
+
+    func testKeepsUsefulLinesForUnknownDownloadFailure() {
+        let failure = HuggingFaceDownloadFailure(processOutput: """
+        first line
+        second line
+        third line
+        fourth line
+        fifth line
+        """)
+
+        XCTAssertEqual(
+            failure,
+            .message("second line\nthird line\nfourth line\nfifth line")
+        )
+    }
 }
 
 final class HuggingFaceDownloadProgressStateTests: XCTestCase {
@@ -450,19 +475,19 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
     }
 
-    func testNearCompleteProgressUsesFinalizingState() throws {
+    func testNearCompleteProgressUsesFinishingState() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_000)
         var state = HuggingFaceDownloadProgressState(now: start)
         let progress = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 995, totalBytes: 1_000)
+            ModelDownloadProgress(completedBytes: 950, totalBytes: 1_000)
         )
 
         _ = state.recordProgress(progress, at: start)
 
-        XCTAssertTrue(state.isFinalizing)
+        XCTAssertTrue(state.isFinishing)
     }
 
-    func testTransferEstimateCeilingUsesFinalizingState() throws {
+    func testTransferEstimateCeilingUsesFinishingState() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_500)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
@@ -474,9 +499,9 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
             state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
         )
 
-        XCTAssertEqual(capped.completedBytes, 996)
+        XCTAssertEqual(capped.completedBytes, 951)
         XCTAssertLessThan(capped.fractionCompleted, 1)
-        XCTAssertTrue(state.isFinalizing)
+        XCTAssertTrue(state.isFinishing)
     }
 
     func testTransferredBytesProduceSmoothedTransferSpeed() {
@@ -531,10 +556,10 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(1), 99)
     }
 
-    func testNearCompleteDownloadUsesFinalizingState() {
-        XCTAssertFalse(ModelDownloadProgressPresentation.isFinalizing(0.994))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(0.995))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(1))
+    func testNearCompleteDownloadUsesFinishingState() {
+        XCTAssertFalse(ModelDownloadProgressPresentation.isFinishing(0.949))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(0.95))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(1))
     }
 
     func testActiveProgressRingDoesNotBecomeComplete() {

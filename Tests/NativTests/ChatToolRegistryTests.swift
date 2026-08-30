@@ -6,6 +6,11 @@ private let nativeToolNames = [
     ChatModelLibraryToolRegistry.toolName,
     ChatServerStatsToolRegistry.toolName,
     ChatSwitchModelToolRegistry.toolName,
+    ChatReadFileToolRegistry.toolName,
+    ChatSearchFilesToolRegistry.toolName,
+    ChatFileWriteToolRegistry.writeToolName,
+    ChatFileWriteToolRegistry.patchToolName,
+    ChatTerminalToolRegistry.toolName,
 ]
 
 private struct FakeToolError: Error, LocalizedError {
@@ -79,6 +84,11 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatSwitchModelToolRegistry.toolName,
             ChatSystemMonitorToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
+            ChatSearchFilesToolRegistry.toolName,
+            ChatFileWriteToolRegistry.writeToolName,
+            ChatFileWriteToolRegistry.patchToolName,
+            ChatTerminalToolRegistry.toolName,
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
         ])
@@ -121,6 +131,27 @@ final class ChatToolRegistryTests: XCTestCase {
 
         XCTAssertEqual(descriptor?.configuration, .webRead)
         XCTAssertEqual(descriptor?.configuration?.displayName, "Web Read")
+    }
+
+    func testFileReadOperationsShareConfigurationMetadata() {
+        let descriptors = ChatToolRegistry.descriptors(canEditImage: false).filter {
+            ChatReadFileToolRegistry.toolNames.contains($0.definition.function.name)
+        }
+
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration == .fileRead })
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration?.displayName == "File Read" })
+        XCTAssertEqual(ChatNativeToolConfiguration.fileRead.toolNames, ["read_file", "search_files"])
+    }
+
+    func testFileWriteOperationsShareConfigurationMetadata() {
+        let descriptors = ChatToolRegistry.descriptors(canEditImage: false).filter {
+            ChatFileWriteToolRegistry.toolNames.contains($0.definition.function.name)
+        }
+
+        XCTAssertEqual(descriptors.count, 2)
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration == .fileWrite })
+        XCTAssertTrue(descriptors.allSatisfy { $0.configuration?.displayName == "File Write" })
     }
 
     func testDefinitionsAdvertiseGenerationAndGuidanceWithNoImageModelConfigured() {
@@ -576,7 +607,7 @@ final class ChatToolRegistryTests: XCTestCase {
     }
 
     func testRoundGateAdvertisesToolsUnderTheCapAndStopsAtIt() {
-        XCTAssertEqual(ChatToolRoundGate.maximumRounds, 4)
+        XCTAssertEqual(ChatToolRoundGate.maximumRounds, 32)
         for round in 0..<ChatToolRoundGate.maximumRounds {
             XCTAssertTrue(ChatToolRoundGate.advertisesTools(atRound: round), "round \(round) should still advertise tools")
         }
@@ -620,6 +651,51 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "fake failure")
         XCTAssertNil(object["cpu_usage_percent"])
+    }
+
+    @MainActor
+    func testSystemMonitorReportsThermalAndPower() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.thermal.dieTemperatureCelsius = 62.37
+        snapshot.thermal.hottestSensorName = "PMU tdie1"
+        snapshot.thermal.fanSpeedsRPM = [1200, 2400]
+        snapshot.thermal.thermalPressure = .fair
+        snapshot.power.cpuWatts = 3.44
+        snapshot.power.gpuWatts = 8.06
+        snapshot.power.socWatts = 14.92
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["die_temperature_c"] as? Double, 62.4)
+        XCTAssertEqual(object["hottest_sensor"] as? String, "PMU tdie1")
+        XCTAssertEqual(object["fan_rpm"] as? Int, 2400, "should report the fastest fan")
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Fair")
+        XCTAssertEqual(object["cpu_watts"] as? Double, 3.4)
+        XCTAssertEqual(object["gpu_watts"] as? Double, 8.1)
+        XCTAssertEqual(object["package_watts"] as? Double, 14.9)
+    }
+
+    @MainActor
+    func testSystemMonitorOmitsUnavailableSensors() async throws {
+        var snapshot = SystemMonitorSnapshot()
+        snapshot.power.systemInputWatts = 21.5
+
+        let payload = try await ChatSystemMonitorToolExecutor().execute(
+            call: makeCall(name: ChatSystemMonitorToolRegistry.toolName),
+            collect: { snapshot }
+        )
+        let object = try decode(payload)
+        XCTAssertNil(object["die_temperature_c"], "machines without a die sensor report null")
+        XCTAssertNil(object["fan_rpm"], "fanless machines report null")
+        XCTAssertEqual(
+            object["package_watts"] as? Double,
+            21.5,
+            "falls back to battery-controller input power when SoC rails are absent"
+        )
+        XCTAssertEqual(object["thermal_pressure"] as? String, "Nominal")
     }
 
     func testModelLibraryFailurePayloadShape() throws {
@@ -694,6 +770,28 @@ final class ChatToolRegistryTests: XCTestCase {
             capabilities: [.imageGeneration],
             availability: availability
         )
+    }
+
+    func testUnknownToolNameGetsAGenericFailurePayloadNotAnImageOne() throws {
+        let payload = ChatToolDispatcher.failurePayload(
+            toolName: "websearch",
+            error: ChatUnknownToolError.unknownTool("websearch")
+        )
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertEqual(object["error"] as? String, "Unknown tool: websearch")
+        XCTAssertNil(object["operation"], "must not fall through to the image-tool shape")
+    }
+
+    func testDispatcherExecuteThrowsUnknownToolErrorForAnUnrecognizedName() async {
+        do {
+            _ = try await ChatToolDispatcher.execute(call: makeCall(name: "websearch"), context: makeContext())
+            XCTFail("an unrecognized tool name must not execute")
+        } catch let error as ChatUnknownToolError {
+            XCTAssertEqual(error.errorDescription, "Unknown tool: websearch")
+        } catch {
+            XCTFail("expected ChatUnknownToolError, got \(error)")
+        }
     }
 }
 
@@ -918,6 +1016,42 @@ final class ChatToolPresentationTests: XCTestCase {
                 .awaitingImageModelSelection: "Model switch",
                 .awaitingConsent: "Switch model?", .declined: "Model switch declined",
             ],
+            ChatReadFileToolRegistry.toolName: [
+                nil: "File read", .preparing: "Reading file…",
+                .running: "Reading file…", .succeeded: "Read file",
+                .failed: "File read", .cancelled: "File read",
+                .awaitingImageModelSelection: "File read",
+                .awaitingConsent: "File read", .declined: "File read",
+            ],
+            ChatSearchFilesToolRegistry.toolName: [
+                nil: "File search", .preparing: "Searching files…",
+                .running: "Searching files…", .succeeded: "Searched files",
+                .failed: "File search", .cancelled: "File search",
+                .awaitingImageModelSelection: "File search",
+                .awaitingConsent: "File search", .declined: "File search",
+            ],
+            ChatFileWriteToolRegistry.writeToolName: [
+                nil: "File write", .preparing: "Writing file…",
+                .running: "Writing file…", .succeeded: "Wrote file",
+                .failed: "File write", .cancelled: "File write",
+                .awaitingImageModelSelection: "File write",
+                .awaitingConsent: "Write protected file?", .declined: "File write declined",
+            ],
+            ChatFileWriteToolRegistry.patchToolName: [
+                nil: "File patch", .preparing: "Patching files…",
+                .running: "Patching files…", .succeeded: "Patched files",
+                .failed: "File patch", .cancelled: "File patch",
+                .awaitingImageModelSelection: "File patch",
+                .awaitingConsent: "Patch protected file?", .declined: "Patch declined",
+            ],
+            ChatTerminalToolRegistry.toolName: [
+                nil: "Terminal", .preparing: "Running terminal command…",
+                .running: "Running terminal command…", .succeeded: "Ran terminal command",
+                .failed: "Terminal command", .cancelled: "Terminal command",
+                .awaitingImageModelSelection: "Terminal command",
+                .awaitingConsent: "Run terminal command?",
+                .declined: "Terminal command declined",
+            ],
             "some_unknown_tool": [
                 nil: "some_unknown_tool", .preparing: "Running some_unknown_tool…",
                 .running: "Running some_unknown_tool…", .succeeded: "Ran some_unknown_tool",
@@ -948,6 +1082,10 @@ final class ChatToolPresentationTests: XCTestCase {
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
+            ChatReadFileToolRegistry.toolName,
+            ChatSearchFilesToolRegistry.toolName,
+            ChatFileWriteToolRegistry.writeToolName, ChatFileWriteToolRegistry.patchToolName,
+            ChatTerminalToolRegistry.toolName,
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
@@ -957,6 +1095,11 @@ final class ChatToolPresentationTests: XCTestCase {
             ChatModelLibraryToolRegistry.toolName: "shippingbox",
             ChatServerStatsToolRegistry.toolName: "chart.line.uptrend.xyaxis",
             ChatSwitchModelToolRegistry.toolName: "arrow.triangle.2.circlepath",
+            ChatReadFileToolRegistry.toolName: "doc.text",
+            ChatSearchFilesToolRegistry.toolName: "doc.text.magnifyingglass",
+            ChatFileWriteToolRegistry.writeToolName: "square.and.pencil",
+            ChatFileWriteToolRegistry.patchToolName: "square.and.pencil",
+            ChatTerminalToolRegistry.toolName: "terminal",
             "some_unknown_tool": "wrench.and.screwdriver",
         ]
 
@@ -1170,6 +1313,22 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.imageGenerationModelID, "org/image")
     }
 
+    func testChatSessionPersistsScheduledTaskOrigin() throws {
+        let session = ChatSession(
+            id: UUID(),
+            title: "Scheduled result",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            messages: [],
+            scheduledTaskID: "task-1"
+        )
+
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
+
+        XCTAssertEqual(decoded.scheduledTaskID, "task-1")
+    }
+
     func testOldChatSessionWithoutImageModelSelectionStillDecodes() throws {
         let oldJSON = #"{"id":"8A6D9E1B-2C1B-4A9E-9C1B-2C1B4A9E9C1B","title":"Old","createdAt":0,"updatedAt":0,"messages":[]}"#
         let session = try JSONDecoder().decode(
@@ -1178,6 +1337,7 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         )
 
         XCTAssertNil(session.imageGenerationModelID)
+        XCTAssertNil(session.scheduledTaskID)
     }
 
     func testOldJSONWithoutToolArgumentsStillDecodes() throws {
