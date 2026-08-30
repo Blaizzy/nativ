@@ -717,6 +717,8 @@ struct ModelsView: View {
                                     repoID: hubModel.id,
                                     sizeBytes: downloadSizeBytes,
                                     cachePath: modelState.settings.modelSearchPath,
+                                    volumeIdentifier: modelState.settings
+                                        .externalModelCache?.volumeIdentifier,
                                     token: modelState.effectiveHuggingFaceToken
                                 ) {}
                             },
@@ -896,7 +898,8 @@ struct ModelsView: View {
         guard localModel.isDeletable else { return }
         localLibrary.delete(
             model: localModel,
-            path: modelState.settings.modelSearchPath
+            path: modelState.settings.modelSearchPath,
+            volumeIdentifier: modelState.settings.externalModelCache?.volumeIdentifier
         ) {
             var settings = modelState.settings
             if settings.languageModelID == localModel.repoID {
