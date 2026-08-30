@@ -29,7 +29,11 @@ from generate_model_capabilities_manifest import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_DISTRIBUTION_ROOT = REPO_ROOT / "PythonDistribution"
 LAUNCHER_SOURCE = PYTHON_DISTRIBUTION_ROOT / "Launcher" / "mlx_vlm_server_launcher.c"
-OVERLAY_SERVER = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py"
+OVERLAY_MODULES = (
+    PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py",
+    PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_adapter_loader.py",
+    PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_runtime.py",
+)
 MODEL_CAPABILITIES_MANIFEST_GENERATOR = Path(__file__).with_name(
     "generate_model_capabilities_manifest.py"
 )
@@ -310,7 +314,9 @@ def build_signature(
             else None
         ),
         "launcher_sha256": file_sha256(LAUNCHER_SOURCE),
-        "overlay_server_sha256": file_sha256(OVERLAY_SERVER),
+        "overlay_sha256": {
+            module.name: file_sha256(module) for module in OVERLAY_MODULES
+        },
         "model_capabilities_manifest_generator_sha256": file_sha256(
             MODEL_CAPABILITIES_MANIFEST_GENERATOR
         ),
@@ -615,9 +621,10 @@ def site_packages_dir(output: Path) -> Path:
 
 
 def install_overlay(output: Path) -> None:
-    destination = site_packages_dir(output) / OVERLAY_SERVER.name
-    log(f"Installing metrics overlay {OVERLAY_SERVER.name}")
-    shutil.copy2(OVERLAY_SERVER, destination)
+    for module in OVERLAY_MODULES:
+        destination = site_packages_dir(output) / module.name
+        log(f"Installing Nativ overlay {module.name}")
+        shutil.copy2(module, destination)
 
 
 def install_model_capabilities_manifest(output: Path) -> None:

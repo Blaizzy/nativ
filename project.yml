@@ -266,6 +266,8 @@ targets:
       - path: Sources/Nativ/Features/Shared/PersistedDataChangeHub.swift
       - path: Sources/Nativ/Features/Shared/InferenceActivityCoordinator.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceAdapters.swift
+      - path: Sources/Nativ/Features/Models/LoRAAdapter.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
       - path: Sources/Nativ/Features/MCP/MCPHostManager.swift

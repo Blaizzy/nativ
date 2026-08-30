@@ -216,6 +216,7 @@ struct ModelsView: View {
     // Observing the manager here invalidates the entire Models view for every
     // progress tick, which makes Discover scroll janky during downloads.
     private var downloadManager: HuggingFaceDownloadManager { .shared }
+    @ObservedObject private var adapterCatalog = LoRAAdapterCatalog.shared
     @State private var section: ModelsPageSection = .installed
     @State private var renderedSection: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
@@ -226,6 +227,7 @@ struct ModelsView: View {
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
+    @State private var adapterModel: LocalModel?
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
@@ -249,6 +251,7 @@ struct ModelsView: View {
 
     var body: some View {
         ModelConfigurationLayoutContent(
+            model: model,
             settings: settingsBinding,
             settingsRequireRestart: model.settingsRequireRestart,
             isConfigurationVisible: $showsConfiguration,
@@ -329,6 +332,13 @@ struct ModelsView: View {
             localLibrary.cancel()
             hubLibrary.cancel()
             lastStartedHubSearchTaskID = nil
+        }
+        .sheet(item: $adapterModel) { localModel in
+            LoRAAdapterSheet(
+                model: model,
+                catalog: adapterCatalog,
+                baseModelID: localModel.repoID
+            )
         }
     }
 
@@ -543,15 +553,19 @@ struct ModelsView: View {
                     preferredPreloadSlot: preferredPreloadSlot(
                         among: preloadSlots
                     ),
-                    isSelectionDisabled: modelState.modelSwitchInProgress
+                    isSelectionDisabled: model.runtimeTransitionInProgress
                         || modelState.inferenceActivityInProgress,
                     isModelLoading: modelState.modelLoadingID
                         == localModel.repoID,
                     modelLoadingPercentage: modelState.modelLoadingPercentage,
+                    adapterName: selectedLanguageAdapterName(
+                        for: localModel.repoID
+                    ),
                     isReadmeSelected: readmeSelection?.repoID == localModel.repoID,
                     isDeleting: localLibrary.deletingModelIDs.contains(
                         localModel.repoID),
-                    canDelete: localModel.isDeletable && !modelState.modelSwitchInProgress
+                    canDelete: localModel.isDeletable && !model.runtimeTransitionInProgress
+                        && !modelState.inferenceActivityInProgress
                         && !isModelInUse(localModel.repoID),
                     onSetPreload: { slot, isEnabled in
                         if isEnabled {
@@ -571,6 +585,9 @@ struct ModelsView: View {
                             localSnapshotURL: localModel.snapshotURL
                         )
                     },
+                    onManageAdapters: localModel.capabilities.contains(.text)
+                        ? { adapterModel = localModel }
+                        : nil,
                     onDelete: { deleteInstalledModel(localModel) }
                 )
                 .equatable()
@@ -837,6 +854,16 @@ struct ModelsView: View {
         return slots
     }
 
+    private func selectedLanguageAdapterName(for modelID: String) -> String? {
+        let settings = model.settings.normalized()
+        guard settings.languageModelID == modelID,
+              let reference = settings.languageAdapter(for: modelID),
+              adapterCatalog.localURL(for: reference, baseModelID: modelID) != nil
+        else {
+            return nil
+        }
+        return reference.displayName
+    }
     private func preferredPreloadSlot(
         among slots: [ModelPreloadSlot]
     ) -> ModelPreloadSlot? {
@@ -1474,11 +1501,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let isSelectionDisabled: Bool
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
+    let adapterName: String?
     let isReadmeSelected: Bool
     let isDeleting: Bool
     let canDelete: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onShowReadme: () -> Void
+    let onManageAdapters: (() -> Void)?
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
@@ -1492,9 +1521,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             && lhs.isSelectionDisabled == rhs.isSelectionDisabled
             && lhs.isModelLoading == rhs.isModelLoading
             && lhs.modelLoadingPercentage == rhs.modelLoadingPercentage
+            && lhs.adapterName == rhs.adapterName
             && lhs.isReadmeSelected == rhs.isReadmeSelected
             && lhs.isDeleting == rhs.isDeleting
             && lhs.canDelete == rhs.canDelete
+            && (lhs.onManageAdapters != nil) == (rhs.onManageAdapters != nil)
     }
 
     private var isSelected: Bool {
@@ -1555,6 +1586,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                                     color: .accentColor
                                 )
                             }
+                            if let adapterName {
+                                ModelPill(
+                                    title: adapterName,
+                                    systemImage: "point.3.connected.trianglepath.dotted",
+                                    color: .blue
+                                )
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .clipped()
@@ -1604,6 +1642,17 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
             .help("Show README for \(localModel.repoID)")
             .accessibilityLabel("Show details for \(localModel.repoID)")
+
+            if let onManageAdapters {
+                Button(action: onManageAdapters) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSelectionDisabled)
+                .help("Manage LoRA adapters")
+                .accessibilityLabel("Manage LoRA adapters for \(localModel.repoID)")
+            }
 
             loadButton
 
@@ -2329,14 +2378,14 @@ struct ModelDownloadProgressControl: View {
         ZStack {
             if isHovering {
                 HStack(spacing: 6) {
-                    ModelDownloadActionButton(
+                    ModelRowActionButton(
                         title: isPaused ? "Resume download" : "Pause download",
                         systemImage: isPaused ? "play.fill" : "pause.fill",
                         tint: isPaused ? .green : .orange,
                         action: onPauseResume
                     )
 
-                    ModelDownloadActionButton(
+                    ModelRowActionButton(
                         title: "Remove Download",
                         systemImage: "trash",
                         tint: .red,
@@ -2408,40 +2457,6 @@ struct ModelDownloadProgressControl: View {
             return "Finishing download"
         }
         return "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
-    }
-}
-
-private struct ModelDownloadActionButton: View {
-    let title: String
-    let systemImage: String
-    let tint: Color
-    var isDisabled = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(
-                    isDisabled
-                        ? Color.secondary.opacity(0.45) : (isHovering ? tint : Color.secondary)
-                )
-                .frame(width: 30, height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            isHovering && !isDisabled
-                                ? tint.opacity(0.13) : Color.secondary.opacity(0.10))
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .onHover { isHovering = $0 && !isDisabled }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .help(title)
-        .accessibilityLabel(title)
     }
 }
 
@@ -2590,49 +2605,7 @@ private struct ModelsEmptyState: View {
     }
 }
 
-private struct ModelRowBackground: ViewModifier {
-    let isHighlighted: Bool
-    let isHovered: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(backgroundColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(borderColor, lineWidth: borderWidth)
-            )
-    }
-
-    private var backgroundColor: Color {
-        if isHovered {
-            return Color.accentColor.opacity(0.08)
-        }
-        return Color(nsColor: .controlBackgroundColor)
-    }
-
-    private var borderColor: Color {
-        if isHighlighted {
-            return Color.accentColor.opacity(0.90)
-        }
-        if isHovered {
-            return Color.accentColor.opacity(0.40)
-        }
-        return Color(nsColor: .separatorColor)
-    }
-
-    private var borderWidth: CGFloat {
-        isHighlighted ? 1.5 : (isHovered ? 1 : 0.5)
-    }
-}
-
 extension View {
-    fileprivate func modelRowBackground(isHighlighted: Bool, isHovered: Bool = false) -> some View {
-        modifier(ModelRowBackground(isHighlighted: isHighlighted, isHovered: isHovered))
-    }
-
     fileprivate func modelsListRow(
         top: CGFloat = 5,
         bottom: CGFloat = 5
@@ -2643,7 +2616,6 @@ extension View {
     }
 
 }
-
 extension LocalModelCapability {
     fileprivate static let visibleModelTags = allCases.filter { $0 != .text }
 

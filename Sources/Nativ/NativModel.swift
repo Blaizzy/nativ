@@ -18,6 +18,31 @@ private struct PendingModelPreloadSwitch {
     let onSelectionAccepted: () -> Void
 }
 
+private enum ModelRuntimeTransitionKind {
+    case model
+    case adapter
+}
+
+private struct ModelRuntimeTransition {
+    let id: UUID
+    let kind: ModelRuntimeTransitionKind
+    let targetID: String?
+    let failureContext: ModelLoadFailureContext
+}
+
+enum ModelLoadFailureContext: Equatable, Sendable {
+    case model
+    case languageAdapter(
+        reference: HubLoRAAdapterReference,
+        operation: LanguageAdapterOperation
+    )
+}
+
+enum LanguageAdapterOperation: Equatable, Sendable {
+    case activate
+    case deactivate
+}
+
 private enum RequestedServerStopReason: String {
     case stopRequest = "a stop request"
     case modelSwitch = "a model switch"
@@ -28,9 +53,25 @@ private enum RequestedServerStopReason: String {
 struct ModelLoadFailure: Equatable, Identifiable, Sendable {
     let id = UUID()
     let modelID: String?
+    let context: ModelLoadFailureContext
     let message: String
 
+    var adapterReference: HubLoRAAdapterReference? {
+        guard case .languageAdapter(let reference, _) = context else {
+            return nil
+        }
+        return reference
+    }
+
     var title: String {
+        switch context {
+        case .languageAdapter(_, .activate):
+            return "Couldn’t activate LoRA adapter"
+        case .languageAdapter(_, .deactivate):
+            return "Couldn’t disable LoRA adapter"
+        case .model:
+            break
+        }
         guard let modelID else {
             return "Couldn’t load model"
         }
@@ -71,9 +112,8 @@ final class NativModel: ChatModelSwitchingSurface {
     /// How long a model switch may stay unconfirmed before the controls unlock.
     nonisolated static let modelSwitchTimeout: TimeInterval = 180
 
-    private(set) var modelSwitchInProgress = false
-    private(set) var modelSwitchTargetID: String?
-    private var modelSwitchWatchdog: Task<Void, Never>?
+    private var runtimeTransition: ModelRuntimeTransition?
+    private var runtimeTransitionWatchdog: Task<Void, Never>?
     @ObservationIgnored private var inferenceActivity: InferenceActivityCoordinator?
     private(set) var modelLoadingProgress: Double?
     private(set) var modelLoadFailure: ModelLoadFailure?
@@ -92,6 +132,7 @@ final class NativModel: ChatModelSwitchingSurface {
     var onMenuStateChanged: (() -> Void)?
 
     private let server = NativProcessController()
+    private let adapterCatalog = LoRAAdapterCatalog.shared
     private var metricsClient = NativMetricsClient()
     private var metricsFetchTask: Task<Void, Never>?
     private var allTimeStatsLoadTask: Task<Void, Never>?
@@ -108,10 +149,32 @@ final class NativModel: ChatModelSwitchingSurface {
     private var pendingModelPreloadSwitch: PendingModelPreloadSwitch?
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
+    private var runtimeTransitionTask: Task<Void, Never>?
+    private var restartPendingAfterRuntimeTransition = false
     private var currentServerOutput = ""
 
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
+
+    var runtimeTransitionInProgress: Bool {
+        runtimeTransition != nil
+    }
+
+    var modelSwitchInProgress: Bool {
+        runtimeTransition?.kind == .model
+    }
+
+    var modelSwitchTargetID: String? {
+        modelSwitchInProgress ? runtimeTransition?.targetID : nil
+    }
+
+    var adapterSwitchInProgress: Bool {
+        runtimeTransition?.kind == .adapter
+    }
+
+    var adapterSwitchTargetID: String? {
+        adapterSwitchInProgress ? runtimeTransition?.targetID : nil
+    }
 
     init() {
         NativAllTimeStats.removeLegacyStorage()
@@ -377,7 +440,30 @@ final class NativModel: ChatModelSwitchingSurface {
         currentServerOutput = ""
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
-        var launchArguments = settings.launchArguments
+        let normalizedSettings = settings.normalized()
+        var adapterPath: String?
+        if let languageModelID = normalizedSettings.languageModelID,
+           let reference = normalizedSettings.languageAdapter(for: languageModelID) {
+            if let localURL = adapterCatalog.localURL(
+                for: reference,
+                baseModelID: languageModelID
+            ) {
+                adapterPath = localURL.path
+            } else {
+                var correctedSettings = settings
+                correctedSettings.setLanguageAdapter(nil, for: languageModelID)
+                settings = correctedSettings
+                setModelLoadFailure(
+                    modelID: languageModelID,
+                    context: .languageAdapter(
+                        reference: reference,
+                        operation: .activate
+                    ),
+                    message: "The selected LoRA adapter is no longer available locally. Download it again from Hugging Face."
+                )
+            }
+        }
+        var launchArguments = settings.launchArguments(adapterPath: adapterPath)
         if let languageModelID = settings.normalized().languageModelID,
            isKnownNonGenerativeModel(languageModelID),
            let modelFlagIndex = launchArguments.firstIndex(of: "--model"),
@@ -494,8 +580,12 @@ final class NativModel: ChatModelSwitchingSurface {
         if preserveSessionStats {
             preserveCurrentSessionStats()
         } else {
-            modelSwitchInProgress = false
-            modelSwitchTargetID = nil
+            runtimeTransitionTask?.cancel()
+            runtimeTransitionTask = nil
+            runtimeTransitionWatchdog?.cancel()
+            runtimeTransitionWatchdog = nil
+            runtimeTransition = nil
+            restartPendingAfterRuntimeTransition = false
             clearPreservedSessionStats()
         }
 
@@ -521,6 +611,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func toggleServer() {
+        guard !runtimeTransitionInProgress else { return }
         if isRunning {
             stopServer()
         } else {
@@ -529,6 +620,10 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func restartServer() {
+        guard !runtimeTransitionInProgress else {
+            restartPendingAfterRuntimeTransition = true
+            return
+        }
         guard server.isRunning else {
             return
         }
@@ -615,6 +710,152 @@ final class NativModel: ChatModelSwitchingSurface {
         switchPreloadedModel(to: modelID, for: .language)
     }
 
+    func activateLanguageAdapter(
+        _ reference: HubLoRAAdapterReference?,
+        for modelID: String
+    ) {
+        guard !runtimeTransitionInProgress, !inferenceActivityInProgress else { return }
+        clearModelLoadFailure()
+
+        if let reference,
+           adapterCatalog.localURL(for: reference, baseModelID: modelID) == nil {
+            setModelLoadFailure(
+                modelID: modelID,
+                context: .languageAdapter(
+                    reference: reference,
+                    operation: .activate
+                ),
+                message: "Download and verify this adapter from Hugging Face before activating it."
+            )
+            return
+        }
+
+        let currentSettings = settings.normalized()
+        if currentSettings.languageModelID != modelID {
+            var nextSettings = settings
+            nextSettings.setLanguageAdapter(reference, for: modelID)
+            settings = nextSettings
+            switchPreloadedModel(
+                to: modelID,
+                for: .language,
+                failureContext: adapterFailureContext(
+                    requestedReference: reference,
+                    currentReference: currentSettings.languageAdapter(for: modelID)
+                )
+            )
+            return
+        }
+
+        var nextSettings = settings
+        nextSettings.setLanguageAdapter(reference, for: modelID)
+        nextSettings = nextSettings.normalized()
+        guard nextSettings.languageAdapter(for: modelID)
+                != currentSettings.languageAdapter(for: modelID)
+        else {
+            return
+        }
+
+        guard server.isRunning else {
+            settings = nextSettings
+            return
+        }
+
+        let path: String?
+        if let reference {
+            guard let localURL = adapterCatalog.localURL(
+                for: reference,
+                baseModelID: modelID
+            ) else {
+                setModelLoadFailure(
+                    modelID: modelID,
+                    context: .languageAdapter(
+                        reference: reference,
+                        operation: .activate
+                    ),
+                    message: "The downloaded adapter files are missing. Download the adapter again from Hugging Face."
+                )
+                return
+            }
+            path = localURL.path
+        } else {
+            path = nil
+        }
+
+        let failureContext = adapterFailureContext(
+            requestedReference: reference,
+            currentReference: currentSettings.languageAdapter(for: modelID)
+        )
+        guard let transitionID = beginRuntimeTransition(
+            kind: .adapter,
+            targetID: reference?.id,
+            failureContext: failureContext
+        ) else { return }
+        notifyMenuStateChanged()
+        let client = NativModelLoadClient(
+            baseURL: settingsAppliedAtServerStart?.serverBaseURL ?? settings.serverBaseURL,
+            apiKey: settingsAppliedAtServerStart?.serverAPIKey
+        )
+        runtimeTransitionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.finishRuntimeTransition(id: transitionID)
+                self.notifyMenuStateChanged()
+            }
+            do {
+                let response = try await client.load(modelID: modelID, adapterPath: path)
+                if reference != nil {
+                    guard let validation = response.adapterValidation,
+                          validation.matchedTensors > 0,
+                          validation.matchedTensors == validation.expectedTensors
+                    else {
+                        throw NativModelLoadClientError.invalidResponse
+                    }
+                } else if response.adapter != nil {
+                    throw NativModelLoadClientError.invalidResponse
+                }
+
+                self.settings = nextSettings
+                if var appliedSettings = self.settingsAppliedAtServerStart {
+                    appliedSettings.setLanguageAdapter(reference, for: modelID)
+                    self.settingsAppliedAtServerStart = appliedSettings.normalized()
+                }
+                self.appendLog(
+                    reference.map {
+                        "\nActivated LoRA adapter \($0.repoID) for \(modelID).\n"
+                    } ?? "\nDisabled the LoRA adapter for \(modelID).\n"
+                )
+                self.refreshMetricsIfRunning(force: true)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.setModelLoadFailure(
+                    modelID: modelID,
+                    context: failureContext,
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func adapterFailureContext(
+        requestedReference: HubLoRAAdapterReference?,
+        currentReference: HubLoRAAdapterReference?
+    ) -> ModelLoadFailureContext {
+        if let requestedReference {
+            return .languageAdapter(
+                reference: requestedReference,
+                operation: .activate
+            )
+        }
+        if let currentReference {
+            return .languageAdapter(
+                reference: currentReference,
+                operation: .deactivate
+            )
+        }
+        return .model
+    }
+
     @discardableResult
     func requestPreloadedModelSwitch(
         to localModel: LocalModel,
@@ -622,7 +863,7 @@ final class NativModel: ChatModelSwitchingSurface {
         availableModels: [LocalModel],
         onSelectionAccepted: @escaping () -> Void = {}
     ) -> Bool {
-        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
+        guard !runtimeTransitionInProgress, !inferenceActivityInProgress else {
             return false
         }
 
@@ -670,9 +911,10 @@ final class NativModel: ChatModelSwitchingSurface {
 
     func switchPreloadedModel(
         to modelID: String?,
-        for slot: ModelPreloadSlot
+        for slot: ModelPreloadSlot,
+        failureContext: ModelLoadFailureContext = .model
     ) {
-        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
+        guard !runtimeTransitionInProgress, !inferenceActivityInProgress else {
             return
         }
         clearModelLoadFailure()
@@ -690,12 +932,14 @@ final class NativModel: ChatModelSwitchingSurface {
         }
 
         settings = nextSettings
-        modelSwitchInProgress = true
-        modelSwitchTargetID = normalizedModelID
-        armModelSwitchWatchdog()
+        guard let transitionID = beginRuntimeTransition(
+            kind: .model,
+            targetID: normalizedModelID,
+            failureContext: failureContext
+        ) else { return }
         notifyMenuStateChanged()
 
-        Task { @MainActor [weak self] in
+        runtimeTransitionTask = Task { @MainActor [weak self] in
             guard let self else {
                 return
             }
@@ -709,16 +953,14 @@ final class NativModel: ChatModelSwitchingSurface {
 
             guard !self.server.isRunning else {
                 self.appendLog("\nCould not stop the current server to switch models.\n")
-                self.modelSwitchInProgress = false
-                self.modelSwitchTargetID = nil
+                self.finishRuntimeTransition(id: transitionID)
                 self.clearPreservedSessionStats()
                 self.notifyMenuStateChanged()
                 return
             }
             self.startServer()
             if !self.server.isRunning {
-                self.modelSwitchInProgress = false
-                self.modelSwitchTargetID = nil
+                self.finishRuntimeTransition(id: transitionID)
                 self.clearPreservedSessionStats()
                 self.notifyMenuStateChanged()
             }
@@ -875,6 +1117,7 @@ final class NativModel: ChatModelSwitchingSurface {
                     ) {
                     self.setModelLoadFailure(
                         modelID: self.modelSwitchTargetID,
+                        context: self.runtimeTransition?.failureContext ?? .model,
                         message: message
                     )
                 }
@@ -899,8 +1142,10 @@ final class NativModel: ChatModelSwitchingSurface {
                 self.metricsLoading = false
                 self.modelLoadingProgress = nil
                 if !self.isStoppingForModelSwitch {
-                    self.modelSwitchInProgress = false
-                    self.modelSwitchTargetID = nil
+                    if self.modelSwitchInProgress {
+                        self.runtimeTransitionTask?.cancel()
+                        self.finishRuntimeTransition(id: self.runtimeTransition?.id)
+                    }
                     self.clearPreservedSessionStats()
                 }
                 self.notifyMenuStateChanged()
@@ -977,8 +1222,9 @@ final class NativModel: ChatModelSwitchingSurface {
             generatedTokenCount: fetchedMetrics.summary.generatedTokensTotal
         )
         metrics = fetchedMetrics
-        modelSwitchInProgress = false
-        modelSwitchTargetID = nil
+        if modelSwitchInProgress {
+            finishRuntimeTransition(id: runtimeTransition?.id)
+        }
         clearPreservedSessionStats()
         refreshAllTimeStats(runtimePath: fetchedMetrics.server.analyticsDatabasePath)
 
@@ -1009,6 +1255,40 @@ final class NativModel: ChatModelSwitchingSurface {
             return true
         default:
             return false
+        }
+    }
+
+    private func beginRuntimeTransition(
+        kind: ModelRuntimeTransitionKind,
+        targetID: String?,
+        failureContext: ModelLoadFailureContext = .model
+    ) -> UUID? {
+        guard runtimeTransition == nil else { return nil }
+        let transition = ModelRuntimeTransition(
+            id: UUID(),
+            kind: kind,
+            targetID: targetID,
+            failureContext: failureContext
+        )
+        runtimeTransition = transition
+        armRuntimeTransitionWatchdog(id: transition.id)
+        return transition.id
+    }
+
+    private func finishRuntimeTransition(id: UUID?) {
+        guard let id, runtimeTransition?.id == id else { return }
+        runtimeTransitionWatchdog?.cancel()
+        runtimeTransitionWatchdog = nil
+        runtimeTransition = nil
+        runtimeTransitionTask = nil
+        let shouldRestart = restartPendingAfterRuntimeTransition
+            && server.isRunning
+            && settingsRequireRestart
+        restartPendingAfterRuntimeTransition = false
+        guard shouldRestart else { return }
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.restartServer()
         }
     }
 
@@ -1053,8 +1333,16 @@ final class NativModel: ChatModelSwitchingSurface {
         }
     }
 
-    private func setModelLoadFailure(modelID: String?, message: String) {
-        modelLoadFailure = ModelLoadFailure(modelID: modelID, message: message)
+    private func setModelLoadFailure(
+        modelID: String?,
+        context: ModelLoadFailureContext = .model,
+        message: String
+    ) {
+        modelLoadFailure = ModelLoadFailure(
+            modelID: modelID,
+            context: context,
+            message: message
+        )
         appendLog("\n\(message)\n")
         notifyMenuStateChanged()
     }
@@ -1129,39 +1417,34 @@ final class NativModel: ChatModelSwitchingSurface {
         onMenuStateChanged?()
     }
 
-    /// Unlocks the model controls if a switch never reports back.
+    /// Unlocks runtime controls if a transition never reports back.
     ///
-    /// `modelSwitchInProgress` normally clears once metrics confirm the newly
-    /// started server. When that server comes up but never serves metrics, the
-    /// flag used to stay set forever, disabling the model picker and the
-    /// start/stop buttons with no way to recover short of relaunching.
+    /// Model transitions normally clear once metrics confirm the newly started
+    /// server, while adapter transitions clear when their load request returns.
+    /// A stalled server or request must not leave the controls disabled forever.
     ///
-    /// Each switch replaces the previous watchdog, so only the newest one can
-    /// fire. Comparing the target alone is not enough: switching away from a
-    /// model and back again would otherwise let the first watchdog time out the
-    /// second switch early.
-    private func armModelSwitchWatchdog(
+    /// The transition identifier prevents an older watchdog from timing out a
+    /// newer transition with the same model or adapter target.
+    private func armRuntimeTransitionWatchdog(
+        id: UUID,
         timeout: TimeInterval = NativModel.modelSwitchTimeout
     ) {
-        modelSwitchWatchdog?.cancel()
-        let targetID = modelSwitchTargetID
-        modelSwitchWatchdog = Task { @MainActor [weak self] in
+        runtimeTransitionWatchdog?.cancel()
+        runtimeTransitionWatchdog = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(timeout))
             // `try?` swallows the cancellation error, so check explicitly rather
             // than acting on a watchdog that has already been replaced.
             guard !Task.isCancelled,
                   let self,
-                  self.modelSwitchInProgress,
-                  self.modelSwitchTargetID == targetID
+                  self.runtimeTransition?.id == id
             else {
                 return
             }
             self.appendLog(
-                "\nModel switch did not confirm within \(Int(timeout))s; "
+                "\nRuntime transition did not confirm within \(Int(timeout))s; "
                     + "unlocking model controls.\n"
             )
-            self.modelSwitchInProgress = false
-            self.modelSwitchTargetID = nil
+            self.finishRuntimeTransition(id: id)
             self.clearPreservedSessionStats()
             self.notifyMenuStateChanged()
         }

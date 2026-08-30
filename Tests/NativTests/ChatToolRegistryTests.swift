@@ -34,6 +34,7 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
     var settings: NativSettings
     var isRunning: Bool
     var modelSwitchInProgress = false
+    var runtimeTransitionInProgress: Bool { modelSwitchInProgress }
     private(set) var switchCallCount = 0
     var onSwitch: ((String?) -> Void)?
 

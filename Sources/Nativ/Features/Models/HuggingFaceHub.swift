@@ -1466,7 +1466,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 }
 
-private enum HuggingFaceSnapshotDownloader {
+enum HuggingFaceSnapshotDownloader {
     static func download(operation: HuggingFaceDownloadOperation) async throws {
         try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
@@ -1488,6 +1488,12 @@ private enum HuggingFaceSnapshotDownloader {
                 .appendingPathComponent(repositoryDirectory, isDirectory: true)
         )
     }
+}
+
+struct HuggingFaceDownloadRetryEvent: Equatable, Sendable {
+    let attempt: Int
+    let maximumAttempts: Int
+    let delaySeconds: Int
 }
 
 struct HuggingFaceDownloadProgressState: Equatable {
@@ -1784,7 +1790,7 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
     }
 }
 
-private final class HuggingFaceDownloadOperation: @unchecked Sendable {
+final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private static let stallTimeout: TimeInterval = 60
     private static let finalizationStallTimeout: TimeInterval = 10 * 60
     private static let monitorInterval: TimeInterval = 0.5
@@ -1797,19 +1803,26 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private let progress: @Sendable (ModelDownloadProgress) -> Void
     private let transferSpeed: @Sendable (Double?) -> Void
     private let phase: @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
+    private let retry: @Sendable (HuggingFaceDownloadRetryEvent) -> Void
     private let activity = HuggingFaceDownloadActivity()
     private let lock = NSLock()
     private var process: Process?
     private var wasCancelled = false
     private var isPaused = false
+    private var completedSnapshotPath: String?
 
     init(
         repoID: String,
         cachePath: String,
         token: String?,
+        revision: String? = nil,
+        allowPatterns: [String]? = nil,
+        expectedBytes: Int64? = nil,
+        progressChunkBytes: Int? = nil,
+        retry: @escaping @Sendable (HuggingFaceDownloadRetryEvent) -> Void = { _ in },
         progress: @escaping @Sendable (ModelDownloadProgress) -> Void,
-        transferSpeed: @escaping @Sendable (Double?) -> Void,
-        phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
+        transferSpeed: @escaping @Sendable (Double?) -> Void = { _ in },
+        phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void = { _ in }
     ) throws {
         let distributionURL = try Nativ.distributionURL()
         let pythonURL = distributionURL.appendingPathComponent("python/bin/python3")
@@ -1818,6 +1831,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
 
         let script = """
+        import json
         import os
         import sys
         import threading
@@ -1826,6 +1840,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         from huggingface_hub.utils import tqdm
 
         parent_pid = int(sys.argv[3])
+        revision = sys.argv[4] or None
+        allow_patterns = json.loads(sys.argv[5]) if sys.argv[5] else None
+        provided_expected_bytes = int(sys.argv[6]) if sys.argv[6] else 0
 
         def exit_if_parent_terminates():
             while os.getppid() == parent_pid:
@@ -1842,6 +1859,8 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             files = snapshot_download(
                 repo_id=sys.argv[1],
                 cache_dir=sys.argv[2],
+                revision=revision,
+                allow_patterns=allow_patterns,
                 dry_run=True,
                 ignore_patterns=ignored_patterns,
             )
@@ -1849,6 +1868,8 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             cached_bytes = sum(item.file_size for item in files if not item.will_download)
         except Exception:
             pass
+        if total_bytes <= 0:
+            total_bytes = provided_expected_bytes
         print(f"__NATIV_PROGRESS__:{cached_bytes}:{total_bytes}", flush=True)
 
         class NativProgress(tqdm):
@@ -1914,37 +1935,53 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 print(f"__NATIV_TRANSFERRED__:{cls._transferred_bytes}", flush=True)
 
         print("__NATIV_STAGE__:downloading", flush=True)
-        snapshot_download(
+        snapshot_path = snapshot_download(
             repo_id=sys.argv[1],
             cache_dir=sys.argv[2],
+            revision=revision,
+            allow_patterns=allow_patterns,
             ignore_patterns=ignored_patterns,
             tqdm_class=NativProgress,
         )
         final_bytes = NativProgress._total_bytes
         print(f"__NATIV_PROGRESS__:{final_bytes}:{final_bytes}", flush=True)
         print("__NATIV_STAGE__:finalizing", flush=True)
+        print(f"__NATIV_SNAPSHOT_PATH__:{snapshot_path}", flush=True)
         """
-
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONHOME"] = distributionURL.appendingPathComponent("python").path
         environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
+        environment.removeValue(forKey: "PYTHONPATH")
         environment["HF_HUB_CACHE"] = cachePath
         environment["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        if progressChunkBytes != nil {
+            // Xet does not expose incremental byte progress. The regular Hub HTTP
+            // path remains resumable and lets the app report honest transfer state.
+            environment["HF_HUB_DISABLE_XET"] = "1"
+            environment["HF_HUB_DOWNLOAD_TIMEOUT"] = "30"
+        }
         if let token = HuggingFaceAuthentication.normalizedToken(token) {
             environment[HuggingFaceAuthentication.environmentVariableName] = token
         }
 
+        let patternsJSON = allowPatterns.flatMap { patterns in
+            try? String(decoding: JSONEncoder().encode(patterns), as: UTF8.self)
+        } ?? ""
         self.executableURL = pythonURL
         self.arguments = [
             "-c",
             script,
             repoID,
             cachePath,
-            String(ProcessInfo.processInfo.processIdentifier)
+            String(ProcessInfo.processInfo.processIdentifier),
+            revision ?? "",
+            patternsJSON,
+            expectedBytes.map(String.init) ?? ""
         ]
         self.environment = environment
         self.progress = progress
+        self.retry = retry
         self.transferSpeed = transferSpeed
         self.phase = phase
     }
@@ -1956,6 +1993,13 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             }
             if attempt > 1 {
                 phase(.retrying)
+                retry(
+                    HuggingFaceDownloadRetryEvent(
+                        attempt: attempt - 1,
+                        maximumAttempts: Self.maximumAttempts - 1,
+                        delaySeconds: 0
+                    )
+                )
             }
             do {
                 try runAttempt()
@@ -2077,6 +2121,77 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             let message = String(decoding: output.snapshot(), as: UTF8.self)
             throw HuggingFaceDownloadFailure(processOutput: message)
         }
+
+        let completedOutput = String(decoding: output.snapshot(), as: UTF8.self)
+        if let path = Self.snapshotPath(from: completedOutput) {
+            lock.lock()
+            completedSnapshotPath = path
+            lock.unlock()
+        }
+    }
+
+    static func snapshotPath(from output: String) -> String? {
+        let marker = "__NATIV_SNAPSHOT_PATH__:"
+        guard let markerRange = output.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let path = output[markerRange.upperBound...]
+            .prefix { !$0.isNewline }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : path
+    }
+
+    static func progressFraction(from outputLine: String) -> Double? {
+        let marker = "__MLX_PROGRESS__:"
+        guard let markerRange = outputLine.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let value = outputLine[markerRange.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let fraction = Double(value), fraction.isFinite else {
+            return nil
+        }
+        return min(max(fraction, 0), 1)
+    }
+
+    static func retryEvent(from outputLine: String) -> HuggingFaceDownloadRetryEvent? {
+        let marker = "__NATIV_DOWNLOAD_RETRY__:"
+        guard let markerRange = outputLine.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let components = outputLine[markerRange.upperBound...].split(separator: ":")
+        guard components.count == 3,
+              let attempt = Int(components[0]),
+              let maximumAttempts = Int(components[1]),
+              let delaySeconds = Int(components[2]),
+              attempt > 0,
+              maximumAttempts >= attempt,
+              delaySeconds >= 0
+        else {
+            return nil
+        }
+        return HuggingFaceDownloadRetryEvent(
+            attempt: attempt,
+            maximumAttempts: maximumAttempts,
+            delaySeconds: delaySeconds
+        )
+    }
+
+    static func downloadError(from output: String) -> String? {
+        let marker = "__NATIV_DOWNLOAD_ERROR__:"
+        guard let markerRange = output.range(of: marker, options: .backwards) else {
+            return nil
+        }
+        let message = output[markerRange.upperBound...]
+            .prefix { !$0.isNewline }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? nil : message
+    }
+
+    var snapshotPath: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return completedSnapshotPath
     }
 
     func cancel() {

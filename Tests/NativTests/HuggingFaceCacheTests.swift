@@ -120,6 +120,83 @@ final class HuggingFaceCacheTests: XCTestCase {
     }
 }
 
+final class HuggingFaceDownloadOperationTests: XCTestCase {
+    func testSnapshotPathSurvivesTqdmCarriageReturnPrefix() {
+        let output = """
+        Fetching 2 files: 100%|██████████| 2/2
+        \rFetching 2 files: 100%|██████████| 2/2__NATIV_SNAPSHOT_PATH__:/tmp/snapshot
+        """
+
+        XCTAssertEqual(
+            HuggingFaceDownloadOperation.snapshotPath(from: output),
+            "/tmp/snapshot"
+        )
+    }
+
+    func testSnapshotPathUsesTheLastCompleteMarker() {
+        let output = """
+        __NATIV_SNAPSHOT_PATH__:
+        log output
+        __NATIV_SNAPSHOT_PATH__:/tmp/final snapshot
+        """
+
+        XCTAssertEqual(
+            HuggingFaceDownloadOperation.snapshotPath(from: output),
+            "/tmp/final snapshot"
+        )
+        XCTAssertNil(HuggingFaceDownloadOperation.snapshotPath(from: "no marker"))
+    }
+
+    func testProgressFractionParsesPrefixedOutputAndClampsValues() {
+        XCTAssertEqual(
+            HuggingFaceDownloadOperation.progressFraction(
+                from: "\rterminal output__MLX_PROGRESS__:0.375000"
+            ),
+            0.375
+        )
+        XCTAssertEqual(
+            HuggingFaceDownloadOperation.progressFraction(from: "__MLX_PROGRESS__:1.2"),
+            1
+        )
+        XCTAssertNil(
+            HuggingFaceDownloadOperation.progressFraction(from: "__MLX_PROGRESS__:unknown")
+        )
+        XCTAssertNil(HuggingFaceDownloadOperation.progressFraction(from: "ordinary output"))
+    }
+
+    func testRetryEventParsesPrefixedOutputAndRejectsInvalidValues() {
+        XCTAssertEqual(
+            HuggingFaceDownloadOperation.retryEvent(
+                from: "transport log__NATIV_DOWNLOAD_RETRY__:2:5:4"
+            ),
+            HuggingFaceDownloadRetryEvent(
+                attempt: 2,
+                maximumAttempts: 5,
+                delaySeconds: 4
+            )
+        )
+        XCTAssertNil(
+            HuggingFaceDownloadOperation.retryEvent(
+                from: "__NATIV_DOWNLOAD_RETRY__:6:5:16"
+            )
+        )
+        XCTAssertNil(HuggingFaceDownloadOperation.retryEvent(from: "ordinary output"))
+    }
+
+    func testDownloadErrorUsesTheLastCompleteMarker() {
+        let output = """
+        __NATIV_DOWNLOAD_ERROR__:first error
+        progress output
+        __NATIV_DOWNLOAD_ERROR__:The partial download was saved.
+        """
+        XCTAssertEqual(
+            HuggingFaceDownloadOperation.downloadError(from: output),
+            "The partial download was saved."
+        )
+        XCTAssertNil(HuggingFaceDownloadOperation.downloadError(from: "ordinary output"))
+    }
+}
+
 final class HuggingFaceAuthenticationTests: XCTestCase {
     func testTokenReadsAndTrimsHFToken() {
         XCTAssertEqual(
