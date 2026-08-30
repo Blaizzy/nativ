@@ -120,8 +120,8 @@ private struct NativApplication: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("Nativ", id: "main") {
-            NativRootView(appDelegate: appDelegate)
+        WindowGroup("Nativ", id: "main") {
+            NativWindowRoot(appDelegate: appDelegate)
         }
         .defaultSize(width: 1240, height: 720)
         .defaultPosition(.center)
@@ -131,36 +131,5 @@ private struct NativApplication: App {
         .commands {
             NativApplicationCommands(appDelegate: appDelegate)
         }
-    }
-}
-
-private struct NativRootView: View {
-    @Environment(\.openWindow) private var openWindow
-    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
-    @StateObject private var controlPanelDependencies: ControlPanelDependencies
-    let appDelegate: AppDelegate
-
-    init(appDelegate: AppDelegate) {
-        self.appDelegate = appDelegate
-        _controlPanelDependencies = StateObject(
-            wrappedValue: appDelegate.makeControlPanelDependencies()
-        )
-    }
-
-    var body: some View {
-        appDelegate.rootView(controlPanelDependencies: controlPanelDependencies)
-            .onAppear {
-                applyAppearance(appearance)
-                appDelegate.registerMainWindowOpener {
-                    openWindow(id: "main")
-                }
-            }
-            .onChange(of: appearance) { _, newAppearance in
-                applyAppearance(newAppearance)
-            }
-    }
-
-    private func applyAppearance(_ appearance: AppAppearance) {
-        NSApplication.shared.appearance = appearance.appKitAppearance
     }
 }
