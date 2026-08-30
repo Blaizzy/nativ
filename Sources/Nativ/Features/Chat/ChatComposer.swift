@@ -409,7 +409,8 @@ struct ChatComposer: View {
             secondarySection: reasoningPickerSection,
             isModelLoading: model.isModelLoading,
             modelLoadingPercentage: model.modelLoadingPercentage,
-            isDisabled: model.isModelLoading || viewModel.hasPendingRequests,
+            isDisabled: model.isModelLoading || viewModel.hasPendingRequests
+                || model.inferenceActivityInProgress,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
@@ -627,8 +628,8 @@ struct ChatComposer: View {
     }
 
     private var modelPickerHelp: String {
-        if viewModel.hasPendingRequests {
-            return "Model switching is unavailable while requests are active or queued"
+        if viewModel.hasPendingRequests || model.inferenceActivityInProgress {
+            return "Models can’t be changed while a response is being generated."
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(selectedModelLabel)"

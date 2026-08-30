@@ -11,6 +11,7 @@ final class ControlPanelDependencyOwnershipTests: XCTestCase {
         XCTAssertTrue(first.systemMonitor === second.systemMonitor)
         XCTAssertTrue(first.launchAtLogin === second.launchAtLogin)
         XCTAssertTrue(first.persistedDataChanges === second.persistedDataChanges)
+        XCTAssertTrue(first.inferenceActivity === second.inferenceActivity)
         XCTAssertTrue(first.downloads === second.downloads)
     }
 

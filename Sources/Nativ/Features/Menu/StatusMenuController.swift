@@ -694,6 +694,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let submenu = NSMenu()
         submenu.autoenablesItems = false
 
+        if model.inferenceActivityInProgress {
+            submenu.addItem(disabledMenuItem(
+                "Models can’t be changed while a response is being generated."
+            ))
+            return submenu
+        }
+
         if model.isModelLoading {
             submenu.addItem(disabledMenuItem(model.modelLoadingStatusText ?? "Loading model…"))
             return submenu
