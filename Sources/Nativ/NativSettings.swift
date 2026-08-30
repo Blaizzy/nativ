@@ -1164,6 +1164,23 @@ struct NativSettings: Codable, Equatable {
         NSString(string: modelSearchPath).expandingTildeInPath
     }
 
+    mutating func useExternalModelCache(_ resolved: ExternalModelCacheReference.Resolved) {
+        modelSearchPath = resolved.url.path
+        externalModelCache = resolved.reference
+    }
+
+    mutating func restoreDefaultModelCache(to path: String = Self.defaultModelSearchPath) {
+        modelSearchPath = path
+        externalModelCache = nil
+    }
+
+    mutating func clearModelSelections() {
+        for slot in ModelPreloadSlot.allCases {
+            setModelID(nil, for: slot)
+        }
+        draftModelID = ""
+    }
+
     var localModelSearchPaths: LocalModelSearchPaths {
         LocalModelSearchPaths(
             primary: modelSearchPath,

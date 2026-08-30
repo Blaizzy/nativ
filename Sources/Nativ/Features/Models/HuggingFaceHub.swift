@@ -1252,6 +1252,22 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
     }
 
+    func stopDownloads(
+        forVolumeIdentifier volumeIdentifier: String,
+        reason: ExternalModelCacheReference.ValidationError
+    ) {
+        let modelIDs = contexts.values.compactMap { context in
+            context.volumeIdentifier == volumeIdentifier ? context.modelID : nil
+        }
+        let failure = downloadFailure(for: reason)
+        for modelID in modelIDs {
+            guard let context = contexts[modelID] else { continue }
+            context.task?.cancel()
+            context.operation?.cancel()
+            finishDownload(repoID: modelID, error: failure)
+        }
+    }
+
     /// Stops downloader subprocesses before the app exits while preserving the
     /// Hugging Face cache, including resumable `.incomplete` files.
     func shutdownForTermination(timeout: Duration = .seconds(2)) async {
