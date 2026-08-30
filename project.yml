@@ -253,6 +253,8 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
+      - path: Sources/Nativ/Features/ControlPanel/ControlPanelNavigation.swift
+      - path: Sources/Nativ/Features/Windowing/WindowIntent.swift
       - path: Sources/Nativ/Features/Artifacts/ArtifactStore.swift
       - path: Sources/Nativ/Features/Dashboard/DashboardViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
