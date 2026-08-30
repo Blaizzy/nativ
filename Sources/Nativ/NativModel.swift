@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativServerKit
 import Observation
@@ -22,6 +23,7 @@ private enum RequestedServerStopReason: String {
     case stopRequest = "a stop request"
     case modelSwitch = "a model switch"
     case configurationRestart = "a configuration restart"
+    case externalStorageUnavailable = "external model storage became unavailable"
     case appTermination = "app termination"
 }
 
@@ -80,6 +82,7 @@ final class NativModel: ChatModelSwitchingSurface {
     private(set) var metricsLoading = false
     private(set) var systemHuggingFaceCredential =
         HuggingFaceAuthentication.systemCredential()
+    private(set) var externalModelCacheState = ExternalModelCacheReference.State.systemDefault
     private(set) var serverRestartCountdown: Int?
     var settings = NativSettings.load() {
         didSet {
@@ -108,6 +111,8 @@ final class NativModel: ChatModelSwitchingSurface {
     private var pendingServerRestartID: UUID?
     private var serverRestartTask: Task<Void, Never>?
     private var currentServerOutput = ""
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var systemModelCachePath = NativSettings.defaultModelSearchPath
 
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
@@ -115,6 +120,8 @@ final class NativModel: ChatModelSwitchingSurface {
     init() {
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
+        observeExternalModelCacheVolume()
+        refreshExternalModelCacheState()
         isRunning = server.isRunning
         refreshAllTimeStats()
         resolveHuggingFaceEnvironmentFromLoginShell()
@@ -149,19 +156,22 @@ final class NativModel: ChatModelSwitchingSurface {
             }.value
             guard !shellEnvironment.isEmpty else { return }
             guard let self else { return }
+            let effectiveEnvironment = processEnvironment.merging(shellEnvironment) {
+                _, shellValue in shellValue
+            }
             if needsCacheEnvironment {
+                self.systemModelCachePath = HuggingFaceCache.defaultHubPath(
+                    environment: effectiveEnvironment
+                )
                 let resolved = HuggingFaceCache.resolvedSearchPath(
                     stored: self.settings.modelSearchPath,
-                    environment: shellEnvironment
+                    environment: effectiveEnvironment
                 )
                 if resolved != self.settings.modelSearchPath {
                     self.settings.modelSearchPath = resolved
                 }
             }
             if needsTokenEnvironment {
-                let effectiveEnvironment = processEnvironment.merging(shellEnvironment) {
-                    _, shellValue in shellValue
-                }
                 self.systemHuggingFaceCredential = HuggingFaceAuthentication.systemCredential(
                     in: effectiveEnvironment
                 )
@@ -348,6 +358,11 @@ final class NativModel: ChatModelSwitchingSurface {
         var shouldStartMetrics = false
         clearModelLoadFailure()
         currentServerOutput = ""
+        guard prepareExternalModelCacheForUse() else {
+            modelLoadingProgress = nil
+            notifyMenuStateChanged()
+            return
+        }
         metricsClient = NativMetricsClient(baseURL: settings.serverBaseURL)
         modelLoadingProgress = settings.normalized().languageModelID == nil ? nil : 0
         var launchArguments = settings.launchArguments
@@ -737,6 +752,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func applicationWillTerminate() {
+        stopObservingExternalModelCacheVolume()
         allTimeStatsLoadTask?.cancel()
         allTimeStatsLoadTask = nil
         stopMetricsPolling(clearSession: true)
@@ -750,7 +766,227 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func resetSettings() {
-        settings = NativSettings()
+        guard settings.externalModelCache != nil else {
+            settings = NativSettings()
+            return
+        }
+
+        do {
+            try ensureModelCacheCanChange()
+            try switchModelCache(
+                to: NativSettings(modelSearchPath: systemModelCachePath),
+                state: .systemDefault
+            )
+        } catch {
+            appendLog("\nCouldn’t reset settings: \(error.localizedDescription)\n")
+        }
+    }
+
+    func selectExternalModelCache(at selectedURL: URL) throws {
+        let resolved = try ExternalModelCacheReference.resolve(selectedURL)
+        if settings.externalModelCache?.volumeIdentifier == resolved.reference.volumeIdentifier,
+           settings.expandedModelSearchPath == resolved.url.path {
+            var refreshedSettings = settings
+            refreshedSettings.useExternalModelCache(resolved)
+            if refreshedSettings != settings {
+                settings = refreshedSettings
+            }
+            externalModelCacheState = .available(
+                path: resolved.url.path,
+                availableCapacity: resolved.availableCapacity
+            )
+            return
+        }
+
+        try ensureModelCacheCanChange()
+        var updatedSettings = settings
+        updatedSettings.useExternalModelCache(resolved)
+        try switchModelCache(
+            to: updatedSettings,
+            state: .available(
+                path: resolved.url.path,
+                availableCapacity: resolved.availableCapacity
+            )
+        )
+    }
+
+    func restoreDefaultModelCache() throws {
+        guard settings.externalModelCache != nil else { return }
+        try ensureModelCacheCanChange()
+        var updatedSettings = settings
+        updatedSettings.restoreDefaultModelCache(to: systemModelCachePath)
+        try switchModelCache(to: updatedSettings, state: .systemDefault)
+    }
+
+    private func ensureModelCacheCanChange() throws {
+        guard HuggingFaceDownloadManager.shared.activeCount == 0 else {
+            throw ExternalModelCacheReference.SwitchError.downloadsInProgress
+        }
+        guard !modelSwitchInProgress else {
+            throw ExternalModelCacheReference.SwitchError.modelSwitchInProgress
+        }
+    }
+
+    private func switchModelCache(
+        to updatedSettings: NativSettings,
+        state: ExternalModelCacheReference.State
+    ) throws {
+        let shouldRestartServer = server.isRunning
+        if shouldRestartServer {
+            stopServer(preserveSessionStats: false, reason: .configurationRestart)
+            guard !server.isRunning else {
+                throw ExternalModelCacheReference.SwitchError.serverCouldNotStop
+            }
+        }
+
+        cancelPendingModelPreloadSwitch()
+        modelSwitchWatchdog?.cancel()
+        modelSwitchWatchdog = nil
+        modelSwitchInProgress = false
+        modelSwitchTargetID = nil
+        modelLoadingProgress = nil
+        clearPreservedSessionStats()
+        stopMetricsPolling(clearSession: true)
+        clearModelLoadFailure()
+
+        var settingsForNewCache = updatedSettings
+        settingsForNewCache.clearModelSelections()
+        settings = settingsForNewCache
+        externalModelCacheState = state
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+
+        if shouldRestartServer {
+            startServer()
+        }
+    }
+
+    func refreshExternalModelCacheState() {
+        guard let reference = settings.externalModelCache else {
+            externalModelCacheState = .systemDefault
+            return
+        }
+
+        do {
+            let resolved = try reference.resolve(lastKnownPath: settings.expandedModelSearchPath)
+            var updatedSettings = settings
+            updatedSettings.useExternalModelCache(resolved)
+            if updatedSettings != settings {
+                settings = updatedSettings
+            }
+            externalModelCacheState = .available(
+                path: resolved.url.path,
+                availableCapacity: resolved.availableCapacity
+            )
+        } catch let error as ExternalModelCacheReference.ValidationError {
+            externalModelCacheState = .unavailable(
+                path: settings.expandedModelSearchPath,
+                reason: error
+            )
+        } catch {
+            externalModelCacheState = .unavailable(
+                path: settings.expandedModelSearchPath,
+                reason: .unavailable
+            )
+        }
+    }
+
+    private func prepareExternalModelCacheForUse() -> Bool {
+        guard settings.externalModelCache != nil else { return true }
+        refreshExternalModelCacheState()
+        guard case .unavailable(_, let reason) = externalModelCacheState else {
+            return true
+        }
+        appendLog("\nCan’t start mlx-vlm-server: \(reason.localizedDescription)\n")
+        return false
+    }
+
+    private func observeExternalModelCacheVolume() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [
+            NSWorkspace.willUnmountNotification,
+            NSWorkspace.didUnmountNotification,
+            NSWorkspace.didMountNotification,
+            NSWorkspace.didRenameVolumeNotification,
+        ] {
+            let observer = center.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let notificationName = notification.name
+                let volumeURL = notification.userInfo?[
+                    NSWorkspace.volumeURLUserInfoKey
+                ] as? URL
+                Task { @MainActor [weak self] in
+                    self?.handleExternalVolumeChange(
+                        notificationName,
+                        volumeURL: volumeURL
+                    )
+                }
+            }
+            workspaceObservers.append(observer)
+        }
+    }
+
+    private func stopObservingExternalModelCacheVolume() {
+        let center = NSWorkspace.shared.notificationCenter
+        workspaceObservers.forEach(center.removeObserver)
+        workspaceObservers.removeAll()
+    }
+
+    private func handleExternalVolumeChange(
+        _ notificationName: Notification.Name,
+        volumeURL: URL?
+    ) {
+        guard settings.externalModelCache != nil else { return }
+
+        switch notificationName {
+        case NSWorkspace.willUnmountNotification, NSWorkspace.didUnmountNotification:
+            guard let volumeURL,
+                  ExternalModelCacheReference.path(
+                    settings.expandedModelSearchPath,
+                    isOnVolumeAt: volumeURL
+                  ) else {
+                return
+            }
+            makeExternalModelCacheUnavailable()
+        case NSWorkspace.didMountNotification, NSWorkspace.didRenameVolumeNotification:
+            let previousState = externalModelCacheState
+            let previousPath = settings.modelSearchPath
+            refreshExternalModelCacheState()
+            if externalModelCacheState != previousState
+                || settings.modelSearchPath != previousPath {
+                NotificationCenter.default.post(
+                    name: .localModelLibraryDidChange,
+                    object: nil
+                )
+            }
+        default:
+            break
+        }
+    }
+
+    private func makeExternalModelCacheUnavailable() {
+        guard let reference = settings.externalModelCache else { return }
+        let unavailableState = ExternalModelCacheReference.State.unavailable(
+            path: settings.expandedModelSearchPath,
+            reason: .unavailable
+        )
+        guard externalModelCacheState != unavailableState else { return }
+
+        HuggingFaceDownloadManager.shared.stopDownloads(
+            forVolumeIdentifier: reference.volumeIdentifier,
+            reason: .unavailable
+        )
+        if server.isRunning {
+            stopServer(
+                preserveSessionStats: false,
+                reason: .externalStorageUnavailable
+            )
+        }
+        externalModelCacheState = unavailableState
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+        notifyMenuStateChanged()
     }
 
     func clearLogs() {

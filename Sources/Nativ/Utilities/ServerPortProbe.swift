@@ -34,6 +34,18 @@ enum ServerPortProbe {
             let info = candidate.pointee
             let descriptor = socket(info.ai_family, info.ai_socktype, info.ai_protocol)
             if descriptor >= 0 {
+                var reuseAddress: Int32 = 1
+                guard setsockopt(
+                    descriptor,
+                    SOL_SOCKET,
+                    SO_REUSEADDR,
+                    &reuseAddress,
+                    socklen_t(MemoryLayout.size(ofValue: reuseAddress))
+                ) == 0 else {
+                    close(descriptor)
+                    address = info.ai_next
+                    continue
+                }
                 let bindResult = Darwin.bind(descriptor, info.ai_addr, info.ai_addrlen)
                 let bindError = errno
                 close(descriptor)
