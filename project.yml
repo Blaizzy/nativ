@@ -252,6 +252,9 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift
       - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
+      - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
+      - path: Sources/Nativ/Features/Artifacts/ArtifactStore.swift
+      - path: Sources/Nativ/Features/Dashboard/DashboardViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
@@ -264,6 +267,7 @@ targets:
       - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
       - path: Sources/Nativ/Features/MCP/MCPHostManager.swift
+      - path: Sources/Nativ/Utilities/LaunchAtLoginController.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
       - path: Sources/Nativ/Features/Routines/RoutineStore.swift
     dependencies:
