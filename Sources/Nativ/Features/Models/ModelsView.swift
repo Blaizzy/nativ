@@ -78,6 +78,7 @@ private final class ModelsNativState: ObservableObject {
         var modelLoadFailure: ModelLoadFailure?
         var systemHuggingFaceCredential: HuggingFaceCredential?
         var loadedModelID: String?
+        var externalModelCacheState: ExternalModelCacheReference.State
     }
 
     @Published private var snapshot: Snapshot
@@ -94,7 +95,8 @@ private final class ModelsNativState: ObservableObject {
             metricsLoading: model.metricsLoading,
             modelLoadFailure: model.modelLoadFailure,
             systemHuggingFaceCredential: model.systemHuggingFaceCredential,
-            loadedModelID: model.metrics?.server.loadedModel
+            loadedModelID: model.metrics?.server.loadedModel,
+            externalModelCacheState: model.externalModelCacheState
         )
 
         observeModel()
@@ -119,6 +121,7 @@ private final class ModelsNativState: ObservableObject {
             $0.modelLoadFailure = model.modelLoadFailure
             $0.systemHuggingFaceCredential = model.systemHuggingFaceCredential
             $0.loadedModelID = model.metrics?.server.loadedModel
+            $0.externalModelCacheState = model.externalModelCacheState
         }
     }
 
@@ -140,6 +143,9 @@ private final class ModelsNativState: ObservableObject {
         snapshot.systemHuggingFaceCredential
     }
     var loadedModelID: String? { snapshot.loadedModelID }
+    var externalModelCacheState: ExternalModelCacheReference.State {
+        snapshot.externalModelCacheState
+    }
 
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(
@@ -225,6 +231,8 @@ struct ModelsView: View {
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
+    @State private var modelCacheErrorMessage = ""
+    @State private var showsModelCacheError = false
 
     init(
         model: NativModel,
@@ -255,6 +263,7 @@ struct ModelsView: View {
                 Divider()
                 activeDownloadBanner
                 modelLoadFailureBanner
+                externalModelCacheBanner
 
                 modelsPage
             }
@@ -264,9 +273,11 @@ struct ModelsView: View {
             rescanLocalModels()
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            model.refreshExternalModelCacheState()
             rescanLocalModels()
         }
         .onAppear {
+            model.refreshExternalModelCacheState()
             openSpeechModelDiscoveryIfRequested()
             openImageModelDiscoveryIfRequested()
         }
@@ -326,6 +337,10 @@ struct ModelsView: View {
             hubLibrary.cancel()
             lastStartedHubSearchTaskID = nil
         }
+        .alert("Couldn’t Change Model Storage", isPresented: $showsModelCacheError) {
+        } message: {
+            Text(modelCacheErrorMessage)
+        }
     }
 
     private func openSpeechModelDiscoveryIfRequested() {
@@ -373,6 +388,21 @@ struct ModelsView: View {
     @ViewBuilder
     private var activeDownloadBanner: some View {
         ActiveDownloadBannerView()
+    }
+
+    @ViewBuilder
+    private var externalModelCacheBanner: some View {
+        if case .unavailable(_, let reason) = modelState.externalModelCacheState {
+            ModelsNotice(
+                title: "External model storage is unavailable",
+                message: reason.localizedDescription,
+                systemImage: "externaldrive.badge.exclamationmark",
+                color: .orange
+            )
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
+            Divider()
+        }
     }
 
     private var pageHeader: some View {
@@ -1143,6 +1173,19 @@ struct ModelsView: View {
         Menu {
             Section("Hugging Face Cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
+                externalModelCacheStatus
+                Button(
+                    "Choose External Location…",
+                    systemImage: "externaldrive",
+                    action: chooseExternalModelCache
+                )
+                if modelState.settings.externalModelCache != nil {
+                    Button(
+                        "Restore System Default",
+                        systemImage: "arrow.counterclockwise",
+                        action: restoreSystemModelCache
+                    )
+                }
             }
             Section("Model Folders") {
                 ForEach(modelState.settings.normalized().additionalModelSearchPaths, id: \.self) {
@@ -1163,7 +1206,25 @@ struct ModelsView: View {
             Label("Sources", systemImage: "folder")
         }
         .fixedSize()
-        .help("Folders scanned for MLX models in addition to the Hugging Face cache")
+        .help("Manage model storage and additional model folders")
+    }
+
+    @ViewBuilder
+    private var externalModelCacheStatus: some View {
+        switch modelState.externalModelCacheState {
+        case .systemDefault:
+            Label("System Default", systemImage: "internaldrive")
+        case .available(_, let availableCapacity):
+            Label("External Drive Connected", systemImage: "externaldrive.fill.badge.checkmark")
+            if let availableCapacity {
+                Text("\(availableCapacity.formatted(.byteCount(style: .file))) available")
+            }
+        case .unavailable:
+            Label(
+                "External Drive Unavailable",
+                systemImage: "externaldrive.badge.exclamationmark"
+            )
+        }
     }
 
     private func rescanLocalModels() {
@@ -1183,6 +1244,37 @@ struct ModelsView: View {
         model.settings.additionalModelSearchPaths.append(
             (url.path as NSString).abbreviatingWithTildeInPath
         )
+    }
+
+    private func chooseExternalModelCache() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(filePath: "/Volumes", directoryHint: .isDirectory)
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder on an external APFS drive. Nativ will unload selected models and restart the server."
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
+
+        do {
+            try model.selectExternalModelCache(at: selectedURL)
+        } catch {
+            showModelCacheError(error)
+        }
+    }
+
+    private func restoreSystemModelCache() {
+        do {
+            try model.restoreDefaultModelCache()
+        } catch {
+            showModelCacheError(error)
+        }
+    }
+
+    private func showModelCacheError(_ error: Error) {
+        modelCacheErrorMessage = error.localizedDescription
+        showsModelCacheError = true
     }
 
     private func removeModelSourceFolder(_ path: String) {
