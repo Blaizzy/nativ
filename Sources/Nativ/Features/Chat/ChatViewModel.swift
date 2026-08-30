@@ -80,6 +80,8 @@ final class ChatViewModel: ObservableObject {
         [UUID: ChatImageModelSelectionRequest] = [:]
 
     private let sessionStore = ChatSessionStore()
+    private let windowID: UUID
+    private let persistedDataChanges: PersistedDataChangeHub
     private let documentContextBuilder: ChatDocumentContextBuilder
     private let attachmentValidator: ChatAttachmentValidator
     private var sessionLoadTask: Task<Void, Never>?
@@ -103,8 +105,15 @@ final class ChatViewModel: ObservableObject {
     private var imageModelRefreshTask: Task<Void, Never>?
     private var composerSnapshot: ComposerSnapshot?
     private var attachmentValidationTasks: [UUID: Task<Void, Never>] = [:]
+    private var persistedDataChangeCancellable: AnyCancellable?
+    private var needsPersistedSessionReload = false
 
-    init() {
+    init(
+        windowID: UUID = UUID(),
+        persistedDataChanges: PersistedDataChangeHub = .init()
+    ) {
+        self.windowID = windowID
+        self.persistedDataChanges = persistedDataChanges
         let documentExtractionCache = ChatDocumentExtractionCache()
         documentContextBuilder = ChatDocumentContextBuilder(
             extractionCache: documentExtractionCache
@@ -132,6 +141,10 @@ final class ChatViewModel: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             finishLoadingSessions(bootstrap)
         }
+        persistedDataChangeCancellable = persistedDataChanges.changes
+            .sink { [weak self] change in
+                self?.handlePersistedDataChange(change)
+            }
     }
 
     deinit {
@@ -321,7 +334,7 @@ final class ChatViewModel: ObservableObject {
         persistCurrentSession(updateTimestamp: false)
         storedSessions.append(session)
         pruneRedundantEmptySessions()
-        sessionStore.saveSession(session)
+        saveSession(session)
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
@@ -351,7 +364,7 @@ final class ChatViewModel: ObservableObject {
             session.messages[index].imageAttachments.removeAll { $0.id == attachmentID }
         }
         upsertStoredSession(session)
-        sessionStore.saveSession(session)
+        saveSession(session)
         refreshSessionList()
     }
 
@@ -388,7 +401,7 @@ final class ChatViewModel: ObservableObject {
         if currentSession?.id == sessionID {
             currentSession?.customTitle = trimmed.isEmpty ? nil : trimmed
         }
-        sessionStore.saveSession(storedSessions[index])
+        saveSession(storedSessions[index])
         refreshSessionList()
     }
 
@@ -403,7 +416,7 @@ final class ChatViewModel: ObservableObject {
             currentSession?.pinned = pinned
             currentSession?.pinnedOrder = order
         }
-        sessionStore.saveSession(storedSessions[index])
+        saveSession(storedSessions[index])
         refreshSessionList()
     }
 
@@ -412,7 +425,7 @@ final class ChatViewModel: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed, isCollapsed: true)
         folders.append(folder)
-        sessionStore.saveFolders(folders)
+        saveFolders()
         return folder.id
     }
 
@@ -425,15 +438,15 @@ final class ChatViewModel: ObservableObject {
             return
         }
         folders[index].name = trimmed
-        sessionStore.saveFolders(folders)
+        saveFolders()
     }
 
     func deleteFolder(_ folderID: UUID) {
         folders.removeAll { $0.id == folderID }
-        sessionStore.saveFolders(folders)
+        saveFolders()
         for index in storedSessions.indices where storedSessions[index].folderID == folderID {
             storedSessions[index].folderID = nil
-            sessionStore.saveSession(storedSessions[index])
+            saveSession(storedSessions[index])
         }
         if currentSession?.folderID == folderID {
             currentSession?.folderID = nil
@@ -446,7 +459,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         folders[index].isCollapsed = collapsed
-        sessionStore.saveFolders(folders)
+        saveFolders()
     }
 
     func setAllFoldersCollapsed(_ collapsed: Bool) {
@@ -456,7 +469,7 @@ final class ChatViewModel: ObservableObject {
         for index in folders.indices {
             folders[index].isCollapsed = collapsed
         }
-        sessionStore.saveFolders(folders)
+        saveFolders()
     }
 
     func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
@@ -467,7 +480,7 @@ final class ChatViewModel: ObservableObject {
         if currentSession?.id == sessionID {
             currentSession?.folderID = folderID
         }
-        sessionStore.saveSession(storedSessions[index])
+        saveSession(storedSessions[index])
         refreshSessionList()
     }
 
@@ -476,7 +489,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         folders[index].isPinned = pinned
-        sessionStore.saveFolders(folders)
+        saveFolders()
     }
 
     func applyFolderOrder(_ orderedFolderIDs: [UUID]) {
@@ -490,7 +503,7 @@ final class ChatViewModel: ObservableObject {
             reordered.append(folder)
         }
         folders = reordered
-        sessionStore.saveFolders(folders)
+        saveFolders()
     }
 
     func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
@@ -504,7 +517,7 @@ final class ChatViewModel: ObservableObject {
                 currentSession?.pinned = true
                 currentSession?.pinnedOrder = order
             }
-            sessionStore.saveSession(storedSessions[index])
+            saveSession(storedSessions[index])
         }
         refreshSessionList()
     }
@@ -522,7 +535,7 @@ final class ChatViewModel: ObservableObject {
                 currentSession?.pinnedOrder = nil
                 currentSession?.sessionOrder = order
             }
-            sessionStore.saveSession(storedSessions[index])
+            saveSession(storedSessions[index])
         }
         refreshSessionList()
     }
@@ -540,7 +553,7 @@ final class ChatViewModel: ObservableObject {
 
         storedSessions.removeAll { $0.id == sessionID }
         RoutineStore.shared.detachSession(sessionID)
-        sessionStore.deleteSession(id: sessionID)
+        deletePersistedSession(sessionID)
         pruneRedundantEmptySessions()
 
         guard sessionID == currentSessionID else {
@@ -581,7 +594,7 @@ final class ChatViewModel: ObservableObject {
                     from: storedSessions[index]
                 )
                 storedSessions[index] = session
-                sessionStore.saveSession(session)
+                saveSession(session)
                 if currentSession?.id == session.id {
                     currentSession = session
                 }
@@ -2383,6 +2396,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {
+        defer {
+            if needsPersistedSessionReload {
+                needsPersistedSessionReload = false
+                reloadPersistedSessions(preservingCurrentIfMissing: false)
+            }
+        }
         let localSession = currentSession
         let localSessionHasWork =
             localSession.map { session in
@@ -2409,7 +2428,7 @@ final class ChatViewModel: ObservableObject {
             applyCurrentSession(latestSession)
         } else if let localSession {
             storedSessions = [localSession]
-            sessionStore.saveSession(localSession)
+            saveSession(localSession)
             refreshSessionList()
         } else {
             createSession()
@@ -2448,7 +2467,7 @@ final class ChatViewModel: ObservableObject {
 
         currentSession = session
         upsertStoredSession(session)
-        sessionStore.saveSession(session)
+        saveSession(session)
         refreshSessionList()
     }
 
@@ -2470,7 +2489,7 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments = composer?.attachments ?? []
         discardPromptEditing()
         upsertStoredSession(branch)
-        sessionStore.saveSession(branch)
+        saveSession(branch)
         applyCurrentSession(branch)
     }
 
@@ -2491,28 +2510,73 @@ final class ChatViewModel: ObservableObject {
         if updateTimestamp {
             storedSessions[index].updatedAt = Date()
         }
-        sessionStore.saveSession(storedSessions[index])
+        saveSession(storedSessions[index])
         refreshSessionList()
     }
 
     func reloadPersistedSessions() {
+        reloadPersistedSessions(preservingCurrentIfMissing: true)
+    }
+
+    private func reloadPersistedSessions(preservingCurrentIfMissing: Bool) {
         guard !isLoadingSessions else {
             return
         }
         storedSessions = sessionStore.loadSessions()
-        if let currentSession,
-            !storedSessions.contains(where: { $0.id == currentSession.id })
-        {
-            upsertStoredSession(currentSession)
-        }
-        if let id = currentSessionID,
-            activeRequestSessionID != id,
-            let fresh = storedSessions.first(where: { $0.id == id }),
-            fresh.messages.count != messages.count
-        {
-            applyCurrentSession(fresh)
+        if let currentSession {
+            if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
+                if activeRequestSessionID != currentSession.id, fresh != currentSession {
+                    applyCurrentSession(fresh)
+                }
+            } else if preservingCurrentIfMissing || activeRequestSessionID == currentSession.id {
+                upsertStoredSession(currentSession)
+            } else {
+                discardPromptEditing()
+                draft = ""
+                pendingImageAttachments.removeAll()
+                if let replacement = storedSessions.sorted(by: ChatSession.recencySort).first {
+                    applyCurrentSession(replacement)
+                } else {
+                    currentSessionID = nil
+                    messages = []
+                    self.currentSession = nil
+                    createSession()
+                }
+            }
         }
         refreshSessionList()
+    }
+
+    private func handlePersistedDataChange(_ change: PersistedDataChange) {
+        guard change.originWindowID != windowID else { return }
+
+        switch change.kind {
+        case .chatSession:
+            if isLoadingSessions {
+                needsPersistedSessionReload = true
+            } else {
+                reloadPersistedSessions(preservingCurrentIfMissing: false)
+            }
+        case .chatFolders:
+            folders = sessionStore.loadFolders()
+        case .imageGenerationSession:
+            break
+        }
+    }
+
+    private func saveSession(_ session: ChatSession) {
+        sessionStore.saveSession(session)
+        persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
+    }
+
+    private func deletePersistedSession(_ sessionID: UUID) {
+        sessionStore.deleteSession(id: sessionID)
+        persistedDataChanges.send(.chatSession(sessionID), originWindowID: windowID)
+    }
+
+    private func saveFolders() {
+        sessionStore.saveFolders(folders)
+        persistedDataChanges.send(.chatFolders, originWindowID: windowID)
     }
 
     private func upsertStoredSession(_ session: ChatSession) {
@@ -2567,7 +2631,7 @@ final class ChatViewModel: ObservableObject {
         storedSessions = keptSessions
         for sessionID in removedSessionIDs {
             RoutineStore.shared.detachSession(sessionID)
-            sessionStore.deleteSession(id: sessionID)
+            deletePersistedSession(sessionID)
         }
     }
 }
