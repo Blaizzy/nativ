@@ -179,6 +179,8 @@ struct ModelsViewHost: View, @MainActor Equatable {
     var speechModelDiscoveryRequest = 0
     var imageModelDiscoveryRequest = 0
     var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+    var modelDiscoveryRequest = 0
+    var modelDiscoveryRepositoryID: String?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -187,6 +189,8 @@ struct ModelsViewHost: View, @MainActor Equatable {
             && lhs.speechModelDiscoveryRequest == rhs.speechModelDiscoveryRequest
             && lhs.imageModelDiscoveryRequest == rhs.imageModelDiscoveryRequest
             && lhs.imageModelDiscoveryCapability == rhs.imageModelDiscoveryCapability
+            && lhs.modelDiscoveryRequest == rhs.modelDiscoveryRequest
+            && lhs.modelDiscoveryRepositoryID == rhs.modelDiscoveryRepositoryID
     }
 
     var body: some View {
@@ -196,7 +200,9 @@ struct ModelsViewHost: View, @MainActor Equatable {
             titleLeadingInset: titleLeadingInset,
             speechModelDiscoveryRequest: speechModelDiscoveryRequest,
             imageModelDiscoveryRequest: imageModelDiscoveryRequest,
-            imageModelDiscoveryCapability: imageModelDiscoveryCapability
+            imageModelDiscoveryCapability: imageModelDiscoveryCapability,
+            modelDiscoveryRequest: modelDiscoveryRequest,
+            modelDiscoveryRepositoryID: modelDiscoveryRepositoryID
         )
     }
 }
@@ -208,6 +214,8 @@ struct ModelsView: View {
     var speechModelDiscoveryRequest = 0
     var imageModelDiscoveryRequest = 0
     var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+    var modelDiscoveryRequest = 0
+    var modelDiscoveryRepositoryID: String?
     @StateObject private var modelState: ModelsNativState
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
@@ -227,6 +235,7 @@ struct ModelsView: View {
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
     @State private var handledImageModelDiscoveryRequest = 0
+    @State private var handledModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
 
@@ -236,7 +245,9 @@ struct ModelsView: View {
         titleLeadingInset: CGFloat = 0,
         speechModelDiscoveryRequest: Int = 0,
         imageModelDiscoveryRequest: Int = 0,
-        imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+        imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration,
+        modelDiscoveryRequest: Int = 0,
+        modelDiscoveryRepositoryID: String? = nil
     ) {
         self.model = model
         _showsConfiguration = showsConfiguration
@@ -244,6 +255,8 @@ struct ModelsView: View {
         self.speechModelDiscoveryRequest = speechModelDiscoveryRequest
         self.imageModelDiscoveryRequest = imageModelDiscoveryRequest
         self.imageModelDiscoveryCapability = imageModelDiscoveryCapability
+        self.modelDiscoveryRequest = modelDiscoveryRequest
+        self.modelDiscoveryRepositoryID = modelDiscoveryRepositoryID
         _modelState = StateObject(wrappedValue: ModelsNativState(model: model))
     }
 
@@ -273,12 +286,16 @@ struct ModelsView: View {
         .onAppear {
             openSpeechModelDiscoveryIfRequested()
             openImageModelDiscoveryIfRequested()
+            openModelDiscoveryIfRequested()
         }
         .onChange(of: speechModelDiscoveryRequest) { _, _ in
             openSpeechModelDiscoveryIfRequested()
         }
         .onChange(of: imageModelDiscoveryRequest) { _, _ in
             openImageModelDiscoveryIfRequested()
+        }
+        .onChange(of: modelDiscoveryRequest) { _, _ in
+            openModelDiscoveryIfRequested()
         }
         .onChange(of: section) { _, newSection in
             // Let the segmented control commit before replacing the toolbar
@@ -355,6 +372,20 @@ struct ModelsView: View {
         hubSort = .downloads
         hubSortDirection = .descending
         hubCapabilityFilters = [imageModelDiscoveryCapability]
+        hubAccessFilter = .all
+    }
+
+    private func openModelDiscoveryIfRequested() {
+        guard modelDiscoveryRequest > handledModelDiscoveryRequest,
+            let modelDiscoveryRepositoryID
+        else {
+            return
+        }
+        handledModelDiscoveryRequest = modelDiscoveryRequest
+        section = .discover
+        typeFilter = .all
+        hubQuery = modelDiscoveryRepositoryID
+        hubCapabilityFilters = []
         hubAccessFilter = .all
     }
 

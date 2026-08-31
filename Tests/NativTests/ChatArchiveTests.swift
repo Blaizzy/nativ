@@ -142,6 +142,26 @@ final class ChatArchiveTests: XCTestCase {
         )
     }
 
+    func testPromptTokenCountUsesTheLatestAssistantMetrics() {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        var session = makeSession(date: date)
+        session.messages.append(
+            ChatTranscriptMessage(
+                role: .assistant,
+                content: "Done",
+                createdAt: date,
+                responseMetrics: ChatResponseMetrics(totalTokens: 321)
+            )
+        )
+        let archive = ChatArchive(
+            chat: session,
+            modelRepositoryID: "mlx-community/Qwen3-4B",
+            systemPrompt: ""
+        )
+
+        XCTAssertEqual(ChatArchiveCodec.promptTokenCount(in: archive), 321)
+    }
+
     private func makeSession(
         date: Date = .now,
         attachmentData: String = Data("hello".utf8).base64EncodedString(),

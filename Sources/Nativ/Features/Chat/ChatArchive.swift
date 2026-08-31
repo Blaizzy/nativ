@@ -151,6 +151,15 @@ enum ChatArchiveCodec {
         return .ready(requiresModelSwitch: currentModelID != archive.modelRepositoryID)
     }
 
+    static func promptTokenCount(in archive: ChatArchive) -> Int? {
+        archive.chat.messages.reversed().compactMap { message -> Int? in
+            guard message.role == .assistant else {
+                return nil
+            }
+            return message.responseMetrics?.totalTokens
+        }.first
+    }
+
     private static func validate(_ archive: ChatArchive) throws {
         guard archive.format == ChatArchive.format else {
             throw ChatArchiveError.invalidFormat
