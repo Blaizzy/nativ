@@ -67,7 +67,8 @@ struct RoutineEditor: View {
             case .skill:
                 return false
             case .kit(let id):
-                return NativKitCatalog.bundled.kit(id: id)?.mcpServerIDs.isEmpty == false
+                guard let kit = model.kitLibrary.catalog.kit(id: id) else { return false }
+                return !kit.mcpReferences.isEmpty || kit.toolCount > 0
             case .mcpServer, .tool:
                 return true
             }
@@ -75,7 +76,7 @@ struct RoutineEditor: View {
     }
 
     private var capabilityOptions: [ScheduledCapabilityOption] {
-        var options = NativKitCatalog.bundled.kits.map { kit in
+        var options = model.kitLibrary.catalog.kits.map { kit in
             ScheduledCapabilityOption(
                 capability: .kit(kit.id),
                 section: .kits,
