@@ -4,6 +4,7 @@ import NativServerKit
 /// The settings-backed capabilities selected Kits can supply to a routine.
 struct NativKitRuntimeResolution: Equatable, Sendable {
     let mcpServers: [MCPServerConfig]
+    let tools: [ScheduledTool]
     let skills: [NativSkill]
     let unavailableCapabilities: [String]
 }
@@ -18,9 +19,20 @@ enum NativKitRuntimeResolver {
     ) -> NativKitRuntimeResolution {
         var serverIDs = Set<UUID>()
         var servers: [MCPServerConfig] = []
+        var toolIDs = Set<String>()
+        var tools: [ScheduledTool] = []
         var skillIDs = Set<UUID>()
         var skills: [NativSkill] = []
         var unavailable = Set<String>()
+
+        func appendServer(_ server: MCPServerConfig, kitName: String) {
+            guard server.isEnabled else {
+                unavailable.insert("\(kitName): \(server.name.isEmpty ? "MCP server" : server.name) (disabled)")
+                return
+            }
+            guard serverIDs.insert(server.id).inserted else { return }
+            servers.append(server)
+        }
 
         for kitID in kitIDs {
             guard let kit = kitCatalog.kit(id: kitID) else {
@@ -30,7 +42,7 @@ enum NativKitRuntimeResolver {
 
             for component in kit.components {
                 switch component {
-                case .mcpServer(let catalogID):
+                case .mcpServer(.catalog(let catalogID)):
                     guard let entry = mcpCatalog.entry(id: catalogID) else {
                         unavailable.insert("\(kit.name): \(catalogID) (unavailable)")
                         continue
@@ -42,20 +54,44 @@ enum NativKitRuntimeResolver {
                         unavailable.insert("\(kit.name): \(entry.name) (not configured)")
                         continue
                     }
-                    guard server.isEnabled else {
-                        unavailable.insert("\(kit.name): \(entry.name) (disabled)")
+                    appendServer(server, kitName: kit.name)
+
+                case .mcpServer(.configured(let id)):
+                    guard let server = settings.mcpServers.first(where: { $0.id == id }) else {
+                        unavailable.insert("\(kit.name): MCP server \(id.uuidString) (not configured)")
                         continue
                     }
-                    guard serverIDs.insert(server.id).inserted else { continue }
-                    servers.append(server)
+                    appendServer(server, kitName: kit.name)
 
-                case .skill(let definition):
-                    guard let skill = settings.skills.first(where: { $0.id == definition.id }) else {
-                        unavailable.insert("\(kit.name): \(definition.name) (not configured)")
+                case .nativeTool(let name):
+                    guard settings.isToolEnabled(name) else {
+                        unavailable.insert("\(kit.name): \(name) (disabled)")
+                        continue
+                    }
+                    guard toolIDs.insert(component.id).inserted else { continue }
+                    tools.append(ScheduledTool(provider: .builtIn, name: name))
+
+                case .customTool(let id):
+                    guard let tool = settings.customTools.first(where: { $0.id == id }) else {
+                        unavailable.insert("\(kit.name): Custom tool \(id.uuidString) (not configured)")
+                        continue
+                    }
+                    guard settings.isToolEnabled(tool.toolName) else {
+                        unavailable.insert("\(kit.name): \(tool.name) (disabled)")
+                        continue
+                    }
+                    guard toolIDs.insert(component.id).inserted else { continue }
+                    tools.append(ScheduledTool(provider: .custom(id), name: tool.toolName))
+
+                case .skill(let id):
+                    let definition = kitCatalog.skillDefinition(id: id)
+                    guard let skill = settings.skills.first(where: { $0.id == id }) else {
+                        let name = definition?.name ?? "Skill \(id.uuidString)"
+                        unavailable.insert("\(kit.name): \(name) (not configured)")
                         continue
                     }
                     guard skill.isEnabled else {
-                        let name = skill.name.isEmpty ? definition.name : skill.name
+                        let name = skill.name.isEmpty ? definition?.name ?? "Skill \(id.uuidString)" : skill.name
                         unavailable.insert("\(kit.name): \(name) (disabled)")
                         continue
                     }
@@ -70,6 +106,7 @@ enum NativKitRuntimeResolver {
 
         return NativKitRuntimeResolution(
             mcpServers: servers,
+            tools: tools,
             skills: skills,
             unavailableCapabilities: unavailable.sorted()
         )

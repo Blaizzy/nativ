@@ -61,6 +61,7 @@ final class ServerLogStore {
 @MainActor
 @Observable
 final class NativModel: ChatModelSwitchingSurface {
+    let kitLibrary: NativKitLibrary
     private(set) var isRunning = false
     let serverLogs = ServerLogStore()
     private(set) var metrics: NativMetrics?
@@ -113,7 +114,8 @@ final class NativModel: ChatModelSwitchingSurface {
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
 
-    init() {
+    init(kitLibrary: NativKitLibrary? = nil) {
+        self.kitLibrary = kitLibrary ?? NativKitLibrary()
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
         isRunning = server.isRunning
