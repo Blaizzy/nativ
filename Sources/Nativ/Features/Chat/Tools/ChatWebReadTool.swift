@@ -163,6 +163,8 @@ private extension WebBrowsingError {
             return WebReadError.invalidArguments.localizedDescription
         case .missingAPIKey(let provider):
             return "No API key is configured for \(provider.metadata.displayName)."
+        case .missingEndpoint(let provider):
+            return "No instance URL is configured for \(provider.metadata.displayName)."
         case .credentialAccess(let provider):
             return "Nativ could not read the \(provider.metadata.displayName) API key from Keychain."
         case .invalidResponse(let provider), .responseTooLarge(let provider):
@@ -178,7 +180,7 @@ private extension WebBrowsingError {
 
     var webReadUserActionRequired: String? {
         switch code {
-        case .missingAPIKey:
+        case .missingAPIKey, .missingEndpoint:
             "Ask the user to configure the selected provider in Extensions → Browsing."
         case .invalidAuthentication, .credentialAccess:
             "Ask the user to reconnect the selected provider in Extensions → Browsing."

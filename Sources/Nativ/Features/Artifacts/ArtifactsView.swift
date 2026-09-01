@@ -506,8 +506,8 @@ struct ArtifactsView: View {
         }
         .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
-                store.delete(pendingDelete)
-                selection.subtract(pendingDelete.map(\.id))
+                let deletedIDs = store.delete(pendingDelete)
+                selection.subtract(deletedIDs)
                 pendingDelete = []
                 if selection.isEmpty {
                     isSelecting = false

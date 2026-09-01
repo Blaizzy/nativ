@@ -6,41 +6,66 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class ArtifactStore: ObservableObject {
+    struct StorageLocations {
+        let indexURL: URL
+        let cacheDirectory: URL
+        let favoritesURL: URL
+        let displayNamesURL: URL
+
+        static var application: Self {
+            let fileManager = FileManager.default
+            let support = fileManager
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first ?? fileManager.temporaryDirectory
+            let nativDirectory = support.appendingPathComponent("Nativ", isDirectory: true)
+            let caches = fileManager
+                .urls(for: .cachesDirectory, in: .userDomainMask)
+                .first ?? fileManager.temporaryDirectory
+
+            return Self(
+                indexURL: nativDirectory.appendingPathComponent("Artifacts Index.json"),
+                cacheDirectory: caches
+                    .appendingPathComponent("Nativ", isDirectory: true)
+                    .appendingPathComponent("Artifacts", isDirectory: true),
+                favoritesURL: nativDirectory.appendingPathComponent("Artifact Favorites.json"),
+                displayNamesURL: nativDirectory.appendingPathComponent("Artifact Names.json")
+            )
+        }
+    }
+
+    typealias DeletionHandler = (Artifact) -> Bool
+
     @Published private(set) var artifacts: [Artifact] = []
     @Published private(set) var isRefreshing = false
-
-    var onDeleteArtifact: ((Artifact) -> Void)?
 
     @Published private(set) var favoriteIDs: Set<UUID> = []
     @Published private(set) var displayNames: [UUID: String] = [:]
 
+    private let deletionHandler: DeletionHandler
     private let indexURL: URL
     private let cacheDirectory: URL
     private let favoritesURL: URL
     private let displayNamesURL: URL
     private let thumbnailCache = NSCache<NSString, NSImage>()
 
-    init() {
-        let support = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first ?? FileManager.default.temporaryDirectory
-        let nativDirectory = support.appendingPathComponent("Nativ", isDirectory: true)
-        indexURL = nativDirectory.appendingPathComponent("Artifacts Index.json")
-        favoritesURL = nativDirectory.appendingPathComponent("Artifact Favorites.json")
-        displayNamesURL = nativDirectory.appendingPathComponent("Artifact Names.json")
-
-        let caches = FileManager.default
-            .urls(for: .cachesDirectory, in: .userDomainMask)
-            .first ?? FileManager.default.temporaryDirectory
-        cacheDirectory = caches
-            .appendingPathComponent("Nativ", isDirectory: true)
-            .appendingPathComponent("Artifacts", isDirectory: true)
+    init(
+        storage: StorageLocations = .application,
+        refreshesAutomatically: Bool = true,
+        deletionHandler: @escaping DeletionHandler = { _ in true }
+    ) {
+        self.deletionHandler = deletionHandler
+        indexURL = storage.indexURL
+        cacheDirectory = storage.cacheDirectory
+        favoritesURL = storage.favoritesURL
+        displayNamesURL = storage.displayNamesURL
 
         thumbnailCache.countLimit = 150
         favoriteIDs = Self.loadFavorites(favoritesURL)
         displayNames = Self.loadNames(displayNamesURL)
         artifacts = Self.loadIndex(indexURL)
-        refresh()
+        if refreshesAutomatically {
+            refresh()
+        }
     }
 
     func fileURL(for artifact: Artifact) -> URL {
@@ -155,21 +180,30 @@ final class ArtifactStore: ObservableObject {
         }
     }
 
-    func delete(_ artifact: Artifact) {
-        onDeleteArtifact?(artifact)
+    @discardableResult
+    func delete(_ artifact: Artifact) -> Bool {
+        guard deletionHandler(artifact) else {
+            return false
+        }
         try? FileManager.default.removeItem(at: fileURL(for: artifact))
         artifacts.removeAll { $0.id == artifact.id }
         Self.writeIndex(artifacts, to: indexURL)
+        return true
     }
 
-    func delete(_ toDelete: [Artifact]) {
+    @discardableResult
+    func delete(_ toDelete: [Artifact]) -> Set<Artifact.ID> {
+        var deletedIDs: Set<Artifact.ID> = []
         for artifact in toDelete {
-            onDeleteArtifact?(artifact)
+            guard !deletedIDs.contains(artifact.id), deletionHandler(artifact) else {
+                continue
+            }
             try? FileManager.default.removeItem(at: fileURL(for: artifact))
+            deletedIDs.insert(artifact.id)
         }
-        let ids = Set(toDelete.map(\.id))
-        artifacts.removeAll { ids.contains($0.id) }
+        artifacts.removeAll { deletedIDs.contains($0.id) }
         Self.writeIndex(artifacts, to: indexURL)
+        return deletedIDs
     }
 
     func revealInFinder(_ artifact: Artifact) {

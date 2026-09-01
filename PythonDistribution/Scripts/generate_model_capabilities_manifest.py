@@ -21,7 +21,7 @@ CAPABILITY_NAMES = (
     "embeddings",
     "reranking",
 )
-PACKAGE_NAMES = ("mlx-lm", "mlx-vlm", "mlx-audio")
+PACKAGE_NAMES = ("mlx-vlm", "mlx-audio")
 
 
 def _parse_module(path: Path) -> ast.Module:

@@ -352,9 +352,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     let menu = NSMenu()
 
     private let model: NativModel
-    private let navigation: ControlPanelNavigation
     private let extensionManager: NativExtensionManager
-    private let showMainWindow: () -> Void
+    private let performWindowIntent: (NativWindowIntent) -> Void
     private var serverActionMenuItem: NSMenuItem?
     private var modelMenuItem: NSMenuItem?
     private var localModels: [LocalModel] = []
@@ -367,14 +366,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     init(
         model: NativModel,
-        navigation: ControlPanelNavigation,
         extensionManager: NativExtensionManager,
-        showMainWindow: @escaping () -> Void
+        performWindowIntent: @escaping (NativWindowIntent) -> Void
     ) {
         self.model = model
-        self.navigation = navigation
         self.extensionManager = extensionManager
-        self.showMainWindow = showMainWindow
+        self.performWindowIntent = performWindowIntent
         super.init()
         menu.delegate = self
     }
@@ -460,31 +457,27 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openDashboardFromMenu(_ sender: Any?) {
-        navigation.open(.dashboard)
-        showMainWindow()
+        performWindowIntent(.openTab(.dashboard))
     }
 
     @objc private func openAudioFromMenu(_ sender: Any?) {
         if extensionManager.isEnabled(
             extensionID: NativExtensionManager.voiceDictationID
         ) {
-            navigation.openExtensionPage(
-                NativExtensionManager.voiceAudioPageID
+            performWindowIntent(
+                .openExtensionPage(NativExtensionManager.voiceAudioPageID)
             )
         } else {
-            navigation.open(.extensions)
+            performWindowIntent(.openTab(.extensions))
         }
-        showMainWindow()
     }
 
     @objc private func openSystemFromMenu(_ sender: Any?) {
-        navigation.open(.system)
-        showMainWindow()
+        performWindowIntent(.openTab(.system))
     }
 
     @objc private func openModelsFromMenu(_ sender: Any?) {
-        navigation.open(.models)
-        showMainWindow()
+        performWindowIntent(.openTab(.models))
     }
 
     @objc private func openVoiceRecordingsFromMenu(_ sender: Any?) {
@@ -494,7 +487,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openWelcomeFromMenu(_ sender: Any?) {
-        showMainWindow()
+        performWindowIntent(.activate)
     }
 
     @objc private func localModelLibraryDidChange(_ notification: Notification) {
@@ -694,6 +687,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let submenu = NSMenu()
         submenu.autoenablesItems = false
 
+        if model.inferenceActivityInProgress {
+            submenu.addItem(disabledMenuItem(
+                "Models can’t be changed while a response is being generated."
+            ))
+            return submenu
+        }
+
         if model.isModelLoading {
             submenu.addItem(disabledMenuItem(model.modelLoadingStatusText ?? "Loading model…"))
             return submenu
@@ -812,7 +812,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             availableModels: localModels
         )
         if requiresConfirmation {
-            showMainWindow()
+            performWindowIntent(.activate)
         }
     }
 

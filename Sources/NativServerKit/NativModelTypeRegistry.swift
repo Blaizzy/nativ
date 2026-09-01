@@ -33,7 +33,7 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
             )
         }
 
-        for package in ["mlx-lm", "mlx-vlm", "mlx-audio"] {
+        for package in ["mlx-vlm", "mlx-audio"] {
             guard let version = manifest.packageVersions[package],
                   !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {

@@ -23,6 +23,9 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var folderID: UUID?
     var imageGenerationModelID: String?
     var scheduledTaskID: String?
+    var importedModelRepositoryID: String? = nil
+    var importedSystemPrompt: String? = nil
+
     var summary: ChatSessionSummary {
         ChatSessionSummary(
             id: id,
@@ -752,7 +755,8 @@ struct ChatSessionStore {
         return loadSession(from: sessionURL(for: id))
     }
 
-    func saveSession(_ session: ChatSession) {
+    @discardableResult
+    func saveSession(_ session: ChatSession) -> Bool {
         do {
             migrateLegacyStoreIfNeeded()
             try fileManager.createDirectory(
@@ -765,8 +769,10 @@ struct ChatSessionStore {
             let data = try makeEncoder().encode(persisted)
             try data.write(to: sessionURL(for: persisted.id), options: .atomic)
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
+            return true
         } catch {
             reportFailure("saveSession", sessionID: session.id, error: error)
+            return false
         }
     }
 

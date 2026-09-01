@@ -2,6 +2,69 @@ import AppKit
 import Foundation
 import SwiftUI
 
+private struct ChatContextWindowUsage: Equatable {
+    let usedTokens: Int
+    let capacityTokens: Int
+
+    var usedFraction: Double {
+        guard capacityTokens > 0 else { return 0 }
+        return min(max(Double(usedTokens) / Double(capacityTokens), 0), 1)
+    }
+
+    var remainingPercentage: Int {
+        Int(((1 - usedFraction) * 100).rounded())
+    }
+}
+
+private struct ChatContextWindowRing: View {
+    let usage: ChatContextWindowUsage
+    @State private var showsDetails = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.quaternary, lineWidth: 2)
+
+            Circle()
+                .trim(from: 0, to: usage.usedFraction)
+                .stroke(
+                    ringColor,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 17, height: 17)
+        .contentShape(.circle)
+        .onHover { showsDetails = $0 }
+        .background {
+            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6) {
+                Text("Context window: \(usage.remainingPercentage)% remaining")
+                    .monospacedDigit()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Model context window")
+        .accessibilityValue(
+            "\(usage.remainingPercentage) percent remaining, "
+                + "\(usage.usedTokens.formatted()) of \(usage.capacityTokens.formatted()) tokens used"
+        )
+    }
+
+    private var ringColor: Color {
+        switch usage.usedFraction {
+        case ..<0.75:
+            .secondary
+        case ..<0.9:
+            .orange
+        default:
+            .red
+        }
+    }
+
+}
+
 private struct ChatAttachmentThumbnail: View {
     let attachment: ChatImageAttachment
     var width: CGFloat = 120
@@ -226,6 +289,10 @@ struct ChatComposer: View {
 
                     Spacer(minLength: 12)
 
+                    if let contextWindowUsage {
+                        ChatContextWindowRing(usage: contextWindowUsage)
+                    }
+
                     modelPicker
 
                     Button {
@@ -409,7 +476,8 @@ struct ChatComposer: View {
             secondarySection: reasoningPickerSection,
             isModelLoading: model.isModelLoading,
             modelLoadingPercentage: model.modelLoadingPercentage,
-            isDisabled: model.isModelLoading || viewModel.hasPendingRequests,
+            isDisabled: model.isModelLoading || viewModel.hasPendingRequests
+                || model.inferenceActivityInProgress,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
@@ -419,6 +487,41 @@ struct ChatComposer: View {
             onSelectModel: select,
             onSwitchModel: { model.switchLanguageModel(to: $0) }
         )
+    }
+
+    private var contextWindowUsage: ChatContextWindowUsage? {
+        guard let capacity = effectiveContextWindowCapacity,
+              capacity > 0 else {
+            return nil
+        }
+
+        let usedTokens = viewModel.visibleMessages
+            .reversed()
+            .lazy
+            .compactMap({ $0.responseMetrics?.totalTokens })
+            .first ?? 0
+
+        return ChatContextWindowUsage(
+            usedTokens: usedTokens,
+            capacityTokens: capacity
+        )
+    }
+
+    private var effectiveContextWindowCapacity: Int? {
+        if let runtimeCapacity = model.metrics?.server.effectiveContextLimit
+            ?? model.metrics?.server.configuredContextLimit
+            ?? model.metrics?.server.loadedContextSize {
+            return runtimeCapacity
+        }
+
+        let advertisedCapacity = selectedLocalModel?.contextSize
+        guard model.settings.maxKVSize > 0 else {
+            return advertisedCapacity
+        }
+        guard let advertisedCapacity else {
+            return model.settings.maxKVSize
+        }
+        return min(advertisedCapacity, model.settings.maxKVSize)
     }
 
     private var languageModels: [LocalModel] {
@@ -456,11 +559,14 @@ struct ChatComposer: View {
     }
 
     private var effectiveCanSend: Bool {
-        canSend && !hasVisionRejectedAttachment
+        canSend && !hasVisionRejectedAttachment && importedContinuationIsAvailable
     }
 
     private var attachmentNotices: [ChatAttachmentNotice] {
         var notices: [ChatAttachmentNotice] = []
+        if let importedContinuationNotice {
+            notices.append(importedContinuationNotice)
+        }
         let rejectedImages = modelLacksVision
             ? viewModel.pendingImageAttachments.filter { $0.chatAttachmentKind == .image }
             : []
@@ -535,6 +641,40 @@ struct ChatComposer: View {
             ))
         }
         return notices
+    }
+
+    private var importedContinuationIsAvailable: Bool {
+        guard viewModel.importedModelRepositoryID != nil else {
+            return true
+        }
+        guard let selectedLocalModel
+        else {
+            return true
+        }
+        guard let tokenCount = viewModel.importedPromptTokenCount,
+            let contextWindow = selectedLocalModel.contextSize
+        else {
+            return true
+        }
+        return tokenCount <= contextWindow
+    }
+
+    private var importedContinuationNotice: ChatAttachmentNotice? {
+        guard viewModel.importedModelRepositoryID != nil else {
+            return nil
+        }
+        if let tokenCount = viewModel.importedPromptTokenCount,
+           let contextWindow = selectedLocalModel?.contextSize,
+           tokenCount > contextWindow {
+            return ChatAttachmentNotice(
+                id: "imported-chat-context-limit",
+                severity: .error,
+                title: "This chat can’t be continued",
+                message: "Its \(tokenCount)-token history exceeds the selected model’s "
+                    + "\(contextWindow)-token context window."
+            )
+        }
+        return nil
     }
 
     private func documentContextWarningMessage(
@@ -627,8 +767,8 @@ struct ChatComposer: View {
     }
 
     private var modelPickerHelp: String {
-        if viewModel.hasPendingRequests {
-            return "Model switching is unavailable while requests are active or queued"
+        if viewModel.hasPendingRequests || model.inferenceActivityInProgress {
+            return "Models can’t be changed while a response is being generated."
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(selectedModelLabel)"

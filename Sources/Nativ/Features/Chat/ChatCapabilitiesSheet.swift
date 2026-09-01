@@ -306,7 +306,7 @@ struct ChatKitsPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let kits = NativKitCatalog.bundled.kits
+        let kits = model.kitLibrary.catalog.kits
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Kits")

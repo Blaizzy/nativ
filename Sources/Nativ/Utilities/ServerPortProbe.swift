@@ -34,13 +34,23 @@ enum ServerPortProbe {
             let info = candidate.pointee
             let descriptor = socket(info.ai_family, info.ai_socktype, info.ai_protocol)
             if descriptor >= 0 {
-                let bindResult = Darwin.bind(descriptor, info.ai_addr, info.ai_addrlen)
+                var reuseAddress: Int32 = 1
+                let optionResult = setsockopt(
+                    descriptor,
+                    SOL_SOCKET,
+                    SO_REUSEADDR,
+                    &reuseAddress,
+                    socklen_t(MemoryLayout.size(ofValue: reuseAddress))
+                )
+                let bindResult = optionResult == 0
+                    ? Darwin.bind(descriptor, info.ai_addr, info.ai_addrlen)
+                    : -1
                 let bindError = errno
                 close(descriptor)
                 if bindResult == 0 {
                     return .available
                 }
-                if bindError == EADDRINUSE {
+                if optionResult == 0, bindError == EADDRINUSE {
                     foundAddressInUse = true
                 }
             }

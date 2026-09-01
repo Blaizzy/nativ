@@ -127,7 +127,7 @@ private struct ChatTranscriptView: View {
         let latestUserMessageID = chat.latestUserMessageID
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
@@ -326,7 +326,8 @@ private struct ChatComposerContainer: View {
                 ?? model.settings.structuredOutputValidationError,
             canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
-                && model.settings.structuredOutputValidationError == nil,
+                && model.settings.structuredOutputValidationError == nil
+                && !chat.isCurrentSessionActiveInAnotherWindow,
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),

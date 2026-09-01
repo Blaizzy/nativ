@@ -61,6 +61,7 @@ final class ServerLogStore {
 @MainActor
 @Observable
 final class NativModel: ChatModelSwitchingSurface {
+    let kitLibrary: NativKitLibrary
     private(set) var isRunning = false
     let serverLogs = ServerLogStore()
     private(set) var metrics: NativMetrics?
@@ -74,6 +75,7 @@ final class NativModel: ChatModelSwitchingSurface {
     private(set) var modelSwitchInProgress = false
     private(set) var modelSwitchTargetID: String?
     private var modelSwitchWatchdog: Task<Void, Never>?
+    @ObservationIgnored private var inferenceActivity: InferenceActivityCoordinator?
     private(set) var modelLoadingProgress: Double?
     private(set) var modelLoadFailure: ModelLoadFailure?
     private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
@@ -112,13 +114,40 @@ final class NativModel: ChatModelSwitchingSurface {
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
 
-    init() {
+    init(kitLibrary: NativKitLibrary? = nil) {
+        self.kitLibrary = kitLibrary ?? NativKitLibrary()
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
         isRunning = server.isRunning
         refreshAllTimeStats()
         resolveHuggingFaceEnvironmentFromLoginShell()
         migrateCustomHuggingFaceCredentialIfNeeded()
+    }
+
+    func observeInferenceActivity(_ coordinator: InferenceActivityCoordinator) {
+        inferenceActivity = coordinator
+        observeInferenceActivityChanges()
+    }
+
+    var inferenceActivityInProgress: Bool {
+        inferenceActivity?.hasActiveOperations == true
+    }
+
+    private func observeInferenceActivityChanges() {
+        guard let inferenceActivity else {
+            return
+        }
+        withObservationTracking {
+            _ = inferenceActivity.hasActiveOperations
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.observeInferenceActivityChanges()
+                self.notifyMenuStateChanged()
+            }
+        }
     }
 
     /// GUI apps inherit launchd's environment, which excludes exports from
@@ -595,7 +624,7 @@ final class NativModel: ChatModelSwitchingSurface {
         availableModels: [LocalModel],
         onSelectionAccepted: @escaping () -> Void = {}
     ) -> Bool {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return false
         }
 
@@ -619,6 +648,9 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func confirmPendingModelPreloadSwitch() {
+        guard !inferenceActivityInProgress else {
+            return
+        }
         guard let pendingModelPreloadSwitch else {
             modelPreloadMemoryWarning = nil
             return
@@ -642,7 +674,7 @@ final class NativModel: ChatModelSwitchingSurface {
         to modelID: String?,
         for slot: ModelPreloadSlot
     ) {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return
         }
         clearModelLoadFailure()

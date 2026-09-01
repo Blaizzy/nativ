@@ -66,6 +66,8 @@ final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var imageModelDiscoveryRequest = 0
     @Published private(set) var imageModelDiscoveryCapability: LocalModelCapability =
         .imageGeneration
+    @Published private(set) var modelDiscoveryRequest = 0
+    @Published private(set) var modelDiscoveryRepositoryID: String?
     @Published private(set) var collapseAllSectionsRequest = 0
     private var consumedNewChatRequest = 0
     private var consumedToggleSidebarRequest = 0
@@ -96,6 +98,12 @@ final class ControlPanelNavigation: ObservableObject {
     func openImageModelDiscovery(for operation: ChatImageOperation) {
         imageModelDiscoveryCapability = operation.requiredCapability
         imageModelDiscoveryRequest += 1
+        requestedTab = .models
+    }
+
+    func openModelDiscovery(repoID: String) {
+        modelDiscoveryRepositoryID = repoID
+        modelDiscoveryRequest += 1
         requestedTab = .models
     }
 
