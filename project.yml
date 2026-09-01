@@ -185,11 +185,13 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/RealtimeAudioMeter.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputLevelMonitor.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
+      - path: Sources/Nativ/Features/Models/ExternalModelCacheReference.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
       - path: Sources/Nativ/Features/Models/ModelPrimaryTaskResolver.swift
+      - path: Sources/Nativ/Features/Shared/NativBulkSelection.swift
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
@@ -241,6 +243,7 @@ targets:
       - path: Sources/Nativ/Features/Browsing/Providers/PerplexityBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/Providers/TavilyBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/Providers/ParallelBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/SearXNGBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/WebReadContentSelector.swift
       - path: Sources/Nativ/Features/Browsing/WebReadService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchProvider.swift
@@ -249,6 +252,7 @@ targets:
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatArchive.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift
       - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift

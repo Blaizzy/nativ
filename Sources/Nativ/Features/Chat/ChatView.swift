@@ -188,7 +188,7 @@ private struct ChatTranscriptView: View {
         let latestUserMessageID = chat.latestUserMessageID
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if let project {
                     ChatProjectContextBanner(
                         project: project,

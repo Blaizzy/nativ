@@ -30,6 +30,8 @@ struct ControlPanelView: View {
     @State var speechModelDiscoveryRequest: Int
     @State var imageModelDiscoveryRequest: Int
     @State var imageModelDiscoveryCapability: LocalModelCapability
+    @State var modelDiscoveryRequest: Int
+    @State var modelDiscoveryRepositoryID: String?
     @State var hoveredFooterControl: FooterControl?
     @State var isSidebarVisible = true
     @State var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
@@ -50,6 +52,7 @@ struct ControlPanelView: View {
     @State var pendingDeleteProject: ChatProject?
     @State var projectErrorMessage: String?
     @State var isConfirmingBulkDelete = false
+    @State var chatImportAlert: ChatImportAlert?
 
     var chat: ChatViewModel { dependencies.chat }
     var mcpHost: MCPHostManager { dependencies.mcpHost }
@@ -99,6 +102,10 @@ struct ControlPanelView: View {
         )
         _imageModelDiscoveryCapability = State(
             initialValue: navigation.imageModelDiscoveryCapability
+        )
+        _modelDiscoveryRequest = State(initialValue: navigation.modelDiscoveryRequest)
+        _modelDiscoveryRepositoryID = State(
+            initialValue: navigation.modelDiscoveryRepositoryID
         )
     }
 
@@ -166,6 +173,35 @@ struct ControlPanelView: View {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
         }
+        .alert(
+            chatImportAlert?.title ?? "Import Chat",
+            isPresented: Binding(
+                get: { chatImportAlert != nil },
+                set: { if !$0 { chatImportAlert = nil } }
+            ),
+            presenting: chatImportAlert
+        ) { alert in
+            switch alert {
+            case .originalModel:
+                Button("OK", role: .cancel) {}
+            case let .switchModel(modelID):
+                Button("Switch Model") {
+                    model.switchLanguageModel(to: modelID)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Use Another Model", role: .cancel) {}
+            case let .modelMissing(modelID):
+                Button("Open Models") {
+                    navigation.openModelDiscovery(repoID: modelID)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Use Another Model", role: .cancel) {}
+            case .contextExceeded, .failed:
+                Button("OK", role: .cancel) {}
+            }
+        } message: { alert in
+            Text(alert.message)
+        }
         .onAppear {
             applySidebarSelection(
                 navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
@@ -212,6 +248,12 @@ struct ControlPanelView: View {
         }
         .onReceive(navigation.$imageModelDiscoveryCapability) { capability in
             imageModelDiscoveryCapability = capability
+        }
+        .onReceive(navigation.$modelDiscoveryRepositoryID) { repoID in
+            modelDiscoveryRepositoryID = repoID
+        }
+        .onReceive(navigation.$modelDiscoveryRequest) { request in
+            modelDiscoveryRequest = request
         }
         .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)

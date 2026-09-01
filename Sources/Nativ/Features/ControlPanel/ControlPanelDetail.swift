@@ -123,7 +123,9 @@ extension ControlPanelView {
                 titleLeadingInset: 0,
                 speechModelDiscoveryRequest: speechModelDiscoveryRequest,
                 imageModelDiscoveryRequest: imageModelDiscoveryRequest,
-                imageModelDiscoveryCapability: imageModelDiscoveryCapability
+                imageModelDiscoveryCapability: imageModelDiscoveryCapability,
+                modelDiscoveryRequest: modelDiscoveryRequest,
+                modelDiscoveryRepositoryID: modelDiscoveryRepositoryID
             )
             .equatable()
         case .extensions:

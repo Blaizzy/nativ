@@ -4,7 +4,12 @@ struct ExaBrowsingProvider: WebBrowsingProviderClient {
     let provider = WebSearchProvider.exa
     let transport: WebBrowsingTransport
 
-    func search(apiKey: String, query: String, limit: Int) async throws -> [WebSearchResult] {
+    func search(
+        access: WebSearchProviderAccess,
+        query: String,
+        limit: Int
+    ) async throws -> [WebSearchResult] {
+        let apiKey = try access.apiKey(for: provider)
         let request = try transport.postRequest(
             url: "https://api.exa.ai/search",
             provider: provider,

@@ -374,7 +374,7 @@ final class ArtifactStore: ObservableObject {
             return existing
         }
 
-        guard let data = Data(base64Encoded: attachment.base64Data) else {
+        guard let data = attachment.imageData else {
             return nil
         }
 
@@ -422,7 +422,15 @@ final class ArtifactStore: ObservableObject {
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        guard (try? record.imageData.write(to: destination, options: .atomic)) != nil else {
+        guard let source = MediaAssetStore.shared.fileURL(for: record.asset) else {
+            return nil
+        }
+        do {
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.copyItem(at: source, to: destination)
+        } catch {
             return nil
         }
 
@@ -435,7 +443,7 @@ final class ArtifactStore: ObservableObject {
             filename: filename,
             mimeType: record.mimeType,
             relativePath: relativePath,
-            byteSize: record.imageData.count,
+            byteSize: record.asset.byteCount,
             createdAt: record.createdAt,
             prompt: record.prompt,
             sessionTitle: record.sessionTitle

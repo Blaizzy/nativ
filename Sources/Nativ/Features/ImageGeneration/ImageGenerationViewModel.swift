@@ -74,6 +74,9 @@ struct ImageGenerationExecutor {
     }
 
     private static func materializeReference(_ attachment: ChatImageAttachment) throws -> URL {
+        if let assetURL = attachment.assetFileURL {
+            return assetURL
+        }
         guard let data = attachment.imageData else {
             throw NativImageError.missingImageData
         }
@@ -136,7 +139,7 @@ enum ImageGenerationTurnStatus: String, Equatable, Codable, Sendable {
 struct ImageGenerationTurn: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     let prompt: String
-    let referenceImages: [ChatImageAttachment]
+    var referenceImages: [ChatImageAttachment]
     let modelID: String
     let settings: ImageRequestSettings
     let createdAt: Date
@@ -196,7 +199,6 @@ final class ImageGenerationViewModel: ObservableObject {
             }
             return repaired
         }
-
         refreshSessionList()
         persistedDataChangeCancellable = persistedDataChanges.changes
             .sink { [weak self] change in
@@ -999,7 +1001,7 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 }
 
-private struct ImageGenerationSession: Identifiable, Equatable, Codable {
+struct ImageGenerationSession: Identifiable, Equatable, Codable {
     var id: UUID
     var title: String
     var createdAt: Date
@@ -1063,10 +1065,39 @@ struct ImageGenerationSessionSummary: Identifiable, Equatable {
     }
 }
 
-private struct ImageGenerationSessionStore {
-    private let fileManager = FileManager.default
+struct ImageGenerationSessionStore {
+    private let fileManager: FileManager
+    private let imageDirectory: URL
+    private let legacyImageDirectory: URL?
+    private let mediaStore: MediaAssetStore
+
+    init(
+        imageDirectory: URL? = nil,
+        legacyImageDirectory: URL? = nil,
+        mediaStore: MediaAssetStore = .shared,
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        self.mediaStore = mediaStore
+        if let imageDirectory {
+            self.imageDirectory = imageDirectory
+            self.legacyImageDirectory = legacyImageDirectory
+        } else {
+            let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            self.imageDirectory = support
+                .appendingPathComponent("Nativ", isDirectory: true)
+                .appendingPathComponent("ImageGeneration", isDirectory: true)
+            let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            self.legacyImageDirectory = caches
+                .appendingPathComponent("Nativ", isDirectory: true)
+                .appendingPathComponent("ImageGeneration", isDirectory: true)
+        }
+    }
 
     func loadSessions() -> [ImageGenerationSession] {
+        migrateLegacyStoreIfNeeded()
         guard let urls = try? fileManager.contentsOfDirectory(
             at: sessionsDirectory,
             includingPropertiesForKeys: nil
@@ -1080,7 +1111,8 @@ private struct ImageGenerationSessionStore {
     }
 
     func loadSession(id: UUID) -> ImageGenerationSession? {
-        loadSession(from: sessionURL(for: id))
+        migrateLegacyStoreIfNeeded()
+        return loadSession(from: sessionURL(for: id))
     }
 
     func fingerprint() -> String {
@@ -1103,29 +1135,39 @@ private struct ImageGenerationSessionStore {
     @discardableResult
     func saveSession(_ session: ImageGenerationSession) -> Bool {
         do {
+            migrateLegacyStoreIfNeeded()
             try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(session).write(to: sessionURL(for: session.id), options: .atomic)
+            var persisted = session
+            _ = try persisted.externalizeAssets(using: mediaStore)
+            try encoder().encode(persisted).write(to: sessionURL(for: persisted.id), options: .atomic)
+            mediaStore.updateOwner("image:\(persisted.id.uuidString)", assets: persisted.assetReferences)
             return true
         } catch {
-            // Persistence should never prevent local image generation.
+            NSLog("Nativ image session save failed: %@", error.localizedDescription)
             return false
         }
     }
 
     func deleteSession(id: UUID) {
         try? fileManager.removeItem(at: sessionURL(for: id))
+        mediaStore.removeOwner("image:\(id.uuidString)")
     }
 
     private func loadSession(from url: URL) -> ImageGenerationSession? {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(ImageGenerationSession.self, from: data)
+        do {
+            var session = try decoder().decode(ImageGenerationSession.self, from: data)
+            if try session.externalizeAssets(using: mediaStore) {
+                try encoder().encode(session).write(to: url, options: .atomic)
+            }
+            mediaStore.updateOwner("image:\(session.id.uuidString)", assets: session.assetReferences)
+            return session
+        } catch {
+            NSLog("Nativ image session load failed for %@: %@", url.lastPathComponent, error.localizedDescription)
+            return nil
+        }
     }
 
     func sessionURL(for id: UUID) -> URL {
@@ -1133,12 +1175,70 @@ private struct ImageGenerationSessionStore {
     }
 
     private var sessionsDirectory: URL {
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        return caches
-            .appendingPathComponent("Nativ", isDirectory: true)
-            .appendingPathComponent("ImageGeneration", isDirectory: true)
-            .appendingPathComponent("Sessions", isDirectory: true)
+        imageDirectory.appendingPathComponent("Sessions", isDirectory: true)
+    }
+
+    private func encoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+
+    private func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    private func migrateLegacyStoreIfNeeded() {
+        guard let legacyImageDirectory,
+              legacyImageDirectory.standardizedFileURL != imageDirectory.standardizedFileURL,
+              fileManager.fileExists(atPath: legacyImageDirectory.path)
+        else { return }
+        do {
+            let legacySessions = legacyImageDirectory.appendingPathComponent("Sessions", isDirectory: true)
+            guard fileManager.fileExists(atPath: legacySessions.path) else { return }
+            try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+            for source in try fileManager.contentsOfDirectory(at: legacySessions, includingPropertiesForKeys: nil)
+                where source.pathExtension == "json" {
+                let destination = sessionsDirectory.appendingPathComponent(source.lastPathComponent)
+                if !fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.copyItem(at: source, to: destination)
+                }
+            }
+        } catch {
+            NSLog("Nativ legacy image-session migration failed: %@", error.localizedDescription)
+        }
+    }
+}
+
+private extension ImageGenerationSession {
+    var assetReferences: Set<MediaAssetReference> {
+        var references = Set<MediaAssetReference>()
+        if let asset = activeReference?.asset { references.insert(asset) }
+        for turn in turns {
+            references.formUnion(turn.referenceImages.compactMap(\.asset))
+            references.formUnion(turn.outputs.compactMap(\.asset))
+        }
+        return references
+    }
+
+    mutating func externalizeAssets(using store: MediaAssetStore) throws -> Bool {
+        var changed = false
+        if activeReference != nil {
+            changed = try activeReference!.externalize(using: store) || changed
+        }
+        for turnIndex in turns.indices {
+            for attachmentIndex in turns[turnIndex].referenceImages.indices {
+                changed = try turns[turnIndex].referenceImages[attachmentIndex]
+                    .externalize(using: store) || changed
+            }
+            for outputIndex in turns[turnIndex].outputs.indices {
+                changed = try turns[turnIndex].outputs[outputIndex].externalize(using: store) || changed
+            }
+        }
+        return changed
     }
 }
 
@@ -1153,13 +1253,18 @@ struct ImageGenerationPixelSize: Equatable, Codable, Sendable {
 
 struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
-    let imageData: Data
     let mimeType: String
     let width: Int
     let height: Int
     let seed: Int
     let path: String?
     let revisedPrompt: String?
+    private var inlineImageData: Data?
+    private(set) var asset: MediaAssetReference?
+
+    enum CodingKeys: String, CodingKey {
+        case id, imageData, mimeType, width, height, seed, path, revisedPrompt, asset
+    }
 
     init(
         id: UUID = UUID(),
@@ -1169,16 +1274,87 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
         height: Int,
         seed: Int,
         path: String?,
-        revisedPrompt: String?
+        revisedPrompt: String?,
+        mediaStore: MediaAssetStore = .shared
     ) {
         self.id = id
-        self.imageData = imageData
         self.mimeType = mimeType
         self.width = width
         self.height = height
         self.seed = seed
         self.path = path
         self.revisedPrompt = revisedPrompt
+        self.asset = try? mediaStore.store(
+            imageData,
+            id: id,
+            mimeType: mimeType,
+            filename: "image-\(seed)"
+        )
+        self.inlineImageData = asset == nil ? imageData : nil
+    }
+
+    init(
+        id: UUID,
+        mimeType: String,
+        width: Int,
+        height: Int,
+        seed: Int,
+        path: String?,
+        revisedPrompt: String?,
+        asset: MediaAssetReference
+    ) {
+        self.id = id
+        self.mimeType = mimeType
+        self.width = width
+        self.height = height
+        self.seed = seed
+        self.path = path
+        self.revisedPrompt = revisedPrompt
+        self.asset = asset
+        self.inlineImageData = nil
+    }
+
+    var imageData: Data {
+        if let asset, let data = MediaAssetStore.shared.data(for: asset) { return data }
+        return inlineImageData ?? Data()
+    }
+
+    mutating func externalize(using store: MediaAssetStore = .shared) throws -> Bool {
+        guard asset == nil, let inlineImageData else { return false }
+        asset = try store.store(
+            inlineImageData,
+            id: id,
+            mimeType: mimeType,
+            filename: filename
+        )
+        self.inlineImageData = nil
+        return true
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        mimeType = try container.decode(String.self, forKey: .mimeType)
+        width = try container.decode(Int.self, forKey: .width)
+        height = try container.decode(Int.self, forKey: .height)
+        seed = try container.decode(Int.self, forKey: .seed)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        revisedPrompt = try container.decodeIfPresent(String.self, forKey: .revisedPrompt)
+        asset = try container.decodeIfPresent(MediaAssetReference.self, forKey: .asset)
+        inlineImageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(mimeType, forKey: .mimeType)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(seed, forKey: .seed)
+        try container.encodeIfPresent(path, forKey: .path)
+        try container.encodeIfPresent(revisedPrompt, forKey: .revisedPrompt)
+        try container.encodeIfPresent(asset, forKey: .asset)
+        if asset == nil { try container.encodeIfPresent(inlineImageData, forKey: .imageData) }
     }
 
     var nsImage: NSImage? {
@@ -1194,7 +1370,10 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
     }
 
     var attachment: ChatImageAttachment {
-        ChatImageAttachment(
+        if let asset {
+            return ChatImageAttachment(id: id, filename: filename, mimeType: mimeType, asset: asset)
+        }
+        return ChatImageAttachment(
             id: id,
             filename: filename,
             mimeType: mimeType,
@@ -1214,7 +1393,7 @@ struct GeneratedArtifactRecord: Sendable {
     let sessionID: UUID
     let turnID: UUID
     let prompt: String?
-    let imageData: Data
+    let asset: MediaAssetReference
     let mimeType: String
     let createdAt: Date
     let sessionTitle: String
@@ -1226,15 +1405,17 @@ enum ImageGenerationArtifactCatalog {
     }
 
     static func generatedRecords() -> [GeneratedArtifactRecord] {
-        ImageGenerationSessionStore().loadSessions().flatMap { session in
+        let store = ImageGenerationSessionStore()
+        return store.loadSessions().flatMap { session in
             session.turns.flatMap { turn in
-                turn.outputs.map { output in
-                    GeneratedArtifactRecord(
+                turn.outputs.compactMap { output in
+                    guard let asset = output.asset else { return nil }
+                    return GeneratedArtifactRecord(
                         id: output.id,
                         sessionID: session.id,
                         turnID: turn.id,
                         prompt: output.revisedPrompt ?? (turn.prompt.isEmpty ? nil : turn.prompt),
-                        imageData: output.imageData,
+                        asset: asset,
                         mimeType: output.mimeType,
                         createdAt: turn.createdAt,
                         sessionTitle: session.displayTitle

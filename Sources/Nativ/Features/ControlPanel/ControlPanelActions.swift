@@ -55,17 +55,91 @@ extension ControlPanelView {
 
     func exportRecentConversation(_ recent: ControlPanelRecentSession) {
         guard case .chat(let sessionID) = recent.selection,
-            let text = chat.conversationText(for: sessionID)
+            let archive = chat.archive(
+                for: sessionID,
+                selectedModelID: model.settings.normalized().languageModelID,
+                systemPrompt: model.settings.systemPrompt
+            )
         else {
             return
         }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(recent.title).txt"
-        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = chatExportFileName(for: recent.title)
+        panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-        try? text.write(to: url, atomically: true, encoding: .utf8)
+        do {
+            try ChatArchiveCodec.encode(archive).write(to: url, options: .atomic)
+        } catch {
+            chatImportAlert = .failed("The chat could not be exported: \(error.localizedDescription)")
+        }
+    }
+
+    func importChat() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let archive = try ChatArchiveCodec.decode(Data(contentsOf: url))
+            Task {
+                await importChat(archive)
+            }
+        } catch {
+            chatImportAlert = .failed(error.localizedDescription)
+        }
+    }
+
+    func importChat(_ archive: ChatArchive) async {
+        do {
+            guard let sessionID = try chat.importArchive(archive) else {
+                chatImportAlert = .failed("Nativ could not save the imported chat.")
+                return
+            }
+            showChatWorkspace()
+            applySidebarSelection(.chat(sessionID))
+        } catch {
+            chatImportAlert = .failed(error.localizedDescription)
+            return
+        }
+
+        do {
+            let models = try await LocalModelDiscovery.scan(
+                searchPaths: model.settings.localModelSearchPaths
+            )
+            guard let originalModel = models.first(where: {
+                $0.repoID == archive.modelRepositoryID
+            }) else {
+                chatImportAlert = .modelMissing(archive.modelRepositoryID)
+                return
+            }
+
+            let selectedModelID = model.settings.normalized().languageModelID
+            if selectedModelID != archive.modelRepositoryID {
+                chatImportAlert = .switchModel(archive.modelRepositoryID)
+            } else if let tokenCount = ChatArchiveCodec.promptTokenCount(in: archive),
+                      let contextWindow = originalModel.contextSize,
+                      tokenCount > contextWindow {
+                chatImportAlert = .contextExceeded(
+                    modelID: archive.modelRepositoryID,
+                    tokenCount: tokenCount,
+                    contextWindow: contextWindow
+                )
+            } else {
+                chatImportAlert = .originalModel(archive.modelRepositoryID)
+            }
+        } catch {
+            chatImportAlert = .failed(
+                "The chat was imported, but Nativ could not check the local model library: "
+                    + error.localizedDescription
+            )
+        }
     }
 
     func exportFolder(_ folder: ChatFolder) {
@@ -110,6 +184,15 @@ extension ControlPanelView {
         let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
         let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+
+    func chatExportFileName(for title: String) -> String {
+        var name = sanitizedFileName(title)
+        if name.lowercased().hasSuffix(".json") {
+            name.removeLast(5)
+        }
+        name = String(name.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(name.isEmpty ? "Chat" : name).json"
     }
 
     func revealRecentSession(_ recent: ControlPanelRecentSession) {

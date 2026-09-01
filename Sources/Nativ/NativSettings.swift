@@ -417,6 +417,7 @@ struct NativSettings: Codable, Equatable {
     static let serverSupportsEmbeddingModelArgument = false
 
     var modelSearchPath: String
+    var externalModelCache: ExternalModelCacheReference?
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
     var mcpServers: [MCPServerConfig]
@@ -472,6 +473,7 @@ struct NativSettings: Codable, Equatable {
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
+        externalModelCache: ExternalModelCacheReference? = nil,
         additionalModelSearchPaths: [String] = [],
         languageModelID: String? = nil,
         mcpServers: [MCPServerConfig] = [],
@@ -526,6 +528,7 @@ struct NativSettings: Codable, Equatable {
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
+        self.externalModelCache = externalModelCache
         self.additionalModelSearchPaths = additionalModelSearchPaths
         self.languageModelID = languageModelID
         self.mcpServers = mcpServers
@@ -582,6 +585,7 @@ struct NativSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case modelSearchPath
+        case externalModelCache
         case additionalModelSearchPaths
         case languageModelID
         case mcpServers
@@ -645,6 +649,10 @@ struct NativSettings: Codable, Equatable {
         let storedModelSearchPath = try container.decodeIfPresent(
             String.self, forKey: .modelSearchPath)
         modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
+        externalModelCache = try container.decodeIfPresent(
+            ExternalModelCacheReference.self,
+            forKey: .externalModelCache
+        )
         additionalModelSearchPaths =
             try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths)
             ?? defaults.additionalModelSearchPaths
@@ -790,6 +798,7 @@ struct NativSettings: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
+        try container.encodeIfPresent(externalModelCache, forKey: .externalModelCache)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encode(mcpServers, forKey: .mcpServers)
@@ -1093,6 +1102,7 @@ struct NativSettings: Codable, Equatable {
         let lhsSpeculativeDecodingActive = lhs.speculativeDecodingActive
         let rhsSpeculativeDecodingActive = rhs.speculativeDecodingActive
         return lhs.modelSearchPath == rhs.modelSearchPath
+            && lhs.externalModelCache?.volumeIdentifier == rhs.externalModelCache?.volumeIdentifier
             && lhs.languageModelID == rhs.languageModelID
             && lhs.mcpServers == rhs.mcpServers
             && lhs.disabledToolNames == rhs.disabledToolNames
