@@ -191,6 +191,7 @@ targets:
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
       - path: Sources/Nativ/Features/Models/ModelPrimaryTaskResolver.swift
+      - path: Sources/Nativ/Features/Shared/NativBulkSelection.swift
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
