@@ -674,10 +674,11 @@ struct ModelsView: View {
             }
             installedModelSelection.toggleMode()
         } label: {
-            Label(
-                installedModelSelection.isActive ? "Done" : "Select",
-                systemImage: installedModelSelection.isActive ? "checkmark" : "checkmark.circle"
-            )
+            if installedModelSelection.isActive {
+                Label("Done", systemImage: "checkmark")
+            } else {
+                Text("Select")
+            }
         }
         .buttonStyle(.bordered)
         .disabled(
