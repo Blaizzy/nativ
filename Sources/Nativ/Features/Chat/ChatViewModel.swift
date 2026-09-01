@@ -2498,6 +2498,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func applyCurrentSession(_ session: ChatSession) {
+        let sessionChanged = currentSessionID != session.id
         currentSession = session
         currentSessionID = session.id
         messages =
@@ -2506,7 +2507,9 @@ final class ChatViewModel: ObservableObject {
                 activeRequestSessionID: activeRequestSessionID
             ) ? normalizedForLoad(session.messages) : session.messages
         refreshSessionList()
-        bumpScroll()
+        if !sessionChanged {
+            bumpScroll()
+        }
     }
 
     private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {

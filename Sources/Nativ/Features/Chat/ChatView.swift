@@ -104,7 +104,6 @@ private enum ChatTranscriptLayout {
 }
 
 private struct ChatTranscriptView: View {
-
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
@@ -112,81 +111,64 @@ private struct ChatTranscriptView: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
-    @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
-    @State private var followsLatestMessage = true
-    @State private var isUserScrollingTranscript = false
+    @Environment(\.chatFontScale) private var chatFontScale
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
     }
 
     var body: some View {
+        let messages = chat.visibleMessages
         let forkableAssistantResponseIDs = chat.forkableAssistantResponseIDs
         let latestUserMessageID = chat.latestUserMessageID
+        let latestUserMessage = messages.first { $0.id == latestUserMessageID }
 
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                if chat.visibleMessages.isEmpty {
-                    if chat.messages.isEmpty {
-                        ChatEmptyTranscriptView(
-                            isRunning: model.isRunning,
-                            selectedModelID: selectedModelID,
-                            modelLoadingProgress: model.isModelLoading ? model.modelLoadingProgress : nil
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 120)
-                    }
-                } else {
-                    ForEach(chat.visibleMessages) { message in
-                        let showsEditUserMessage = message.id == latestUserMessageID
-                        let editUnavailableReason = showsEditUserMessage
-                            ? userPromptEditingUnavailableReason(for: message)
-                            : nil
-                        ChatMessageRow(
-                            message: message,
-                            imageModelSelectionRequest: chat.imageModelSelectionRequest(
-                                for: message.id
-                            ),
-                            showsEditUserMessage: showsEditUserMessage,
-                            canEditUserMessage: editUnavailableReason == nil,
-                            editUserMessageUnavailableReason: editUnavailableReason,
-                            isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
-                            canForkAssistantResponse: forkableAssistantResponseIDs.contains(
-                                message.id
-                            ),
-                            onEditUserMessage: chat.beginEditingUserMessage,
-                            onForkAssistantResponse: chat.forkAssistantResponse,
-                            onConfirmToolConsent: chat.confirmToolConsent,
-                            onDenyToolConsent: chat.denyToolConsent,
-                            onSelectImageModel: chat.selectImageModel,
-                            onCancelImageModelSelection: chat.cancelImageModelSelection,
-                            onExploreImageModels: onExploreImageModels,
-                            onPreviewAttachment: onPreviewAttachment
-                        )
-                        .equatable()
-                        .id(message.id)
-                    }
-                }
+        ChatTranscriptTable(
+            state: ChatTranscriptTable.State(
+                sessionID: chat.currentSessionID,
+                messages: messages,
+                latestUserMessageID: latestUserMessageID,
+                editUnavailableReason: latestUserMessage.flatMap(
+                    userPromptEditingUnavailableReason
+                ),
+                editingUserMessageID: chat.promptEditContext?.messageID,
+                forkableAssistantResponseIDs: forkableAssistantResponseIDs,
+                imageModelSelectionRequests: chat.imageModelSelectionRequests,
+                composerClearance: max(
+                    18,
+                    composerHeight + ChatTranscriptLayout.composerClearance
+                ),
+                fontScale: chatFontScale,
+                scrollTargetMessageID: chat.scrollTargetMessageID
+            ),
+            actions: ChatTranscriptTable.Actions(
+                editUserMessage: chat.beginEditingUserMessage,
+                forkAssistantResponse: chat.forkAssistantResponse,
+                confirmToolConsent: chat.confirmToolConsent,
+                denyToolConsent: chat.denyToolConsent,
+                selectImageModel: chat.selectImageModel,
+                cancelImageModelSelection: chat.cancelImageModelSelection,
+                exploreImageModels: onExploreImageModels,
+                previewAttachment: onPreviewAttachment,
+                clearScrollTarget: { chat.scrollTargetMessageID = nil }
+            )
+        )
+        .background(Color.nativMainContentBackground)
+        .overlay {
+            if chat.messages.isEmpty {
+                ChatEmptyTranscriptView(
+                    isRunning: model.isRunning,
+                    selectedModelID: selectedModelID,
+                    modelLoadingProgress: model.isModelLoading
+                        ? model.modelLoadingProgress
+                        : nil
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, composerHeight)
             }
-            .frame(
-                maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                    - (ChatTranscriptLayout.messageHorizontalInset * 2)
-            )
-            .frame(maxWidth: .infinity)
-            .padding(
-                .horizontal,
-                ChatTranscriptLayout.horizontalPadding
-                    + ChatTranscriptLayout.messageHorizontalInset
-            )
-            .padding(.top, 18)
-            .padding(
-                .bottom,
-                max(18, composerHeight + ChatTranscriptLayout.composerClearance)
-            )
         }
-        .scrollPosition($transcriptScrollPosition)
         .overlay(alignment: .bottom) {
             ZStack(alignment: .bottom) {
                 composerBackdrop
@@ -197,64 +179,11 @@ private struct ChatTranscriptView: View {
                     extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
-                    onHeightChange: { height in
-                        let isInitialMeasurement = composerHeight == 0
-                        composerHeight = height
-                        if isInitialMeasurement {
-                            Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(50))
-                                transcriptScrollPosition.scrollTo(edge: .bottom)
-                            }
-                        }
-                    },
-                    onBackdropHeightChange: { height in
-                        composerBackdropHeight = height
-                    }
+                    onHeightChange: { composerHeight = $0 },
+                    onBackdropHeightChange: { composerBackdropHeight = $0 }
                 )
             }
         }
-        .onScrollPhaseChange { _, newPhase, context in
-            switch newPhase {
-            case .tracking, .interacting:
-                isUserScrollingTranscript = true
-                followsLatestMessage = false
-            case .decelerating:
-                if isUserScrollingTranscript {
-                    followsLatestMessage = false
-                }
-            case .idle:
-                guard isUserScrollingTranscript else { return }
-                isUserScrollingTranscript = false
-                followsLatestMessage = isAtTranscriptBottom(context.geometry)
-            case .animating:
-                break
-            }
-        }
-        .onChange(of: chat.scrollToken) { _, _ in
-            if followsLatestMessage {
-                transcriptScrollPosition.scrollTo(edge: .bottom)
-            }
-        }
-        .onChange(of: chat.currentSessionID) { _, _ in
-            followsLatestMessage = true
-            transcriptScrollPosition.scrollTo(edge: .bottom)
-        }
-        .onChange(of: chat.scrollTargetMessageID) { _, target in
-            guard let target else { return }
-            followsLatestMessage = false
-            DispatchQueue.main.async {
-                transcriptScrollPosition.scrollTo(id: target, anchor: .center)
-                chat.scrollTargetMessageID = nil
-            }
-        }
-        .onAppear {
-            followsLatestMessage = true
-            transcriptScrollPosition.scrollTo(edge: .bottom)
-        }
-    }
-
-    private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
-        geometry.visibleRect.maxY >= geometry.contentSize.height - 8
     }
 
     private var composerBackdrop: some View {
@@ -302,6 +231,664 @@ private struct ChatTranscriptView: View {
         return nil
     }
 }
+
+private struct ChatTranscriptTable: NSViewRepresentable {
+    struct State: Equatable {
+        let sessionID: UUID?
+        let messages: [ChatTranscriptMessage]
+        let latestUserMessageID: UUID?
+        let editUnavailableReason: String?
+        let editingUserMessageID: UUID?
+        let forkableAssistantResponseIDs: Set<UUID>
+        let imageModelSelectionRequests: [UUID: ChatImageModelSelectionRequest]
+        let composerClearance: CGFloat
+        let fontScale: Double
+        let scrollTargetMessageID: UUID?
+    }
+
+    struct Actions {
+        let editUserMessage: (UUID) -> Void
+        let forkAssistantResponse: (UUID) -> Void
+        let confirmToolConsent: (UUID) -> Void
+        let denyToolConsent: (UUID) -> Void
+        let selectImageModel: (UUID, String) -> Void
+        let cancelImageModelSelection: (UUID) -> Void
+        let exploreImageModels: (ChatImageOperation) -> Void
+        let previewAttachment: (ChatImageAttachment) -> Void
+        let clearScrollTarget: () -> Void
+    }
+
+    let state: State
+    let actions: Actions
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(state: state, actions: actions)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let tableView = NSTableView()
+        let column = NSTableColumn(identifier: Coordinator.columnID)
+        column.resizingMask = .autoresizingMask
+        column.width = ChatTranscriptLayout.conversationMaxWidth
+        tableView.addTableColumn(column)
+        tableView.headerView = nil
+        tableView.backgroundColor = .clear
+        tableView.selectionHighlightStyle = .none
+        tableView.allowsEmptySelection = true
+        tableView.intercellSpacing = .zero
+        tableView.usesAutomaticRowHeights = false
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = tableView
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        context.coordinator.attach(tableView: tableView, scrollView: scrollView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.update(state: state, actions: actions, scrollView: scrollView)
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        static let columnID = NSUserInterfaceItemIdentifier("ChatTranscriptColumn")
+        private static let messageCellID = NSUserInterfaceItemIdentifier(
+            "ChatTranscriptMessage"
+        )
+        private static let spacerCellID = NSUserInterfaceItemIdentifier(
+            "ChatTranscriptSpacer"
+        )
+        private static let geometryTolerance: CGFloat = 0.5
+
+        private struct Anchor {
+            let row: Int
+            let messageID: UUID
+            let viewportY: CGFloat
+        }
+
+        private struct HeightKey: Hashable {
+            let sessionID: UUID?
+            let messageID: UUID
+        }
+
+        private var state: State
+        private var actions: Actions
+        private var renderedState: State?
+        private weak var tableView: NSTableView?
+        private weak var scrollView: NSScrollView?
+        private var scrollObservers: [NSObjectProtocol] = []
+        private var measuredHeights: [HeightKey: CGFloat] = [:]
+        private var layoutWidth: CGFloat = 0
+        private var fallbackRowHeight: CGFloat = 0
+        private var systemRowHeight: CGFloat = 0
+        private var awaitsViewportFallback = false
+        private var pendingHeightRows = IndexSet()
+        private var heightUpdateTask: Task<Void, Never>?
+        private var followsLatestMessage = true
+        private var isProgrammaticScroll = false
+        private var programmaticScrollTask: Task<Void, Never>?
+        private var handledScrollTargetMessageID: UUID?
+
+        init(state: State, actions: Actions) {
+            self.state = state
+            self.actions = actions
+        }
+
+        func attach(tableView: NSTableView, scrollView: NSScrollView) {
+            self.tableView = tableView
+            self.scrollView = scrollView
+            systemRowHeight = tableView.rowHeight
+            scrollObservers = [
+                NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: scrollView.contentView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.boundsDidChange()
+                    }
+                },
+                NotificationCenter.default.addObserver(
+                    forName: NSScrollView.didLiveScrollNotification,
+                    object: scrollView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.liveScrollDidChange()
+                    }
+                },
+            ]
+        }
+
+        func detach() {
+            resetPendingHeightUpdates()
+            programmaticScrollTask?.cancel()
+            for observer in scrollObservers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            scrollObservers.removeAll()
+            tableView = nil
+            scrollView = nil
+        }
+
+        func update(state: State, actions: Actions, scrollView: NSScrollView) {
+            guard let tableView else {
+                return
+            }
+
+            let previous = renderedState
+            let sessionChanged = previous?.sessionID != state.sessionID
+            let structureChanged = previous.map {
+                !Self.haveMatchingMessageIDs($0.messages, state.messages)
+            } ?? true
+            let width = scrollView.contentSize.width > 0
+                ? scrollView.contentSize.width
+                : tableView.bounds.width
+            let layoutChanged = abs(layoutWidth - width) > Self.geometryTolerance
+                || previous?.fontScale != state.fontScale
+            let clearanceChanged = previous?.composerClearance != state.composerClearance
+            let metadataChanged = previous.map {
+                $0.latestUserMessageID != state.latestUserMessageID
+                    || $0.editUnavailableReason != state.editUnavailableReason
+                    || $0.editingUserMessageID != state.editingUserMessageID
+                    || $0.forkableAssistantResponseIDs
+                        != state.forkableAssistantResponseIDs
+                    || $0.imageModelSelectionRequests != state.imageModelSelectionRequests
+            } ?? true
+
+            let shouldFollowLatest = sessionChanged || previous == nil
+                || followsLatestMessage
+            let anchor = shouldFollowLatest ? nil : visibleAnchor(in: tableView)
+
+            self.state = state
+            self.actions = actions
+
+            if sessionChanged {
+                followsLatestMessage = true
+                handledScrollTargetMessageID = nil
+            }
+
+            if layoutChanged {
+                measuredHeights.removeAll(keepingCapacity: true)
+            }
+            layoutWidth = width
+            configureFallback(in: scrollView)
+            if tableView.dataSource == nil {
+                tableView.delegate = self
+                tableView.dataSource = self
+            }
+
+            if sessionChanged || structureChanged || layoutChanged {
+                resetPendingHeightUpdates()
+                performProgrammaticScroll {
+                    tableView.reloadData()
+                    if shouldFollowLatest {
+                        scrollToBottomPosition()
+                    } else if let anchor {
+                        restorePosition(anchor, in: tableView)
+                    }
+                }
+            } else if let previous {
+                reloadChangedRows(from: previous, metadataChanged: metadataChanged)
+                if clearanceChanged {
+                    performProgrammaticScroll {
+                        tableView.noteHeightOfRows(
+                            withIndexesChanged: IndexSet(integer: state.messages.count)
+                        )
+                        if followsLatestMessage {
+                            scrollToBottomPosition()
+                        }
+                    }
+                }
+            }
+
+            handleScrollTarget()
+            renderedState = state
+        }
+
+        func numberOfRows(in tableView: NSTableView) -> Int {
+            state.messages.count + 1
+        }
+
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            guard row < state.messages.count else {
+                return state.composerClearance
+            }
+            return measuredHeights[heightKey(for: state.messages[row].id)]
+                ?? fallbackRowHeight
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            viewFor tableColumn: NSTableColumn?,
+            row: Int
+        ) -> NSView? {
+            guard row < state.messages.count else {
+                let cell = tableView.makeView(
+                    withIdentifier: Self.spacerCellID,
+                    owner: self
+                ) as? ChatTranscriptSpacerCell ?? ChatTranscriptSpacerCell()
+                cell.identifier = Self.spacerCellID
+                return cell
+            }
+
+            let message = state.messages[row]
+            let cell = tableView.makeView(
+                withIdentifier: Self.messageCellID,
+                owner: self
+            ) as? ChatTranscriptHostingCell ?? ChatTranscriptHostingCell()
+            cell.identifier = Self.messageCellID
+            let width = layoutWidth > 0 ? layoutWidth : tableView.bounds.width
+            let rootView = ChatTranscriptHostedRow(
+                message: message,
+                presentation: presentation(for: message),
+                actions: actions,
+                tableWidth: width,
+                topPadding: row == 0 ? 18 : 6,
+                fontScale: state.fontScale,
+                onHeightChange: { [weak self] height in
+                    self?.acceptMeasuredHeight(height, messageID: message.id, row: row)
+                }
+            )
+            let height = cell.update(rootView: rootView, tableWidth: width)
+            acceptMeasuredHeight(height, messageID: message.id, row: row)
+            return cell
+        }
+
+        private static func haveMatchingMessageIDs(
+            _ lhs: [ChatTranscriptMessage],
+            _ rhs: [ChatTranscriptMessage]
+        ) -> Bool {
+            lhs.count == rhs.count
+                && zip(lhs, rhs).allSatisfy { $0.id == $1.id }
+        }
+
+        private func reloadChangedRows(from previous: State, metadataChanged: Bool) {
+            guard let tableView else {
+                return
+            }
+            var rows = IndexSet()
+            for index in state.messages.indices
+            where previous.messages[index] != state.messages[index] {
+                rows.insert(index)
+            }
+            if metadataChanged {
+                rows.formUnion(visibleMessageRows(in: tableView))
+            }
+            guard !rows.isEmpty else {
+                return
+            }
+            tableView.reloadData(
+                forRowIndexes: rows,
+                columnIndexes: IndexSet(integer: 0)
+            )
+        }
+
+        private func presentation(
+            for message: ChatTranscriptMessage
+        ) -> ChatTranscriptHostedRow.Presentation {
+            let showsEditAction = message.id == state.latestUserMessageID
+            return ChatTranscriptHostedRow.Presentation(
+                imageModelSelectionRequest: state.imageModelSelectionRequests[message.id],
+                showsEditAction: showsEditAction,
+                editUnavailableReason: showsEditAction ? state.editUnavailableReason : nil,
+                isEditing: state.editingUserMessageID == message.id,
+                canFork: state.forkableAssistantResponseIDs.contains(message.id)
+            )
+        }
+
+        private func configureFallback(in scrollView: NSScrollView) {
+            fallbackRowHeight = scrollView.contentSize.height > 0
+                ? scrollView.contentSize.height
+                : systemRowHeight
+            awaitsViewportFallback = scrollView.contentSize.height <= 0
+        }
+
+        private func heightKey(for messageID: UUID) -> HeightKey {
+            HeightKey(sessionID: state.sessionID, messageID: messageID)
+        }
+
+        private func acceptMeasuredHeight(
+            _ height: CGFloat,
+            messageID: UUID,
+            row: Int
+        ) {
+            guard height.isFinite,
+                  height > 0,
+                  state.messages.indices.contains(row),
+                  state.messages[row].id == messageID
+            else {
+                return
+            }
+            let height = height.rounded(.up)
+            let key = heightKey(for: messageID)
+            if measuredHeights[key] == height {
+                return
+            }
+            measuredHeights[key] = height
+            pendingHeightRows.insert(row)
+            scheduleHeightUpdate()
+        }
+
+        private func scheduleHeightUpdate() {
+            guard heightUpdateTask == nil else {
+                return
+            }
+            heightUpdateTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+                self.heightUpdateTask = nil
+                let rows = self.pendingHeightRows
+                self.pendingHeightRows.removeAll()
+                guard let tableView = self.tableView, !rows.isEmpty else {
+                    return
+                }
+                let shouldFollowLatest = self.followsLatestMessage
+                let anchor = shouldFollowLatest ? nil : self.visibleAnchor(in: tableView)
+                self.performProgrammaticScroll {
+                    tableView.noteHeightOfRows(withIndexesChanged: rows)
+                    if shouldFollowLatest {
+                        self.scrollToBottomPosition()
+                    } else if let anchor {
+                        self.restorePosition(anchor, in: tableView)
+                    }
+                }
+            }
+        }
+
+        private func resetPendingHeightUpdates() {
+            heightUpdateTask?.cancel()
+            heightUpdateTask = nil
+            pendingHeightRows.removeAll()
+        }
+
+        private func visibleAnchor(in tableView: NSTableView) -> Anchor? {
+            let visibleRect = tableView.visibleRect
+            let visibleRows = tableView.rows(in: visibleRect)
+            guard visibleRows.location != NSNotFound,
+                  visibleRows.location < state.messages.count
+            else {
+                return nil
+            }
+            let firstRow = visibleRows.location
+            let nextRow = firstRow + 1
+            let firstRowIsClipped = tableView.rect(ofRow: firstRow).minY
+                < visibleRect.minY - Self.geometryTolerance
+            let row = if firstRowIsClipped,
+                         nextRow < visibleRows.location + visibleRows.length,
+                         nextRow < state.messages.count {
+                nextRow
+            } else {
+                firstRow
+            }
+            return Anchor(
+                row: row,
+                messageID: state.messages[row].id,
+                viewportY: tableView.rect(ofRow: row).minY - visibleRect.minY
+            )
+        }
+
+        private func restorePosition(_ anchor: Anchor, in tableView: NSTableView) {
+            guard let scrollView else {
+                return
+            }
+            let row = if state.messages.indices.contains(anchor.row),
+                         state.messages[anchor.row].id == anchor.messageID {
+                anchor.row
+            } else {
+                state.messages.firstIndex { $0.id == anchor.messageID }
+            }
+            guard let row else {
+                return
+            }
+            let targetY = max(0, tableView.rect(ofRow: row).minY - anchor.viewportY)
+            guard abs(scrollView.contentView.bounds.minY - targetY)
+                > Self.geometryTolerance
+            else {
+                return
+            }
+            scroll(toY: targetY)
+        }
+
+        private func visibleMessageRows(in tableView: NSTableView) -> IndexSet {
+            let range = tableView.rows(in: tableView.visibleRect)
+            guard range.location != NSNotFound else {
+                return []
+            }
+            let lowerBound = max(0, range.location)
+            let upperBound = min(state.messages.count, range.location + range.length)
+            return lowerBound < upperBound
+                ? IndexSet(integersIn: lowerBound..<upperBound)
+                : []
+        }
+
+        private func handleScrollTarget() {
+            guard let target = state.scrollTargetMessageID else {
+                handledScrollTargetMessageID = nil
+                return
+            }
+            guard handledScrollTargetMessageID != target else {
+                return
+            }
+            handledScrollTargetMessageID = target
+            scrollToMessage(target)
+            actions.clearScrollTarget()
+        }
+
+        private func scrollToBottomPosition() {
+            guard let tableView,
+                  let scrollView,
+                  tableView.numberOfRows > 0
+            else {
+                return
+            }
+            scroll(
+                toY: max(
+                    tableView.bounds.minY,
+                    tableView.bounds.maxY - scrollView.contentView.bounds.height
+                )
+            )
+        }
+
+        private func scrollToMessage(_ messageID: UUID) {
+            guard let tableView,
+                  let scrollView,
+                  let row = state.messages.firstIndex(where: { $0.id == messageID })
+            else {
+                return
+            }
+            followsLatestMessage = false
+            let rowRect = tableView.rect(ofRow: row)
+            let targetY = max(0, rowRect.midY - (scrollView.contentView.bounds.height / 2))
+            performProgrammaticScroll {
+                scroll(toY: targetY)
+            }
+        }
+
+        private func scroll(toY y: CGFloat) {
+            guard let scrollView else {
+                return
+            }
+            let clipView = scrollView.contentView
+            clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: y))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+
+        private func performProgrammaticScroll(_ action: () -> Void) {
+            programmaticScrollTask?.cancel()
+            isProgrammaticScroll = true
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                context.allowsImplicitAnimation = false
+                action()
+            }
+            programmaticScrollTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+                self.programmaticScrollTask = nil
+                self.isProgrammaticScroll = false
+            }
+        }
+
+        private func liveScrollDidChange() {
+            programmaticScrollTask?.cancel()
+            programmaticScrollTask = nil
+            isProgrammaticScroll = false
+            updateFollowState()
+        }
+
+        private func updateFollowState() {
+            guard let tableView, let scrollView else {
+                return
+            }
+            followsLatestMessage = scrollView.contentView.bounds.maxY
+                >= tableView.bounds.maxY - scrollView.verticalLineScroll
+        }
+
+        private func boundsDidChange() {
+            guard let tableView, let scrollView else {
+                return
+            }
+            let width = scrollView.contentSize.width > 0
+                ? scrollView.contentSize.width
+                : tableView.bounds.width
+            let layoutChanged = abs(layoutWidth - width) > Self.geometryTolerance
+            let viewportBecameAvailable = awaitsViewportFallback
+                && scrollView.contentSize.height > 0
+            if layoutChanged || viewportBecameAvailable {
+                let shouldFollowLatest = followsLatestMessage
+                let anchor = shouldFollowLatest ? nil : visibleAnchor(in: tableView)
+                if layoutChanged {
+                    measuredHeights.removeAll(keepingCapacity: true)
+                    layoutWidth = width
+                    configureFallback(in: scrollView)
+                } else {
+                    fallbackRowHeight = scrollView.contentSize.height
+                    awaitsViewportFallback = false
+                }
+                resetPendingHeightUpdates()
+                performProgrammaticScroll {
+                    tableView.reloadData()
+                    if shouldFollowLatest {
+                        scrollToBottomPosition()
+                    } else if let anchor {
+                        restorePosition(anchor, in: tableView)
+                    }
+                }
+                return
+            }
+            guard !isProgrammaticScroll else {
+                return
+            }
+            updateFollowState()
+        }
+    }
+}
+
+private struct ChatTranscriptHostedRow: View {
+    struct Presentation: Equatable {
+        let imageModelSelectionRequest: ChatImageModelSelectionRequest?
+        let showsEditAction: Bool
+        let editUnavailableReason: String?
+        let isEditing: Bool
+        let canFork: Bool
+    }
+
+    let message: ChatTranscriptMessage
+    let presentation: Presentation
+    let actions: ChatTranscriptTable.Actions
+    let tableWidth: CGFloat
+    let topPadding: CGFloat
+    let fontScale: Double
+    let onHeightChange: (CGFloat) -> Void
+
+    var body: some View {
+        ChatMessageRow(
+            message: message,
+            imageModelSelectionRequest: presentation.imageModelSelectionRequest,
+            showsEditUserMessage: presentation.showsEditAction,
+            canEditUserMessage: presentation.editUnavailableReason == nil,
+            editUserMessageUnavailableReason: presentation.editUnavailableReason,
+            isEditingUserMessage: presentation.isEditing,
+            canForkAssistantResponse: presentation.canFork,
+            onEditUserMessage: actions.editUserMessage,
+            onForkAssistantResponse: actions.forkAssistantResponse,
+            onConfirmToolConsent: actions.confirmToolConsent,
+            onDenyToolConsent: actions.denyToolConsent,
+            onSelectImageModel: actions.selectImageModel,
+            onCancelImageModelSelection: actions.cancelImageModelSelection,
+            onExploreImageModels: actions.exploreImageModels,
+            onPreviewAttachment: actions.previewAttachment
+        )
+        .equatable()
+        .id(message.id)
+        .frame(
+            maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                - (ChatTranscriptLayout.messageHorizontalInset * 2)
+        )
+        .frame(maxWidth: .infinity)
+        .padding(
+            .horizontal,
+            ChatTranscriptLayout.horizontalPadding
+                + ChatTranscriptLayout.messageHorizontalInset
+        )
+        .padding(.top, topPadding)
+        .padding(.bottom, 6)
+        .frame(width: tableWidth, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+        .environment(\.chatFontScale, fontScale)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+            onHeightChange($0)
+        }
+    }
+}
+
+@MainActor
+private final class ChatTranscriptHostingCell: NSTableCellView {
+    private var hostingView: NSHostingView<ChatTranscriptHostedRow>?
+
+    func update(rootView: ChatTranscriptHostedRow, tableWidth: CGFloat) -> CGFloat {
+        let hostingView: NSHostingView<ChatTranscriptHostedRow>
+        if let existing = self.hostingView {
+            existing.rootView = rootView
+            hostingView = existing
+        } else {
+            let created = NSHostingView(rootView: rootView)
+            created.translatesAutoresizingMaskIntoConstraints = true
+            created.autoresizingMask = [.width, .height]
+            addSubview(created)
+            self.hostingView = created
+            hostingView = created
+        }
+        hostingView.frame.size.width = tableWidth
+        hostingView.invalidateIntrinsicContentSize()
+        hostingView.layoutSubtreeIfNeeded()
+        let height = max(1, hostingView.fittingSize.height)
+        hostingView.frame = NSRect(x: 0, y: 0, width: tableWidth, height: height)
+        hostingView.layoutSubtreeIfNeeded()
+        return height
+    }
+
+    override func layout() {
+        super.layout()
+        hostingView?.frame = bounds
+    }
+}
+
+private final class ChatTranscriptSpacerCell: NSTableCellView {}
 
 private struct ChatComposerContainer: View {
     var model: NativModel
