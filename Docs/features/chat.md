@@ -27,6 +27,13 @@ carries its title, messages, timestamps, pin state, and an optional folder assig
   session (`folderID`) and the folder list persists alongside sessions.
 - Empty, redundant sessions are pruned automatically.
 
+## Multiple windows
+
+Choose **File > New Window** or press Command + Shift + N to open another workspace.
+Each window keeps its own navigation, chat, draft, and generation state while sharing the
+inference server, loaded models, and settings. A chat can generate in only one window at a
+time, and model selection is unavailable while any window is generating.
+
 ## Chat tools
 
 A tool-calling model can invoke host capabilities mid-conversation. The registry is
