@@ -675,8 +675,8 @@ struct ModelsView: View {
             installedModelSelection.toggleMode()
         } label: {
             Label(
-                installedModelSelection.isActive ? "Done" : "Delete Models…",
-                systemImage: installedModelSelection.isActive ? "checkmark" : "trash"
+                installedModelSelection.isActive ? "Done" : "Select",
+                systemImage: installedModelSelection.isActive ? "checkmark" : "checkmark.circle"
             )
         }
         .buttonStyle(.bordered)
@@ -687,7 +687,7 @@ struct ModelsView: View {
         .help(
             installedModelSelection.isActive
                 ? "Finish selecting installed models"
-                : "Select multiple installed models to delete"
+                : "Select multiple installed models"
         )
     }
 
