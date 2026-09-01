@@ -24,9 +24,6 @@ packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
-  PhosphorSwift:
-    url: https://github.com/phosphor-icons/swift
-    exactVersion: 2.1.0
 schemes:
   Nativ:
     build:
@@ -109,6 +106,9 @@ targets:
         buildPhase: resources
       - path: Extensions/VoiceDictation/Manifest.json
         buildPhase: resources
+      - path: ThirdParty/ripgrep/Tools
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
@@ -120,8 +120,6 @@ targets:
         product: Textual
       - package: ZIPFoundation
         product: ZIPFoundation
-      - package: PhosphorSwift
-        product: PhosphorSwift
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
@@ -142,8 +140,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.5
-        CURRENT_PROJECT_VERSION: 10
+        MARKETING_VERSION: 0.3.6
+        CURRENT_PROJECT_VERSION: 11
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -164,8 +162,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.5
-        CURRENT_PROJECT_VERSION: 10
+        MARKETING_VERSION: 0.3.6
+        CURRENT_PROJECT_VERSION: 11
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -176,6 +174,7 @@ targets:
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
+      - path: Sources/Nativ/Features/Extensions/NativKitLibrary.swift
       - path: Sources/Nativ/Features/Extensions/NativKitRuntimeResolver.swift
       - path: Sources/Nativ/Features/Extensions/CustomTool.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
@@ -186,6 +185,7 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/RealtimeAudioMeter.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioInputLevelMonitor.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
+      - path: Sources/Nativ/Features/Models/ExternalModelCacheReference.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
@@ -219,8 +219,17 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatReadFileTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatSearchFilesTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatFileWriteTools.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatTerminalTool.swift
       - path: Sources/Nativ/Features/Files/FileReadAccessPolicy.swift
       - path: Sources/Nativ/Features/Files/SafeLocalFileReader.swift
+      - path: Sources/Nativ/Features/Files/FileSearchEngine.swift
+      - path: Sources/Nativ/Features/Files/FileWriteAccessPolicy.swift
+      - path: Sources/Nativ/Features/Files/SafeLocalFileWriter.swift
+      - path: Sources/Nativ/Features/Files/FileMutationState.swift
+      - path: Sources/Nativ/Features/Files/FileEditEngine.swift
+      - path: Sources/Nativ/Features/Files/FileSyntaxValidator.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingError.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingProviderClient.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingRuntime.swift
@@ -232,6 +241,7 @@ targets:
       - path: Sources/Nativ/Features/Browsing/Providers/PerplexityBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/Providers/TavilyBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/Providers/ParallelBrowsingProvider.swift
+      - path: Sources/Nativ/Features/Browsing/Providers/SearXNGBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/WebReadContentSelector.swift
       - path: Sources/Nativ/Features/Browsing/WebReadService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchProvider.swift
@@ -240,21 +250,32 @@ targets:
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatArchive.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift
       - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift
       - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
+      - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
+      - path: Sources/Nativ/Features/ControlPanel/ControlPanelNavigation.swift
+      - path: Sources/Nativ/Features/Windowing/WindowIntent.swift
+      - path: Sources/Nativ/Features/Artifacts/ArtifactStore.swift
+      - path: Sources/Nativ/Features/Dashboard/DashboardViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
+      - path: Sources/Nativ/Utilities/ServerPortProbe.swift
       - path: Sources/Nativ/Utilities/Formatting.swift
       - path: Sources/Nativ/Utilities/MarkdownFormatting.swift
+      - path: Sources/Nativ/Features/Shared/NativComponents.swift
+      - path: Sources/Nativ/Features/Shared/PersistedDataChangeHub.swift
+      - path: Sources/Nativ/Features/Shared/InferenceActivityCoordinator.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
       - path: Sources/Nativ/Features/MCP/MCPHostManager.swift
+      - path: Sources/Nativ/Utilities/LaunchAtLoginController.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
       - path: Sources/Nativ/Features/Routines/RoutineStore.swift
     dependencies:

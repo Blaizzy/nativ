@@ -794,13 +794,6 @@ enum NativExtensionPermissionStatus: Hashable {
         }
     }
 
-    var color: Color {
-        switch self {
-        case .granted: .green
-        case .denied: .red
-        case .notRequested: .secondary
-        }
-    }
 }
 
 extension AppExtensionPoint {

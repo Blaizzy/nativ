@@ -72,6 +72,7 @@ private final class ModelsNativState: ObservableObject {
         var settings: NativSettings
         var isRunning: Bool
         var modelSwitchInProgress: Bool
+        var inferenceActivityInProgress: Bool
         var modelSwitchTargetID: String?
         var modelLoadingProgress: Double?
         var metricsLoading: Bool
@@ -89,6 +90,7 @@ private final class ModelsNativState: ObservableObject {
             settings: model.settings,
             isRunning: model.isRunning,
             modelSwitchInProgress: model.modelSwitchInProgress,
+            inferenceActivityInProgress: model.inferenceActivityInProgress,
             modelSwitchTargetID: model.modelSwitchTargetID,
             modelLoadingProgress: model.modelLoadingProgress,
             metricsLoading: model.metricsLoading,
@@ -113,6 +115,7 @@ private final class ModelsNativState: ObservableObject {
             $0.settings = model.settings
             $0.isRunning = model.isRunning
             $0.modelSwitchInProgress = model.modelSwitchInProgress
+            $0.inferenceActivityInProgress = model.inferenceActivityInProgress
             $0.modelSwitchTargetID = model.modelSwitchTargetID
             $0.modelLoadingProgress = model.modelLoadingProgress
             $0.metricsLoading = model.metricsLoading
@@ -132,6 +135,7 @@ private final class ModelsNativState: ObservableObject {
     var settings: NativSettings { snapshot.settings }
     var isRunning: Bool { snapshot.isRunning }
     var modelSwitchInProgress: Bool { snapshot.modelSwitchInProgress }
+    var inferenceActivityInProgress: Bool { snapshot.inferenceActivityInProgress }
     var modelSwitchTargetID: String? { snapshot.modelSwitchTargetID }
     var modelLoadingProgress: Double? { snapshot.modelLoadingProgress }
     var metricsLoading: Bool { snapshot.metricsLoading }
@@ -175,6 +179,8 @@ struct ModelsViewHost: View, @MainActor Equatable {
     var speechModelDiscoveryRequest = 0
     var imageModelDiscoveryRequest = 0
     var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+    var modelDiscoveryRequest = 0
+    var modelDiscoveryRepositoryID: String?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -183,6 +189,8 @@ struct ModelsViewHost: View, @MainActor Equatable {
             && lhs.speechModelDiscoveryRequest == rhs.speechModelDiscoveryRequest
             && lhs.imageModelDiscoveryRequest == rhs.imageModelDiscoveryRequest
             && lhs.imageModelDiscoveryCapability == rhs.imageModelDiscoveryCapability
+            && lhs.modelDiscoveryRequest == rhs.modelDiscoveryRequest
+            && lhs.modelDiscoveryRepositoryID == rhs.modelDiscoveryRepositoryID
     }
 
     var body: some View {
@@ -192,7 +200,9 @@ struct ModelsViewHost: View, @MainActor Equatable {
             titleLeadingInset: titleLeadingInset,
             speechModelDiscoveryRequest: speechModelDiscoveryRequest,
             imageModelDiscoveryRequest: imageModelDiscoveryRequest,
-            imageModelDiscoveryCapability: imageModelDiscoveryCapability
+            imageModelDiscoveryCapability: imageModelDiscoveryCapability,
+            modelDiscoveryRequest: modelDiscoveryRequest,
+            modelDiscoveryRepositoryID: modelDiscoveryRepositoryID
         )
     }
 }
@@ -204,6 +214,8 @@ struct ModelsView: View {
     var speechModelDiscoveryRequest = 0
     var imageModelDiscoveryRequest = 0
     var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+    var modelDiscoveryRequest = 0
+    var modelDiscoveryRepositoryID: String?
     @StateObject private var modelState: ModelsNativState
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
@@ -223,6 +235,7 @@ struct ModelsView: View {
     @State private var hubAccessFilter: HubAccessFilter = .all
     @State private var handledSpeechModelDiscoveryRequest = 0
     @State private var handledImageModelDiscoveryRequest = 0
+    @State private var handledModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
     @State private var installedModelSelection = NativBulkSelection<String>()
@@ -235,7 +248,9 @@ struct ModelsView: View {
         titleLeadingInset: CGFloat = 0,
         speechModelDiscoveryRequest: Int = 0,
         imageModelDiscoveryRequest: Int = 0,
-        imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
+        imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration,
+        modelDiscoveryRequest: Int = 0,
+        modelDiscoveryRepositoryID: String? = nil
     ) {
         self.model = model
         _showsConfiguration = showsConfiguration
@@ -243,6 +258,8 @@ struct ModelsView: View {
         self.speechModelDiscoveryRequest = speechModelDiscoveryRequest
         self.imageModelDiscoveryRequest = imageModelDiscoveryRequest
         self.imageModelDiscoveryCapability = imageModelDiscoveryCapability
+        self.modelDiscoveryRequest = modelDiscoveryRequest
+        self.modelDiscoveryRepositoryID = modelDiscoveryRepositoryID
         _modelState = StateObject(wrappedValue: ModelsNativState(model: model))
     }
 
@@ -287,12 +304,16 @@ struct ModelsView: View {
         .onAppear {
             openSpeechModelDiscoveryIfRequested()
             openImageModelDiscoveryIfRequested()
+            openModelDiscoveryIfRequested()
         }
         .onChange(of: speechModelDiscoveryRequest) { _, _ in
             openSpeechModelDiscoveryIfRequested()
         }
         .onChange(of: imageModelDiscoveryRequest) { _, _ in
             openImageModelDiscoveryIfRequested()
+        }
+        .onChange(of: modelDiscoveryRequest) { _, _ in
+            openModelDiscoveryIfRequested()
         }
         .onChange(of: section) { _, newSection in
             // Let the segmented control commit before replacing the toolbar
@@ -369,6 +390,20 @@ struct ModelsView: View {
         hubSort = .downloads
         hubSortDirection = .descending
         hubCapabilityFilters = [imageModelDiscoveryCapability]
+        hubAccessFilter = .all
+    }
+
+    private func openModelDiscoveryIfRequested() {
+        guard modelDiscoveryRequest > handledModelDiscoveryRequest,
+            let modelDiscoveryRepositoryID
+        else {
+            return
+        }
+        handledModelDiscoveryRequest = modelDiscoveryRequest
+        section = .discover
+        typeFilter = .all
+        hubQuery = modelDiscoveryRepositoryID
+        hubCapabilityFilters = []
         hubAccessFilter = .all
     }
 
@@ -455,7 +490,7 @@ struct ModelsView: View {
             HStack(spacing: 10) {
                 DebouncedModelsSearchField(
                     prompt: renderedSection == .installed
-                        ? "Search installed models" : "Search models on Hugging Face",
+                        ? "Search installed models" : "Search models on Hugging Face Hub",
                     text: activeSearchQuery,
                     identity: renderedSection,
                     debounceMilliseconds: renderedSection == .installed ? 100 : 350
@@ -532,8 +567,8 @@ struct ModelsView: View {
                     ? "No models match your filter" : "No MLX models installed",
                 message: installedFilterIsActive
                     ? "Try a different search or model type."
-                    : "Discover an MLX model on Hugging Face and download it to this cache.",
-                actionTitle: installedFilterIsActive ? nil : "Discover models",
+                    : "Discover an MLX model on Hugging Face Hub and download it to this cache.",
+                actionTitle: installedFilterIsActive ? nil : "Open Models",
                 action: { section = .discover }
             )
             .modelsListRow()
@@ -562,7 +597,8 @@ struct ModelsView: View {
                     preferredPreloadSlot: preferredPreloadSlot(
                         among: preloadSlots
                     ),
-                    isSelectionDisabled: modelState.modelSwitchInProgress,
+                    isSelectionDisabled: modelState.modelSwitchInProgress
+                        || modelState.inferenceActivityInProgress,
                     isModelLoading: modelState.modelLoadingID
                         == localModel.repoID,
                     modelLoadingPercentage: modelState.modelLoadingPercentage,
@@ -663,7 +699,7 @@ struct ModelsView: View {
         if let error = hubLibrary.error {
             ScrollView {
                 ModelsNotice(
-                    title: "Hugging Face is unavailable",
+                    title: "Hugging Face Hub is unavailable",
                     message: error,
                     systemImage: "wifi.exclamationmark",
                     color: .orange
@@ -674,7 +710,7 @@ struct ModelsView: View {
             ScrollView {
                 ModelsLoadingState(
                     title: hubQuery.isEmpty
-                        ? "Finding popular Safetensors models…" : "Searching Hugging Face…")
+                        ? "Finding popular Safetensors models…" : "Searching Hugging Face Hub…")
                     .modelsListRow()
             }
         } else if hubLibrary.models.isEmpty {
@@ -987,7 +1023,7 @@ struct ModelsView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Models")
                 .font(.title2.weight(.semibold))
-            Text("Manage local MLX models or find new ones on Hugging Face.")
+            Text("Manage local MLX models or find new ones on Hugging Face Hub.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -1209,10 +1245,10 @@ struct ModelsView: View {
 
     private var sourcesMenu: some View {
         Menu {
-            Section("Hugging Face cache") {
+            Section("Hugging Face Cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
             }
-            Section("Model folders") {
+            Section("Model Folders") {
                 ForEach(modelState.settings.normalized().additionalModelSearchPaths, id: \.self) {
                     path in
                     Menu(abbreviatedPath(path)) {
@@ -1506,7 +1542,7 @@ private struct ModelReadmePanel: View {
                 Text(store.error ?? "This model doesn’t include a README.")
             } actions: {
                 if let hubURL {
-                    Link("Open on Hugging Face", destination: hubURL)
+                    Link("Open on Hugging Face Hub", destination: hubURL)
                 }
             }
         }
@@ -1886,7 +1922,7 @@ private struct ActiveDownloadBannerRow: View {
                         .help(pauseResumeTitle)
 
                     Button(
-                        "Remove download",
+                        "Remove Download",
                         systemImage: "xmark",
                         role: .destructive,
                         action: confirmRemoval
@@ -2098,10 +2134,13 @@ private struct HubModelRow: View, @MainActor Equatable {
 
                             HStack(spacing: 6) {
                                 ModelPill(
-                                    title: compactCount(model.downloads),
+                                    title: NativFormatting.compactCount(model.downloads).display,
                                     systemImage: "arrow.down.circle"
                                 )
-                                ModelPill(title: compactCount(model.likes), systemImage: "heart")
+                                ModelPill(
+                                    title: NativFormatting.compactCount(model.likes).display,
+                                    systemImage: "heart"
+                                )
                                 if let sizeBytes = downloadSizeBytes {
                                     ModelPill(
                                         title: ByteCountFormatter.string(
@@ -2189,7 +2228,7 @@ private struct HubModelRow: View, @MainActor Equatable {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Link(destination: modelHubURL) {
-                    Label("Request access on Hugging Face", systemImage: "arrow.up.right")
+                    Label("Request access on Hugging Face Hub", systemImage: "arrow.up.right")
                         .font(.caption.weight(.semibold))
                 }
             }
@@ -2420,7 +2459,7 @@ struct ModelDownloadProgressControl: View {
                     )
 
                     ModelDownloadActionButton(
-                        title: "Remove download",
+                        title: "Remove Download",
                         systemImage: "trash",
                         tint: .red,
                         action: { isConfirmingRemoval = true }
@@ -2875,18 +2914,6 @@ private func compactContextSize(_ value: Int) -> String {
     if value >= million, value.isMultiple(of: million) { return "\(value / million)M" }
     if value >= 1024, value.isMultiple(of: 1024) { return "\(value / 1024)K" }
     return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-}
-
-private func compactCount(_ value: Int) -> String {
-    if value >= 1_000_000 {
-        return String(format: "%.1fM", Double(value) / 1_000_000).replacingOccurrences(
-            of: ".0M", with: "M")
-    }
-    if value >= 1_000 {
-        return String(format: "%.1fK", Double(value) / 1_000).replacingOccurrences(
-            of: ".0K", with: "K")
-    }
-    return "\(value)"
 }
 
 #Preview {

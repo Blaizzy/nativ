@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         builtInExtensions: [voiceDictationExtension]
     )
     private let controlPanelNavigation = ControlPanelNavigation()
+    private let controlPanelSharedDependencies = ControlPanelSharedDependencies()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
     private let routineSessionStore = ChatSessionStore()
@@ -31,14 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     private var statusItem: NSStatusItem?
     private lazy var statusMenuController = StatusMenuController(
         model: model,
-        navigation: controlPanelNavigation,
         extensionManager: extensionManager,
-        showMainWindow: { [weak self] in
-            self?.showMainWindow()
+        performWindowIntent: { [weak self] intent in
+            self?.performWindowIntent(intent)
         }
     )
     private var downloadShutdownTask: Task<Void, Never>?
     private var didFinishDownloadShutdown = false
+
+    override init() {
+        super.init()
+        model.observeInferenceActivity(controlPanelSharedDependencies.inferenceActivity)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.onUpdate = { [weak self] in
@@ -77,10 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
                     )
                 },
                 openSpeechModels: { [weak self] in
-                    self?.controlPanelNavigation.openSpeechModelDiscovery()
+                    self?.performWindowIntent(.openSpeechModels)
                 },
                 showMainWindow: { [weak self] in
-                    self?.showMainWindow()
+                    self?.performWindowIntent(.activate)
                 }
             )
         )
@@ -116,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        showMainWindow()
+        performWindowIntent(.activate)
         return true
     }
 
@@ -129,13 +134,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         model.applicationWillTerminate()
     }
 
-    var rootView: some View {
+    func makeControlPanelDependencies() -> ControlPanelDependencies {
+        ControlPanelDependencies(shared: controlPanelSharedDependencies)
+    }
+
+    func rootView(controlPanelDependencies: ControlPanelDependencies) -> some View {
         WelcomeGateView(
             model: model,
             navigation: controlPanelNavigation,
             runtime: runtime,
             extensionManager: extensionManager,
             softwareUpdater: softwareUpdater,
+            controlPanelDependencies: controlPanelDependencies,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)
             }
@@ -144,21 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
 
     func registerMainWindowOpener(_ opener: @escaping () -> Void) {
         mainWindowOpener = opener
-    }
-
-    func openSettings() {
-        controlPanelNavigation.open(.settings)
-        showMainWindow()
-    }
-
-    func createNewChat() {
-        controlPanelNavigation.createChat()
-        showMainWindow()
-    }
-
-    func toggleSidebar() {
-        controlPanelNavigation.toggleSidebar()
-        showMainWindow()
     }
 
     private func setUpRoutines() {
@@ -198,20 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     ) {
         let sessionID = (response.notification.request.content.userInfo["sessionID"] as? String)
             .flatMap(UUID.init(uuidString:))
-        DispatchQueue.main.async { [weak self] in
-            if let sessionID {
-                self?.controlPanelNavigation.openChatSession(sessionID)
-            } else {
-                self?.controlPanelNavigation.open(.chat)
-            }
-            self?.showMainWindow()
+        if let sessionID {
+            performWindowIntent(.openChat(sessionID))
+        } else {
+            performWindowIntent(.openTab(.chat))
         }
         completionHandler()
-    }
-
-    func toggleAllSidebarSections() {
-        controlPanelNavigation.collapseAllSections()
-        showMainWindow()
     }
 
     func increaseChatFontSize() {
@@ -232,6 +219,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         var settings = model.settings
         settings.stepChatFontScale(by: delta)
         model.settings = settings.normalized()
+    }
+
+    func performWindowIntent(_ intent: NativWindowIntent) {
+        controlPanelNavigation.perform(intent)
+        showMainWindow()
     }
 
     private func showMainWindow() {
@@ -427,10 +419,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
 
     private func menuBarMemoryUsedText() -> String {
         guard runtime.usedMemoryBytes > 0 else {
-            return "--\u{2009}GB"
+            return NativFormatting.missingValue
         }
         let usedGigabytes = Double(runtime.usedMemoryBytes) / 1_073_741_824
-        return String(format: "%.0f\u{2009}GB", usedGigabytes)
+        return usedGigabytes.formatted(
+            .number.precision(.fractionLength(0))
+        ) + "\u{2009}GB"
     }
 
     private func menuBarGigabytesImage(value: String) -> NSImage {

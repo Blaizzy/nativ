@@ -26,7 +26,7 @@ struct FileReadConfigurationView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("File Read")
                         .font(.title2.weight(.semibold))
-                    Text("Choose the folder where Nativ tools may read.")
+                    Text("Choose the folder where Nativ tools may read and search.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -44,7 +44,7 @@ struct FileReadConfigurationView: View {
 
                     Text(
                         configuredRootURL == nil
-                            ? "The read_file tool remains unavailable until a folder is selected."
+                            ? "The read_file and search_files tools remain unavailable until a folder is selected."
                             : "Relative paths resolve inside this folder. Absolute paths and symlinks cannot escape it."
                     )
                     .font(.caption)
@@ -83,7 +83,7 @@ struct FileReadConfigurationView: View {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
         panel.prompt = "Allow Reading"
-        panel.message = "Choose the folder that Nativ's File Read tool may access."
+        panel.message = "Choose the folder that Nativ’s File Read tools may access."
         panel.directoryURL = configuredRootURL
 
         guard panel.runModal() == .OK, let url = panel.url else { return }

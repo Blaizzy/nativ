@@ -223,9 +223,9 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
         case .imageGeneration:
             "Image Generation"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .embeddings:
             "Embeddings"
         }
@@ -402,12 +402,14 @@ struct NativSettings: Codable, Equatable {
     static let serverSupportsEmbeddingModelArgument = false
 
     var modelSearchPath: String
+    var externalModelCache: ExternalModelCacheReference?
     var additionalModelSearchPaths: [String]
     var languageModelID: String?
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
     var disabledToolNames: [String]
     var fileReadRootPath: String?
+    var fileWriteRootPath: String?
     var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
@@ -454,12 +456,14 @@ struct NativSettings: Codable, Equatable {
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
+        externalModelCache: ExternalModelCacheReference? = nil,
         additionalModelSearchPaths: [String] = [],
         languageModelID: String? = nil,
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
         disabledToolNames: [String] = [],
         fileReadRootPath: String? = nil,
+        fileWriteRootPath: String? = nil,
         skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
@@ -505,12 +509,14 @@ struct NativSettings: Codable, Equatable {
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
+        self.externalModelCache = externalModelCache
         self.additionalModelSearchPaths = additionalModelSearchPaths
         self.languageModelID = languageModelID
         self.mcpServers = mcpServers
         self.customTools = customTools
         self.disabledToolNames = disabledToolNames
         self.fileReadRootPath = fileReadRootPath
+        self.fileWriteRootPath = fileWriteRootPath
         self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
@@ -558,12 +564,14 @@ struct NativSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case modelSearchPath
+        case externalModelCache
         case additionalModelSearchPaths
         case languageModelID
         case mcpServers
         case customTools
         case disabledToolNames
         case fileReadRootPath
+        case fileWriteRootPath
         case skills
         case imageGenerationModelID
         case textToSpeechModelID
@@ -616,12 +624,17 @@ struct NativSettings: Codable, Equatable {
         let legacySelectedModelID = try container.decodeIfPresent(String.self, forKey: .selectedModelID)
         let storedModelSearchPath = try container.decodeIfPresent(String.self, forKey: .modelSearchPath)
         modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
+        externalModelCache = try container.decodeIfPresent(
+            ExternalModelCacheReference.self,
+            forKey: .externalModelCache
+        )
         additionalModelSearchPaths = try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths) ?? defaults.additionalModelSearchPaths
         languageModelID = try container.decodeIfPresent(String.self, forKey: .languageModelID) ?? legacySelectedModelID ?? defaults.languageModelID
         mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
         customTools = try container.decodeIfPresent([CustomTool].self, forKey: .customTools) ?? defaults.customTools
         disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
         fileReadRootPath = try container.decodeIfPresent(String.self, forKey: .fileReadRootPath) ?? defaults.fileReadRootPath
+        fileWriteRootPath = try container.decodeIfPresent(String.self, forKey: .fileWriteRootPath) ?? defaults.fileWriteRootPath
         skills = try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
         imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
         textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
@@ -670,12 +683,14 @@ struct NativSettings: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
+        try container.encodeIfPresent(externalModelCache, forKey: .externalModelCache)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
         try container.encode(disabledToolNames, forKey: .disabledToolNames)
         try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
+        try container.encodeIfPresent(fileWriteRootPath, forKey: .fileWriteRootPath)
         try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
@@ -857,6 +872,16 @@ struct NativSettings: Codable, Equatable {
         settings.fileReadRootPath = trimmedFileReadRoot.isEmpty
             ? nil
             : NSString(string: trimmedFileReadRoot).expandingTildeInPath
+        let trimmedFileWriteRoot = settings.fileWriteRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        settings.fileWriteRootPath = trimmedFileWriteRoot.isEmpty
+            ? nil
+            : NSString(string: trimmedFileWriteRoot).expandingTildeInPath
+        if settings.disabledToolNames.contains("read_file"),
+            !settings.disabledToolNames.contains("search_files")
+        {
+            settings.disabledToolNames.append("search_files")
+        }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         if let imageModelID = settings.imageGenerationModelID,
@@ -945,6 +970,7 @@ struct NativSettings: Codable, Equatable {
         let lhsSpeculativeDecodingActive = lhs.speculativeDecodingActive
         let rhsSpeculativeDecodingActive = rhs.speculativeDecodingActive
         return lhs.modelSearchPath == rhs.modelSearchPath
+            && lhs.externalModelCache?.volumeIdentifier == rhs.externalModelCache?.volumeIdentifier
             && lhs.languageModelID == rhs.languageModelID
             && lhs.mcpServers == rhs.mcpServers
             && lhs.disabledToolNames == rhs.disabledToolNames

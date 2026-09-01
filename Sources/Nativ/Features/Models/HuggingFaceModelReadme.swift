@@ -64,13 +64,13 @@ enum HuggingFaceModelReadmeError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidRepositoryID:
-            "This model doesn’t have a Hugging Face repository."
+            "This model doesn’t have a Hugging Face Hub repository."
         case .notFound:
             "This model doesn’t include a README."
         case .authenticationRequired:
             "Sign in to Hugging Face to view this model’s README."
         case .invalidResponse:
-            "Hugging Face returned an invalid README response."
+            "Hugging Face Hub returned an invalid README response."
         case .requestFailed(let statusCode):
             "The model README couldn’t be loaded (HTTP \(statusCode))."
         case .empty:

@@ -331,7 +331,8 @@ struct SettingsView: View {
 
     private var appVersionLabel: String {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "Unknown"
+        let version = info?["CFBundleShortVersionString"] as? String
+            ?? NativFormatting.missingValue
         let build = info?["CFBundleVersion"] as? String
         if let build, !build.isEmpty {
             return "Version \(version) (\(build))"

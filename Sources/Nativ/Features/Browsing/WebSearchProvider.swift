@@ -11,6 +11,11 @@ enum WebBrowsingCapability: Hashable, Sendable {
     case read
 }
 
+enum WebSearchProviderConfigurationKind: Equatable, Sendable {
+    case apiKey
+    case instanceURL
+}
+
 enum WebSearchProvider: String, CaseIterable, Identifiable, Sendable {
     case brave
     case exa
@@ -19,6 +24,7 @@ enum WebSearchProvider: String, CaseIterable, Identifiable, Sendable {
     case perplexity
     case tavily
     case parallel
+    case searxng
 
     var id: String { rawValue }
 
@@ -34,7 +40,7 @@ enum WebSearchProvider: String, CaseIterable, Identifiable, Sendable {
             switch self {
             case .exa, .nimble, .firecrawl, .tavily, .parallel:
                 true
-            case .brave, .perplexity:
+            case .brave, .perplexity, .searxng:
                 false
             }
         }
@@ -46,45 +52,52 @@ enum WebSearchProvider: String, CaseIterable, Identifiable, Sendable {
             WebSearchProviderMetadata(
                 displayName: "Brave",
                 logoResourceName: "Brave",
-                apiKeySetupURL: .webSearchURL("https://api-dashboard.search.brave.com/app/keys")
+                setupURL: .webSearchURL("https://api-dashboard.search.brave.com/app/keys")
             )
         case .exa:
             WebSearchProviderMetadata(
                 displayName: "Exa",
                 logoResourceName: "Exa",
-                apiKeySetupURL: .webSearchURL("https://dashboard.exa.ai/api-keys")
+                setupURL: .webSearchURL("https://dashboard.exa.ai/api-keys")
             )
         case .nimble:
             WebSearchProviderMetadata(
                 displayName: "Nimble",
                 logoResourceName: "Nimble",
-                apiKeySetupURL: .webSearchURL("https://online.nimbleway.com/settings/api-keys")
+                setupURL: .webSearchURL("https://online.nimbleway.com/settings/api-keys")
             )
         case .firecrawl:
             WebSearchProviderMetadata(
                 displayName: "Firecrawl",
                 logoResourceName: "Firecrawl",
-                apiKeySetupURL: .webSearchURL("https://www.firecrawl.dev/app/api-keys")
+                setupURL: .webSearchURL("https://www.firecrawl.dev/app/api-keys")
             )
         case .perplexity:
             WebSearchProviderMetadata(
                 displayName: "Perplexity",
                 logoResourceName: "Perplexity",
-                apiKeySetupURL: .webSearchURL("https://console.perplexity.ai/group/keys")
+                setupURL: .webSearchURL("https://console.perplexity.ai/group/keys")
             )
         case .tavily:
             WebSearchProviderMetadata(
                 displayName: "Tavily",
                 logoResourceName: "Tavily",
                 rendersLogoAsTemplate: true,
-                apiKeySetupURL: .webSearchURL("https://app.tavily.com")
+                setupURL: .webSearchURL("https://app.tavily.com")
             )
         case .parallel:
             WebSearchProviderMetadata(
                 displayName: "Parallel",
                 logoResourceName: "Parallel",
                 rendersLogoAsTemplate: true,
-                apiKeySetupURL: .webSearchURL("https://platform.parallel.ai")
+                setupURL: .webSearchURL("https://platform.parallel.ai")
+            )
+        case .searxng:
+            WebSearchProviderMetadata(
+                displayName: "SearXNG",
+                logoResourceName: "SearXNG",
+                configurationKind: .instanceURL,
+                setupURL: .webSearchURL("https://docs.searxng.org/dev/search_api.html")
             )
         }
     }
@@ -94,7 +107,8 @@ struct WebSearchProviderMetadata: Sendable {
     let displayName: String
     let logoResourceName: String
     var rendersLogoAsTemplate = false
-    let apiKeySetupURL: URL
+    var configurationKind = WebSearchProviderConfigurationKind.apiKey
+    let setupURL: URL
 }
 
 enum WebSearchCredentialIssue: String, Sendable {
@@ -108,6 +122,7 @@ struct WebBrowsingPreferences {
     private let searchProviderKey = "nativ.web-search.active-provider.v1"
     private let pageReaderProviderKey = "nativ.web-browsing.page-reader-provider.v1"
     private let credentialIssueKeyPrefix = "nativ.web-search.credential-issue.v1."
+    private let endpointKeyPrefix = "nativ.web-search.endpoint.v1."
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -168,8 +183,52 @@ struct WebBrowsingPreferences {
         }
     }
 
+    func endpoint(for provider: WebSearchProvider) -> URL? {
+        guard provider.metadata.configurationKind == .instanceURL,
+              let value = defaults.string(forKey: endpointKey(for: provider)) else {
+            return nil
+        }
+        return WebSearchInstanceURL.normalized(value)
+    }
+
+    func setEndpoint(_ endpoint: URL?, for provider: WebSearchProvider) {
+        guard provider.metadata.configurationKind == .instanceURL else { return }
+        let key = endpointKey(for: provider)
+        if let endpoint {
+            defaults.set(endpoint.absoluteString, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     private func credentialIssueKey(for provider: WebSearchProvider) -> String {
         credentialIssueKeyPrefix + provider.rawValue
+    }
+
+    private func endpointKey(for provider: WebSearchProvider) -> String {
+        endpointKeyPrefix + provider.rawValue
+    }
+}
+
+enum WebSearchInstanceURL {
+    static func normalized(_ value: String) -> URL? {
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              components.host?.isEmpty == false,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil else {
+            return nil
+        }
+
+        components.scheme = scheme
+        while components.path.count > 1, components.path.hasSuffix("/") {
+            components.path.removeLast()
+        }
+        return components.url
     }
 }
 

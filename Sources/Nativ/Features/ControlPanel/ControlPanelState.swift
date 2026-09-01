@@ -6,20 +6,6 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-@MainActor
-final class ControlPanelDependencies: ObservableObject {
-    lazy var chat = ChatViewModel()
-    lazy var mcpHost = MCPHostManager()
-    lazy var imageGeneration = ImageGenerationViewModel()
-    lazy var artifacts = ArtifactStore()
-    lazy var dashboard = DashboardViewModel()
-    lazy var systemMonitor = SystemMonitorStore()
-    lazy var launchAtLogin = LaunchAtLoginController()
-    lazy var downloads = HuggingFaceDownloadManager.shared
-    lazy var embeddingLibrary = LocalModelLibrary()
-    lazy var routineModelLibrary = LocalModelLibrary()
-}
-
 /// Filters `NativModel` down to values that can change control-panel chrome.
 @MainActor
 final class ControlPanelChromeState: ObservableObject {

@@ -77,7 +77,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .font(.system(size: 15, weight: .medium))
+                    .nativTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)
@@ -127,7 +127,7 @@ private struct ChatTranscriptView: View {
         let latestUserMessageID = chat.latestUserMessageID
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
@@ -294,7 +294,7 @@ private struct ChatTranscriptView: View {
             return "Wait for the model to finish loading"
         }
         guard selectedModelID?.isEmpty == false else {
-            return "Select a language model before editing a prompt"
+            return "Choose a language model before editing a prompt"
         }
         if let validationError = model.settings.structuredOutputValidationError {
             return validationError
@@ -326,7 +326,8 @@ private struct ChatComposerContainer: View {
                 ?? model.settings.structuredOutputValidationError,
             canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
-                && model.settings.structuredOutputValidationError == nil,
+                && model.settings.structuredOutputValidationError == nil
+                && !chat.isCurrentSessionActiveInAnotherWindow,
             canSend: !model.isModelLoading
                 && model.settings.structuredOutputValidationError == nil
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
@@ -459,7 +460,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                         if canForkAssistantResponse {
                             ChatMessageActionButton(
                                 icon: .asset("ChatForkIcon"),
-                                title: "Fork conversation from this response",
+                                title: "Fork chat from this response",
                                 isActive: false,
                                 isEnabled: true
                             ) {
@@ -782,7 +783,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             NativStatusBadge(text: "Failed", tone: .danger)
         case .cancelled:
-            NativStatusBadge(text: "Cancelled", tone: .neutral)
+            NativStatusBadge(text: "Canceled", tone: .neutral)
         case .declined:
             NativStatusBadge(text: "Declined", tone: .neutral)
         case .preparing, .running, .awaitingConsent,
@@ -793,10 +794,14 @@ private struct ChatAgentStepCell: View {
 
     private var consentPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
-            consentDescription
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let terminalRequest {
+                terminalConsentPrompt(for: terminalRequest)
+            } else {
+                consentDescription
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -813,10 +818,45 @@ private struct ChatAgentStepCell: View {
         .padding(.top, 7)
     }
 
+    private func terminalConsentPrompt(for request: ChatTerminalToolRequest) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(
+                "The model wants to run this command on your Mac. Review it carefully before confirming."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let cwd = request.cwd {
+                LabeledContent("Working directory") {
+                    Text(cwd)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                .font(.caption)
+            }
+
+            NativCodeBlock(raw: request.command, lineLimit: 10)
+
+            ForEach(terminalAssessment.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private var consentDescription: Text {
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
             return Text(
                 "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
+            )
+        }
+        if let toolName = message.toolName,
+           ChatFileWriteToolRegistry.toolNames.contains(toolName) {
+            return Text(
+                "The model wants to modify a protected instruction or credential configuration file in your authorized folder. Confirm to allow this change."
             )
         }
         return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
@@ -856,7 +896,7 @@ private struct ChatAgentStepCell: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Explore models") {
+                    Button("Open Models") {
                         onExploreImageModels(request.operation)
                     }
                     .buttonStyle(.bordered)
@@ -892,6 +932,18 @@ private struct ChatAgentStepCell: View {
             return "a different model"
         }
         return modelID
+    }
+
+    private var terminalRequest: ChatTerminalToolRequest? {
+        guard message.toolName == ChatTerminalToolRegistry.toolName else { return nil }
+        return try? ChatTerminalToolRequest(argumentsJSON: message.toolArguments)
+    }
+
+    private var terminalAssessment: TerminalCommandAssessment {
+        guard let terminalRequest else {
+            return TerminalCommandAssessment(blockedReason: nil, warnings: [])
+        }
+        return TerminalCommandSafetyPolicy.assess(command: terminalRequest.command)
     }
 
     @ViewBuilder
@@ -972,7 +1024,7 @@ private struct ChatAgentStepCell: View {
         case .failed:
             "failed"
         case .cancelled:
-            "cancelled"
+            "canceled"
         case .awaitingConsent:
             "awaiting your confirmation"
         case .awaitingImageModelSelection:
@@ -1398,7 +1450,7 @@ private struct ChatResponseMetricsRow: View {
         }
         ChatResponseMetricPill(
             label: "Peak memory",
-            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? "--"
+            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? NativFormatting.missingValue
         )
     }
 }
@@ -1501,7 +1553,7 @@ private struct ChatImageAttachmentView: View {
         }
         .help(attachment.filename)
         .accessibilityLabel(attachment.filename)
-        .alert("Couldn’t Save Image", isPresented: $showsSaveError) {
+        .alert("Couldn’t save image", isPresented: $showsSaveError) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {

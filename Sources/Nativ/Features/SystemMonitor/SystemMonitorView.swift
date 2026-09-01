@@ -51,6 +51,7 @@ struct SystemMonitorView: View {
     var store: SystemMonitorStore
     @ObservedObject var menuBarPreferences: SystemMenuBarPreferences
     var titleLeadingInset: CGFloat = 0
+    @State private var observationID = UUID()
     @State private var destination: SystemMonitorDestination = .overview
     @State private var isMenuBarControlHovered = false
 
@@ -65,10 +66,10 @@ struct SystemMonitorView: View {
         }
         .background(Color.nativMainContentBackground)
         .onAppear {
-            store.start()
+            store.beginObservation(observationID)
         }
         .onDisappear {
-            store.stop()
+            store.endObservation(observationID)
         }
     }
 
@@ -87,9 +88,9 @@ struct SystemMonitorView: View {
             menuBarControl
 
             HStack(spacing: 7) {
-                Circle()
-                    .fill(store.isSampling ? SystemMonitorPalette.positive : Color.secondary)
-                    .frame(width: 7, height: 7)
+                NativStatusDot(
+                    tone: store.isSampling ? .success : .neutral
+                )
                 Text(store.isSampling ? "Live" : "Paused")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -97,9 +98,9 @@ struct SystemMonitorView: View {
 
             Button {
                 if store.isSampling {
-                    store.stop()
+                    store.pause()
                 } else {
-                    store.start()
+                    store.resume()
                 }
             } label: {
                 Image(systemName: store.isSampling ? "pause.fill" : "play.fill")
@@ -331,7 +332,7 @@ private struct SystemOverviewPage: View {
                     SystemInfoRow(
                         "Neural Engine",
                         value: snapshot.identity.aneCoreCount
-                            .map { "\($0) cores" } ?? "Unavailable"
+                            .map { "\($0) cores" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Disk",
@@ -351,17 +352,18 @@ private struct SystemOverviewPage: View {
                     SystemInfoRow("Model identifier", value: snapshot.identity.modelIdentifier)
                     SystemInfoRow(
                         "Model number",
-                        value: snapshot.identity.modelNumber ?? "Unavailable"
+                        value: snapshot.identity.modelNumber ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Production year",
-                        value: snapshot.identity.productionYear.map(String.init) ?? "Unavailable"
+                        value: snapshot.identity.productionYear.map(String.init)
+                            ?? NativFormatting.missingValue
                     )
                     SystemInfoRow("Serial number", value: snapshot.identity.serialNumber)
                     SystemInfoRow("File system", value: snapshot.identity.disk.fileSystem)
                     SystemInfoRow(
                         "Storage health",
-                        value: snapshot.identity.disk.smartStatus ?? "Unavailable"
+                        value: snapshot.identity.disk.smartStatus ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Uptime",
@@ -422,7 +424,7 @@ private struct SystemSensorsPage: View {
                     value: SystemMonitorFormat.celsius(
                         snapshot.thermal.dieTemperatureCelsius
                     ),
-                    detail: snapshot.thermal.hottestSensorName ?? "Unavailable",
+                    detail: snapshot.thermal.hottestSensorName ?? NativFormatting.missingValue,
                     icon: "thermometer.medium",
                     tint: SystemMonitorPalette.red
                 )
@@ -431,7 +433,7 @@ private struct SystemSensorsPage: View {
                     value: SystemMonitorFormat.watts(snapshot.power.headlineWatts),
                     detail: snapshot.power.hasAnyReading
                         ? snapshot.power.headlineLabel
-                        : "Unavailable",
+                        : NativFormatting.missingValue,
                     icon: "bolt.fill",
                     tint: SystemMonitorPalette.orange
                 )
@@ -455,7 +457,7 @@ private struct SystemSensorsPage: View {
             .frame(maxWidth: .infinity)
 
             SystemValueHistoryChart(
-                title: "Temperature history",
+                title: "Temperature History",
                 samples: temperatureHistory,
                 color: SystemMonitorPalette.red,
                 seriesName: "Die temperature",
@@ -466,7 +468,7 @@ private struct SystemSensorsPage: View {
             )
 
             SystemValueHistoryChart(
-                title: "Power history",
+                title: "Power History",
                 samples: powerHistory,
                 color: SystemMonitorPalette.orange,
                 seriesName: snapshot.power.headlineLabel,
@@ -476,7 +478,7 @@ private struct SystemSensorsPage: View {
             )
 
             adaptivePair {
-                SystemInfoCard(title: "Power breakdown") {
+                SystemInfoCard(title: "Power Breakdown") {
                     SystemInfoRow("CPU", value: SystemMonitorFormat.watts(snapshot.power.cpuWatts))
                     SystemInfoRow("GPU", value: SystemMonitorFormat.watts(snapshot.power.gpuWatts))
                     SystemInfoRow(
@@ -521,7 +523,7 @@ private struct SystemSensorsPage: View {
 
             if !snapshot.thermal.sensors.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("All sensors")
+                    Text("All Sensors")
                         .font(.headline)
 
                     LazyVGrid(
@@ -536,7 +538,7 @@ private struct SystemSensorsPage: View {
                         }
                     }
                     .padding(14)
-                    .systemMonitorPanel()
+                    .nativPanelStyle()
                 }
             }
         }
@@ -854,13 +856,13 @@ private struct SystemCPUPage: View {
             }
 
             SystemPercentHistoryChart(
-                title: "Usage history",
+                title: "Usage History",
                 samples: history,
                 color: SystemMonitorPalette.blue
             )
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Load per core")
+                Text("Load per Core")
                     .font(.headline)
 
                 LazyVGrid(
@@ -880,7 +882,7 @@ private struct SystemCPUPage: View {
                     }
                 }
                 .padding(14)
-                .systemMonitorPanel()
+                .nativPanelStyle()
             }
 
         }
@@ -946,13 +948,13 @@ private struct SystemGPUPage: View {
 
             adaptivePair {
                 SystemPercentHistoryChart(
-                    title: "GPU utilization history",
+                    title: "GPU Utilization History",
                     samples: gpuHistory,
                     color: SystemMonitorPalette.blue
                 )
             } trailing: {
                 SystemPercentHistoryChart(
-                    title: "Neural Engine utilization history",
+                    title: "Neural Engine Utilization History",
                     samples: aneHistory,
                     color: SystemMonitorPalette.orange
                 )
@@ -1035,13 +1037,13 @@ private struct SystemMemoryPage: View {
             }
 
             SystemPercentHistoryChart(
-                title: "Memory usage history",
+                title: "Memory Usage History",
                 samples: memoryHistory,
                 color: SystemMonitorPalette.blue
             )
 
             SystemPercentHistoryChart(
-                title: "Swap history",
+                title: "Swap History",
                 samples: swapHistory,
                 color: SystemMonitorPalette.purple,
                 footer: "\(SystemMonitorFormat.memoryBytes(snapshot.memory.swapUsedBytes)) of \(SystemMonitorFormat.memoryBytes(snapshot.memory.swapTotalBytes))"
@@ -1116,7 +1118,7 @@ private struct SystemDiskPage: View {
                             Spacer()
                             Text(
                                 snapshot.disk.totalBytes
-                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                                    .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue
                             )
                                 .font(.callout.weight(.medium))
                                 .foregroundStyle(.secondary)
@@ -1133,13 +1135,13 @@ private struct SystemDiskPage: View {
                             SystemLegendItem(
                                 title: "Used",
                                 value: snapshot.disk.usedBytes
-                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable",
+                                    .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue,
                                 color: diskUsageColor
                             )
                             SystemLegendItem(
                                 title: "Available",
                                 value: snapshot.disk.availableBytes
-                                    .map(SystemMonitorFormat.bytes) ?? "Unavailable",
+                                    .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue,
                                 color: Color.secondary.opacity(0.45)
                             )
                         }
@@ -1199,52 +1201,52 @@ private struct SystemDiskPage: View {
                 SystemInfoCard(title: "SMART") {
                     SystemInfoRow(
                         "Status",
-                        value: snapshot.identity.disk.smartStatus ?? "Unavailable"
+                        value: snapshot.identity.disk.smartStatus ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Total read",
                         value: snapshot.identity.disk.lifetimeReadBytes
-                            .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                            .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Total written",
                         value: snapshot.identity.disk.lifetimeWrittenBytes
-                            .map(SystemMonitorFormat.bytes) ?? "Unavailable"
+                            .map(SystemMonitorFormat.bytes) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Temperature",
                         value: snapshot.identity.disk.temperatureCelsius
-                            .map { "\($0)°C" } ?? "Unavailable"
+                            .map { "\($0)°C" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Health",
                         value: snapshot.identity.disk.healthPercent
-                            .map { "\($0)%" } ?? "Unavailable"
+                            .map { "\($0)%" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Power cycles",
                         value: snapshot.identity.disk.powerCycles
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Power on hours",
                         value: snapshot.identity.disk.powerOnHours
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Available spare",
                         value: snapshot.identity.disk.availableSparePercent
-                            .map { "\($0)%" } ?? "Unavailable"
+                            .map { "\($0)%" } ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Unsafe shutdowns",
                         value: snapshot.identity.disk.unsafeShutdowns
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                     SystemInfoRow(
                         "Media errors",
                         value: snapshot.identity.disk.mediaErrors
-                            .map(SystemMonitorFormat.integer) ?? "Unavailable"
+                            .map(SystemMonitorFormat.integer) ?? NativFormatting.missingValue
                     )
                 }
             }
@@ -1290,7 +1292,7 @@ private struct SystemPanel<Content: View>: View {
         content
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .systemMonitorPanel()
+            .nativPanelStyle()
     }
 }
 
@@ -1315,15 +1317,17 @@ private struct SystemOverviewMetric: View {
                     .foregroundStyle(SystemMonitorPalette.metricLabel)
                 Text(value)
                     .font(.title3.weight(.semibold).monospacedDigit())
+                    .accessibilityLabel(NativFormatting.accessibleValue(value))
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(SystemMonitorPalette.metricDetail)
                     .lineLimit(1)
+                    .accessibilityLabel(NativFormatting.accessibleValue(detail))
             }
         }
         .padding(15)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 }
 
@@ -1341,7 +1345,7 @@ private struct SystemInfoCard<Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 }
 
@@ -1372,6 +1376,7 @@ private struct SystemInfoRow: View {
                 .font(.callout.weight(.medium))
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
         }
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
@@ -1445,6 +1450,7 @@ private struct SystemLegendItem: View {
             Text(value)
                 .fontWeight(.semibold)
                 .monospacedDigit()
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
         }
         .font(.caption)
     }
@@ -1619,7 +1625,7 @@ private struct SystemPercentHistoryChart: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 }
 
@@ -1633,7 +1639,7 @@ private struct SystemDiskHistoryChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Read / Write history")
+                Text("Read/Write History")
                     .font(.headline)
                 Spacer()
                 SystemLegendItem(
@@ -1748,7 +1754,7 @@ private struct SystemDiskHistoryChart: View {
             }
         }
         .padding(16)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 
     private func diskHoverRows(at date: Date) -> [SystemChartHoverRow] {
@@ -1789,7 +1795,7 @@ private struct SystemFPSHistoryChart: View {
 
     var body: some View {
         SystemValueHistoryChart(
-            title: "FPS history",
+            title: "FPS History",
             samples: samples,
             color: SystemMonitorPalette.blue,
             seriesName: "Frame rate",
@@ -1950,7 +1956,7 @@ private struct SystemValueHistoryChart: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .systemMonitorPanel()
+        .nativPanelStyle()
     }
 
     private var axisRange: ClosedRange<Double> {
@@ -2147,75 +2153,69 @@ private func adaptivePair<Leading: View, Trailing: View>(
 
 private enum SystemMonitorFormat {
     static func percent(_ value: Double) -> String {
-        "\(Int((value * 100).rounded()))%"
+        value.formatted(.percent.precision(.fractionLength(0)))
     }
 
     static func optionalPercent(_ value: Double?) -> String {
-        value.map(percent) ?? "--"
+        value.map(percent) ?? NativFormatting.missingValue
     }
 
     static func framesPerSecond(_ value: Double?) -> String {
-        guard let value, value.isFinite, value >= 0 else { return "--" }
-        return "\(Int(value.rounded())) FPS"
+        guard let value, value.isFinite, value >= 0 else { return NativFormatting.missingValue }
+        return "\(Int(value.rounded()).formatted()) FPS"
     }
 
     static func celsius(_ value: Double?) -> String {
-        guard let value, value.isFinite else { return "--" }
-        return String(format: "%.1f°C", value)
+        guard let value, value.isFinite else { return NativFormatting.missingValue }
+        return "\(NativFormatting.decimal(value, fractionDigits: 1))°C"
     }
 
     static func watts(_ value: Double?) -> String {
-        guard let value, value.isFinite, value >= 0 else { return "--" }
-        return value < 10
-            ? String(format: "%.2f W", value)
-            : String(format: "%.1f W", value)
+        guard let value, value.isFinite, value >= 0 else { return NativFormatting.missingValue }
+        let fractionDigits = value < 10 ? 2 : 1
+        return "\(NativFormatting.decimal(value, fractionDigits: fractionDigits)) W"
     }
 
     static func rpm(_ value: Int?) -> String {
-        guard let value else { return "--" }
-        return "\(value) RPM"
+        guard let value else { return NativFormatting.missingValue }
+        return "\(value.formatted()) RPM"
     }
 
     static func decimal(_ value: Double) -> String {
-        String(format: "%.2f", value)
+        NativFormatting.decimal(value)
     }
 
     static func bytes(_ value: UInt64) -> String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(clamping: value),
-            countStyle: .file
-        )
+        Int64(clamping: value).formatted(.byteCount(style: .file))
     }
 
     static func memoryBytes(_ value: UInt64) -> String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(clamping: value),
-            countStyle: .memory
-        )
+        Int64(clamping: value).formatted(.byteCount(style: .memory))
     }
 
     static func byteRate(_ value: Double) -> String {
-        guard value.isFinite, value >= 0 else { return "--" }
-        return "\(bytes(UInt64(value.rounded()))) /s"
+        guard value.isFinite, value >= 0 else { return NativFormatting.missingValue }
+        return "\(bytes(UInt64(value.rounded())))/s"
     }
 
     static func uptime(_ interval: TimeInterval) -> String {
-        let totalHours = max(Int(interval / 3_600), 0)
-        let days = totalHours / 24
-        let hours = totalHours % 24
-        if days > 0 {
-            return "\(days) days, \(hours) hours"
-        }
-        return "\(hours) hours"
+        let seconds = max(interval, 0)
+        return Duration.seconds(seconds).formatted(
+            .units(
+                allowed: [.days, .hours],
+                width: .abbreviated,
+                maximumUnitCount: 2
+            )
+        )
     }
 
     static func frequency(_ hertz: UInt64) -> String {
         let gigahertz = Double(hertz) / 1_000_000_000
-        return String(format: "%.2f GHz", gigahertz)
+        return "\(NativFormatting.decimal(gigahertz)) GHz"
     }
 
     static func boolean(_ value: Bool?) -> String {
-        guard let value else { return "Unavailable" }
+        guard let value else { return NativFormatting.missingValue }
         return value ? "Yes" : "No"
     }
 
@@ -2295,9 +2295,9 @@ private struct MenuBarCustomizationMenuControl: NSViewRepresentable {
             let menu = NSMenu()
             menu.autoenablesItems = false
 
-            menu.addItem(.sectionHeader(title: "Menu bar"))
+            menu.addItem(.sectionHeader(title: "Menu Bar"))
             menu.addItem(menuItem(
-                title: "Nativ icon",
+                title: "Nativ Icon",
                 systemImage: SystemMenuBarMetric.nativ.systemImage,
                 optionID: SystemMenuBarMetric.nativ.rawValue,
                 isSelected: preferences.items.isEmpty
@@ -2380,26 +2380,6 @@ private enum SystemMonitorPalette {
     static let positive = Color(red: 0.18, green: 0.72, blue: 0.38)
     static let metricLabel = Color.primary.opacity(0.72)
     static let metricDetail = Color.primary.opacity(0.58)
-}
-
-private struct SystemMonitorPanelModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            }
-    }
-}
-
-private extension View {
-    func systemMonitorPanel() -> some View {
-        modifier(SystemMonitorPanelModifier())
-    }
 }
 
 private extension Array {

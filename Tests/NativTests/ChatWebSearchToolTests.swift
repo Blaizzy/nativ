@@ -79,6 +79,56 @@ final class ChatWebSearchToolTests: XCTestCase {
         )
     }
 
+    func testSearXNGRequestAndResultMapping() async throws {
+        let client = StubWebSearchHTTPClient(
+            response: #"{"results":[{"title":"SearXNG result","url":"https://example.com/result","content":"Private metasearch"}]}"#
+        )
+        let instanceURL = try XCTUnwrap(URL(string: "https://search.example.com/searx/"))
+
+        let results = try await WebSearchService(client: client).search(
+            provider: .searxng,
+            access: .instance(instanceURL),
+            query: "local ai",
+            limit: 2
+        )
+
+        let capturedRequest = await client.recordedRequest()
+        let request = try XCTUnwrap(capturedRequest)
+        let components = try XCTUnwrap(URLComponents(
+            url: try XCTUnwrap(request.url),
+            resolvingAgainstBaseURL: false
+        ))
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(components.path, "/searx/search")
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value) }),
+            ["q": "local ai", "format": "json"]
+        )
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(
+            results,
+            [WebSearchResult(
+                title: "SearXNG result",
+                url: "https://example.com/result",
+                snippet: "Private metasearch"
+            )!]
+        )
+    }
+
+    func testSearXNGInstanceURLValidation() {
+        XCTAssertEqual(
+            WebSearchInstanceURL.normalized(" HTTPS://search.example.com/searx/// ")?.absoluteString,
+            "https://search.example.com/searx"
+        )
+        XCTAssertEqual(
+            WebSearchInstanceURL.normalized("http://localhost:8080")?.absoluteString,
+            "http://localhost:8080"
+        )
+        XCTAssertNil(WebSearchInstanceURL.normalized("file:///tmp/searxng"))
+        XCTAssertNil(WebSearchInstanceURL.normalized("https://user:secret@example.com"))
+        XCTAssertNil(WebSearchInstanceURL.normalized("https://search.example.com?format=json"))
+    }
+
     func testExaRequestAndResultMapping() async throws {
         let client = StubWebSearchHTTPClient(
             response: #"{"results":[{"title":"Exa result","url":"https://exa.ai","highlights":["A highlight"]}]}"#
@@ -278,6 +328,26 @@ final class ChatWebSearchToolTests: XCTestCase {
         XCTAssertTrue(acceptedRuntime.isConfigured(.search))
     }
 
+    func testSearXNGRuntimeUsesPersistedEndpointWithoutCredential() async throws {
+        let suiteName = "ChatWebSearchToolTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = WebBrowsingPreferences(defaults: defaults)
+        preferences.searchProvider = .searxng
+        preferences.setEndpoint(
+            try XCTUnwrap(URL(string: "https://search.example.com")),
+            for: .searxng
+        )
+        let runtime = WebBrowsingRuntime(
+            credentials: StubWebSearchCredentialStore(),
+            preferences: preferences,
+            client: StubWebSearchHTTPClient(response: #"{"results":[]}"#)
+        )
+
+        XCTAssertTrue(runtime.isConfigured(.search))
+        _ = try await runtime.search(query: "Nativ", limit: 1)
+    }
+
     func testMissingKeyFailureTellsTheModelWhereToSendTheUser() async throws {
         let suiteName = "ChatWebSearchToolTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -379,7 +449,7 @@ final class ChatWebSearchToolTests: XCTestCase {
 
     func testProviderSetupLinksAreSecure() {
         for provider in WebSearchProvider.allCases {
-            XCTAssertEqual(provider.metadata.apiKeySetupURL.scheme, "https")
+            XCTAssertEqual(provider.metadata.setupURL.scheme, "https")
         }
     }
 
@@ -400,7 +470,7 @@ final class ChatWebSearchToolTests: XCTestCase {
 
         XCTAssertEqual(viewModel.selectedProvider, .exa)
         XCTAssertEqual(viewModel.selectedConnectionState, .connected)
-        XCTAssertTrue(viewModel.draftAPIKey.isEmpty)
+        XCTAssertTrue(viewModel.draftConfiguration.isEmpty)
     }
 
     @MainActor
@@ -419,7 +489,7 @@ final class ChatWebSearchToolTests: XCTestCase {
         viewModel.select(.nimble)
 
         XCTAssertEqual(preferences.searchProvider, .brave)
-        XCTAssertTrue(viewModel.draftAPIKey.isEmpty)
+        XCTAssertTrue(viewModel.draftConfiguration.isEmpty)
     }
 
     func testPageReaderDefaultsToSearchProviderWhenSupported() throws {
@@ -464,14 +534,14 @@ final class ChatWebSearchToolTests: XCTestCase {
             service: WebSearchService(client: client)
         )
         viewModel.select(.exa)
-        viewModel.draftAPIKey = "new-key"
+        viewModel.draftConfiguration = "new-key"
 
         _ = await viewModel.testAndConnect()
 
         XCTAssertEqual(credentials.storedKey(for: .exa), "new-key")
         XCTAssertEqual(preferences.searchProvider, .exa)
         XCTAssertEqual(viewModel.selectedConnectionState, .connected)
-        XCTAssertTrue(viewModel.draftAPIKey.isEmpty)
+        XCTAssertTrue(viewModel.draftConfiguration.isEmpty)
     }
 
     @MainActor
@@ -491,7 +561,7 @@ final class ChatWebSearchToolTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedProvider, .exa)
         XCTAssertEqual(viewModel.availableProviders, WebSearchProvider.pageReaders)
         viewModel.select(.exa)
-        viewModel.draftAPIKey = "exa-key"
+        viewModel.draftConfiguration = "exa-key"
 
         _ = await viewModel.testAndConnect()
 
@@ -514,7 +584,7 @@ final class ChatWebSearchToolTests: XCTestCase {
             credentials: credentials,
             service: WebSearchService(client: client)
         )
-        viewModel.draftAPIKey = "bad-replacement"
+        viewModel.draftConfiguration = "bad-replacement"
 
         _ = await viewModel.testAndConnect()
 
@@ -523,6 +593,34 @@ final class ChatWebSearchToolTests: XCTestCase {
         guard case .failure = viewModel.status else {
             return XCTFail("Expected the rejected replacement to show an error")
         }
+    }
+
+    @MainActor
+    func testSettingsValidateAndActivateSearXNGInstance() async throws {
+        let suiteName = "ChatWebSearchToolTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = WebBrowsingPreferences(defaults: defaults)
+        let viewModel = WebBrowsingSettingsViewModel(
+            preferences: preferences,
+            credentials: StubWebSearchCredentialStore(),
+            service: WebSearchService(
+                client: StubWebSearchHTTPClient(response: #"{"results":[]}"#)
+            )
+        )
+        viewModel.select(.searxng)
+        viewModel.draftConfiguration = "https://search.example.com/"
+
+        let connected = await viewModel.testAndConnect()
+
+        XCTAssertTrue(connected)
+        XCTAssertEqual(preferences.searchProvider, .searxng)
+        XCTAssertEqual(
+            preferences.endpoint(for: .searxng)?.absoluteString,
+            "https://search.example.com/"
+        )
+        XCTAssertEqual(viewModel.selectedConnectionState, .connected)
+        XCTAssertEqual(viewModel.draftConfiguration, "https://search.example.com/")
     }
 
     private func makeWebSearchCall(query: String) -> MLXChatToolCall {

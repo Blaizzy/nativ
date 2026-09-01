@@ -25,7 +25,7 @@ extension ControlPanelView {
                     )
 
                 Text("Nativ")
-                    .font(.system(size: 18, weight: .semibold))
+                    .nativTextStyle(.brandTitle)
                     .foregroundStyle(.primary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

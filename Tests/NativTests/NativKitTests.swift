@@ -29,15 +29,15 @@ struct NativKitTests {
         let kit = makeKit(
             id: "example",
             components: [
-                .mcpServer(catalogID: "fetch"),
-                .mcpServer(catalogID: "fetch"),
+                .mcpServer(.catalog(id: "fetch")),
+                .mcpServer(.catalog(id: "fetch")),
             ]
         )
 
         #expect(
             throws: NativKitCatalogError.duplicateComponent(
                 kitID: "example",
-                componentID: "mcp:fetch"
+                componentID: "mcp-catalog:fetch"
             )
         ) {
             try NativKitCatalog(kits: [kit], mcpCatalog: try makeMCPCatalog())
@@ -48,7 +48,7 @@ struct NativKitTests {
     func unknownMCPServer() {
         let kit = makeKit(
             id: "example",
-            components: [.mcpServer(catalogID: "missing")]
+            components: [.mcpServer(.catalog(id: "missing"))]
         )
 
         #expect(
@@ -73,19 +73,34 @@ struct NativKitTests {
         )
         let first = makeKit(
             id: "first",
-            components: [.mcpServer(catalogID: "fetch")]
+            components: [.mcpServer(.catalog(id: "fetch"))]
         )
         let second = makeKit(
             id: "second",
             components: [
-                .mcpServer(catalogID: "fetch"),
-                .skill(skill),
+                .mcpServer(.catalog(id: "fetch")),
+                .skill(id: skill.id),
             ]
         )
         var settings = NativSettings()
 
-        NativKitActivation.enableMissing(in: first, settings: &settings, mcpCatalog: mcpCatalog)
-        NativKitActivation.enableMissing(in: second, settings: &settings, mcpCatalog: mcpCatalog)
+        let kitCatalog = try NativKitCatalog(
+            kits: [first, second],
+            mcpCatalog: mcpCatalog,
+            skillDefinitions: [skill]
+        )
+        NativKitActivation.enableMissing(
+            in: first,
+            settings: &settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: mcpCatalog
+        )
+        NativKitActivation.enableMissing(
+            in: second,
+            settings: &settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: mcpCatalog
+        )
 
         #expect(settings.mcpServers.count == 1)
         #expect(settings.mcpServers.first?.catalogID == "fetch")
@@ -95,6 +110,7 @@ struct NativKitTests {
             NativKitActivation.state(
                 of: first,
                 settings: settings,
+                kitCatalog: kitCatalog,
                 isExtensionEnabled: { _ in false },
                 mcpCatalog: mcpCatalog
             ) == .enabled
@@ -103,6 +119,7 @@ struct NativKitTests {
             NativKitActivation.state(
                 of: second,
                 settings: settings,
+                kitCatalog: kitCatalog,
                 isExtensionEnabled: { _ in false },
                 mcpCatalog: mcpCatalog
             ) == .enabled
@@ -124,10 +141,20 @@ struct NativKitTests {
             instructions: "My instructions",
             isEnabled: false
         )
-        let kit = makeKit(id: "example", components: [.skill(bundledSkill)])
+        let kit = makeKit(id: "example", components: [.skill(id: bundledSkill.id)])
+        let kitCatalog = try NativKitCatalog(
+            kits: [kit],
+            mcpCatalog: .empty,
+            skillDefinitions: [bundledSkill]
+        )
         var settings = NativSettings(skills: [editedSkill])
 
-        NativKitActivation.enableMissing(in: kit, settings: &settings, mcpCatalog: .empty)
+        NativKitActivation.enableMissing(
+            in: kit,
+            settings: &settings,
+            kitCatalog: kitCatalog,
+            mcpCatalog: .empty
+        )
 
         #expect(settings.skills == [
             NativSkill(
@@ -152,8 +179,8 @@ struct NativKitTests {
         let kit = makeKit(
             id: "example",
             components: [
-                .mcpServer(catalogID: "fetch"),
-                .skill(skill),
+                .mcpServer(.catalog(id: "fetch")),
+                .skill(id: skill.id),
             ]
         )
         var settings = NativSettings()
@@ -163,6 +190,11 @@ struct NativKitTests {
         let snapshot = NativKitActivation.snapshot(
             of: kit,
             settings: settings,
+            kitCatalog: try NativKitCatalog(
+                kits: [kit],
+                mcpCatalog: mcpCatalog,
+                skillDefinitions: [skill]
+            ),
             extensionName: { $0 },
             isExtensionEnabled: { _ in false },
             mcpCatalog: mcpCatalog
@@ -185,12 +217,16 @@ struct NativKitTests {
         let kit = makeKit(
             id: "example",
             components: [
-                .mcpServer(catalogID: "fetch"),
-                .skill(skill),
+                .mcpServer(.catalog(id: "fetch")),
+                .skill(id: skill.id),
                 .extensionPackage(id: "com.nativ.example"),
             ]
         )
-        let kitCatalog = try NativKitCatalog(kits: [kit], mcpCatalog: mcpCatalog)
+        let kitCatalog = try NativKitCatalog(
+            kits: [kit],
+            mcpCatalog: mcpCatalog,
+            skillDefinitions: [skill]
+        )
         let entry = try #require(mcpCatalog.entry(id: "fetch"))
         var settings = NativSettings(
             mcpServers: [entry.makeConfiguration(isEnabled: false)]
@@ -228,6 +264,7 @@ struct NativKitTests {
         NativKitActivation.enableMissing(
             in: kit,
             settings: &settings,
+            kitCatalog: kitCatalog,
             mcpCatalog: mcpCatalog
         )
         resolution = NativKitRuntimeResolver.resolve(
@@ -255,15 +292,16 @@ struct NativKitTests {
         )
         let first = makeKit(
             id: "first",
-            components: [.mcpServer(catalogID: "fetch"), .skill(skill)]
+            components: [.mcpServer(.catalog(id: "fetch")), .skill(id: skill.id)]
         )
         let second = makeKit(
             id: "second",
-            components: [.mcpServer(catalogID: "fetch"), .skill(skill)]
+            components: [.mcpServer(.catalog(id: "fetch")), .skill(id: skill.id)]
         )
         let kitCatalog = try NativKitCatalog(
             kits: [first, second],
-            mcpCatalog: mcpCatalog
+            mcpCatalog: mcpCatalog,
+            skillDefinitions: [skill]
         )
         let server = entry.makeConfiguration()
         let settings = NativSettings(mcpServers: [server], skills: [skill])
@@ -278,6 +316,118 @@ struct NativKitTests {
         #expect(resolution.mcpServers == [server])
         #expect(resolution.skills == [skill])
         #expect(resolution.unavailableCapabilities == ["Kit missing (unavailable)"])
+    }
+
+    @Test("Kit components use a stable tagged Codable format")
+    func componentCodableFormat() throws {
+        let configuredID = UUID()
+        let customID = UUID()
+        let skillID = UUID()
+        let components: [NativKitComponent] = [
+            .mcpServer(.catalog(id: "fetch")),
+            .mcpServer(.configured(id: configuredID)),
+            .nativeTool(name: "web_search"),
+            .customTool(id: customID),
+            .skill(id: skillID),
+            .extensionPackage(id: "com.nativ.example"),
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(components)
+        let json = String(decoding: data, as: UTF8.self)
+
+        #expect(json.contains(#""type":"mcpCatalog""#))
+        #expect(json.contains(#""type":"mcpConfigured""#))
+        #expect(json.contains(#""type":"nativeTool""#))
+        #expect(try JSONDecoder().decode([NativKitComponent].self, from: data) == components)
+    }
+
+    @Test("Unknown Kit component discriminators fail decoding")
+    func unknownComponentTypeFails() {
+        let data = Data(#"{"type":"futureCapability","id":"example"}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(NativKitComponent.self, from: data)
+        }
+    }
+
+    @Test("User Kit library persists updates and deletion")
+    func libraryRoundTrip() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nativ-kit-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Kits.json")
+        let kit = makeKit(
+            id: UUID().uuidString,
+            components: [.nativeTool(name: "web_search")]
+        )
+
+        let library = NativKitLibrary(storageURL: url)
+        try library.upsert(kit)
+        #expect(library.userKits == [kit])
+        #expect(NativKitLibrary(storageURL: url).userKits == [kit])
+
+        try library.delete(kitID: kit.id)
+        #expect(NativKitLibrary(storageURL: url).userKits.isEmpty)
+    }
+
+    @Test("Corrupt Kit files are reported and not overwritten")
+    func corruptLibraryIsPreserved() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nativ-kit-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("Kits.json")
+        let corrupt = Data("not-json".utf8)
+        try corrupt.write(to: url)
+
+        let library = NativKitLibrary(storageURL: url)
+
+        #expect(library.userKits.isEmpty)
+        #expect(library.lastErrorMessage != nil)
+        #expect(try Data(contentsOf: url) == corrupt)
+    }
+
+    @Test("Tool references activate and resolve without copying tool definitions")
+    func toolReferencesActivateAndResolve() throws {
+        let custom = try CustomTool.make(
+            name: "Example Tool",
+            summary: "Example",
+            kind: .script,
+            script: "print('{}')",
+            parametersJSON: CustomTool.defaultParametersJSON
+        )
+        let kit = makeKit(
+            id: "tools",
+            components: [
+                .nativeTool(name: "web_search"),
+                .customTool(id: custom.id),
+            ]
+        )
+        let catalog = try NativKitCatalog.bundled.merging(userKits: [kit])
+        var settings = NativSettings(
+            customTools: [custom],
+            disabledToolNames: ["web_search", custom.toolName]
+        )
+
+        NativKitActivation.enableMissing(
+            in: kit,
+            settings: &settings,
+            kitCatalog: catalog,
+            mcpCatalog: .empty
+        )
+        let resolution = NativKitRuntimeResolver.resolve(
+            kitIDs: [kit.id],
+            settings: settings,
+            kitCatalog: catalog,
+            mcpCatalog: .empty
+        )
+
+        #expect(settings.isToolEnabled("web_search"))
+        #expect(settings.isToolEnabled(custom.toolName))
+        #expect(resolution.tools == [
+            ScheduledTool(provider: .builtIn, name: "web_search"),
+            ScheduledTool(provider: .custom(custom.id), name: custom.toolName),
+        ])
     }
 
     private func makeKit(

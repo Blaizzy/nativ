@@ -67,7 +67,8 @@ struct RoutineEditor: View {
             case .skill:
                 return false
             case .kit(let id):
-                return NativKitCatalog.bundled.kit(id: id)?.mcpServerIDs.isEmpty == false
+                guard let kit = model.kitLibrary.catalog.kit(id: id) else { return false }
+                return !kit.mcpReferences.isEmpty || kit.toolCount > 0
             case .mcpServer, .tool:
                 return true
             }
@@ -75,7 +76,7 @@ struct RoutineEditor: View {
     }
 
     private var capabilityOptions: [ScheduledCapabilityOption] {
-        var options = NativKitCatalog.bundled.kits.map { kit in
+        var options = model.kitLibrary.catalog.kits.map { kit in
             ScheduledCapabilityOption(
                 capability: .kit(kit.id),
                 section: .kits,
@@ -102,6 +103,7 @@ struct RoutineEditor: View {
         options += ChatToolRegistry.descriptors(canEditImage: false)
             .filter {
                 $0.definition.function.name != ChatSwitchModelToolRegistry.toolName
+                    && $0.configuration != .fileWrite
                     && !disabledNames.contains($0.definition.function.name)
                     && ($0.configuration != .webSearch || ChatWebSearchToolRegistry.isConfigured())
                     && ($0.configuration != .fileRead
@@ -115,8 +117,8 @@ struct RoutineEditor: View {
                     capability: .tool(ScheduledTool(provider: .builtIn, name: definition.name)),
                     section: .tools,
                     title: descriptor.configuration?.displayName ?? humanized(definition.name),
-                    detail: definition.name == ChatReadFileToolRegistry.toolName
-                        ? "Reads only within \(model.settings.fileReadRootPath ?? "the configured File Read folder"). Runs without confirmation in scheduled tasks."
+                    detail: ChatReadFileToolRegistry.toolNames.contains(definition.name)
+                        ? "Reads or searches only within \(model.settings.fileReadRootPath ?? "the configured File Read folder"). Runs without confirmation in scheduled tasks."
                         : definition.description,
                     systemImage: "hammer"
                 )
@@ -188,7 +190,7 @@ struct RoutineEditor: View {
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No tools selected")
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.rowTitle)
                     }
                 }
             } else {
@@ -202,15 +204,15 @@ struct RoutineEditor: View {
                                 .frame(width: 22)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.title)
-                                    .font(.system(size: 12, weight: .medium))
+                                    .nativTextStyle(.supportingEmphasized)
                                 Text(option.summaryLine)
-                                    .font(.system(size: 10))
+                                    .nativTextStyle(.metadata)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 8)
                             Text(option.section.singularTitle)
-                                .font(.system(size: 9, weight: .semibold))
+                                .nativTextStyle(.badge)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
@@ -236,7 +238,7 @@ struct RoutineEditor: View {
                     isSelectingCapabilities = true
                 } label: {
                     Label(
-                        capabilities.isEmpty ? "Add tools" : "Manage tools",
+                        capabilities.isEmpty ? "Add Tools" : "Manage Tools",
                         systemImage: "plus"
                     )
                 }
@@ -274,7 +276,7 @@ struct RoutineEditor: View {
                     field("Model") {
                         VStack(alignment: .leading, spacing: 8) {
                             Picker("Model", selection: $modelID) {
-                                Text("Select a model").tag("")
+                                Text("Choose Model").tag("")
                                 ForEach(availableModelIDs, id: \.self) { id in
                                     Text(NativFormatting.truncateModelName(id, maxLength: 52)).tag(id)
                                 }
@@ -586,9 +588,9 @@ private struct ScheduledCapabilityPicker: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Tools")
-                    .font(.system(size: 18, weight: .semibold))
+                    .nativTextStyle(.sheetTitle)
                 Text("Choose the tools this scheduled task can use.")
-                    .font(.system(size: 12))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -617,11 +619,11 @@ private struct ScheduledCapabilityPicker: View {
                         let count = count(for: item)
                         if count > 0 {
                             Text("\(count)")
-                                .font(.system(size: 10, weight: .medium))
+                                .nativTextStyle(.badgeMuted)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.system(size: 12, weight: .medium))
+                    .nativTextStyle(.supportingEmphasized)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .foregroundStyle(section == item ? Color.accentColor : Color.primary)
@@ -709,16 +711,16 @@ private struct ScheduledCapabilityPicker: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 7) {
                         Text(option.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.rowTitle)
                         Text(option.section.singularTitle)
-                            .font(.system(size: 9, weight: .semibold))
+                            .nativTextStyle(.badge)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
                     Text(option.summaryLine)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -736,7 +738,7 @@ private struct ScheduledCapabilityPicker: View {
     private var footer: some View {
         HStack {
             Text(selection.isEmpty ? "No tools selected" : "\(selection.count) selected")
-                .font(.system(size: 11))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Done", action: dismiss.callAsFunction)

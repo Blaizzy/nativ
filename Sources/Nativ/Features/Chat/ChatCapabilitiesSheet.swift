@@ -15,7 +15,7 @@ private enum GlobalChatCapabilityKind: Int, CaseIterable {
 }
 
 private enum GlobalChatCapabilityTarget: Hashable {
-    case nativeTool(String)
+    case nativeTools([String])
     case customTool(String)
     case skill(UUID)
     case mcpServer(UUID)
@@ -81,7 +81,8 @@ struct ChatCapabilitiesSheet: View {
                 let entry = MCPServerCatalog.bundled.entry(matching: server)
                 let requiredEnvironment = entry?.requiredEnvironment ?? []
                 let hasRequiredEnvironment = requiredEnvironment.allSatisfy {
-                    server.environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    server.environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        == false
                 }
                 return GlobalChatCapabilityItem(
                     id: "mcp-\(server.id.uuidString)",
@@ -104,12 +105,20 @@ struct ChatCapabilitiesSheet: View {
     }
 
     private var nativeToolItems: [GlobalChatCapabilityItem] {
-        ChatToolRegistry.descriptors(canEditImage: false).map { descriptor in
+        var seenConfigurations = Set<ChatNativeToolConfiguration>()
+        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
+            if let configuration,
+                configuration.toolNames.count > 1,
+                !seenConfigurations.insert(configuration).inserted
+            {
+                return nil
+            }
+            let toolNames = configuration?.toolNames ?? [toolName]
             return GlobalChatCapabilityItem(
                 id: "native-tool-\(toolName)",
-                target: .nativeTool(toolName),
+                target: .nativeTools(toolNames),
                 title: configuration?.displayName ?? humanized(toolName),
                 detail: "Tool · Built-in",
                 kind: .tool,
@@ -124,13 +133,13 @@ struct ChatCapabilitiesSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Directory")
-                    .font(.system(size: 18, weight: .semibold))
+                    .nativTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("These settings apply to every chat.")
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             TextField("Search directory", text: $query)
@@ -139,11 +148,14 @@ struct ChatCapabilitiesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     if filteredItems.isEmpty {
-                        Text(query.isEmpty ? "No capabilities are available." : "No matching capabilities.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 44)
+                        Text(
+                            query.isEmpty
+                                ? "No capabilities are available." : "No matching capabilities."
+                        )
+                        .nativTextStyle(.supporting)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 44)
                     } else {
                         ForEach(GlobalChatCapabilityKind.allCases, id: \.rawValue) { kind in
                             capabilitySection(kind)
@@ -164,7 +176,7 @@ struct ChatCapabilitiesSheet: View {
         if !sectionItems.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(kind.title.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
+                    .nativTextStyle(.badge)
                     .foregroundStyle(.secondary)
 
                 VStack(spacing: 0) {
@@ -204,12 +216,12 @@ struct ChatCapabilitiesSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .nativTextStyle(.rowTitleEmphasized)
                     .foregroundStyle(item.isAvailable ? Color.primary : Color.secondary)
 
                 if item.isAvailable {
                     Text(item.detail)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 } else if let setupSection = item.setupSection {
                     GlobalCapabilitySetupDetail(detail: item.detail) {
@@ -236,7 +248,9 @@ struct ChatCapabilitiesSheet: View {
     private func isEnabled(_ item: GlobalChatCapabilityItem) -> Bool {
         guard item.isAvailable else { return false }
         switch item.target {
-        case .nativeTool(let toolName), .customTool(let toolName):
+        case .nativeTools(let toolNames):
+            return toolNames.allSatisfy(model.settings.isToolEnabled)
+        case .customTool(let toolName):
             return model.settings.isToolEnabled(toolName)
         case .skill(let id):
             return model.settings.skills.first { $0.id == id }?.isEnabled == true
@@ -247,16 +261,25 @@ struct ChatCapabilitiesSheet: View {
 
     private func toggle(_ item: GlobalChatCapabilityItem) {
         switch item.target {
-        case .nativeTool(let toolName), .customTool(let toolName):
+        case .nativeTools(let toolNames):
+            let enabled = !toolNames.allSatisfy(model.settings.isToolEnabled)
+            for toolName in toolNames {
+                model.settings.setToolEnabled(enabled, toolName: toolName)
+            }
+        case .customTool(let toolName):
             model.settings.setToolEnabled(
                 !model.settings.isToolEnabled(toolName),
                 toolName: toolName
             )
         case .skill(let id):
-            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else {
+                return
+            }
             model.settings.skills[index].isEnabled.toggle()
         case .mcpServer(let id):
-            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else {
+                return
+            }
             model.settings.mcpServers[index].isEnabled.toggle()
         }
     }
@@ -283,17 +306,17 @@ struct ChatKitsPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let kits = NativKitCatalog.bundled.kits
+        let kits = model.kitLibrary.catalog.kits
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Kits")
-                    .font(.title3.weight(.semibold))
+                    .nativTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("Enable a ready-made set of capabilities for every chat.")
-                .font(.body)
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             ScrollView {
@@ -343,7 +366,7 @@ struct ChatKitsPickerSheet: View {
     private func kitRowContent(_ kit: NativKit, state: NativKitState) -> some View {
         let actionTitle = switch state {
         case .off: "Enable"
-        case .partial: "Enable All"
+        case .partial: "Enable Missing"
         case .enabled: "Enabled"
         }
         return HStack(spacing: 12) {
@@ -355,17 +378,17 @@ struct ChatKitsPickerSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(kit.name)
-                    .font(.headline)
+                    .nativTextStyle(.rowTitle)
                     .foregroundStyle(.primary)
                 Text(kit.summary)
-                    .font(.caption)
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Label(
                     actionTitle,
                     systemImage: state == .enabled ? "checkmark.circle.fill" : "plus.circle"
                 )
-                .font(.caption)
+                .nativTextStyle(.actionLabel)
                 .foregroundStyle(state == .enabled ? Color.green : Color.accentColor)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -390,12 +413,14 @@ private struct GlobalCapabilitySetupDetail: View {
                     .underline()
             }
         }
-        .font(.system(size: 11))
+        .nativTextStyle(.metadata)
         .multilineTextAlignment(.leading)
         .buttonStyle(.plain)
-        .environment(\.openURL, OpenURLAction { _ in
-            action()
-            return .handled
-        })
+        .environment(
+            \.openURL,
+            OpenURLAction { _ in
+                action()
+                return .handled
+            })
     }
 }

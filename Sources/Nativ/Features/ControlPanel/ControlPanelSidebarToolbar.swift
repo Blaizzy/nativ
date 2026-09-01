@@ -10,6 +10,13 @@ extension ControlPanelView {
         HStack(spacing: 8) {
             Spacer(minLength: 0)
 
+            Button("Import Chat", systemImage: "square.and.arrow.down", action: importChat)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .frame(width: 26, height: 28)
+                .foregroundStyle(Color.secondary.opacity(0.7))
+                .help("Import chat")
+
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
                     enterSelectMode()
@@ -49,7 +56,7 @@ extension ControlPanelView {
     var bulkSelectionBar: some View {
         HStack(spacing: 6) {
             Text(bulkSelectionTitle)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             Spacer(minLength: 0)
@@ -86,7 +93,7 @@ extension ControlPanelView {
                     exitSelectMode()
                 }
             }
-            .font(.system(size: 12, weight: .medium))
+            .nativTextStyle(.supportingEmphasized)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

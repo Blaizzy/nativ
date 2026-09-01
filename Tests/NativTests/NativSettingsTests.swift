@@ -1,7 +1,15 @@
+import Darwin
 import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
+        let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
+
+        XCTAssertFalse(settings.isToolEnabled("read_file"))
+        XCTAssertFalse(settings.isToolEnabled("search_files"))
+    }
+
     func testFileReadRootRoundTripsAndNormalizesWhitespace() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -13,6 +21,19 @@ final class NativSettingsTests: XCTestCase {
         let data = try PropertyListEncoder().encode(settings)
         let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
         XCTAssertEqual(decoded.fileReadRootPath, directory.path)
+    }
+
+    func testFileWriteRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileWriteRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileWriteRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileWriteRootPath, directory.path)
     }
 
     func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
@@ -987,4 +1008,130 @@ extension Array where Element == String {
             self[$0] == first && self[index(after: $0)] == second
         }
     }
+}
+
+final class ServerPortProbeTests: XCTestCase {
+    func testProbeDetectsActiveListener() throws {
+        let listener = try makeLoopbackListener()
+        defer { close(listener.descriptor) }
+
+        XCTAssertEqual(
+            ServerPortProbe.availability(host: "127.0.0.1", port: listener.port),
+            .addressInUse
+        )
+    }
+
+    func testProbeAllowsImmediateReuseAfterServerClosesConnection() throws {
+        let listener = try makeLoopbackListener()
+        let client = try connectToLoopback(port: listener.port)
+        let accepted = accept(listener.descriptor, nil, nil)
+        guard accepted >= 0 else {
+            close(client)
+            close(listener.descriptor)
+            throw SocketTestError.operation("accept", errno)
+        }
+
+        close(listener.descriptor)
+        close(accepted)
+        var byte: UInt8 = 0
+        _ = recv(client, &byte, 1, 0)
+        close(client)
+
+        XCTAssertEqual(
+            ServerPortProbe.availability(host: "127.0.0.1", port: listener.port),
+            .available
+        )
+    }
+
+    private func makeLoopbackListener() throws -> (descriptor: Int32, port: Int) {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            throw SocketTestError.operation("socket", errno)
+        }
+
+        var reuseAddress: Int32 = 1
+        guard setsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &reuseAddress,
+            socklen_t(MemoryLayout.size(ofValue: reuseAddress))
+        ) == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("setsockopt", error)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(
+                    descriptor,
+                    $0,
+                    socklen_t(MemoryLayout<sockaddr_in>.size)
+                )
+            }
+        }
+        guard bindResult == 0, listen(descriptor, 1) == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("bind/listen", error)
+        }
+
+        var boundAddress = sockaddr_in()
+        var boundAddressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &boundAddress) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(descriptor, $0, &boundAddressLength)
+            }
+        }
+        guard nameResult == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("getsockname", error)
+        }
+
+        return (
+            descriptor,
+            Int(UInt16(bigEndian: boundAddress.sin_port))
+        )
+    }
+
+    private func connectToLoopback(port: Int) throws -> Int32 {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            throw SocketTestError.operation("socket", errno)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port)).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(
+                    descriptor,
+                    $0,
+                    socklen_t(MemoryLayout<sockaddr_in>.size)
+                )
+            }
+        }
+        guard result == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("connect", error)
+        }
+        return descriptor
+    }
+}
+
+private enum SocketTestError: Error {
+    case operation(String, Int32)
 }
