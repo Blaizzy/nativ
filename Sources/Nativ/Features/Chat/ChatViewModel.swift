@@ -197,18 +197,25 @@ final class ChatViewModel: ObservableObject {
     }
 
     var visibleMessages: [ChatTranscriptMessage] {
+        visibleUnqueuedMessages.filter {
+            !($0.role == .assistant
+                && $0.content.isEmpty
+                && $0.reasoningContent.isEmpty
+                && !$0.toolCalls.isEmpty)
+        }
+    }
+
+    var visibleTranscriptItems: [ChatTranscriptItem] {
+        ChatTranscriptPresentation.items(from: visibleUnqueuedMessages)
+    }
+
+    private var visibleUnqueuedMessages: [ChatTranscriptMessage] {
         let queuedMessageIDs = Set(
             requestQueue.lazy
                 .filter { $0.sessionID == self.currentSessionID }
                 .map(\.userMessageID)
         )
-        return messages.filter {
-            !queuedMessageIDs.contains($0.id)
-                && !($0.role == .assistant
-                    && $0.content.isEmpty
-                    && $0.reasoningContent.isEmpty
-                    && !$0.toolCalls.isEmpty)
-        }
+        return messages.filter { !queuedMessageIDs.contains($0.id) }
     }
 
     var currentSessionQueuedPrompts: [ChatQueuedPrompt] {
