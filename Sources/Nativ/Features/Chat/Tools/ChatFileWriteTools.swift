@@ -10,7 +10,7 @@ enum ChatFileWriteToolRegistry {
         function: MLXChatFunctionDefinition(
             name: writeToolName,
             description:
-                "Create a UTF-8 text file or completely overwrite one inside the user-authorized write folder. Always replaces the entire file; use patch for targeted edits.",
+                "Create a UTF-8 text file or completely overwrite one inside the user-authorized write folder. Always replaces the entire file; use patch for targeted edits. A successful call writes all supplied content or fails. The returned diff may be a truncated preview; verified=true confirms the complete write, so do not re-read or rewrite solely to verify it.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -274,11 +274,17 @@ struct ChatFileWriteToolExecutor {
                 currentStamp: beforeSnapshot?.stamp,
                 runID: context.fileOperationRunID
             )
+            let contentData = Data(arguments.content.utf8)
             let stamp = try await context.fileWriteToolDependencies.write(
-                Data(arguments.content.utf8), target.url, true
+                contentData, target.url, true
             )
             let issues = await context.fileWriteToolDependencies.validate(
                 target.url, beforeText, arguments.content
+            )
+            let diff = FileUnifiedDiff.renderWithMetadata(
+                path: target.displayPath,
+                before: beforeText,
+                after: arguments.content
             )
             await Self.finishMutation(
                 path: target.url.path,
@@ -291,13 +297,14 @@ struct ChatFileWriteToolExecutor {
                     resolvedPath: target.url.path,
                     filesModified: [target.displayPath],
                     warning: warning,
-                    hint: issues.isEmpty
-                        ? nil : "Review the new syntax errors reported in lint_errors.",
-                    diff: FileUnifiedDiff.render(
-                        path: target.displayPath,
-                        before: beforeText,
-                        after: arguments.content
+                    hint: Self.successHint(
+                        lintErrors: issues,
+                        diffTruncated: diff.truncated
                     ),
+                    diff: diff.content,
+                    diffTruncated: diff.truncated,
+                    bytesWritten: contentData.count,
+                    linesWritten: Self.lineCount(arguments.content),
                     verified: true,
                     sha256: Self.hash(arguments.content),
                     lintErrors: issues
@@ -374,10 +381,16 @@ struct ChatFileWriteToolExecutor {
                 currentStamp: snapshot.stamp,
                 runID: context.fileOperationRunID
             )
+            let contentData = Data(after.utf8)
             let stamp = try await context.fileWriteToolDependencies.write(
-                Data(after.utf8), target.url, true
+                contentData, target.url, true
             )
             let issues = await context.fileWriteToolDependencies.validate(target.url, before, after)
+            let diff = FileUnifiedDiff.renderWithMetadata(
+                path: target.displayPath,
+                before: before,
+                after: after
+            )
             await context.fileMutationState.resetReplacementFailures(paths: [target.url.path])
             await Self.finishMutation(path: target.url.path, stamp: stamp, context: context)
             await Self.release(locks)
@@ -386,10 +399,14 @@ struct ChatFileWriteToolExecutor {
                     resolvedPath: target.url.path,
                     filesModified: [target.displayPath],
                     warning: warning,
-                    hint: issues.isEmpty
-                        ? nil : "Review the new syntax errors reported in lint_errors.",
-                    diff: FileUnifiedDiff.render(
-                        path: target.displayPath, before: before, after: after),
+                    hint: Self.successHint(
+                        lintErrors: issues,
+                        diffTruncated: diff.truncated
+                    ),
+                    diff: diff.content,
+                    diffTruncated: diff.truncated,
+                    bytesWritten: contentData.count,
+                    linesWritten: Self.lineCount(after),
                     verified: true,
                     sha256: Self.hash(after),
                     lintErrors: issues
@@ -443,6 +460,7 @@ struct ChatFileWriteToolExecutor {
             var modified: [String] = []
             var lintErrors: [String] = []
             var finalHash: String?
+            var diffTruncated = false
 
             for plan in plans {
                 if let warning = await context.fileMutationState.stalenessWarning(
@@ -457,6 +475,7 @@ struct ChatFileWriteToolExecutor {
                 diffs.append(result.diff)
                 lintErrors.append(contentsOf: result.lintErrors)
                 finalHash = result.hash ?? finalHash
+                diffTruncated = diffTruncated || result.diffTruncated
             }
             await context.fileMutationState.resetReplacementFailures(paths: allPaths)
             await Self.release(locks)
@@ -465,9 +484,14 @@ struct ChatFileWriteToolExecutor {
                     resolvedPath: plans.first?.primary.url.path ?? policy.rootURL.path,
                     filesModified: modified,
                     warning: warnings.isEmpty ? nil : Array(Set(warnings)).joined(separator: " "),
-                    hint: lintErrors.isEmpty
-                        ? nil : "Review the new syntax errors reported in lint_errors.",
+                    hint: Self.successHint(
+                        lintErrors: lintErrors,
+                        diffTruncated: diffTruncated
+                    ),
                     diff: diffs.joined(separator: "\n\n"),
+                    diffTruncated: diffTruncated,
+                    bytesWritten: nil,
+                    linesWritten: nil,
                     verified: true,
                     sha256: plans.count == 1 ? finalHash : nil,
                     lintErrors: lintErrors
@@ -567,33 +591,52 @@ struct ChatFileWriteToolExecutor {
                 Data(after.utf8), target.url, overwrite
             )
             let issues = await context.fileWriteToolDependencies.validate(target.url, before, after)
+            let diff = FileUnifiedDiff.renderWithMetadata(
+                path: target.displayPath,
+                before: before,
+                after: after
+            )
             await Self.finishMutation(path: target.url.path, stamp: stamp, context: context)
             return AppliedPatchMutation(
                 modifiedPaths: [target.displayPath],
-                diff: FileUnifiedDiff.render(
-                    path: target.displayPath, before: before, after: after),
+                diff: diff.content,
+                diffTruncated: diff.truncated,
                 lintErrors: issues,
                 hash: Self.hash(after)
             )
         case .delete(let target, let before, _):
             try await context.fileWriteToolDependencies.delete(target.url)
+            let diff = FileUnifiedDiff.renderWithMetadata(
+                path: target.displayPath,
+                before: before,
+                after: nil
+            )
             await Self.finishMutation(path: target.url.path, stamp: nil, context: context)
             return AppliedPatchMutation(
                 modifiedPaths: [target.displayPath],
-                diff: FileUnifiedDiff.render(path: target.displayPath, before: before, after: nil),
+                diff: diff.content,
+                diffTruncated: diff.truncated,
                 lintErrors: [],
                 hash: nil
             )
         case .move(let source, let destination, let content, let stamp):
             try await context.fileWriteToolDependencies.move(source.url, destination.url)
+            let sourceDiff = FileUnifiedDiff.renderWithMetadata(
+                path: source.displayPath,
+                before: content,
+                after: nil
+            )
+            let destinationDiff = FileUnifiedDiff.renderWithMetadata(
+                path: destination.displayPath,
+                before: nil,
+                after: content
+            )
             await Self.finishMutation(path: source.url.path, stamp: nil, context: context)
             await Self.finishMutation(path: destination.url.path, stamp: stamp, context: context)
             return AppliedPatchMutation(
                 modifiedPaths: [source.displayPath, destination.displayPath],
-                diff: FileUnifiedDiff.render(path: source.displayPath, before: content, after: nil)
-                    + "\n\n"
-                    + FileUnifiedDiff.render(
-                        path: destination.displayPath, before: nil, after: content),
+                diff: sourceDiff.content + "\n\n" + destinationDiff.content,
+                diffTruncated: sourceDiff.truncated || destinationDiff.truncated,
                 lintErrors: [],
                 hash: Self.hash(content)
             )
@@ -605,14 +648,22 @@ struct ChatFileWriteToolExecutor {
             let issues = await context.fileWriteToolDependencies.validate(
                 destination.url, before, after
             )
+            let sourceDiff = FileUnifiedDiff.renderWithMetadata(
+                path: source.displayPath,
+                before: before,
+                after: nil
+            )
+            let destinationDiff = FileUnifiedDiff.renderWithMetadata(
+                path: destination.displayPath,
+                before: nil,
+                after: after
+            )
             await Self.finishMutation(path: source.url.path, stamp: nil, context: context)
             await Self.finishMutation(path: destination.url.path, stamp: stamp, context: context)
             return AppliedPatchMutation(
                 modifiedPaths: [source.displayPath, destination.displayPath],
-                diff: FileUnifiedDiff.render(path: source.displayPath, before: before, after: nil)
-                    + "\n\n"
-                    + FileUnifiedDiff.render(
-                        path: destination.displayPath, before: nil, after: after),
+                diff: sourceDiff.content + "\n\n" + destinationDiff.content,
+                diffTruncated: sourceDiff.truncated || destinationDiff.truncated,
                 lintErrors: issues,
                 hash: Self.hash(after)
             )
@@ -735,6 +786,30 @@ struct ChatFileWriteToolExecutor {
 
     private static func hash(_ content: String) -> String {
         SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func lineCount(_ content: String) -> Int {
+        guard !content.isEmpty else { return 0 }
+        let newlineCount = content.utf8.reduce(into: 0) { count, byte in
+            if byte == 0x0A { count += 1 }
+        }
+        return newlineCount + (content.hasSuffix("\n") ? 0 : 1)
+    }
+
+    private static func successHint(
+        lintErrors: [String],
+        diffTruncated: Bool
+    ) -> String? {
+        var hints: [String] = []
+        if diffTruncated {
+            hints.append(
+                "The complete content was written successfully. Only the diff preview was truncated; do not rewrite or re-read solely to verify this write."
+            )
+        }
+        if !lintErrors.isEmpty {
+            hints.append("Review the new syntax errors reported in lint_errors.")
+        }
+        return hints.isEmpty ? nil : hints.joined(separator: " ")
     }
 
     private static func mapped(_ error: Error) -> ChatFileWriteToolError {
@@ -885,6 +960,7 @@ private enum PlannedPatchMutation {
 private struct AppliedPatchMutation {
     let modifiedPaths: [String]
     let diff: String
+    let diffTruncated: Bool
     let lintErrors: [String]
     let hash: String?
 }
@@ -896,6 +972,9 @@ private struct FileWriteSuccessPayload: Encodable {
     let warning: String?
     let hint: String?
     let diff: String
+    let diffTruncated: Bool
+    let bytesWritten: Int?
+    let linesWritten: Int?
     let verified: Bool
     let sha256: String?
     let lintErrors: [String]
@@ -906,6 +985,9 @@ private struct FileWriteSuccessPayload: Encodable {
         case filesModified = "files_modified"
         case warning = "_warning"
         case hint = "_hint"
+        case diffTruncated = "diff_truncated"
+        case bytesWritten = "bytes_written"
+        case linesWritten = "lines_written"
         case lintErrors = "lint_errors"
     }
 }
