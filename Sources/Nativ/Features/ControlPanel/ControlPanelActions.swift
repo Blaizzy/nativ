@@ -11,7 +11,7 @@ extension ControlPanelView {
             imageGeneration.beginNewDraft()
             showImageWorkspace()
         } else {
-            createChatSession()
+            createChatSession(projectID: activeProjectContextID)
         }
     }
 
@@ -19,7 +19,7 @@ extension ControlPanelView {
         guard navigation.consumeNewChatRequest() else {
             return
         }
-        createChatSession()
+        createChatSession(projectID: activeProjectContextID)
     }
 
     func handleToggleSidebarRequest() {
@@ -235,7 +235,9 @@ extension ControlPanelView {
     var newRecentHelp: String {
         selectedTab == .chat && chatWorkspaceMode == .images
             ? "Start a new image draft"
-            : "Create a new chat"
+            : activeProjectContextID.flatMap { projects.project(withID: $0)?.name }
+                .map { "Create a new chat in \($0)" }
+                ?? "Create a new chat"
     }
 
     var newRecentTitle: String {
@@ -250,8 +252,76 @@ extension ControlPanelView {
             : "square.and.pencil"
     }
 
-    func createChatSession() {
-        chat.createSession()
+    var activeProjectContextID: UUID? {
+        selectedTab == .chat && chatWorkspaceMode == .chat
+            ? chat.currentProjectID
+            : nil
+    }
+
+    func createChatSession(projectID: UUID? = nil) {
+        chat.createSession(projectID: projectID)
+        showChatWorkspace()
+    }
+
+    func createProject() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Create Project"
+        panel.message = "Choose a folder Nativ can read and write for this project."
+        guard panel.runModal() == .OK, let directoryURL = panel.url else {
+            return
+        }
+
+        do {
+            let project = try projects.createProject(directoryURL: directoryURL)
+            model.settings.sidebarProjectsCollapsed = false
+            createChatSession(projectID: project.id)
+        } catch {
+            projectErrorMessage = error.localizedDescription
+        }
+    }
+
+    func revealProject(_ project: ChatProject) {
+        NSWorkspace.shared.activateFileViewerSelecting([
+            URL(fileURLWithPath: project.rootPath, isDirectory: true)
+        ])
+    }
+
+    func locateProject(_ project: ChatProject) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = projects.isRootAvailable(for: project) ? "Choose" : "Locate"
+        panel.message = "Choose a readable and writable folder for “\(project.name)”."
+        panel.directoryURL = URL(fileURLWithPath: project.rootPath, isDirectory: true)
+        guard panel.runModal() == .OK, let directoryURL = panel.url else {
+            return
+        }
+
+        do {
+            try projects.replaceRoot(for: project.id, with: directoryURL)
+        } catch {
+            projectErrorMessage = error.localizedDescription
+        }
+    }
+
+    func removeProject(
+        _ project: ChatProject,
+        disposition: ChatProjectSessionRemovalDisposition
+    ) {
+        guard chat.removeProjectSessions(projectID: project.id, disposition: disposition) else {
+            pendingDeleteProject = nil
+            projectErrorMessage =
+                "One or more project chats are active in another window. Stop them and try again."
+            return
+        }
+        projects.removeProject(project.id)
+        pendingDeleteProject = nil
         showChatWorkspace()
     }
 
@@ -269,13 +339,13 @@ extension ControlPanelView {
     }
 
     func showChatWorkspace() {
-        if sidebarState.currentChatSessionID == nil {
+        if chat.currentSessionID == nil {
             chat.createSession()
         }
         chatWorkspaceMode = .chat
         selectedTab = .chat
         sidebarSelection =
-            sidebarState.currentChatSessionID.map(ControlPanelSidebarSelection.chat)
+            chat.currentSessionID.map(ControlPanelSidebarSelection.chat)
             ?? .tab(.chat)
     }
 

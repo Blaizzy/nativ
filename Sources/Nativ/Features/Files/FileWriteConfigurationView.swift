@@ -24,7 +24,7 @@ struct FileWriteConfigurationView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("File Write")
                         .font(.title2.weight(.semibold))
-                    Text("Choose the folder where Nativ tools may create and edit files.")
+                    Text("Choose the folder where standalone chats may create and edit files.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -42,7 +42,7 @@ struct FileWriteConfigurationView: View {
 
                     Text(
                         configuredRootURL == nil
-                            ? "File editing remains unavailable until a folder is selected."
+                            ? "File editing remains unavailable in standalone chats until a folder is selected. Project chats use their project folder."
                             : "File editing is confined to this folder. Protected instruction and credential configuration files still require confirmation."
                     )
                     .font(.caption)

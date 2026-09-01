@@ -11,6 +11,7 @@ struct ChatView: View {
     let chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
+    @ObservedObject var projects: ChatProjectStore
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
@@ -19,6 +20,7 @@ struct ChatView: View {
     @State private var previewedAttachment: ChatImageAttachment?
 
     var body: some View {
+        let project = chat.currentProjectID.flatMap { projects.project(withID: $0) }
         ModelConfigurationLayout(
             model: model,
             isConfigurationVisible: $showsConfiguration
@@ -27,6 +29,8 @@ struct ChatView: View {
                 model: model,
                 chat: chat,
                 extensionManager: extensionManager,
+                project: project,
+                projectRootIsAvailable: project.map { projects.isRootAvailable(for: $0) } ?? true,
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 onExploreImageModels: onExploreImageModels,
@@ -34,7 +38,9 @@ struct ChatView: View {
             )
             .dropDestination(for: URL.self) { urls, _ in
                 chat.attachFiles(fromURLs: urls)
-            } isTargeted: { isDropTargeted = $0 }
+            } isTargeted: {
+                isDropTargeted = $0
+            }
             .overlay {
                 if isDropTargeted {
                     dropOverlay
@@ -103,11 +109,66 @@ private enum ChatTranscriptLayout {
     static let scrollIndicatorClearance: CGFloat = 17
 }
 
+private struct ChatProjectContextBanner: View {
+    let project: ChatProject
+    let rootIsAvailable: Bool
+    let toolsEnabled: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: rootIsAvailable ? "folder.fill" : "folder.badge.questionmark")
+                .foregroundStyle(rootIsAvailable ? Color.accentColor : Color.orange)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            if !rootIsAvailable || !toolsEnabled {
+                Text(rootIsAvailable ? "Tools Off" : "Unavailable")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.secondary.opacity(0.14), lineWidth: 0.5)
+        )
+        .help(project.rootPath)
+    }
+
+    private var statusText: String {
+        if !rootIsAvailable {
+            return "Folder unavailable — locate it from the project menu"
+        }
+        if !toolsEnabled {
+            return "Agentic tools are disabled in Settings"
+        }
+        return project.rootPath
+    }
+}
+
 private struct ChatTranscriptView: View {
 
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
+    let project: ChatProject?
+    let projectRootIsAvailable: Bool
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
@@ -128,12 +189,20 @@ private struct ChatTranscriptView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                if let project {
+                    ChatProjectContextBanner(
+                        project: project,
+                        rootIsAvailable: projectRootIsAvailable,
+                        toolsEnabled: model.settings.projectToolsEnabled
+                    )
+                }
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
                             isRunning: model.isRunning,
                             selectedModelID: selectedModelID,
-                            modelLoadingProgress: model.isModelLoading ? model.modelLoadingProgress : nil
+                            modelLoadingProgress: model.isModelLoading
+                                ? model.modelLoadingProgress : nil
                         )
                         .frame(maxWidth: .infinity)
                         .padding(.top, 120)
@@ -141,7 +210,8 @@ private struct ChatTranscriptView: View {
                 } else {
                     ForEach(chat.visibleMessages) { message in
                         let showsEditUserMessage = message.id == latestUserMessageID
-                        let editUnavailableReason = showsEditUserMessage
+                        let editUnavailableReason =
+                            showsEditUserMessage
                             ? userPromptEditingUnavailableReason(for: message)
                             : nil
                         ChatMessageRow(
@@ -322,7 +392,8 @@ private struct ChatComposerContainer: View {
             viewModel: chat,
             extensionManager: extensionManager,
             unavailableReason: model.modelLoadingStatusText
-                ?? chat.unavailableReason(isRunning: model.isRunning, selectedModelID: selectedModelID)
+                ?? chat.unavailableReason(
+                    isRunning: model.isRunning, selectedModelID: selectedModelID)
                 ?? model.settings.structuredOutputValidationError,
             canCompose: (model.isRunning || model.isModelLoading)
                 && selectedModelID?.isEmpty == false
@@ -529,7 +600,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
         case .user:
             return ""
         case .assistant:
-            return message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 42) } ?? "Assistant"
+            return message.modelID.map { NativFormatting.truncateModelName($0, maxLength: 42) }
+                ?? "Assistant"
         case .tool:
             return ""
         case .error:
@@ -618,9 +690,9 @@ private struct ChatMessageRow: View, @MainActor Equatable {
 
     private var responseMetrics: ChatResponseMetrics? {
         guard message.role == .assistant,
-              !message.isStreaming,
-              let responseMetrics = message.responseMetrics,
-              responseMetrics.hasVisibleValues
+            !message.isStreaming,
+            let responseMetrics = message.responseMetrics,
+            responseMetrics.hasVisibleValues
         else {
             return nil
         }
@@ -630,9 +702,9 @@ private struct ChatMessageRow: View, @MainActor Equatable {
 
     private var liveResponseMetrics: ChatResponseMetrics? {
         guard message.role == .assistant,
-              message.isStreaming,
-              let responseMetrics = message.responseMetrics,
-              responseMetrics.generatedTokens.map({ $0 > 0 }) == true
+            message.isStreaming,
+            let responseMetrics = message.responseMetrics,
+            responseMetrics.generatedTokens.map({ $0 > 0 }) == true
                 || responseMetrics.decodeTokensPerSecond.map({
                     $0 > 0 && $0.isFinite
                 }) == true
@@ -752,7 +824,8 @@ private struct ChatAgentStepCell: View {
                 Text(title)
                     .font(.callout.weight(.medium))
                 if let mcpServerSlug {
-                    NativStatusBadge(text: mcpServerSlug, tone: .neutral, symbol: "puzzlepiece.extension")
+                    NativStatusBadge(
+                        text: mcpServerSlug, tone: .neutral, symbol: "puzzlepiece.extension")
                 }
                 statusBadge
 
@@ -787,7 +860,7 @@ private struct ChatAgentStepCell: View {
         case .declined:
             NativStatusBadge(text: "Declined", tone: .neutral)
         case .preparing, .running, .awaitingConsent,
-             .awaitingImageModelSelection, nil:
+            .awaitingImageModelSelection, nil:
             EmptyView()
         }
     }
@@ -854,12 +927,15 @@ private struct ChatAgentStepCell: View {
             )
         }
         if let toolName = message.toolName,
-           ChatFileWriteToolRegistry.toolNames.contains(toolName) {
+            ChatFileWriteToolRegistry.toolNames.contains(toolName)
+        {
             return Text(
                 "The model wants to modify a protected instruction or credential configuration file in your authorized folder. Confirm to allow this change."
             )
         }
-        return Text("The model wants to run this script tool on your Mac. Confirm to allow its code to run.")
+        return Text(
+            "The model wants to run this script tool on your Mac. Confirm to allow its code to run."
+        )
     }
 
     @ViewBuilder
@@ -926,8 +1002,8 @@ private struct ChatAgentStepCell: View {
 
     private var requestedModelID: String {
         guard let data = message.toolArguments?.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let modelID = object["model_id"] as? String
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let modelID = object["model_id"] as? String
         else {
             return "a different model"
         }
@@ -1038,7 +1114,7 @@ private struct ChatAgentStepCell: View {
 
     private var toolErrorMessage: String? {
         guard let data = message.content.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return nil
         }
@@ -1151,7 +1227,8 @@ private struct ChatLiveDecodeMetricsBadge: View, Equatable {
             }
 
             if metrics.generatedTokens != nil,
-               metrics.decodeTokensPerSecond != nil {
+                metrics.decodeTokensPerSecond != nil
+            {
                 Text("·")
                     .foregroundStyle(.tertiary)
             }
@@ -1181,7 +1258,7 @@ private struct ChatLiveDecodeMetricsBadge: View, Equatable {
     private var accessibilityValue: String {
         [
             metrics.generatedTokens.map { "\($0) generated tokens" },
-            metrics.decodeTokensPerSecond.map(NativFormatting.rate)
+            metrics.decodeTokensPerSecond.map(NativFormatting.rate),
         ]
         .compactMap { $0 }
         .joined(separator: ", ")
@@ -1231,7 +1308,9 @@ private struct ChatMessageActionButton: View {
     var body: some View {
         Button(action: action) {
             iconView
-                .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
+                .foregroundStyle(
+                    isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary)
+                )
                 .frame(width: 30, height: 28)
                 .contentShape(.rect)
         }
@@ -1247,10 +1326,10 @@ private struct ChatMessageActionButton: View {
     @ViewBuilder
     private var iconView: some View {
         switch icon {
-        case let .system(name):
+        case .system(let name):
             Image(systemName: name)
                 .font(.system(size: 13, weight: .medium))
-        case let .asset(name):
+        case .asset(let name):
             Image(name)
                 .resizable()
                 .scaledToFit()
@@ -1371,7 +1450,8 @@ private struct ChatThinkingShimmerText: View {
             } else {
                 TimelineView(.animation) { context in
                     let duration = 1.65
-                    let progress = context.date.timeIntervalSinceReferenceDate
+                    let progress =
+                        context.date.timeIntervalSinceReferenceDate
                         .truncatingRemainder(dividingBy: duration) / duration
 
                     label
@@ -1388,7 +1468,7 @@ private struct ChatThinkingShimmerText: View {
                                         .white,
                                         Color.primary.opacity(0.75),
                                         Color.secondary.opacity(0.25),
-                                        .clear
+                                        .clear,
                                     ],
                                     startPoint: .leading,
                                     endPoint: .trailing
@@ -1450,7 +1530,8 @@ private struct ChatResponseMetricsRow: View {
         }
         ChatResponseMetricPill(
             label: "Peak memory",
-            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes) ?? NativFormatting.missingValue
+            value: metrics.peakMemoryGB.map(NativFormatting.gigabytes)
+                ?? NativFormatting.missingValue
         )
     }
 }
@@ -1523,8 +1604,9 @@ private struct ChatImageAttachmentView: View {
             .accessibilityLabel("Open \(attachment.filename)")
 
             if showsSaveButton,
-               attachment.chatAttachmentKind == .image,
-               attachment.imageData != nil {
+                attachment.chatAttachmentKind == .image,
+                attachment.imageData != nil
+            {
                 Button(action: saveImage) {
                     Image(systemName: "square.and.arrow.down")
                         .foregroundStyle(
@@ -1597,7 +1679,8 @@ private struct ChatImageAttachmentView: View {
 
     private var image: NSImage? {
         guard attachment.chatAttachmentKind == .image,
-              let data = attachment.imageData else {
+            let data = attachment.imageData
+        else {
             return nil
         }
         return NSImage(data: data)
@@ -1606,7 +1689,8 @@ private struct ChatImageAttachmentView: View {
     private func loadDocumentThumbnail() async {
         documentThumbnail = nil
         guard attachment.chatAttachmentKind != .image,
-              let file = try? await ChatAttachmentPreviewFile.create(for: attachment) else {
+            let file = try? await ChatAttachmentPreviewFile.create(for: attachment)
+        else {
             return
         }
         defer { file.remove() }
@@ -1618,9 +1702,11 @@ private struct ChatImageAttachmentView: View {
             scale: NSScreen.main?.backingScaleFactor ?? 2,
             representationTypes: .thumbnail
         )
-        guard let representation = try? await QLThumbnailGenerator.shared
-            .generateBestRepresentation(for: request),
-              !Task.isCancelled else {
+        guard
+            let representation = try? await QLThumbnailGenerator.shared
+                .generateBestRepresentation(for: request),
+            !Task.isCancelled
+        else {
             return
         }
         documentThumbnail = NSImage(cgImage: representation.cgImage, size: .zero)
@@ -1700,10 +1786,10 @@ private struct ChatMessageText: View {
 
     private var renderedText: Text {
         guard rendersMarkdown,
-              let attributed = try? AttributedString(
+            let attributed = try? AttributedString(
                 markdown: content,
                 options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-              )
+            )
         else {
             return Text(content)
         }
@@ -1760,11 +1846,12 @@ private struct ChatStreamingMarkdownChunk: View, Equatable {
     }
 }
 
-private extension Color {
-    static let nativMark = Color(nsColor: NSColor(name: nil) { appearance in
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark ? NSColor(white: 0.5, alpha: 1) : NSColor(white: 0.25, alpha: 1)
-    })
+extension Color {
+    fileprivate static let nativMark = Color(
+        nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return isDark ? NSColor(white: 0.5, alpha: 1) : NSColor(white: 0.25, alpha: 1)
+        })
 }
 
 private struct ChatEmptyTranscriptView: View {
@@ -1831,6 +1918,7 @@ private struct ChatEmptyTranscriptView: View {
         chat: ChatViewModel(),
         mcpHost: MCPHostManager(),
         extensionManager: NativExtensionManager(builtInExtensions: []),
+        projects: ChatProjectStore(),
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),

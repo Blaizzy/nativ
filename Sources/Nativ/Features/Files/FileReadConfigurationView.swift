@@ -26,7 +26,7 @@ struct FileReadConfigurationView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("File Read")
                         .font(.title2.weight(.semibold))
-                    Text("Choose the folder where Nativ tools may read and search.")
+                    Text("Choose the folder where standalone chats may read and search.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -44,7 +44,7 @@ struct FileReadConfigurationView: View {
 
                     Text(
                         configuredRootURL == nil
-                            ? "The read_file and search_files tools remain unavailable until a folder is selected."
+                            ? "The read_file and search_files tools remain unavailable in standalone chats until a folder is selected. Project chats use their project folder."
                             : "Relative paths resolve inside this folder. Absolute paths and symlinks cannot escape it."
                     )
                     .font(.caption)

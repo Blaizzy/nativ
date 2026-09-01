@@ -57,6 +57,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 pageHeader
                 generalSettings
+                projectSettings
                 permissionSettings
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -148,10 +149,13 @@ struct SettingsView: View {
                         : "Open Nativ automatically when you log in.",
                     systemImage: "person.crop.circle.badge.checkmark"
                 ) {
-                    Toggle("", isOn: Binding(
-                        get: { launchAtLogin.isEnabled },
-                        set: { launchAtLogin.setEnabled($0) }
-                    ))
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { launchAtLogin.isEnabled },
+                            set: { launchAtLogin.setEnabled($0) }
+                        )
+                    )
                     .labelsHidden()
                 }
 
@@ -211,6 +215,48 @@ struct SettingsView: View {
         }
     }
 
+    private var projectSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Projects")
+                .font(.headline)
+
+            VStack(spacing: 0) {
+                settingsRow(
+                    title: "Agentic Tools",
+                    description:
+                        "Allow project chats to read, search, write, and patch files in their project folder, and request approval to run terminal commands there.",
+                    systemImage: "folder.badge.gearshape"
+                ) {
+                    Toggle("", isOn: projectToolsEnabledBinding)
+                        .labelsHidden()
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
+
+            Text(
+                "This setting is independent from the tool configuration used by standalone chats. Terminal commands start in the project folder but are not restricted to it, and every command still requires approval."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var projectToolsEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.projectToolsEnabled },
+            set: { isEnabled in
+                var settings = model.settings
+                settings.projectToolsEnabled = isEnabled
+                model.settings = settings.normalized()
+            }
+        )
+    }
+
     @ViewBuilder
     private var notificationSettingsControl: some View {
         switch notifications.authorizationStatus {
@@ -258,7 +304,7 @@ struct SettingsView: View {
     }
 
     private var chatFontStepRange: ClosedRange<Double> {
-        0...Double(NativSettings.chatFontScaleSteps.count - 1)
+        0 ... Double(NativSettings.chatFontScaleSteps.count - 1)
     }
 
     private var chatFontStepBinding: Binding<Double> {
@@ -331,7 +377,8 @@ struct SettingsView: View {
 
     private var appVersionLabel: String {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String
+        let version =
+            info?["CFBundleShortVersionString"] as? String
             ?? NativFormatting.missingValue
         let build = info?["CFBundleVersion"] as? String
         if let build, !build.isEmpty {

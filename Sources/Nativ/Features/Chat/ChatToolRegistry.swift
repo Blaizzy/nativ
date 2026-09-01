@@ -30,6 +30,7 @@ struct ChatToolExecutionContext: Sendable {
     var fileMutationState = FileMutationState.shared
     var fileWriteToolDependencies = ChatFileWriteToolDependencies.live
     var terminalApprovalGranted = false
+    var terminalDefaultWorkingDirectory: String? = nil
     var terminalToolDependencies = ChatTerminalToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
@@ -181,6 +182,13 @@ enum ChatToolRegistry {
         }
         tools.append(
             ChatNativeToolDescriptor(
+                definition: ChatTerminalToolRegistry.definition,
+                displayDescription:
+                    "Run approved shell commands locally on this Mac.",
+                configuration: nil
+            ))
+        tools.append(
+            ChatNativeToolDescriptor(
                 definition: ChatWebSearchToolRegistry.definition,
                 displayDescription: "Search the web for current information and sources.",
                 configuration: .webSearch
@@ -190,13 +198,6 @@ enum ChatToolRegistry {
                 definition: ChatWebReadToolRegistry.definition,
                 displayDescription: "Read and find relevant information on public web pages.",
                 configuration: .webRead
-            ))
-        tools.append(
-            ChatNativeToolDescriptor(
-                definition: ChatTerminalToolRegistry.definition,
-                displayDescription:
-                    "Run approved shell commands locally on this Mac.",
-                configuration: nil
             ))
         return tools
     }

@@ -51,6 +51,7 @@ extension ControlPanelView {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    projectsSection
                     if showsPinnedSection {
                         pinnedSection
                     }
@@ -135,6 +136,42 @@ extension ControlPanelView {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(bulkDeleteDescription)
+        }
+        .alert(
+            "Remove project?",
+            isPresented: Binding(
+                get: { pendingDeleteProject != nil },
+                set: { if !$0 { pendingDeleteProject = nil } }
+            ),
+            presenting: pendingDeleteProject
+        ) { project in
+            Button("Keep Chats") {
+                removeProject(project, disposition: .keepChats)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Delete Chats", role: .destructive) {
+                removeProject(project, disposition: .deleteChats)
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteProject = nil
+            }
+        } message: { project in
+            Text(
+                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted."
+            )
+        }
+        .alert(
+            "Project Error",
+            isPresented: Binding(
+                get: { projectErrorMessage != nil },
+                set: { if !$0 { projectErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                projectErrorMessage = nil
+            }
+        } message: {
+            Text(projectErrorMessage ?? "The project could not be updated.")
         }
     }
 

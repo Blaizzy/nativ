@@ -26,6 +26,7 @@ struct ControlPanelRecentSessionRow: View {
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
+    var allowsFolderOrganization = true
     @State private var isHovering = false
     @State private var isDeleteHovering = false
     @State private var isRenaming = false
@@ -177,45 +178,47 @@ struct ControlPanelRecentSessionRow: View {
                 Label("Rename", systemImage: "pencil")
             }
 
-            Button {
-                onTogglePin()
-            } label: {
-                Label(
-                    recent.pinned ? "Unpin" : "Pin",
-                    systemImage: recent.pinned ? "pin.slash" : "pin"
-                )
-            }
-
-            Menu {
-                if recent.folderID != nil {
-                    Button {
-                        onMoveToFolder(nil)
-                    } label: {
-                        Label("Remove from Folder", systemImage: "folder.badge.minus")
-                    }
-                    Divider()
+            if allowsFolderOrganization {
+                Button {
+                    onTogglePin()
+                } label: {
+                    Label(
+                        recent.pinned ? "Unpin" : "Pin",
+                        systemImage: recent.pinned ? "pin.slash" : "pin"
+                    )
                 }
-                ForEach(folders) { folder in
-                    Button {
-                        onMoveToFolder(folder.id)
-                    } label: {
-                        if folder.id == recent.folderID {
-                            Label(folder.name, systemImage: "checkmark")
-                        } else {
-                            Text(folder.name)
+
+                Menu {
+                    if recent.folderID != nil {
+                        Button {
+                            onMoveToFolder(nil)
+                        } label: {
+                            Label("Remove from Folder", systemImage: "folder.badge.minus")
+                        }
+                        Divider()
+                    }
+                    ForEach(folders) { folder in
+                        Button {
+                            onMoveToFolder(folder.id)
+                        } label: {
+                            if folder.id == recent.folderID {
+                                Label(folder.name, systemImage: "checkmark")
+                            } else {
+                                Text(folder.name)
+                            }
                         }
                     }
-                }
-                if !folders.isEmpty {
-                    Divider()
-                }
-                Button {
-                    onCreateFolderForSession()
+                    if !folders.isEmpty {
+                        Divider()
+                    }
+                    Button {
+                        onCreateFolderForSession()
+                    } label: {
+                        Label("New Folder", systemImage: "folder.badge.plus")
+                    }
                 } label: {
-                    Label("New Folder", systemImage: "folder.badge.plus")
+                    Label("Move to Folder", systemImage: "folder")
                 }
-            } label: {
-                Label("Move to Folder", systemImage: "folder")
             }
         }
 
@@ -239,6 +242,114 @@ struct ControlPanelRecentSessionRow: View {
 
     private func beginRename() {
         renameDraft = recent.title
+        isRenaming = true
+        DispatchQueue.main.async {
+            renameFieldFocused = true
+        }
+    }
+
+    private func commitRename() {
+        isRenaming = false
+        onRename(renameDraft)
+    }
+}
+
+struct ControlPanelProjectHeaderView: View {
+    let project: ChatProject
+    let count: Int
+    let isAvailable: Bool
+    let onToggleCollapse: () -> Void
+    let onNewChat: () -> Void
+    let onRename: (String) -> Void
+    let onReveal: () -> Void
+    let onLocate: () -> Void
+    let onRemove: () -> Void
+    @State private var isRenaming = false
+    @State private var renameDraft = ""
+    @FocusState private var renameFieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Button(action: onToggleCollapse) {
+                Image(systemName: project.isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12)
+            }
+            .buttonStyle(.plain)
+
+            Image(systemName: isAvailable ? "folder.fill" : "folder.badge.questionmark")
+                .font(.system(size: 11))
+                .foregroundStyle(isAvailable ? Color.secondary : Color.orange)
+
+            if isRenaming {
+                TextField("Name", text: $renameDraft)
+                    .textFieldStyle(.plain)
+                    .focused($renameFieldFocused)
+                    .onSubmit { commitRename() }
+                    .onExitCommand { isRenaming = false }
+                    .onChange(of: renameFieldFocused) { _, focused in
+                        if !focused, isRenaming { commitRename() }
+                    }
+            } else {
+                Text(project.name)
+                    .nativTextStyle(.rowTitle)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                if !isAvailable {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .help("Project folder unavailable")
+                }
+
+                Text("\(count)")
+                    .nativTextStyle(.metadata)
+                    .foregroundStyle(.secondary.opacity(0.7))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .contentShape(.rect)
+        .onTapGesture(count: 2) { beginRename() }
+        .contextMenu {
+            Button(action: onNewChat) {
+                Label("New Chat", systemImage: "square.and.pencil")
+            }
+
+            Divider()
+
+            Button {
+                beginRename()
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+
+            Button(action: onReveal) {
+                Label("Reveal in Finder", systemImage: "folder")
+            }
+            .disabled(!isAvailable)
+
+            Button(action: onLocate) {
+                Label(
+                    isAvailable ? "Change Folder…" : "Locate Folder…",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
+
+            Divider()
+
+            Button(role: .destructive, action: onRemove) {
+                Label("Remove Project", systemImage: "trash")
+            }
+        }
+        .help(isAvailable ? project.rootPath : "Project folder unavailable: \(project.rootPath)")
+    }
+
+    private func beginRename() {
+        renameDraft = project.name
         isRenaming = true
         DispatchQueue.main.async {
             renameFieldFocused = true
