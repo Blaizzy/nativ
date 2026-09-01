@@ -115,20 +115,19 @@ private struct ChatProjectContextBanner: View {
     let toolsEnabled: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: rootIsAvailable ? "folder.fill" : "folder.badge.questionmark")
                 .foregroundStyle(rootIsAvailable ? Color.accentColor : Color.orange)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                    .nativTextStyle(.rowTitleEmphasized)
-                    .lineLimit(1)
-                Text(statusText)
-                    .nativTextStyle(.metadata)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            Text(project.name)
+                .nativTextStyle(.rowTitleEmphasized)
+                .lineLimit(1)
+
+            Text(project.rootPath)
+                .nativTextStyle(.metadata)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
 
             Spacer(minLength: 8)
 
@@ -138,27 +137,14 @@ private struct ChatProjectContextBanner: View {
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.secondary.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.secondary.opacity(0.14), lineWidth: 0.5)
-        )
+        .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.nativMainContentBackground)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
         .help(project.rootPath)
-    }
-
-    private var statusText: String {
-        if !rootIsAvailable {
-            return "Folder unavailable — locate it from the project menu"
-        }
-        if !toolsEnabled {
-            return "Agentic tools are disabled in Settings"
-        }
-        return project.rootPath
     }
 }
 
@@ -189,13 +175,6 @@ private struct ChatTranscriptView: View {
 
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-                if let project {
-                    ChatProjectContextBanner(
-                        project: project,
-                        rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: model.settings.projectToolsEnabled
-                    )
-                }
                 if chat.visibleMessages.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
@@ -257,6 +236,15 @@ private struct ChatTranscriptView: View {
             )
         }
         .scrollPosition($transcriptScrollPosition)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let project {
+                ChatProjectContextBanner(
+                    project: project,
+                    rootIsAvailable: projectRootIsAvailable,
+                    toolsEnabled: model.settings.projectToolsEnabled
+                )
+            }
+        }
         .overlay(alignment: .bottom) {
             ZStack(alignment: .bottom) {
                 composerBackdrop
