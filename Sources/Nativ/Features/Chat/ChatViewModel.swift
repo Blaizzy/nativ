@@ -2811,6 +2811,16 @@ final class ChatViewModel: ObservableObject {
             }
 
             if session.messages.isEmpty {
+                let routineStore = RoutineStore.shared
+                let isLinkedToRoutine = routineStore.routines.contains {
+                    $0.sourceSessionID == session.id
+                } || routineStore.runs.contains {
+                    $0.sessionID == session.id
+                }
+                if isLinkedToRoutine {
+                    keptSessions.append(session)
+                    continue
+                }
                 if keptEmptySession {
                     removedSessionIDs.append(session.id)
                     continue
