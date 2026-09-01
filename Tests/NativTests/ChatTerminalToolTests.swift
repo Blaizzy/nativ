@@ -15,7 +15,8 @@ private func terminalCall(_ arguments: String) -> MLXChatToolCall {
 
 private func terminalContext(
     approved: Bool,
-    dependencies: ChatTerminalToolDependencies
+    dependencies: ChatTerminalToolDependencies,
+    defaultWorkingDirectory: String? = nil
 ) -> ChatToolExecutionContext {
     var context = ChatToolExecutionContext(
         imageGenerationModelID: nil,
@@ -26,6 +27,7 @@ private func terminalContext(
         additionalModelSearchPaths: []
     )
     context.terminalApprovalGranted = approved
+    context.terminalDefaultWorkingDirectory = defaultWorkingDirectory
     context.terminalToolDependencies = dependencies
     return context
 }
@@ -247,5 +249,30 @@ final class ChatTerminalToolTests: XCTestCase {
         XCTAssertEqual(result.stdout.hasPrefix("hello\n"), true)
         XCTAssertEqual(normalizedReportedDirectory, directory.path)
         XCTAssertEqual(result.stderr, "warning")
+    }
+
+    func testExecutorUsesProjectDirectoryAsDefaultWorkingDirectory() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NativProjectTerminalTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let dependencies = ChatTerminalToolDependencies.live
+        let payload = try await ChatTerminalToolExecutor(dependencies: dependencies).execute(
+            call: terminalCall(#"{"command":"pwd"}"#),
+            context: terminalContext(
+                approved: true,
+                dependencies: dependencies,
+                defaultWorkingDirectory: directory.path
+            )
+        )
+        let json = try terminalJSON(payload)
+        let cwd = try XCTUnwrap(json["cwd"] as? String)
+
+        XCTAssertEqual(
+            cwd.replacingOccurrences(of: "/private/var/", with: "/var/"),
+            directory.path
+        )
     }
 }

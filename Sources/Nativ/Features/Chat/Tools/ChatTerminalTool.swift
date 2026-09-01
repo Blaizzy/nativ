@@ -24,7 +24,7 @@ enum ChatTerminalToolRegistry {
                     "cwd": .object([
                         "type": .string("string"),
                         "description": .string(
-                            "Optional working directory. Relative paths are resolved from the user's home directory."
+                            "Optional working directory. Relative paths are resolved from Nativ's default working directory (the project root in a project chat, or the user's home directory otherwise)."
                         ),
                         "minLength": .number(1),
                     ]),
@@ -429,13 +429,19 @@ struct ChatTerminalToolExecutor: Sendable {
     }
 
     @discardableResult
-    func preflight(call: MLXChatToolCall) throws -> ChatTerminalToolRequest {
+    func preflight(
+        call: MLXChatToolCall,
+        defaultWorkingDirectory: String? = nil
+    ) throws -> ChatTerminalToolRequest {
         let request = try ChatTerminalToolRequest(call: call)
         let assessment = TerminalCommandSafetyPolicy.assess(command: request.command)
         if let reason = assessment.blockedReason {
             throw ChatTerminalToolError.blocked(reason)
         }
-        _ = try resolveWorkingDirectory(request.cwd)
+        _ = try resolveWorkingDirectory(
+            request.cwd,
+            defaultWorkingDirectory: defaultWorkingDirectory
+        )
         return request
     }
 
@@ -446,9 +452,15 @@ struct ChatTerminalToolExecutor: Sendable {
         guard context.terminalApprovalGranted else {
             throw ChatTerminalToolError.approvalRequired
         }
-        let request = try preflight(call: call)
+        let request = try preflight(
+            call: call,
+            defaultWorkingDirectory: context.terminalDefaultWorkingDirectory
+        )
         let assessment = TerminalCommandSafetyPolicy.assess(command: request.command)
-        let workingDirectoryURL = try resolveWorkingDirectory(request.cwd)
+        let workingDirectoryURL = try resolveWorkingDirectory(
+            request.cwd,
+            defaultWorkingDirectory: context.terminalDefaultWorkingDirectory
+        )
         let processRequest = TerminalProcessRequest(
             command: request.command,
             currentDirectoryURL: workingDirectoryURL,
@@ -606,17 +618,24 @@ struct ChatTerminalToolExecutor: Sendable {
         return environment
     }
 
-    private func resolveWorkingDirectory(_ rawPath: String?) throws -> URL {
+    private func resolveWorkingDirectory(
+        _ rawPath: String?,
+        defaultWorkingDirectory: String?
+    ) throws -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        let defaultDirectory =
+            defaultWorkingDirectory.map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            } ?? home
         let candidate: URL
         if let rawPath {
             let expanded = NSString(string: rawPath).expandingTildeInPath
             candidate =
                 expanded.hasPrefix("/")
                 ? URL(fileURLWithPath: expanded, isDirectory: true)
-                : home.appendingPathComponent(expanded, isDirectory: true)
+                : defaultDirectory.appendingPathComponent(expanded, isDirectory: true)
         } else {
-            candidate = home
+            candidate = defaultDirectory
         }
         let resolved = candidate.standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false

@@ -53,6 +53,7 @@ extension ControlPanelView {
                 mcpHost: mcpHost,
                 extensionManager: extensionManager,
                 imageGeneration: imageGeneration,
+                projects: projects,
                 showsConfiguration: $isModelConfigurationVisible,
                 onExploreImageModels: navigation.openImageModelDiscovery
             )
@@ -235,6 +236,7 @@ struct ChatWorkspaceView: View {
     let mcpHost: MCPHostManager
     let extensionManager: NativExtensionManager
     let imageGeneration: ImageGenerationViewModel
+    let projects: ChatProjectStore
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
 
@@ -247,6 +249,7 @@ struct ChatWorkspaceView: View {
                     chat: chat,
                     mcpHost: mcpHost,
                     extensionManager: extensionManager,
+                    projects: projects,
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,

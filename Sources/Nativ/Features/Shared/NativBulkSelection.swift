@@ -62,7 +62,7 @@ struct NativBulkSelectionCheckbox: View {
 
             if isSelected {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .nativTextStyle(.badgeStrong)
                     .foregroundStyle(.white)
             }
         }
@@ -140,7 +140,7 @@ struct NativBulkSelectionToolbar: View {
     var body: some View {
         HStack(spacing: 10) {
             Text("\(selectedCount) selected")
-                .font(.caption.weight(.medium))
+                .nativTextStyle(.actionLabel)
                 .foregroundStyle(.secondary)
 
             Button(allSelected ? "Deselect All" : "Select All", action: onToggleAll)

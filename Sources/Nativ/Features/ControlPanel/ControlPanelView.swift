@@ -16,6 +16,7 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
 
     let dependencies: ControlPanelDependencies
+    @ObservedObject var projects: ChatProjectStore
     @StateObject var chromeState: ControlPanelChromeState
     @StateObject var sidebarState: ChatSidebarState
     @StateObject var contentState: ControlPanelContentState
@@ -48,6 +49,8 @@ struct ControlPanelView: View {
     @State var isFoldersDropTargeted = false
     @State var pendingDeleteRecent: ControlPanelRecentSession?
     @State var pendingDeleteFolder: ChatFolder?
+    @State var pendingDeleteProject: ChatProject?
+    @State var projectErrorMessage: String?
     @State var isConfirmingBulkDelete = false
     @State var chatImportAlert: ChatImportAlert?
 
@@ -76,11 +79,13 @@ struct ControlPanelView: View {
         self.extensionManager = extensionManager
         self.softwareUpdater = softwareUpdater
         self.dependencies = dependencies
+        _projects = ObservedObject(wrappedValue: dependencies.projects)
         _chromeState = StateObject(wrappedValue: ControlPanelChromeState(model: model))
         _sidebarState = StateObject(
             wrappedValue: ChatSidebarState(
                 chat: dependencies.chat,
-                imageGeneration: dependencies.imageGeneration
+                imageGeneration: dependencies.imageGeneration,
+                projects: dependencies.projects
             )
         )
         _contentState = StateObject(
@@ -254,6 +259,7 @@ struct ControlPanelView: View {
             NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
         ) { _ in
             launchAtLogin.refresh()
+            projects.refreshRootAvailability()
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -300,7 +306,9 @@ struct ControlPanelView: View {
         }
         .padding(
             .leading,
-            isFullScreen ? ControlPanelLayout.topControlsLeadingPaddingFullScreen : ControlPanelLayout.topControlsLeadingPadding
+            isFullScreen
+                ? ControlPanelLayout.topControlsLeadingPaddingFullScreen
+                : ControlPanelLayout.topControlsLeadingPadding
         )
         .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding)
         .padding(.top, ControlPanelLayout.topControlsTopPadding)

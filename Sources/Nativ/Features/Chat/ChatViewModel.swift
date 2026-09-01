@@ -33,6 +33,7 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let toolScope: ChatToolScope
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
         let languageModelSupportsVision: Bool
@@ -58,6 +59,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
+    @Published private(set) var currentProjectID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = [] {
         didSet {
@@ -101,6 +103,7 @@ final class ChatViewModel: ObservableObject {
     private var streamFlushDates: [UUID: Date] = [:]
     private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
+    private let projectStore: ChatProjectStore
     private let toolConsentGate = ChatToolConsentGate()
     private let imageModelSelectionGate = ChatImageModelSelectionGate()
     private var imageModelPreparationTasks: [UUID: Task<Void, Never>] = [:]
@@ -114,11 +117,13 @@ final class ChatViewModel: ObservableObject {
     init(
         windowID: UUID = UUID(),
         persistedDataChanges: PersistedDataChangeHub = .init(),
-        inferenceActivity: InferenceActivityCoordinator = .init()
+        inferenceActivity: InferenceActivityCoordinator = .init(),
+        projectStore: ChatProjectStore = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
         self.inferenceActivity = inferenceActivity
+        self.projectStore = projectStore
         let documentExtractionCache = ChatDocumentExtractionCache()
         documentContextBuilder = ChatDocumentContextBuilder(
             extractionCache: documentExtractionCache
@@ -358,8 +363,8 @@ final class ChatViewModel: ObservableObject {
         return nil
     }
 
-    func createSession() {
-        if canReuseCurrentEmptySession {
+    func createSession(projectID: UUID? = nil) {
+        if canReuseCurrentEmptySession(in: projectID) {
             if let currentSession {
                 applyCurrentSession(currentSession)
             }
@@ -372,7 +377,8 @@ final class ChatViewModel: ObservableObject {
             title: ChatSession.timestampTitle(for: createdAt),
             createdAt: createdAt,
             updatedAt: createdAt,
-            messages: []
+            messages: [],
+            projectID: projectID
         )
 
         persistCurrentSession(updateTimestamp: false)
@@ -438,11 +444,13 @@ final class ChatViewModel: ObservableObject {
         }
         if sessionID == currentSessionID {
             let previousMessages = messages
-            guard removeAttachment(
-                messageID: messageID,
-                attachmentID: attachmentID,
-                from: &messages
-            ) else {
+            guard
+                removeAttachment(
+                    messageID: messageID,
+                    attachmentID: attachmentID,
+                    from: &messages
+                )
+            else {
                 return false
             }
             guard persistCurrentSession(updateTimestamp: false) else {
@@ -458,11 +466,13 @@ final class ChatViewModel: ObservableObject {
         else {
             return false
         }
-        guard removeAttachment(
-            messageID: messageID,
-            attachmentID: attachmentID,
-            from: &session.messages
-        ) else {
+        guard
+            removeAttachment(
+                messageID: messageID,
+                attachmentID: attachmentID,
+                from: &session.messages
+            )
+        else {
             return false
         }
         guard saveSession(session) else {
@@ -712,9 +722,46 @@ final class ChatViewModel: ObservableObject {
         } else {
             currentSession = nil
             currentSessionID = nil
+            currentProjectID = nil
             messages = []
             refreshSessionList()
         }
+    }
+
+    @discardableResult
+    func removeProjectSessions(
+        projectID: UUID,
+        disposition: ChatProjectSessionRemovalDisposition
+    ) -> Bool {
+        let sessionIDs = Array(
+            storedSessions.lazy
+                .filter { $0.projectID == projectID }
+                .map(\.id))
+        guard sessionIDs.allSatisfy(canModifySession) else {
+            return false
+        }
+
+        switch disposition {
+        case .keepChats:
+            for index in storedSessions.indices where storedSessions[index].projectID == projectID {
+                storedSessions[index].projectID = nil
+                storedSessions[index].folderID = nil
+                guard saveSession(storedSessions[index]) else {
+                    return false
+                }
+                if currentSession?.id == storedSessions[index].id {
+                    currentSession = storedSessions[index]
+                    currentProjectID = nil
+                }
+            }
+            pruneRedundantEmptySessions()
+            refreshSessionList()
+        case .deleteChats:
+            for sessionID in sessionIDs {
+                deleteSession(sessionID)
+            }
+        }
+        return true
     }
 
     func handleScheduledTaskDeletion(
@@ -895,6 +942,10 @@ final class ChatViewModel: ObservableObject {
                 userMessageID: userMessageID,
                 assistantMessageID: UUID(),
                 settings: settings,
+                toolScope: projectStore.toolScope(
+                    for: projectID(for: sessionID),
+                    settings: settings
+                ),
                 imageGenerationModelID: imageGenerationModelID(for: sessionID)
                     ?? settings.imageGenerationModelID,
                 languageModelSupportsTools: languageModelSupportsTools,
@@ -1309,11 +1360,13 @@ final class ChatViewModel: ObservableObject {
             let resource = InferenceActivityCoordinator.Resource.chat(
                 queuedRequest.sessionID
             )
-            guard inferenceActivity.begin(
-                resource: resource,
-                windowID: windowID,
-                operationID: queuedRequest.id
-            ) else {
+            guard
+                inferenceActivity.begin(
+                    resource: resource,
+                    windowID: windowID,
+                    operationID: queuedRequest.id
+                )
+            else {
                 requestQueue.insert(queuedRequest, at: 0)
                 return
             }
@@ -1556,14 +1609,19 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
-                let isNativeTerminal = customTool == nil
+                let isNativeTerminal =
+                    customTool == nil
                     && !(toolCall.function?.name.flatMap {
                         mcpHost?.handlesTool(named: $0)
                     } ?? false)
                     && toolCall.function?.name == ChatTerminalToolRegistry.toolName
                 if isNativeTerminal {
                     do {
-                        try ChatTerminalToolExecutor().preflight(call: toolCall)
+                        try ChatTerminalToolExecutor().preflight(
+                            call: toolCall,
+                            defaultWorkingDirectory: queuedRequest.toolScope
+                                .terminalWorkingDirectory
+                        )
                     } catch {
                         updateToolMessage(
                             toolMessageID,
@@ -1621,7 +1679,9 @@ final class ChatViewModel: ObservableObject {
                     !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false),
                     ChatFileWriteApprovalPolicy.requiresApproval(
                         call: toolCall,
-                        rootPath: queuedRequest.settings.fileWriteRootPath
+                        rootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileWriteRootPath
+                            : queuedRequest.settings.fileWriteRootPath
                     )
                 {
                     updateToolMessage(
@@ -1768,13 +1828,19 @@ final class ChatViewModel: ObservableObject {
                         additionalModelSearchPaths: queuedRequest.settings
                             .additionalModelSearchPaths,
                         huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
-                        fileReadRootPath: queuedRequest.settings.fileReadRootPath,
+                        fileReadRootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileReadRootPath
+                            : queuedRequest.settings.fileReadRootPath,
                         fileReadTracker: fileReadTracker,
                         fileSearchTracker: fileSearchTracker,
-                        fileWriteRootPath: queuedRequest.settings.fileWriteRootPath,
+                        fileWriteRootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileWriteRootPath
+                            : queuedRequest.settings.fileWriteRootPath,
                         fileWriteApprovalGranted: fileWriteApprovalGranted,
                         fileOperationRunID: fileOperationRunID,
                         terminalApprovalGranted: terminalApprovalGranted,
+                        terminalDefaultWorkingDirectory: queuedRequest.toolScope
+                            .terminalWorkingDirectory,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
@@ -2025,7 +2091,13 @@ final class ChatViewModel: ObservableObject {
                 rootPath: settings.fileWriteRootPath
             )
             toolDefinitions.removeAll {
-                !settings.isToolEnabled($0.function.name)
+                let toolName = $0.function.name
+                if queuedRequest.toolScope.isProject,
+                    ChatToolScope.projectToolNames.contains(toolName)
+                {
+                    return !queuedRequest.toolScope.projectToolsAreAvailable
+                }
+                return !settings.isToolEnabled(toolName)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
                     || ($0.function.name == ChatWebReadToolRegistry.toolName
@@ -2041,6 +2113,9 @@ final class ChatViewModel: ObservableObject {
         var systemParts: [String] = []
         if !settings.systemPrompt.isEmpty {
             systemParts.append(settings.systemPrompt)
+        }
+        if let projectPrompt = queuedRequest.toolScope.systemPrompt {
+            systemParts.append(projectPrompt)
         }
         // Inject the built-in tool-use skill when tools are available.
         if !toolDefinitions.isEmpty {
@@ -2298,6 +2373,13 @@ final class ChatViewModel: ObservableObject {
         }
         return storedSessions.first(where: { $0.id == sessionID })?
             .imageGenerationModelID
+    }
+
+    private func projectID(for sessionID: UUID) -> UUID? {
+        if currentSessionID == sessionID {
+            return currentSession?.projectID
+        }
+        return storedSessions.first(where: { $0.id == sessionID })?.projectID
     }
 
     private func beginImageExecution(
@@ -2562,6 +2644,7 @@ final class ChatViewModel: ObservableObject {
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
+        currentProjectID = session.projectID
         messages =
             ChatSessionLoadPolicy.shouldNormalizeOnApply(
                 sessionID: session.id,
@@ -2721,6 +2804,7 @@ final class ChatViewModel: ObservableObject {
                     applyCurrentSession(replacement)
                 } else {
                     currentSessionID = nil
+                    currentProjectID = nil
                     messages = []
                     self.currentSession = nil
                     createSession()
@@ -2791,21 +2875,27 @@ final class ChatViewModel: ObservableObject {
             .sorted(by: ChatSessionSummary.recencySort)
     }
 
-    private var canReuseCurrentEmptySession: Bool {
+    private func canReuseCurrentEmptySession(in projectID: UUID?) -> Bool {
         guard let currentSession else {
             return false
         }
 
-        return currentSession.messages.isEmpty
+        return currentSession.projectID == projectID
+            && currentSession.messages.isEmpty
             && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pendingImageAttachments.isEmpty
     }
 
     private func pruneRedundantEmptySessions() {
-        let sortedSessions = storedSessions.sorted(by: ChatSession.recencySort)
+        let selectedSessionID = currentSessionID
+        let sortedSessions = storedSessions.sorted { lhs, rhs in
+            if lhs.id == selectedSessionID { return true }
+            if rhs.id == selectedSessionID { return false }
+            return ChatSession.recencySort(lhs, rhs)
+        }
         var seenIDs = Set<UUID>()
         var keptSessions: [ChatSession] = []
-        var keptEmptySession = false
+        var keptEmptyScopes = Set<UUID?>()
         var removedSessionIDs: [UUID] = []
 
         for session in sortedSessions {
@@ -2825,11 +2915,10 @@ final class ChatViewModel: ObservableObject {
                     keptSessions.append(session)
                     continue
                 }
-                if keptEmptySession {
+                if !keptEmptyScopes.insert(session.projectID).inserted {
                     removedSessionIDs.append(session.id)
                     continue
                 }
-                keptEmptySession = true
             }
 
             keptSessions.append(session)

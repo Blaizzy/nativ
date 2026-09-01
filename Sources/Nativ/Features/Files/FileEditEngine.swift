@@ -300,7 +300,22 @@ enum FuzzyFileTextReplacer {
 }
 
 enum FileUnifiedDiff {
+    static let maximumCharacters = 100_000
+
+    struct Rendered: Sendable {
+        let content: String
+        let truncated: Bool
+    }
+
     static func render(path: String, before: String?, after: String?) -> String {
+        renderWithMetadata(path: path, before: before, after: after).content
+    }
+
+    static func renderWithMetadata(
+        path: String,
+        before: String?,
+        after: String?
+    ) -> Rendered {
         let beforeLines = before.map(lines) ?? []
         let afterLines = after.map(lines) ?? []
         var output = [
@@ -310,9 +325,13 @@ enum FileUnifiedDiff {
         output.append(contentsOf: beforeLines.map { "-\($0)" })
         output.append(contentsOf: afterLines.map { "+\($0)" })
         let rendered = output.joined(separator: "\n")
-        return rendered.count > 50_000
-            ? String(rendered.prefix(50_000)) + "\n... diff truncated"
-            : rendered
+        let truncated = rendered.count > maximumCharacters
+        return Rendered(
+            content: truncated
+                ? String(rendered.prefix(maximumCharacters)) + "\n... diff truncated"
+                : rendered,
+            truncated: truncated
+        )
     }
 
     private static func lines(_ value: String) -> [String] {

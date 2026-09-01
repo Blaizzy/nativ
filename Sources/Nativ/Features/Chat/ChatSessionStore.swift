@@ -21,6 +21,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var pinnedOrder: Int?
     var sessionOrder: Int?
     var folderID: UUID?
+    var projectID: UUID?
     var imageGenerationModelID: String?
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil
@@ -37,6 +38,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
             folderID: folderID,
+            projectID: projectID,
             scheduledTaskID: scheduledTaskID
         )
     }
@@ -92,7 +94,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
     }
 
     private static func title(fromUserContent content: String) -> String? {
-        let firstLine = content
+        let firstLine =
+            content
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
@@ -124,6 +127,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let projectID: UUID?
     let scheduledTaskID: String?
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
@@ -256,14 +260,20 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         role = try container.decode(Role.self, forKey: .role)
         content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
-        reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
+        reasoningContent =
+            try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
         modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         isStreaming = false
-        isThinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isThinkingEnabled) ?? false
-        thinkingDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .thinkingDuration)
-        imageAttachments = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) ?? []
-        responseMetrics = try container.decodeIfPresent(ChatResponseMetrics.self, forKey: .responseMetrics)
+        isThinkingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .isThinkingEnabled) ?? false
+        thinkingDuration = try container.decodeIfPresent(
+            TimeInterval.self, forKey: .thinkingDuration)
+        imageAttachments =
+            try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments)
+            ?? []
+        responseMetrics = try container.decodeIfPresent(
+            ChatResponseMetrics.self, forKey: .responseMetrics)
         toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls) ?? []
         toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
@@ -271,8 +281,9 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
 
         if role == .error,
-           content == NativChatError.missingAssistantContent.localizedDescription,
-           !reasoningContent.isEmpty {
+            content == NativChatError.missingAssistantContent.localizedDescription,
+            !reasoningContent.isEmpty
+        {
             role = .assistant
             content = ""
         }
@@ -311,7 +322,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
             let requestContent = [content, documentContext ?? ""]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
-            let imageParts = includesImages
+            let imageParts =
+                includesImages
                 ? imageAttachments.filter { $0.chatAttachmentKind == .image }
                 : []
             if !imageParts.isEmpty {
@@ -319,7 +331,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
                 if !requestContent.isEmpty {
                     parts.append(MLXChatContentPart(text: requestContent))
                 }
-                parts.append(contentsOf: imageParts.map { MLXChatContentPart(imageURL: $0.dataURL) })
+                parts.append(
+                    contentsOf: imageParts.map { MLXChatContentPart(imageURL: $0.dataURL) })
                 return MLXChatMessage(role: "user", content: .parts(parts))
             }
 
@@ -627,7 +640,8 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 
     static func canReadImages(from pasteboard: NSPasteboard) -> Bool {
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-           urls.contains(where: isImageURL) {
+            urls.contains(where: isImageURL)
+        {
             return true
         }
         return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
@@ -635,7 +649,8 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 
     static func imageAttachments(from pasteboard: NSPasteboard) -> [ChatImageAttachment] {
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] {
-            let fileAttachments = urls
+            let fileAttachments =
+                urls
                 .filter(isImageURL)
                 .compactMap { try? ChatImageAttachment(contentsOf: $0) }
             if !fileAttachments.isEmpty {
@@ -653,8 +668,8 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 
     static func attachment(from image: NSImage, filename: String) -> ChatImageAttachment? {
         guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:])
+            let bitmap = NSBitmapImageRep(data: tiff),
+            let png = bitmap.representation(using: .png, properties: [:])
         else {
             return nil
         }
@@ -737,14 +752,17 @@ struct ChatSessionStore {
         migrateLegacyStoreIfNeeded()
         migrateLegacyTranscriptIfNeeded()
 
-        guard let urls = try? fileManager.contentsOfDirectory(
-            at: sessionsDirectory,
-            includingPropertiesForKeys: nil
-        ) else {
+        guard
+            let urls = try? fileManager.contentsOfDirectory(
+                at: sessionsDirectory,
+                includingPropertiesForKeys: nil
+            )
+        else {
             return []
         }
 
-        return urls
+        return
+            urls
             .filter { $0.pathExtension == "json" }
             .compactMap(loadSession)
             .sorted(by: ChatSession.recencySort)
@@ -874,7 +892,7 @@ struct ChatSessionStore {
 
     private func migrateLegacyTranscriptIfNeeded() {
         guard existingSessionURLs().isEmpty,
-              let data = try? Data(contentsOf: legacyTranscriptURL)
+            let data = try? Data(contentsOf: legacyTranscriptURL)
         else {
             return
         }
@@ -913,14 +931,18 @@ struct ChatSessionStore {
     }
 
     func sessionsFingerprint() -> String {
-        let urls = (try? fileManager.contentsOfDirectory(
-            at: sessionsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
-        )) ?? []
-        return urls
+        let urls =
+            (try? fileManager.contentsOfDirectory(
+                at: sessionsDirectory,
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+            )) ?? []
+        return
+            urls
             .filter { $0.pathExtension == "json" }
             .compactMap { url in
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let values = try? url.resourceValues(forKeys: [
+                    .contentModificationDateKey, .fileSizeKey,
+                ])
                 let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
                 let size = values?.fileSize ?? 0
                 return "\(url.lastPathComponent):\(mtime):\(size)"

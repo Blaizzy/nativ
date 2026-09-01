@@ -1,5 +1,6 @@
 import Darwin
 import XCTest
+
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
@@ -471,7 +472,8 @@ final class NativSettingsTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
 
         XCTAssertEqual(request.url?.path, "/v1/responses/input_tokens")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer nativ_chat_token")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"), "Bearer nativ_chat_token")
         XCTAssertEqual(json["model"] as? String, "org/model")
         XCTAssertEqual(json["enable_thinking"] as? Bool, true)
         XCTAssertNil(json["max_tokens"])
@@ -607,17 +609,20 @@ final class NativSettingsTests: XCTestCase {
     func testSidebarSectionCollapseRoundTrips() throws {
         var settings = NativSettings()
         XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarProjectsCollapsed)
         XCTAssertFalse(settings.sidebarFoldersCollapsed)
         XCTAssertFalse(settings.sidebarSessionsCollapsed)
         XCTAssertFalse(settings.allSidebarSectionsCollapsed)
 
         settings.sidebarPinnedCollapsed = true
+        settings.sidebarProjectsCollapsed = true
         settings.sidebarSessionsCollapsed = true
         let decoded = try JSONDecoder().decode(
             NativSettings.self,
             from: JSONEncoder().encode(settings)
         )
         XCTAssertTrue(decoded.sidebarPinnedCollapsed)
+        XCTAssertTrue(decoded.sidebarProjectsCollapsed)
         XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertTrue(decoded.sidebarSessionsCollapsed)
         XCTAssertFalse(decoded.allSidebarSectionsCollapsed)
@@ -627,12 +632,14 @@ final class NativSettingsTests: XCTestCase {
         var settings = NativSettings()
         settings.setAllSidebarSectionsCollapsed(true)
         XCTAssertTrue(settings.sidebarPinnedCollapsed)
+        XCTAssertTrue(settings.sidebarProjectsCollapsed)
         XCTAssertTrue(settings.sidebarFoldersCollapsed)
         XCTAssertTrue(settings.sidebarSessionsCollapsed)
         XCTAssertTrue(settings.allSidebarSectionsCollapsed)
 
         settings.setAllSidebarSectionsCollapsed(false)
         XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarProjectsCollapsed)
         XCTAssertFalse(settings.sidebarFoldersCollapsed)
         XCTAssertFalse(settings.sidebarSessionsCollapsed)
         XCTAssertFalse(settings.allSidebarSectionsCollapsed)
@@ -642,8 +649,24 @@ final class NativSettingsTests: XCTestCase {
         let legacyJSON = Data(#"{"serverHost":"127.0.0.1","serverPort":8080}"#.utf8)
         let decoded = try JSONDecoder().decode(NativSettings.self, from: legacyJSON)
         XCTAssertFalse(decoded.sidebarPinnedCollapsed)
+        XCTAssertFalse(decoded.sidebarProjectsCollapsed)
         XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertFalse(decoded.sidebarSessionsCollapsed)
+    }
+
+    func testProjectToolsDefaultToEnabledAndRoundTripIndependently() throws {
+        XCTAssertTrue(NativSettings().projectToolsEnabled)
+
+        var settings = NativSettings()
+        settings.projectToolsEnabled = false
+        settings.disabledToolNames = ["terminal"]
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertFalse(decoded.projectToolsEnabled)
+        XCTAssertEqual(decoded.disabledToolNames, ["terminal"])
     }
 
     func testRememberProfileCapturesCurrentModelSettings() throws {
@@ -788,7 +811,9 @@ private enum TestCredentialStoreError: Error {
     case unavailable
 }
 
-private final class TestServerAPICredentialStore: ServerAPICredentialStoring, HuggingFaceCredentialStoring {
+private final class TestServerAPICredentialStore: ServerAPICredentialStoring,
+    HuggingFaceCredentialStoring
+{
     var token: String?
     var loadError: Error?
     var saveError: Error?
@@ -820,14 +845,15 @@ private final class TestServerAPICredentialStore: ServerAPICredentialStoring, Hu
 
 final class NativChatToolProtocolTests: XCTestCase {
     func testChatRequestEncodesImageToolAndToolChoice() throws {
-        let tool = MLXChatToolDefinition(function: MLXChatFunctionDefinition(
-            name: "generate_image",
-            description: "Generate an image",
-            parameters: .object([
-                "type": .string("object"),
-                "required": .array([.string("prompt")])
-            ])
-        ))
+        let tool = MLXChatToolDefinition(
+            function: MLXChatFunctionDefinition(
+                name: "generate_image",
+                description: "Generate an image",
+                parameters: .object([
+                    "type": .string("object"),
+                    "required": .array([.string("prompt")]),
+                ])
+            ))
         let request = MLXChatCompletionRequest(
             model: "org/language",
             messages: [MLXChatMessage(role: "user", content: "Draw a lighthouse")],
@@ -868,7 +894,7 @@ final class NativChatToolProtocolTests: XCTestCase {
                 content: #"{"ok":true}"#,
                 toolCallID: "call_123",
                 name: "generate_image"
-            )
+            ),
         ]
 
         let data = try JSONEncoder().encode(messages)
@@ -895,7 +921,8 @@ final class NativChatToolProtocolTests: XCTestCase {
         let message = try JSONDecoder().decode(MLXChatMessage.self, from: data)
         XCTAssertEqual(message.role, "assistant")
         XCTAssertEqual(message.toolCalls?.first?.function?.name, "generate_image")
-        XCTAssertTrue(message.toolCalls?.first?.function?.arguments?.contains("A lighthouse") == true)
+        XCTAssertTrue(
+            message.toolCalls?.first?.function?.arguments?.contains("A lighthouse") == true)
     }
 
     func testFragmentedToolCallsAccumulateByIndex() {
@@ -1050,13 +1077,15 @@ final class ServerPortProbeTests: XCTestCase {
         }
 
         var reuseAddress: Int32 = 1
-        guard setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_REUSEADDR,
-            &reuseAddress,
-            socklen_t(MemoryLayout.size(ofValue: reuseAddress))
-        ) == 0 else {
+        guard
+            setsockopt(
+                descriptor,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                &reuseAddress,
+                socklen_t(MemoryLayout.size(ofValue: reuseAddress))
+            ) == 0
+        else {
             let error = errno
             close(descriptor)
             throw SocketTestError.operation("setsockopt", error)
