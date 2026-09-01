@@ -218,7 +218,7 @@ struct SettingsView: View {
     private var projectSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Projects")
-                .font(.headline)
+                .nativTextStyle(.sectionTitle)
 
             VStack(spacing: 0) {
                 settingsRow(
@@ -241,7 +241,7 @@ struct SettingsView: View {
             Text(
                 "This setting is independent from the tool configuration used by standalone chats. Terminal commands start in the project folder but are not restricted to it, and every command still requires approval."
             )
-            .font(.callout)
+            .nativTextStyle(.supporting)
             .foregroundStyle(.secondary)
         }
     }

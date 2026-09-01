@@ -345,7 +345,7 @@ extension ControlPanelView {
             trailing: {
                 Button(action: createProject) {
                     Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 13, weight: .medium))
+                        .nativTextStyle(.rowTitle)
                         .frame(width: 24, height: 24)
                         .foregroundStyle(Color.secondary.opacity(0.7))
                 }

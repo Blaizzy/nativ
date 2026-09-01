@@ -121,10 +121,10 @@ private struct ChatProjectContextBanner: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(project.name)
-                    .font(.callout.weight(.semibold))
+                    .nativTextStyle(.rowTitleEmphasized)
                     .lineLimit(1)
                 Text(statusText)
-                    .font(.caption)
+                    .nativTextStyle(.metadata)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -134,7 +134,7 @@ private struct ChatProjectContextBanner: View {
 
             if !rootIsAvailable || !toolsEnabled {
                 Text(rootIsAvailable ? "Tools Off" : "Unavailable")
-                    .font(.caption.weight(.medium))
+                    .nativTextStyle(.badgeMuted)
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
             }
         }

@@ -272,14 +272,14 @@ struct ControlPanelProjectHeaderView: View {
         HStack(spacing: 7) {
             Button(action: onToggleCollapse) {
                 Image(systemName: project.isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+                    .nativTextStyle(.badge)
                     .foregroundStyle(.secondary)
                     .frame(width: 12)
             }
             .buttonStyle(.plain)
 
             Image(systemName: isAvailable ? "folder.fill" : "folder.badge.questionmark")
-                .font(.system(size: 11))
+                .nativTextStyle(.metadata)
                 .foregroundStyle(isAvailable ? Color.secondary : Color.orange)
 
             if isRenaming {
