@@ -2790,6 +2790,7 @@ private struct AudioTranscriptRow: View {
             }
         }
         .padding(.vertical, 12)
+        .padding(.horizontal, isSelecting ? 10 : 0)
         .nativBulkSelectable(
             isSelecting: isSelecting,
             isSelected: isSelected,
