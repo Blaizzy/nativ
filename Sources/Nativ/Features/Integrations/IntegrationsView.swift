@@ -116,6 +116,7 @@ final class IntegrationsViewModel: ObservableObject {
     func refreshStatuses() {
         guard !isRefreshingStatuses else { return }
         isRefreshingStatuses = true
+        profiles.migrateConfiguredBaseURLs()
         let baseURL = integrationServerBaseURL
         let apiKey = serverAPIKey
         Task {
@@ -182,6 +183,7 @@ final class IntegrationsViewModel: ObservableObject {
                 statuses[tool] = status
 
                 try await prepareServer(modelID: selectedModelID)
+                profiles.migrateConfiguredBaseURLs()
                 try profiles.launch(
                     tool: tool,
                     executableURL: executableURL,
@@ -245,7 +247,9 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func configureProfile(tool: IntegrationTool, selectedModelID: String) throws {
-        try profiles.configure(
+        let manager = profiles
+        manager.recordServerOrigin()
+        try manager.configure(
             tool: tool,
             selectedModelID: selectedModelID,
             models: eligibleModels,
