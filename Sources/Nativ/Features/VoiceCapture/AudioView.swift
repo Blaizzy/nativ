@@ -69,6 +69,12 @@ struct AudioView: View {
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
     @State private var isConfirmingClearAllDictations = false
+    @State private var dictationSelection = NativBulkSelection<String>()
+    @State private var pendingDictationDeletion: [AudioTranscriptionRecord] = []
+    @State private var isConfirmingDictationDeletion = false
+    @State private var recordingSelection = NativBulkSelection<String>()
+    @State private var pendingRecordingDeletion: [AudioTranscriptionRecord] = []
+    @State private var isConfirmingRecordingDeletion = false
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -125,6 +131,9 @@ struct AudioView: View {
             }
         }
         .onChange(of: destination) { _, destination in
+            if destination != .history {
+                finishAudioLibrarySelection()
+            }
             handleDestinationChange(destination)
         }
         .onDisappear {
@@ -173,10 +182,7 @@ struct AudioView: View {
         }
         .alert(
             "Delete dictation?",
-            isPresented: Binding(
-                get: { pendingDeleteDictation != nil },
-                set: { if !$0 { pendingDeleteDictation = nil } }
-            ),
+            isPresented: isPresentingDictationDeletion,
             presenting: pendingDeleteDictation
         ) { record in
             Button("Delete", role: .destructive) {
@@ -204,10 +210,7 @@ struct AudioView: View {
         }
         .alert(
             "Delete recording?",
-            isPresented: Binding(
-                get: { pendingDeleteRecording != nil },
-                set: { if !$0 { pendingDeleteRecording = nil } }
-            ),
+            isPresented: isPresentingRecordingDeletion,
             presenting: pendingDeleteRecording
         ) { record in
             Button("Delete", role: .destructive) {
@@ -220,6 +223,42 @@ struct AudioView: View {
             }
         } message: { record in
             Text("“\(record.displayTitle)” and its saved audio, transcript, and summary will be permanently deleted.")
+        }
+        .alert(
+            dictationDeletionConfirmationTitle,
+            isPresented: $isConfirmingDictationDeletion
+        ) {
+            Button(
+                pendingDictationDeletion.count == 1 ? "Delete Dictation" : "Delete Dictations",
+                role: .destructive
+            ) {
+                deleteDictations(pendingDictationDeletion)
+                pendingDictationDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingDictationDeletion = []
+            }
+        } message: {
+            Text("The selected transcripts and retained audio will be permanently deleted.")
+        }
+        .alert(
+            recordingDeletionConfirmationTitle,
+            isPresented: $isConfirmingRecordingDeletion
+        ) {
+            Button(
+                pendingRecordingDeletion.count == 1 ? "Delete Recording" : "Delete Recordings",
+                role: .destructive
+            ) {
+                deleteRecordings(pendingRecordingDeletion)
+                pendingRecordingDeletion = []
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {
+                pendingRecordingDeletion = []
+            }
+        } message: {
+            Text("The selected recordings, transcripts, and summaries will be permanently deleted.")
         }
     }
 
@@ -1868,18 +1907,45 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Clear All", role: .destructive) {
-                    isConfirmingClearAllDictations = true
-                }
-                .buttonStyle(.plain)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.red)
-                .disabled(dictationRecords.isEmpty)
-                .help("Delete all recent dictations")
-
                 TextField("Search transcripts", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
+
+                Button(dictationSelection.isActive ? "Done" : "Select") {
+                    if !dictationSelection.isActive {
+                        recordingSelection.finish()
+                    }
+                    dictationSelection.toggleMode()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!dictationSelection.isActive && visibleDictationRecords.isEmpty)
+
+                if !dictationSelection.isActive {
+                    Button("Clear All", role: .destructive) {
+                        isConfirmingClearAllDictations = true
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.red)
+                    .disabled(dictationRecords.isEmpty)
+                    .help("Delete all recent dictations")
+                }
+            }
+
+            if dictationSelection.isActive {
+                NativBulkSelectionToolbar(
+                    selectedCount: selectedDictations.count,
+                    allSelected: dictationSelection.includesAll(visibleDictationIDs),
+                    isSelectAllEnabled: !visibleDictationRecords.isEmpty,
+                    onToggleAll: {
+                        dictationSelection.toggleAll(visibleDictationIDs)
+                    },
+                    onDelete: {
+                        pendingDictationDeletion = selectedDictations
+                        isConfirmingDictationDeletion = true
+                    }
+                )
             }
 
             if filteredRecords.isEmpty {
@@ -1898,13 +1964,16 @@ struct AudioView: View {
                 .frame(maxWidth: .infinity, minHeight: 160)
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(filteredRecords.prefix(30).enumerated()), id: \.element.id) {
+                    ForEach(Array(visibleDictationRecords.enumerated()), id: \.element.id) {
                         index, record in
                         AudioTranscriptRow(
                             record: record,
+                            isSelecting: dictationSelection.isActive,
+                            isSelected: dictationSelection.contains(record.id),
+                            onToggleSelection: { dictationSelection.toggle(record.id) },
                             onDelete: { pendingDeleteDictation = record }
                         )
-                        if index < min(filteredRecords.count, 30) - 1 {
+                        if index < visibleDictationRecords.count - 1 {
                             Divider()
                         }
                     }
@@ -1926,19 +1995,46 @@ struct AudioView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(action: chooseAudioToImport) {
-                    Label("Add Recording", systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                if !recordingSelection.isActive {
+                    Button(action: chooseAudioToImport) {
+                        Label("Add Recording", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
 
-                Button {
-                    destination = .record
-                } label: {
-                    Label("New Recording", systemImage: "plus")
+                    Button {
+                        destination = .record
+                    } label: {
+                        Label("New Recording", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                Button(recordingSelection.isActive ? "Done" : "Select") {
+                    if !recordingSelection.isActive {
+                        dictationSelection.finish()
+                    }
+                    recordingSelection.toggleMode()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(!recordingSelection.isActive && captureRecords.isEmpty)
+            }
+
+            if recordingSelection.isActive {
+                NativBulkSelectionToolbar(
+                    selectedCount: selectedRecordings.count,
+                    allSelected: recordingSelection.includesAll(recordingIDs),
+                    isSelectAllEnabled: !captureRecords.isEmpty,
+                    onToggleAll: {
+                        recordingSelection.toggleAll(recordingIDs)
+                    },
+                    onDelete: {
+                        pendingRecordingDeletion = selectedRecordings
+                        isConfirmingRecordingDeletion = true
+                    }
+                )
             }
 
             if captureRecords.isEmpty {
@@ -1958,6 +2054,9 @@ struct AudioView: View {
                     ForEach(captureRecords) { record in
                         AudioCaptureRecordRow(
                             record: record,
+                            isSelecting: recordingSelection.isActive,
+                            isSelected: recordingSelection.contains(record.id),
+                            onToggleSelection: { recordingSelection.toggle(record.id) },
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
                             isPlaying: captureLibrary.playingRecordID == record.id
@@ -2100,12 +2199,64 @@ struct AudioView: View {
         }
     }
 
+    private var visibleDictationRecords: [AudioTranscriptionRecord] {
+        Array(filteredRecords.prefix(30))
+    }
+
+    private var visibleDictationIDs: Set<String> {
+        Set(visibleDictationRecords.map(\.id))
+    }
+
     private var dictationRecords: [AudioTranscriptionRecord] {
         analytics.records.filter { $0.resolvedKind == .dictation }
     }
 
     private var captureRecords: [AudioTranscriptionRecord] {
         analytics.records.filter { $0.resolvedKind != .dictation }
+    }
+
+    private var recordingIDs: Set<String> {
+        Set(captureRecords.map(\.id))
+    }
+
+    private var selectedDictations: [AudioTranscriptionRecord] {
+        dictationRecords.filter { dictationSelection.contains($0.id) }
+    }
+
+    private var selectedRecordings: [AudioTranscriptionRecord] {
+        captureRecords.filter { recordingSelection.contains($0.id) }
+    }
+
+    private var dictationDeletionConfirmationTitle: String {
+        let count = pendingDictationDeletion.count
+        return "Delete \(count) \(count == 1 ? "dictation" : "dictations")?"
+    }
+
+    private var isPresentingDictationDeletion: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteDictation != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteDictation = nil
+                }
+            }
+        )
+    }
+
+    private var isPresentingRecordingDeletion: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteRecording != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteRecording = nil
+                }
+            }
+        )
+    }
+
+    private var recordingDeletionConfirmationTitle: String {
+        let count = pendingRecordingDeletion.count
+        return "Delete \(count) \(count == 1 ? "recording" : "recordings")?"
     }
 
     private var speechModels: [LocalModel] {
@@ -2225,11 +2376,31 @@ struct AudioView: View {
         )
     }
 
+    private func deleteDictations(_ records: [AudioTranscriptionRecord]) {
+        records.forEach(deleteDictation)
+        dictationSelection.finish()
+    }
+
+    private func deleteRecordings(_ records: [AudioTranscriptionRecord]) {
+        records.forEach(captureLibrary.delete)
+        recordingSelection.finish()
+    }
+
+    private func finishAudioLibrarySelection() {
+        dictationSelection.finish()
+        recordingSelection.finish()
+        pendingDictationDeletion = []
+        pendingRecordingDeletion = []
+        isConfirmingDictationDeletion = false
+        isConfirmingRecordingDeletion = false
+    }
+
     private func clearAllDictations() {
         analytics.deleteAllDictations(
             recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
         )
         searchText = ""
+        dictationSelection.finish()
     }
 
     private func apply(_ shortcut: VoiceShortcut, to kind: AudioShortcutKind) {
@@ -2539,12 +2710,19 @@ private struct InlineEditableAudioTitle: View {
 
 private struct AudioTranscriptRow: View {
     let record: AudioTranscriptionRecord
+    let isSelecting: Bool
+    let isSelected: Bool
+    let onToggleSelection: () -> Void
     let onDelete: () -> Void
     @State private var copied = false
     @State private var isDeleteHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
+            if isSelecting {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
+            }
+
             VStack(alignment: .leading, spacing: 7) {
                 Text(record.transcript)
                     .font(.callout)
@@ -2571,45 +2749,54 @@ private struct AudioTranscriptRow: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 4) {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(record.transcript, forType: .string)
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.5))
-                        copied = false
-                    }
-                } label: {
-                    Label(
-                        copied ? "Copied" : "Copy",
-                        systemImage: copied ? "checkmark" : "doc.on.doc"
-                    )
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .frame(width: 26, height: 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(
-                                    isDeleteHovering
-                                        ? Color.red.opacity(0.13)
-                                        : Color.clear
-                                )
+            if !isSelecting {
+                HStack(spacing: 4) {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(record.transcript, forType: .string)
+                        copied = true
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            copied = false
+                        }
+                    } label: {
+                        Label(
+                            copied ? "Copied" : "Copy",
+                            systemImage: copied ? "checkmark" : "doc.on.doc"
                         )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button(role: .destructive, action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .frame(width: 26, height: 20)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(
+                                        isDeleteHovering
+                                            ? Color.red.opacity(0.13)
+                                            : Color.clear
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
+                    .help("Delete dictation")
+                    .accessibilityLabel("Delete dictation")
+                    .onHover { isDeleteHovering = $0 }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(isDeleteHovering ? Color.red : Color.secondary)
-                .help("Delete dictation")
-                .accessibilityLabel("Delete dictation")
-                .onHover { isDeleteHovering = $0 }
             }
         }
         .padding(.vertical, 12)
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelected,
+            cornerRadius: 8,
+            accessibilityLabel: "Select dictation recorded \(record.recordedAt.formatted())",
+            action: onToggleSelection
+        )
     }
 
     private var metadataSeparator: some View {
@@ -2620,6 +2807,9 @@ private struct AudioTranscriptRow: View {
 
 private struct AudioCaptureRecordRow: View {
     let record: AudioTranscriptionRecord
+    let isSelecting: Bool
+    let isSelected: Bool
+    let onToggleSelection: () -> Void
     let audioIsAvailable: Bool
     let isProcessing: Bool
     let isPlaying: Bool
@@ -2665,6 +2855,10 @@ private struct AudioCaptureRecordRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
+                if isSelecting {
+                    NativBulkSelectionCheckbox(isSelected: isSelected)
+                }
+
                 Image(systemName: record.resolvedKind.systemImage)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(record.resolvedKind == .dictation ? Color.secondary : Color.blue)
@@ -2676,12 +2870,18 @@ private struct AudioCaptureRecordRow: View {
                     )
 
                 VStack(alignment: .leading, spacing: 4) {
-                    InlineEditableAudioTitle(
-                        title: record.displayTitle,
-                        placeholder: "\(record.resolvedKind.title) title",
-                        font: .callout.weight(.semibold),
-                        onRename: onRename
-                    )
+                    if isSelecting {
+                        Text(record.displayTitle)
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(1)
+                    } else {
+                        InlineEditableAudioTitle(
+                            title: record.displayTitle,
+                            placeholder: "\(record.resolvedKind.title) title",
+                            font: .callout.weight(.semibold),
+                            onRename: onRename
+                        )
+                    }
                     HStack(spacing: 7) {
                         Text(record.resolvedKind.title)
                         Text("·")
@@ -2710,63 +2910,65 @@ private struct AudioCaptureRecordRow: View {
                     .foregroundStyle(.secondary)
                 }
 
-                Button(action: onPlay) {
-                    Label(
-                        isPlaying ? "Pause" : (isPaused ? "Resume" : "Play"),
-                        systemImage: isPlaying ? "pause.fill" : "play.fill"
-                    )
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!audioIsAvailable)
-
-                if isPlaying || isPaused {
-                    Button(action: onStop) {
-                        Label("Stop", systemImage: "stop.fill")
+                if !isSelecting {
+                    Button(action: onPlay) {
+                        Label(
+                            isPlaying ? "Pause" : (isPaused ? "Resume" : "Play"),
+                            systemImage: isPlaying ? "pause.fill" : "play.fill"
+                        )
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .labelStyle(.iconOnly)
-                    .help("Stop playback")
-                }
+                    .disabled(!audioIsAvailable)
 
-                if record.transcript.isEmpty && !isProcessing {
-                    Button("Transcribe", action: onTranscribe)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(!audioIsAvailable)
-                }
-
-                Menu {
-                    if !record.transcript.isEmpty {
-                        Button("Copy Transcript", action: copyTranscript)
-                        if let summary = record.summary, !summary.isEmpty {
-                            Button("Copy Summary") {
-                                copy(summary, detail: .summary)
-                            }
+                    if isPlaying || isPaused {
+                        Button(action: onStop) {
+                            Label("Stop", systemImage: "stop.fill")
                         }
-                        Button(
-                            record.summary?.isEmpty == false
-                                ? "Regenerate summary"
-                                : "Generate summary",
-                            action: onSummarize
-                        )
-                        .disabled(isProcessing)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .labelStyle(.iconOnly)
+                        .help("Stop playback")
                     }
-                    Divider()
-                    Button("Reveal in Finder", action: onReveal)
-                        .disabled(!audioIsAvailable)
-                    Button("Delete Recording", role: .destructive, action: onDelete)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .frame(width: 18)
+
+                    if record.transcript.isEmpty && !isProcessing {
+                        Button("Transcribe", action: onTranscribe)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(!audioIsAvailable)
+                    }
+
+                    Menu {
+                        if !record.transcript.isEmpty {
+                            Button("Copy Transcript", action: copyTranscript)
+                            if let summary = record.summary, !summary.isEmpty {
+                                Button("Copy Summary") {
+                                    copy(summary, detail: .summary)
+                                }
+                            }
+                            Button(
+                                record.summary?.isEmpty == false
+                                    ? "Regenerate summary"
+                                    : "Generate summary",
+                                action: onSummarize
+                            )
+                            .disabled(isProcessing)
+                        }
+                        Divider()
+                        Button("Reveal in Finder", action: onReveal)
+                            .disabled(!audioIsAvailable)
+                        Button("Delete Recording", role: .destructive, action: onDelete)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 18)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
             }
 
-            if !record.transcript.isEmpty {
+            if !isSelecting, !record.transcript.isEmpty {
                 VStack(spacing: 0) {
                     detailMenu
 
@@ -2805,6 +3007,12 @@ private struct AudioCaptureRecordRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         }
+        .nativBulkSelectable(
+            isSelecting: isSelecting,
+            isSelected: isSelected,
+            accessibilityLabel: "Select \(record.displayTitle)",
+            action: onToggleSelection
+        )
     }
 
     private var detailMenu: some View {
