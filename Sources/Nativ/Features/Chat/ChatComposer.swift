@@ -559,11 +559,14 @@ struct ChatComposer: View {
     }
 
     private var effectiveCanSend: Bool {
-        canSend && !hasVisionRejectedAttachment
+        canSend && !hasVisionRejectedAttachment && importedContinuationIsAvailable
     }
 
     private var attachmentNotices: [ChatAttachmentNotice] {
         var notices: [ChatAttachmentNotice] = []
+        if let importedContinuationNotice {
+            notices.append(importedContinuationNotice)
+        }
         let rejectedImages = modelLacksVision
             ? viewModel.pendingImageAttachments.filter { $0.chatAttachmentKind == .image }
             : []
@@ -638,6 +641,40 @@ struct ChatComposer: View {
             ))
         }
         return notices
+    }
+
+    private var importedContinuationIsAvailable: Bool {
+        guard viewModel.importedModelRepositoryID != nil else {
+            return true
+        }
+        guard let selectedLocalModel
+        else {
+            return true
+        }
+        guard let tokenCount = viewModel.importedPromptTokenCount,
+            let contextWindow = selectedLocalModel.contextSize
+        else {
+            return true
+        }
+        return tokenCount <= contextWindow
+    }
+
+    private var importedContinuationNotice: ChatAttachmentNotice? {
+        guard viewModel.importedModelRepositoryID != nil else {
+            return nil
+        }
+        if let tokenCount = viewModel.importedPromptTokenCount,
+           let contextWindow = selectedLocalModel?.contextSize,
+           tokenCount > contextWindow {
+            return ChatAttachmentNotice(
+                id: "imported-chat-context-limit",
+                severity: .error,
+                title: "This chat can’t be continued",
+                message: "Its \(tokenCount)-token history exceeds the selected model’s "
+                    + "\(contextWindow)-token context window."
+            )
+        }
+        return nil
     }
 
     private func documentContextWarningMessage(

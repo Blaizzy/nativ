@@ -244,6 +244,19 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    var importedModelRepositoryID: String? {
+        currentSession?.importedModelRepositoryID
+    }
+
+    var importedPromptTokenCount: Int? {
+        messages.reversed().compactMap { message -> Int? in
+            guard message.role == .assistant else {
+                return nil
+            }
+            return message.responseMetrics?.totalTokens
+        }.first
+    }
+
     func attachmentValidation(for attachmentID: UUID) -> ChatAttachmentValidation? {
         attachmentValidations[attachmentID]
     }
@@ -369,6 +382,48 @@ final class ChatViewModel: ObservableObject {
         draft = ""
         pendingImageAttachments.removeAll()
         applyCurrentSession(session)
+    }
+
+    func archive(
+        for sessionID: UUID,
+        selectedModelID: String?,
+        systemPrompt: String
+    ) -> ChatArchive? {
+        let session: ChatSession?
+        if sessionID == currentSessionID {
+            session = currentSessionSnapshot
+        } else {
+            session = storedSessions.first(where: { $0.id == sessionID })
+                ?? sessionStore.loadSession(id: sessionID)
+        }
+
+        guard let session,
+            let modelRepositoryID = session.importedModelRepositoryID
+                ?? session.messages.reversed().compactMap(\.modelID).first
+                ?? selectedModelID
+        else {
+            return nil
+        }
+
+        return ChatArchive(
+            chat: session,
+            modelRepositoryID: modelRepositoryID,
+            systemPrompt: session.importedSystemPrompt ?? systemPrompt
+        )
+    }
+
+    func importArchive(_ archive: ChatArchive) throws -> UUID? {
+        let session = try ChatArchiveCodec.importedSession(from: archive)
+        persistCurrentSession(updateTimestamp: false)
+        guard saveSession(session) else {
+            return nil
+        }
+        upsertStoredSession(session)
+        discardPromptEditing()
+        draft = ""
+        pendingImageAttachments.removeAll()
+        applyCurrentSession(session)
+        return session.id
     }
 
     func stageAttachment(_ attachment: ChatImageAttachment) {
@@ -752,7 +807,10 @@ final class ChatViewModel: ObservableObject {
         languageModelSupportsTools: Bool,
         languageModelSupportsVision: Bool
     ) {
-        let settings = appModel.settings.normalized()
+        var settings = appModel.settings.normalized()
+        if let importedSystemPrompt = currentSession?.importedSystemPrompt {
+            settings.systemPrompt = importedSystemPrompt
+        }
         guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
             languageModelSupportsVision || !hasPendingImageAttachments,
             let modelID = settings.languageModelID,
