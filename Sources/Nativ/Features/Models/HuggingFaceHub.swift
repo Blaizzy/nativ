@@ -1038,15 +1038,23 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private final class DownloadContext {
         let modelID: String
         let cachePath: String
+        let volumeIdentifier: String?
         let token: String?
         var onCompletion: (() -> Void)?
         var operation: HuggingFaceDownloadOperation?
         var task: Task<Void, Never>?
         var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
-        init(modelID: String, cachePath: String, token: String?, onCompletion: (() -> Void)?) {
+        init(
+            modelID: String,
+            cachePath: String,
+            volumeIdentifier: String?,
+            token: String?,
+            onCompletion: (() -> Void)?
+        ) {
             self.modelID = modelID
             self.cachePath = cachePath
+            self.volumeIdentifier = volumeIdentifier
             self.token = token
             self.onCompletion = onCompletion
         }
@@ -1125,20 +1133,24 @@ final class HuggingFaceDownloadManager: ObservableObject {
         repoID: String,
         sizeBytes: Int64?,
         cachePath: String,
+        volumeIdentifier: String?,
         token: String?,
         onCompletion: @escaping () -> Void
     ) {
         guard contexts[repoID] == nil else { return }
-        if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-            errorByModelID[repoID] = .message(blocker)
-            rowUpdates.send(repoID)
-            return
-        }
         do {
+            _ = try ExternalModelCacheReference.validateForUse(
+                path: cachePath,
+                expectedVolumeIdentifier: volumeIdentifier
+            )
+            if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
+                throw HuggingFaceDownloadFailure.message(blocker)
+            }
             try enqueue(
                 repoID: repoID,
                 sizeBytes: sizeBytes,
                 cachePath: cachePath,
+                volumeIdentifier: volumeIdentifier,
                 token: token,
                 onCompletion: onCompletion
             )
@@ -1152,11 +1164,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
         repoID: String,
         sizeBytes: Int64?,
         cachePath: String,
+        volumeIdentifier: String?,
         token: String?
     ) async throws {
         let expandedCachePath = LocalModelDiscovery.expandedPath(cachePath)
         if let context = contexts[repoID] {
-            guard context.cachePath == expandedCachePath else {
+            guard context.cachePath == expandedCachePath,
+                  context.volumeIdentifier == volumeIdentifier else {
                 throw HuggingFaceHubError.anotherDownloadInProgress(repoID)
             }
         } else {
@@ -1165,6 +1179,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                     repoID: repoID,
                     sizeBytes: sizeBytes,
                     cachePath: expandedCachePath,
+                    volumeIdentifier: volumeIdentifier,
                     token: token,
                     onCompletion: nil
                 )
@@ -1200,6 +1215,17 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     func resumeDownload(_ modelID: String) {
         guard let context = contexts[modelID], state(for: modelID) == .paused else { return }
+        do {
+            _ = try ExternalModelCacheReference.validateForUse(
+                path: context.cachePath,
+                expectedVolumeIdentifier: context.volumeIdentifier
+            )
+        } catch {
+            context.task?.cancel()
+            context.operation?.cancel()
+            finishDownload(repoID: modelID, error: downloadFailure(for: error))
+            return
+        }
         context.operation?.resume()
         setState(modelID, .downloading)
     }
@@ -1208,6 +1234,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         guard let context = contexts[modelID] else { return }
         let task = context.task
         let cachePath = context.cachePath
+        let volumeIdentifier = context.volumeIdentifier
         task?.cancel()
         let waiters = Array(context.waiters.values)
         removeContext(modelID)
@@ -1216,7 +1243,11 @@ final class HuggingFaceDownloadManager: ObservableObject {
         Task {
             await task?.value
             await Task.detached(priority: .utility) {
-                HuggingFaceSnapshotDownloader.removeDownload(repoID: modelID, cachePath: cachePath)
+                HuggingFaceSnapshotDownloader.removeDownload(
+                    repoID: modelID,
+                    cachePath: cachePath,
+                    volumeIdentifier: volumeIdentifier
+                )
             }.value
         }
     }
@@ -1253,13 +1284,18 @@ final class HuggingFaceDownloadManager: ObservableObject {
         repoID: String,
         sizeBytes: Int64?,
         cachePath: String,
+        volumeIdentifier: String?,
         token: String?,
         onCompletion: (() -> Void)?
     ) throws {
-        let expandedCachePath = LocalModelDiscovery.expandedPath(cachePath)
+        let cacheURL = try ExternalModelCacheReference.validateForUse(
+            path: cachePath,
+            expectedVolumeIdentifier: volumeIdentifier
+        )
         let context = DownloadContext(
             modelID: repoID,
-            cachePath: expandedCachePath,
+            cachePath: cacheURL.path,
+            volumeIdentifier: volumeIdentifier,
             token: token,
             onCompletion: onCompletion
         )
@@ -1477,9 +1513,18 @@ private enum HuggingFaceSnapshotDownloader {
         }
     }
 
-    static func removeDownload(repoID: String, cachePath: String) {
+    static func removeDownload(
+        repoID: String,
+        cachePath: String,
+        volumeIdentifier: String?
+    ) {
+        guard let cacheURL = try? ExternalModelCacheReference.validateForUse(
+            path: cachePath,
+            expectedVolumeIdentifier: volumeIdentifier
+        ) else {
+            return
+        }
         let repositoryDirectory = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
-        let cacheURL = URL(fileURLWithPath: cachePath, isDirectory: true)
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: cacheURL.appendingPathComponent(repositoryDirectory, isDirectory: true))
         try? fileManager.removeItem(
