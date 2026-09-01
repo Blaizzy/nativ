@@ -222,9 +222,9 @@ struct SettingsView: View {
 
             VStack(spacing: 0) {
                 settingsRow(
-                    title: "Agentic Tools",
+                    title: "Allow Tools",
                     description:
-                        "Allow project chats to read, search, write, and patch files in their project folder, and request approval to run terminal commands there.",
+                        "Allow projects to read and write files in their project folder and run terminal commands with approval.",
                     systemImage: "folder.badge.gearshape"
                 ) {
                     Toggle("", isOn: projectToolsEnabledBinding)
@@ -237,12 +237,6 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
-
-            Text(
-                "This setting is independent from the tool configuration used by standalone chats. Terminal commands start in the project folder but are not restricted to it, and every command still requires approval."
-            )
-            .nativTextStyle(.supporting)
-            .foregroundStyle(.secondary)
         }
     }
 
