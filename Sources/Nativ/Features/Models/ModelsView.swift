@@ -235,8 +235,7 @@ struct ModelsView: View {
     @State private var section: ModelsPageSection = .installed
     @State private var renderedSection: ModelsPageSection = .installed
     @State private var typeFilter: ModelsTypeFilter = .all
-    @State private var localQuery = ""
-    @State private var hubQuery = ""
+    @State private var searchQuery = ""
     @State private var hubSort: HuggingFaceModelSort = .trending
     @State private var hubSortDirection: HuggingFaceSortDirection = .descending
     @State private var hubCapabilityFilters = Set<LocalModelCapability>()
@@ -366,7 +365,7 @@ struct ModelsView: View {
             guard searchTaskID != lastStartedHubSearchTaskID else { return }
             lastStartedHubSearchTaskID = searchTaskID
             hubLibrary.search(
-                query: hubQuery,
+                query: searchQuery,
                 sort: hubSort,
                 direction: hubSortDirection,
                 capabilities: hubCapabilityFilters,
@@ -399,7 +398,7 @@ struct ModelsView: View {
         handledSpeechModelDiscoveryRequest = speechModelDiscoveryRequest
         section = .discover
         typeFilter = .speech
-        hubQuery = ""
+        searchQuery = ""
         hubCapabilityFilters = [.speechToText]
         hubAccessFilter = .all
     }
@@ -411,7 +410,7 @@ struct ModelsView: View {
         handledImageModelDiscoveryRequest = imageModelDiscoveryRequest
         section = .discover
         typeFilter = .image
-        hubQuery = ""
+        searchQuery = ""
         hubSort = .downloads
         hubSortDirection = .descending
         hubCapabilityFilters = [imageModelDiscoveryCapability]
@@ -427,7 +426,7 @@ struct ModelsView: View {
         handledModelDiscoveryRequest = modelDiscoveryRequest
         section = .discover
         typeFilter = .all
-        hubQuery = modelDiscoveryRepositoryID
+        searchQuery = modelDiscoveryRepositoryID
         hubCapabilityFilters = []
         hubAccessFilter = .all
     }
@@ -534,7 +533,7 @@ struct ModelsView: View {
                 DebouncedModelsSearchField(
                     prompt: renderedSection == .installed
                         ? "Search installed models" : "Search models on Hugging Face Hub",
-                    text: activeSearchQuery,
+                    text: $searchQuery,
                     identity: renderedSection,
                     debounceMilliseconds: renderedSection == .installed ? 100 : 350
                 )
@@ -779,7 +778,7 @@ struct ModelsView: View {
         } else if hubLibrary.isSearching && hubLibrary.models.isEmpty {
             ScrollView {
                 ModelsLoadingState(
-                    title: hubQuery.isEmpty
+                    title: searchQuery.isEmpty
                         ? "Finding popular Safetensors models…" : "Searching Hugging Face Hub…")
                     .modelsListRow()
             }
@@ -1061,7 +1060,7 @@ struct ModelsView: View {
     }
 
     private var filteredLocalModels: [LocalModel] {
-        let query = localQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         var models =
             query.isEmpty
             ? localLibrary.models
@@ -1112,19 +1111,6 @@ struct ModelsView: View {
         .labelsHidden()
         .pickerStyle(.segmented)
         .frame(width: 230, alignment: .leading)
-    }
-
-    private var activeSearchQuery: Binding<String> {
-        Binding(
-            get: { renderedSection == .installed ? localQuery : hubQuery },
-            set: { newValue in
-                if renderedSection == .installed {
-                    localQuery = newValue
-                } else {
-                    hubQuery = newValue
-                }
-            }
-        )
     }
 
     private var settingsBinding: Binding<NativSettings> {
@@ -1309,7 +1295,7 @@ struct ModelsView: View {
 
     private var installedFilterIsActive: Bool {
         typeFilter != .all
-            || !localQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var modelScanPath: String {
@@ -1373,7 +1359,7 @@ struct ModelsView: View {
     private var hubSearchTaskID: HubSearchTaskID {
         HubSearchTaskID(
             section: renderedSection,
-            query: hubQuery,
+            query: searchQuery,
             sort: hubSort,
             direction: hubSortDirection,
             capabilities: hubCapabilityFilters,
@@ -1390,7 +1376,7 @@ struct ModelsView: View {
             URLQueryItem(name: "p", value: String(hubLibrary.pageNumber - 1)),
         ]
 
-        let query = hubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             queryItems.append(URLQueryItem(name: "search", value: query))
         }
