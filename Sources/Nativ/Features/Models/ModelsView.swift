@@ -181,6 +181,8 @@ struct ModelsViewHost: View, @MainActor Equatable {
     var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
     var modelDiscoveryRequest = 0
     var modelDiscoveryRepositoryID: String?
+    var drafterModelDiscoveryRequest = 0
+    var drafterModelDiscoveryTargetID: String?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -191,6 +193,8 @@ struct ModelsViewHost: View, @MainActor Equatable {
             && lhs.imageModelDiscoveryCapability == rhs.imageModelDiscoveryCapability
             && lhs.modelDiscoveryRequest == rhs.modelDiscoveryRequest
             && lhs.modelDiscoveryRepositoryID == rhs.modelDiscoveryRepositoryID
+            && lhs.drafterModelDiscoveryRequest == rhs.drafterModelDiscoveryRequest
+            && lhs.drafterModelDiscoveryTargetID == rhs.drafterModelDiscoveryTargetID
     }
 
     var body: some View {
@@ -202,7 +206,9 @@ struct ModelsViewHost: View, @MainActor Equatable {
             imageModelDiscoveryRequest: imageModelDiscoveryRequest,
             imageModelDiscoveryCapability: imageModelDiscoveryCapability,
             modelDiscoveryRequest: modelDiscoveryRequest,
-            modelDiscoveryRepositoryID: modelDiscoveryRepositoryID
+            modelDiscoveryRepositoryID: modelDiscoveryRepositoryID,
+            drafterModelDiscoveryRequest: drafterModelDiscoveryRequest,
+            drafterModelDiscoveryTargetID: drafterModelDiscoveryTargetID
         )
     }
 }
@@ -216,6 +222,8 @@ struct ModelsView: View {
     var imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration
     var modelDiscoveryRequest = 0
     var modelDiscoveryRepositoryID: String?
+    var drafterModelDiscoveryRequest = 0
+    var drafterModelDiscoveryTargetID: String?
     @StateObject private var modelState: ModelsNativState
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var hubLibrary = HuggingFaceModelLibrary()
@@ -236,6 +244,7 @@ struct ModelsView: View {
     @State private var handledSpeechModelDiscoveryRequest = 0
     @State private var handledImageModelDiscoveryRequest = 0
     @State private var handledModelDiscoveryRequest = 0
+    @State private var handledDrafterModelDiscoveryRequest = 0
     @State private var lastStartedHubSearchTaskID: HubSearchTaskID?
     @State private var readmeSelection: ModelReadmeSelection?
     @State private var installedModelSelection = NativBulkSelection<String>()
@@ -250,7 +259,9 @@ struct ModelsView: View {
         imageModelDiscoveryRequest: Int = 0,
         imageModelDiscoveryCapability: LocalModelCapability = .imageGeneration,
         modelDiscoveryRequest: Int = 0,
-        modelDiscoveryRepositoryID: String? = nil
+        modelDiscoveryRepositoryID: String? = nil,
+        drafterModelDiscoveryRequest: Int = 0,
+        drafterModelDiscoveryTargetID: String? = nil
     ) {
         self.model = model
         _showsConfiguration = showsConfiguration
@@ -260,6 +271,8 @@ struct ModelsView: View {
         self.imageModelDiscoveryCapability = imageModelDiscoveryCapability
         self.modelDiscoveryRequest = modelDiscoveryRequest
         self.modelDiscoveryRepositoryID = modelDiscoveryRepositoryID
+        self.drafterModelDiscoveryRequest = drafterModelDiscoveryRequest
+        self.drafterModelDiscoveryTargetID = drafterModelDiscoveryTargetID
         _modelState = StateObject(wrappedValue: ModelsNativState(model: model))
     }
 
@@ -307,6 +320,7 @@ struct ModelsView: View {
             openSpeechModelDiscoveryIfRequested()
             openImageModelDiscoveryIfRequested()
             openModelDiscoveryIfRequested()
+            openDrafterModelDiscoveryIfRequested()
         }
         .onChange(of: speechModelDiscoveryRequest) { _, _ in
             openSpeechModelDiscoveryIfRequested()
@@ -316,6 +330,9 @@ struct ModelsView: View {
         }
         .onChange(of: modelDiscoveryRequest) { _, _ in
             openModelDiscoveryIfRequested()
+        }
+        .onChange(of: drafterModelDiscoveryRequest) { _, _ in
+            openDrafterModelDiscoveryIfRequested()
         }
         .onChange(of: section) { _, newSection in
             if newSection != .installed {
@@ -412,6 +429,24 @@ struct ModelsView: View {
         typeFilter = .all
         hubQuery = modelDiscoveryRepositoryID
         hubCapabilityFilters = []
+        hubAccessFilter = .all
+    }
+
+    private func openDrafterModelDiscoveryIfRequested() {
+        guard drafterModelDiscoveryRequest > handledDrafterModelDiscoveryRequest,
+              let drafterModelDiscoveryTargetID
+        else {
+            return
+        }
+        handledDrafterModelDiscoveryRequest = drafterModelDiscoveryRequest
+        section = .discover
+        typeFilter = .all
+        hubQuery = DrafterModelCompatibility.discoveryQuery(
+            for: drafterModelDiscoveryTargetID
+        )
+        hubSort = .downloads
+        hubSortDirection = .descending
+        hubCapabilityFilters = [.drafter]
         hubAccessFilter = .all
     }
 
