@@ -562,6 +562,101 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertNil(LocalModelDiscovery.drafterKind(fromModelType: ""))
     }
 
+    func testDrafterMetadataResolverUsesConfigInsteadOfRepositoryNames() throws {
+        let resolver = MLXDrafterModelResolver(
+            supportedDrafterKinds: [
+                "qwen3_5_mtp": "mtp",
+                "qwen3_dflash": "dflash",
+                "dspark": "dflash",
+                "eagle3": "eagle3",
+            ]
+        )
+        let fixtures: [([String: Any], MLXDrafterMetadata)] = [
+            (
+                ["model_type": "qwen3_5_mtp"],
+                MLXDrafterMetadata(loaderModelType: "qwen3_5_mtp", kind: "mtp")
+            ),
+            (
+                [
+                    "model_type": "qwen3",
+                    "architectures": ["DFlashDraftModel"],
+                    "dflash_config": [:],
+                ],
+                MLXDrafterMetadata(loaderModelType: "qwen3_dflash", kind: "dflash")
+            ),
+            (
+                [
+                    "model_type": "qwen3",
+                    "architectures": ["DSparkDraftModel"],
+                    "dflash_config": ["projector_type": "dspark"],
+                    "markov_rank": 512,
+                ],
+                MLXDrafterMetadata(loaderModelType: "dspark", kind: "dflash")
+            ),
+            (
+                ["architectures": ["Eagle3DraftModel"]],
+                MLXDrafterMetadata(loaderModelType: "eagle3", kind: "eagle3")
+            ),
+        ]
+
+        for (config, expected) in fixtures {
+            let data = try JSONSerialization.data(withJSONObject: config)
+            let decoded = try JSONDecoder().decode(DrafterModelConfiguration.self, from: data)
+            XCTAssertEqual(resolver.metadata(for: decoded), expected)
+        }
+
+        let targetConfig = try JSONDecoder().decode(
+            DrafterModelConfiguration.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "model_type": "qwen3",
+                "speculators_model_type": "eagle3",
+                "num_nextn_predict_layers": 1,
+            ])
+        )
+        XCTAssertNil(resolver.metadata(for: targetConfig))
+    }
+
+    func testScanClassifiesSupportedDrafterConfigFamilies() async throws {
+        let fixtures: [(String, [String: Any], String)] = [
+            ("org/mtp", ["model_type": "qwen3_5_mtp"], "mtp"),
+            (
+                "org/dflash",
+                [
+                    "model_type": "qwen3",
+                    "architectures": ["DFlashDraftModel"],
+                    "dflash_config": [:],
+                ],
+                "dflash"
+            ),
+            (
+                "org/dspark",
+                [
+                    "model_type": "qwen3",
+                    "architectures": ["DSparkDraftModel"],
+                    "dflash_config": ["projector_type": "dspark"],
+                    "markov_rank": 512,
+                ],
+                "dflash"
+            ),
+            (
+                "org/eagle3",
+                ["architectures": ["Eagle3DraftModel"]],
+                "eagle3"
+            ),
+        ]
+        for (repoID, config, _) in fixtures {
+            try makeDrafterSnapshot(repoID: repoID, config: config)
+        }
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        for (repoID, _, expectedKind) in fixtures {
+            let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+            XCTAssertTrue(model.capabilities.contains(.drafter), repoID)
+            XCTAssertEqual(model.drafterKind, expectedKind, repoID)
+        }
+    }
+
     func testDrafterExcludedFromLanguageModelPicker() {
         let drafter = makeModel(
             repoID: "mlx-community/Qwen3.5-4B-MTP-4bit",
@@ -573,6 +668,73 @@ final class LocalModelDiscoveryTests: XCTestCase {
         )
         XCTAssertFalse(drafter.isEligibleForLanguageModelPicker)
         XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
+    }
+
+    func testModelsSortByDisplayedTitleInsteadOfRepositoryOwner() async throws {
+        for repoID in [
+            "alpha/Zeta-2B",
+            "zeta/Alpha-10B",
+            "middle/Alpha-2B",
+        ] {
+            try makeTextModelSnapshot(
+                repoID: repoID,
+                modelType: "qwen3",
+                architectures: ["Qwen3ForCausalLM"],
+                sentenceTransformer: false
+            )
+        }
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertEqual(
+            models.map(\.repoID),
+            ["middle/Alpha-2B", "zeta/Alpha-10B", "alpha/Zeta-2B"]
+        )
+    }
+
+    func testDrafterCompatibilityMatchesTargetNameAndHiddenSize() {
+        let target = makeModel(
+            repoID: "mlx-community/Qwen3.8-27B-4bit",
+            capabilities: [.text],
+            hiddenSize: 5_120
+        )
+        let matchingDFlash = makeModel(
+            repoID: "z-lab/Qwen3.8-27B-DFlash2",
+            capabilities: [.text, .drafter],
+            drafterKind: "dflash",
+            hiddenSize: 5_120
+        )
+        let olderMTP = makeModel(
+            repoID: "mlx-community/Qwen3.6-27B-MTP-4bit",
+            capabilities: [.text, .drafter],
+            drafterKind: "mtp",
+            hiddenSize: 5_120
+        )
+        let wrongHiddenSize = makeModel(
+            repoID: "other/Qwen3.8-27B-EAGLE3",
+            capabilities: [.text, .drafter],
+            drafterKind: "eagle3",
+            hiddenSize: 4_096
+        )
+
+        XCTAssertTrue(DrafterModelCompatibility.isCompatible(matchingDFlash, with: target))
+        XCTAssertFalse(DrafterModelCompatibility.isCompatible(olderMTP, with: target))
+        XCTAssertFalse(DrafterModelCompatibility.isCompatible(wrongHiddenSize, with: target))
+    }
+
+    func testDrafterDiscoveryQueryRemovesConversionAndDrafterSuffixes() {
+        XCTAssertEqual(
+            DrafterModelCompatibility.discoveryQuery(
+                for: "mlx-community/Qwen3.8-27B-MLX-4bit"
+            ),
+            "Qwen3.8-27B"
+        )
+        XCTAssertEqual(
+            DrafterModelCompatibility.discoveryQuery(
+                for: "google/gemma-4-26B-A4B-it-assistant"
+            ),
+            "gemma-4-26B-A4B-it"
+        )
     }
 
     func testRerankerIsClassifiedAndExcludedFromLanguageModelPicker() async throws {
@@ -597,9 +759,25 @@ final class LocalModelDiscoveryTests: XCTestCase {
         try Data(string.utf8).write(to: url)
     }
 
+    private func makeDrafterSnapshot(
+        repoID: String,
+        config: [String: Any]
+    ) throws {
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository =
+            snapshot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try write(snapshot.lastPathComponent, to: repository.appendingPathComponent("refs/main"))
+        try writeJSON(config, to: snapshot.appendingPathComponent("config.json"))
+        try write("weights", to: snapshot.appendingPathComponent("model.safetensors"))
+    }
+
     private func makeModel(
         repoID: String,
-        capabilities: Set<LocalModelCapability>
+        capabilities: Set<LocalModelCapability>,
+        drafterKind: String? = nil,
+        hiddenSize: Int? = nil
     ) -> LocalModel {
         LocalModel(
             repoID: repoID,
@@ -612,8 +790,8 @@ final class LocalModelDiscoveryTests: XCTestCase {
             contextSize: nil,
             provider: nil,
             capabilities: capabilities,
-            drafterKind: nil,
-            hiddenSize: nil
+            drafterKind: drafterKind,
+            hiddenSize: hiddenSize
         )
     }
 }

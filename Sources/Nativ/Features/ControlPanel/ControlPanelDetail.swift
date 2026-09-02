@@ -55,7 +55,8 @@ extension ControlPanelView {
                 imageGeneration: imageGeneration,
                 projects: projects,
                 showsConfiguration: $isModelConfigurationVisible,
-                onExploreImageModels: navigation.openImageModelDiscovery
+                onExploreImageModels: navigation.openImageModelDiscovery,
+                onFindDraftModels: navigation.openDrafterModelDiscovery
             )
         case .scheduled:
             ScheduledTasksView(
@@ -125,7 +126,9 @@ extension ControlPanelView {
                 imageModelDiscoveryRequest: imageModelDiscoveryRequest,
                 imageModelDiscoveryCapability: imageModelDiscoveryCapability,
                 modelDiscoveryRequest: modelDiscoveryRequest,
-                modelDiscoveryRepositoryID: modelDiscoveryRepositoryID
+                modelDiscoveryRepositoryID: modelDiscoveryRepositoryID,
+                drafterModelDiscoveryRequest: drafterModelDiscoveryRequest,
+                drafterModelDiscoveryTargetID: drafterModelDiscoveryTargetID
             )
             .equatable()
         case .extensions:
@@ -239,6 +242,7 @@ struct ChatWorkspaceView: View {
     let projects: ChatProjectStore
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onFindDraftModels: (String) -> Void
 
     var body: some View {
         Group {
@@ -253,7 +257,8 @@ struct ChatWorkspaceView: View {
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
-                    onExploreImageModels: onExploreImageModels
+                    onExploreImageModels: onExploreImageModels,
+                    onFindDraftModels: onFindDraftModels
                 )
             case .images:
                 ImageGenerationView(
