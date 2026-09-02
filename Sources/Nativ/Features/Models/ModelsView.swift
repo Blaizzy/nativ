@@ -440,7 +440,7 @@ struct ModelsView: View {
         handledDrafterModelDiscoveryRequest = drafterModelDiscoveryRequest
         section = .discover
         typeFilter = .all
-        hubQuery = DrafterModelCompatibility.discoveryQuery(
+        searchQuery = DrafterModelCompatibility.discoveryQuery(
             for: drafterModelDiscoveryTargetID
         )
         hubSort = .downloads
