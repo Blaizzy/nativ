@@ -44,6 +44,16 @@ enum ChatStreamingRenderPolicy {
 }
 
 @MainActor
+@Observable
+final class ChatTranscriptRevision {
+    private(set) var value = 0
+
+    func bump() {
+        value &+= 1
+    }
+}
+
+@MainActor
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
@@ -99,7 +109,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
-    @Published private(set) var scrollToken = 0
+    let transcriptRevision = ChatTranscriptRevision()
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
     @Published private(set) var imageModelSelectionRequests:
@@ -2682,7 +2692,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func bumpScroll() {
-        scrollToken += 1
+        transcriptRevision.bump()
     }
 
     private func applyCurrentSession(_ session: ChatSession) {
