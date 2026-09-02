@@ -20,12 +20,34 @@ private struct ChatSessionBootstrap {
     let sessions: [ChatSession]
 }
 
+enum ChatStreamingRenderPolicy {
+    static func updatesPerSecond(characterCount: Int) -> Double {
+        switch characterCount {
+        case ..<2_000:
+            10
+        case ..<8_000:
+            9
+        case ..<20_000:
+            8.5
+        default:
+            8
+        }
+    }
+
+    static func flushIntervalSeconds(characterCount: Int) -> TimeInterval {
+        1 / updatesPerSecond(characterCount: characterCount)
+    }
+
+    static func flushInterval(characterCount: Int) -> Duration {
+        .seconds(flushIntervalSeconds(characterCount: characterCount))
+    }
+}
+
 @MainActor
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -2452,12 +2474,21 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        let now = Date()
-        if let lastFlush = streamFlushDates[id],
-            now.timeIntervalSince(lastFlush) < Self.streamFlushInterval
-        {
-            scheduleStreamFlush(id, in: sessionID)
-            return
+        let now = Date.now
+        let characterCount = streamingCharacterCount(id, in: sessionID)
+        let flushInterval = ChatStreamingRenderPolicy.flushIntervalSeconds(
+            characterCount: characterCount
+        )
+        if let lastFlush = streamFlushDates[id] {
+            let elapsed = now.timeIntervalSince(lastFlush)
+            if elapsed < flushInterval {
+                scheduleStreamFlush(
+                    id,
+                    in: sessionID,
+                    delay: flushInterval - elapsed
+                )
+                return
+            }
         }
         flushStream(id, in: sessionID)
     }
@@ -2468,12 +2499,16 @@ final class ChatViewModel: ObservableObject {
             || pendingStreamMetrics[id] != nil
     }
 
-    private func scheduleStreamFlush(_ id: UUID, in sessionID: UUID) {
+    private func scheduleStreamFlush(
+        _ id: UUID,
+        in sessionID: UUID,
+        delay: TimeInterval
+    ) {
         guard streamFlushTasks[id] == nil else {
             return
         }
         streamFlushTasks[id] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.streamFlushInterval * 1_000_000_000))
+            try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else {
                 return
             }
@@ -2515,7 +2550,7 @@ final class ChatViewModel: ObservableObject {
                 )
             }
         }
-        streamFlushDates[id] = Date()
+        streamFlushDates[id] = .now
         if !content.isEmpty || !reasoning.isEmpty, currentSessionID == sessionID {
             bumpScroll()
         }
@@ -2528,6 +2563,15 @@ final class ChatViewModel: ObservableObject {
         pendingStreamReasoning.removeValue(forKey: id)
         pendingStreamMetrics.removeValue(forKey: id)
         streamFlushDates.removeValue(forKey: id)
+    }
+
+    private func streamingCharacterCount(_ id: UUID, in sessionID: UUID) -> Int {
+        let message = message(id, in: sessionID)
+        let contentCount = (message?.content.count ?? 0)
+            + (pendingStreamContent[id]?.count ?? 0)
+        let reasoningCount = (message?.reasoningContent.count ?? 0)
+            + (pendingStreamReasoning[id]?.count ?? 0)
+        return max(contentCount, reasoningCount)
     }
 
     private func shouldRefreshLiveMetrics(
