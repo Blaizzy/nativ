@@ -389,7 +389,15 @@ final class NativModel: ChatModelSwitchingSurface {
             // still comes up.
             launchArguments.removeSubrange(modelFlagIndex...(modelFlagIndex + 1))
             modelLoadingProgress = nil
-            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Choose a language model to load one.\n")
+            settings.languageModelID = nil
+            setModelLoadFailure(
+                modelID: languageModelID,
+                message: "\(languageModelID) is not supported and was not loaded. "
+                    + "Choose another model.",
+                logMessage: "\(languageModelID) is not a text-generation model — "
+                    + "starting the server without pre-loading it. "
+                    + "Choose a language model to load one."
+            )
         }
         if let speechToTextModelID = settings.normalized().speechToTextModelID,
            let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(
@@ -1055,9 +1063,13 @@ final class NativModel: ChatModelSwitchingSurface {
         }
     }
 
-    private func setModelLoadFailure(modelID: String?, message: String) {
+    private func setModelLoadFailure(
+        modelID: String?,
+        message: String,
+        logMessage: String? = nil
+    ) {
         modelLoadFailure = ModelLoadFailure(modelID: modelID, message: message)
-        appendLog("\n\(message)\n")
+        appendLog("\n\(logMessage ?? message)\n")
         notifyMenuStateChanged()
     }
 
