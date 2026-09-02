@@ -19,11 +19,11 @@ enum ControlPanelTab: String, CaseIterable, Identifiable {
     static var allCases: [ControlPanelTab] {
         [
             .chat,
-            .scheduled,
+            .models,
             .artifacts,
+            .scheduled,
             .dashboard,
             .system,
-            .models,
             .extensions,
             .dev,
         ]
