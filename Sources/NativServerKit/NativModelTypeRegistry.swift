@@ -19,6 +19,8 @@ public enum NativModelTypeRegistryError: Error, Equatable, Sendable {
     case emptyCapability(NativModelCapability)
     case invalidModelType(String, NativModelCapability)
     case invalidAlias(String, String, NativModelCapability)
+    case invalidModelKinds(NativModelCapability)
+    case invalidModelKind(String, String, NativModelCapability)
 }
 
 /// A validated view of the loaders shipped inside Nativ's bundled MLX runtime.
@@ -91,9 +93,36 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
                 aliases[normalizedAlias] = normalizedLoader
             }
 
+            if let manifestKinds = manifestEntry.kinds {
+                guard capability == .speculativeDrafters,
+                      Set(manifestKinds.keys) == modelTypes
+                else {
+                    throw NativModelTypeRegistryError.invalidModelKinds(capability)
+                }
+            }
+
+            var kinds: [String: String] = [:]
+            for (modelType, kind) in manifestEntry.kinds ?? [:] {
+                guard let normalizedModelType = Self.normalized(modelType),
+                    let normalizedKind = Self.normalized(kind),
+                    normalizedModelType == modelType,
+                    normalizedKind == kind,
+                    modelTypes.contains(normalizedModelType),
+                    Self.knownDrafterKinds.contains(normalizedKind)
+                else {
+                    throw NativModelTypeRegistryError.invalidModelKind(
+                        modelType,
+                        kind,
+                        capability
+                    )
+                }
+                kinds[normalizedModelType] = normalizedKind
+            }
+
             validatedEntries[capability] = Entry(
                 modelTypes: modelTypes,
-                aliases: aliases
+                aliases: aliases,
+                kinds: kinds
             )
         }
 
@@ -129,17 +158,34 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
         )
     }
 
+    /// The speculative round-loop kind assigned by the bundled mlx-vlm
+    /// runtime. Aliases are resolved through the same loader table first.
+    public func drafterKind(for modelType: String) -> String? {
+        guard
+            let loader = loader(
+                for: modelType,
+                capability: .speculativeDrafters
+            )
+        else {
+            return nil
+        }
+        return entries[.speculativeDrafters]?.kinds[loader]
+    }
+
     private static func normalized(_ modelType: String) -> String? {
         let value = modelType.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return value.isEmpty ? nil : value
     }
+
+    private static let knownDrafterKinds: Set<String> = ["dflash", "eagle3", "mtp"]
 }
 
 private extension NativModelTypeRegistry {
     struct Entry: Equatable, Sendable {
         let modelTypes: Set<String>
         let aliases: [String: String]
+        let kinds: [String: String]
     }
 
     struct Manifest: Decodable {
@@ -157,10 +203,12 @@ private extension NativModelTypeRegistry {
     struct ManifestEntry: Decodable {
         let modelTypes: [String]
         let aliases: [String: String]
+        let kinds: [String: String]?
 
         enum CodingKeys: String, CodingKey {
             case modelTypes = "model_types"
             case aliases
+            case kinds
         }
     }
 }

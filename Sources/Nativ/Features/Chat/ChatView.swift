@@ -15,6 +15,7 @@ struct ChatView: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onFindDraftModels: (String) -> Void
     @State private var isDropTargeted = false
     @State private var previewedAttachment: ChatImageAttachment?
 
@@ -33,6 +34,7 @@ struct ChatView: View {
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 onExploreImageModels: onExploreImageModels,
+                onFindDraftModels: onFindDraftModels,
                 onPreviewAttachment: { previewedAttachment = $0 }
             )
             .dropDestination(for: URL.self) { urls, _ in
@@ -154,6 +156,7 @@ private struct ChatTranscriptView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onFindDraftModels: (String) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var atBottom = true
     @State private var userPausedAutoScroll = false
@@ -166,11 +169,11 @@ private struct ChatTranscriptView: View {
     var body: some View {
         let forkableAssistantResponseIDs = chat.forkableAssistantResponseIDs
         let latestUserMessageID = chat.latestUserMessageID
-        let visibleMessages = chat.visibleMessages
+        let visibleItems = chat.visibleTranscriptItems
 
         VStack(spacing: 0) {
             transcript(
-                messages: visibleMessages,
+                items: visibleItems,
                 forkableAssistantResponseIDs: forkableAssistantResponseIDs,
                 latestUserMessageID: latestUserMessageID
             )
@@ -186,14 +189,14 @@ private struct ChatTranscriptView: View {
     }
 
     private func transcript(
-        messages: [ChatTranscriptMessage],
+        items: [ChatTranscriptItem],
         forkableAssistantResponseIDs: Set<UUID>,
         latestUserMessageID: UUID?
     ) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    if messages.isEmpty {
+                    if items.isEmpty {
                         if chat.messages.isEmpty {
                             ChatEmptyTranscriptView(
                                 isRunning: model.isRunning,
@@ -205,9 +208,9 @@ private struct ChatTranscriptView: View {
                             .padding(.top, 120)
                         }
                     } else {
-                        ForEach(messages) { message in
-                            messageRow(
-                                message,
+                        ForEach(items) { item in
+                            transcriptItemRow(
+                                item,
                                 latestUserMessageID: latestUserMessageID,
                                 forkableAssistantResponseIDs: forkableAssistantResponseIDs
                             )
@@ -230,7 +233,7 @@ private struct ChatTranscriptView: View {
                 )
                 .padding(.top, 18)
                 .padding(.bottom, ChatTranscriptLayout.composerClearance)
-                .animation(.easeOut(duration: 0.25), value: messages.count)
+                .animation(.easeOut(duration: 0.25), value: items.count)
             }
             .defaultScrollAnchor(.bottom)
             .id(chat.currentSessionID)
@@ -284,7 +287,7 @@ private struct ChatTranscriptView: View {
                 userPausedAutoScroll = false
                 proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
             }
-            .onChange(of: transcriptFingerprint(messages)) { _, _ in
+            .onChange(of: transcriptFingerprint(items)) { _, _ in
                 if atBottom || (chat.isCurrentSessionSending && !userPausedAutoScroll) {
                     proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
                 }
@@ -309,6 +312,39 @@ private struct ChatTranscriptView: View {
                     isStreaming: chat.isCurrentSessionSending
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptItemRow(
+        _ item: ChatTranscriptItem,
+        latestUserMessageID: UUID?,
+        forkableAssistantResponseIDs: Set<UUID>
+    ) -> some View {
+        switch item {
+        case .message(let message):
+            messageRow(
+                message,
+                latestUserMessageID: latestUserMessageID,
+                forkableAssistantResponseIDs: forkableAssistantResponseIDs
+            )
+            .id(item.id)
+        case .agentTurn(let turn):
+            ChatAgentTurnRow(
+                turn: turn,
+                imageModelSelectionRequests: imageModelSelectionRequests(for: turn),
+                canForkAssistantResponse: turn.finalAssistantMessage.map {
+                    forkableAssistantResponseIDs.contains($0.id)
+                } ?? false,
+                onForkAssistantResponse: chat.forkAssistantResponse,
+                onConfirmToolConsent: chat.confirmToolConsent,
+                onDenyToolConsent: chat.denyToolConsent,
+                onSelectImageModel: chat.selectImageModel,
+                onCancelImageModelSelection: chat.cancelImageModelSelection,
+                onExploreImageModels: onExploreImageModels,
+                onPreviewAttachment: onPreviewAttachment
+            )
+            .id(item.id)
         }
     }
 
@@ -349,18 +385,29 @@ private struct ChatTranscriptView: View {
             chat: chat,
             extensionManager: extensionManager,
             workspaceMode: workspaceMode,
-            onSelectWorkspaceMode: onSelectWorkspaceMode
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onFindDraftModels: onFindDraftModels
         )
         .background(Color.nativMainContentBackground)
         .zIndex(1)
     }
 
+    private func imageModelSelectionRequests(
+        for turn: ChatAgentTurnPresentation
+    ) -> [UUID: ChatImageModelSelectionRequest] {
+        Dictionary(
+            uniqueKeysWithValues: turn.toolMessages.compactMap { message in
+                chat.imageModelSelectionRequest(for: message.id).map { (message.id, $0) }
+            }
+        )
+    }
+
     private func transcriptFingerprint(
-        _ messages: [ChatTranscriptMessage]
+        _ items: [ChatTranscriptItem]
     ) -> ChatTranscriptFingerprint {
         ChatTranscriptFingerprint(
-            messageCount: messages.count,
-            lastMessageID: messages.last?.id
+            messageCount: items.count,
+            lastMessageID: items.last?.id
         )
     }
 
@@ -400,6 +447,7 @@ private struct ChatComposerContainer: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onFindDraftModels: (String) -> Void
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -423,6 +471,7 @@ private struct ChatComposerContainer: View {
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onFindDraftModels: onFindDraftModels,
             onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,
@@ -487,6 +536,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
+    var displaysModelTitle = true
+    var displaysThinking = true
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -498,11 +549,13 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             && lhs.editUserMessageUnavailableReason == rhs.editUserMessageUnavailableReason
             && lhs.isEditingUserMessage == rhs.isEditingUserMessage
             && lhs.canForkAssistantResponse == rhs.canForkAssistantResponse
+            && lhs.displaysModelTitle == rhs.displaysModelTitle
+            && lhs.displaysThinking == rhs.displaysThinking
     }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-            if !title.isEmpty {
+            if displaysModelTitle && !title.isEmpty {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -530,7 +583,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     )
                 }
 
-                if showsThinkingBubble {
+                if displaysThinkingBubble {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
                         isThinking: message.isStreaming && message.content.isEmpty,
@@ -690,10 +743,15 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             return false
         }
         return !message.content.isEmpty
-            || (!showsThinkingBubble && (message.imageAttachments.isEmpty || message.isStreaming))
+            || (!displaysThinkingBubble
+                && (message.imageAttachments.isEmpty || message.isStreaming))
     }
 
-    private var showsThinkingBubble: Bool {
+    private var displaysThinkingBubble: Bool {
+        displaysThinking && hasThinkingContent
+    }
+
+    private var hasThinkingContent: Bool {
         guard message.role == .assistant else {
             return false
         }
@@ -797,6 +855,253 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 didCopyMessage = false
             }
         }
+    }
+}
+
+private struct ChatAgentTurnRow: View {
+    let turn: ChatAgentTurnPresentation
+    let imageModelSelectionRequests: [UUID: ChatImageModelSelectionRequest]
+    let canForkAssistantResponse: Bool
+    let onForkAssistantResponse: (UUID) -> Void
+    let onConfirmToolConsent: (UUID) -> Void
+    let onDenyToolConsent: (UUID) -> Void
+    let onSelectImageModel: (UUID, String) -> Void
+    let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
+    let onPreviewAttachment: (ChatImageAttachment) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(modelTitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if showsThinkingBubble {
+                ChatThinkingBubble(
+                    content: turn.reasoningContent,
+                    isThinking: turn.isThinking,
+                    isStreaming: turn.isAssistantStreaming,
+                    thinkingDuration: turn.thinkingDuration
+                )
+            }
+
+            if !turn.toolMessages.isEmpty {
+                ChatToolUsageSummaryRow(
+                    turn: turn,
+                    imageModelSelectionRequests: imageModelSelectionRequests,
+                    onConfirmToolConsent: onConfirmToolConsent,
+                    onDenyToolConsent: onDenyToolConsent,
+                    onSelectImageModel: onSelectImageModel,
+                    onCancelImageModelSelection: onCancelImageModelSelection,
+                    onExploreImageModels: onExploreImageModels
+                )
+            }
+
+            ForEach(toolMessagesWithAttachments) { message in
+                ChatImageAttachmentStack(
+                    attachments: message.imageAttachments,
+                    isUserMessage: false,
+                    showsSaveButton: true,
+                    onPreview: onPreviewAttachment
+                )
+            }
+
+            if let finalAssistantMessage = turn.finalAssistantMessage,
+                shouldRender(finalAssistantMessage)
+            {
+                ChatMessageRow(
+                    message: finalAssistantMessage,
+                    imageModelSelectionRequest: nil,
+                    showsEditUserMessage: false,
+                    canEditUserMessage: false,
+                    editUserMessageUnavailableReason: nil,
+                    isEditingUserMessage: false,
+                    canForkAssistantResponse: canForkAssistantResponse,
+                    onEditUserMessage: { _ in },
+                    onForkAssistantResponse: onForkAssistantResponse,
+                    onConfirmToolConsent: onConfirmToolConsent,
+                    onDenyToolConsent: onDenyToolConsent,
+                    onSelectImageModel: onSelectImageModel,
+                    onCancelImageModelSelection: onCancelImageModelSelection,
+                    onExploreImageModels: onExploreImageModels,
+                    onPreviewAttachment: onPreviewAttachment,
+                    displaysModelTitle: false,
+                    displaysThinking: false
+                )
+                .equatable()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var modelTitle: String {
+        turn.modelID.map { NativFormatting.truncateModelName($0, maxLength: 42) }
+            ?? "Assistant"
+    }
+
+    private var showsThinkingBubble: Bool {
+        !turn.reasoningContent.isEmpty || turn.isThinking
+    }
+
+    private var toolMessagesWithAttachments: [ChatTranscriptMessage] {
+        turn.toolMessages.filter { !$0.imageAttachments.isEmpty }
+    }
+
+    private func shouldRender(_ message: ChatTranscriptMessage) -> Bool {
+        !message.content.isEmpty
+            || !message.imageAttachments.isEmpty
+            || message.responseMetrics != nil
+            || canForkAssistantResponse
+    }
+}
+
+private struct ChatToolUsageSummaryRow: View {
+    let turn: ChatAgentTurnPresentation
+    let imageModelSelectionRequests: [UUID: ChatImageModelSelectionRequest]
+    let onConfirmToolConsent: (UUID) -> Void
+    let onDenyToolConsent: (UUID) -> Void
+    let onSelectImageModel: (UUID, String) -> Void
+    let onCancelImageModelSelection: (UUID) -> Void
+    let onExploreImageModels: (ChatImageOperation) -> Void
+    @State private var isExpanded = false
+
+    private var summary: ChatToolUsageSummary {
+        turn.toolUsage
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    statusIcon
+
+                    Text(summary.text)
+                        .font(.callout)
+                        .foregroundStyle(summaryColor)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Hide tool details" : "Show tool details")
+
+            if isExpanded || summary.requiresInteraction {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(detailMessages) { message in
+                        if message.role == .tool {
+                            ChatAgentStepCell(
+                                message: message,
+                                imageModelSelectionRequest: imageModelSelectionRequests[
+                                    message.id
+                                ],
+                                onConfirm: onConfirmToolConsent,
+                                onDeny: onDenyToolConsent,
+                                onSelectImageModel: onSelectImageModel,
+                                onCancelImageModelSelection: onCancelImageModelSelection,
+                                onExploreImageModels: onExploreImageModels
+                            )
+                        } else if !message.content.isEmpty {
+                            ChatIntermediateAssistantContent(message: message)
+                        }
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(summary.text)
+    }
+
+    private var detailMessages: [ChatTranscriptMessage] {
+        let finalAssistantID = turn.finalAssistantMessage?.id
+        return turn.messages.filter { message in
+            message.id != finalAssistantID
+                && (message.role == .tool
+                    || (message.role == .assistant && !message.content.isEmpty))
+        }
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if summary.requiresInteraction {
+            Image(systemName: statusSymbolName)
+                .foregroundStyle(summaryColor)
+        } else if summary.hasFailure {
+            Image(systemName: statusSymbolName)
+                .foregroundStyle(summaryColor)
+        } else if summary.isActive {
+            ProgressView()
+                .controlSize(.small)
+        } else {
+            Image(systemName: statusSymbolName)
+                .foregroundStyle(summaryColor)
+        }
+    }
+
+    private var statusSymbolName: String {
+        if summary.requiresInteraction {
+            return "questionmark.circle"
+        }
+        if summary.hasFailure {
+            return "exclamationmark.triangle.fill"
+        }
+        if summary.hasNonSuccess {
+            return "xmark.circle"
+        }
+        return "book"
+    }
+
+    private var summaryColor: Color {
+        if summary.requiresInteraction {
+            return .orange
+        }
+        if summary.hasFailure {
+            return .red
+        }
+        return .secondary
+    }
+}
+
+private struct ChatIntermediateAssistantContent: View {
+    let message: ChatTranscriptMessage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let modelID = message.modelID {
+                Text(NativFormatting.truncateModelName(modelID, maxLength: 42))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ChatMessageText(
+                content: message.content,
+                rendersMarkdown: true,
+                isStreaming: message.isStreaming
+            )
+            .font(.callout)
+            .lineSpacing(2)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let responseMetrics = message.responseMetrics,
+                responseMetrics.hasVisibleValues
+            {
+                ChatResponseMetricsRow(metrics: responseMetrics)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -1418,8 +1723,8 @@ private struct ChatThinkingBubble: View {
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -1440,7 +1745,7 @@ private struct ChatThinkingBubble: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(12)
+                        .padding(14)
                     } else {
                         Text(collapsedPreviewContent)
                             .font(.callout)
@@ -1450,7 +1755,7 @@ private struct ChatThinkingBubble: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(height: 58, alignment: .bottomLeading)
                             .clipped()
-                            .padding(12)
+                            .padding(14)
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -1903,6 +2208,168 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        onExploreImageModels: { _ in }
+        onExploreImageModels: { _ in },
+        onFindDraftModels: { _ in }
     )
+}
+
+#Preview("Coalesced agent turns") {
+    ScrollView {
+        VStack(alignment: .leading, spacing: 20) {
+            ChatAgentTurnPreviewRow(turn: .previewCompleted)
+            Divider()
+            ChatAgentTurnPreviewRow(turn: .previewRunning)
+            Divider()
+            ChatAgentTurnPreviewRow(turn: .previewFailed)
+        }
+        .padding(24)
+    }
+    .frame(width: 640, height: 720)
+    .background(Color.nativMainContentBackground)
+}
+
+private struct ChatAgentTurnPreviewRow: View {
+    let turn: ChatAgentTurnPresentation
+
+    var body: some View {
+        ChatAgentTurnRow(
+            turn: turn,
+            imageModelSelectionRequests: [:],
+            canForkAssistantResponse: false,
+            onForkAssistantResponse: { _ in },
+            onConfirmToolConsent: { _ in },
+            onDenyToolConsent: { _ in },
+            onSelectImageModel: { _, _ in },
+            onCancelImageModelSelection: { _ in },
+            onExploreImageModels: { _ in },
+            onPreviewAttachment: { _ in }
+        )
+    }
+}
+
+extension ChatAgentTurnPresentation {
+    fileprivate static let previewCompleted = ChatAgentTurnPresentation(messages: [
+        previewAssistant(
+            id: "00000000-0000-0000-0000-000000000101",
+            reasoning: "I’ll inspect the relevant files first.",
+            duration: 1,
+            callID: "read-1",
+            toolName: ChatReadFileToolRegistry.toolName
+        ),
+        previewTool(
+            id: "00000000-0000-0000-0000-000000000102",
+            callID: "read-1",
+            toolName: ChatReadFileToolRegistry.toolName,
+            status: .succeeded
+        ),
+        previewAssistant(
+            id: "00000000-0000-0000-0000-000000000103",
+            reasoning: "A second file defines the rendering path.",
+            duration: 4,
+            callID: "read-2",
+            toolName: ChatReadFileToolRegistry.toolName
+        ),
+        previewTool(
+            id: "00000000-0000-0000-0000-000000000104",
+            callID: "read-2",
+            toolName: ChatReadFileToolRegistry.toolName,
+            status: .succeeded
+        ),
+        previewAssistant(
+            id: "00000000-0000-0000-0000-000000000105",
+            reasoning: "I’ll run the focused tests.",
+            duration: 3,
+            callID: "terminal-1",
+            toolName: ChatTerminalToolRegistry.toolName
+        ),
+        previewTool(
+            id: "00000000-0000-0000-0000-000000000106",
+            callID: "terminal-1",
+            toolName: ChatTerminalToolRegistry.toolName,
+            status: .succeeded
+        ),
+        ChatTranscriptMessage(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000107")!,
+            role: .assistant,
+            content: "The repeated activity now renders as one compact agent turn.",
+            modelID: "LiquidAI/LFM2.5-2.6B"
+        ),
+    ])
+
+    fileprivate static let previewRunning = ChatAgentTurnPresentation(messages: [
+        previewAssistant(
+            id: "00000000-0000-0000-0000-000000000201",
+            reasoning: "I need one current source to finish this answer.",
+            duration: 2,
+            callID: "search-1",
+            toolName: ChatWebSearchToolRegistry.toolName
+        ),
+        previewTool(
+            id: "00000000-0000-0000-0000-000000000202",
+            callID: "search-1",
+            toolName: ChatWebSearchToolRegistry.toolName,
+            status: .running,
+            isStreaming: true
+        ),
+    ])
+
+    fileprivate static let previewFailed = ChatAgentTurnPresentation(messages: [
+        previewAssistant(
+            id: "00000000-0000-0000-0000-000000000301",
+            reasoning: "I’ll inspect the requested file.",
+            duration: 1,
+            callID: "read-failed",
+            toolName: ChatReadFileToolRegistry.toolName
+        ),
+        previewTool(
+            id: "00000000-0000-0000-0000-000000000302",
+            callID: "read-failed",
+            toolName: ChatReadFileToolRegistry.toolName,
+            status: .failed
+        ),
+    ])
+
+    private static func previewAssistant(
+        id: String,
+        reasoning: String,
+        duration: TimeInterval,
+        callID: String,
+        toolName: String
+    ) -> ChatTranscriptMessage {
+        ChatTranscriptMessage(
+            id: UUID(uuidString: id)!,
+            role: .assistant,
+            content: "",
+            reasoningContent: reasoning,
+            modelID: "LiquidAI/LFM2.5-2.6B",
+            thinkingDuration: duration,
+            toolCalls: [
+                MLXChatToolCall(
+                    id: callID,
+                    function: MLXChatFunctionCall(name: toolName, arguments: "{}")
+                )
+            ]
+        )
+    }
+
+    private static func previewTool(
+        id: String,
+        callID: String,
+        toolName: String,
+        status: ChatTranscriptMessage.ToolStatus,
+        isStreaming: Bool = false
+    ) -> ChatTranscriptMessage {
+        ChatTranscriptMessage(
+            id: UUID(uuidString: id)!,
+            role: .tool,
+            content: status == .failed
+                ? #"{"ok":false,"error":"The file could not be read."}"#
+                : #"{"ok":true}"#,
+            isStreaming: isStreaming,
+            toolCallID: callID,
+            toolName: toolName,
+            toolStatus: status,
+            toolArguments: "{}"
+        )
+    }
 }

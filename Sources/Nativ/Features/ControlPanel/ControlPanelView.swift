@@ -32,6 +32,8 @@ struct ControlPanelView: View {
     @State var imageModelDiscoveryCapability: LocalModelCapability
     @State var modelDiscoveryRequest: Int
     @State var modelDiscoveryRepositoryID: String?
+    @State var drafterModelDiscoveryRequest: Int
+    @State var drafterModelDiscoveryTargetID: String?
     @State var hoveredFooterControl: FooterControl?
     @State var isSidebarVisible = true
     @State var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
@@ -106,6 +108,12 @@ struct ControlPanelView: View {
         _modelDiscoveryRequest = State(initialValue: navigation.modelDiscoveryRequest)
         _modelDiscoveryRepositoryID = State(
             initialValue: navigation.modelDiscoveryRepositoryID
+        )
+        _drafterModelDiscoveryRequest = State(
+            initialValue: navigation.drafterModelDiscoveryRequest
+        )
+        _drafterModelDiscoveryTargetID = State(
+            initialValue: navigation.drafterModelDiscoveryTargetID
         )
     }
 
@@ -254,6 +262,12 @@ struct ControlPanelView: View {
         }
         .onReceive(navigation.$modelDiscoveryRequest) { request in
             modelDiscoveryRequest = request
+        }
+        .onReceive(navigation.$drafterModelDiscoveryTargetID) { targetID in
+            drafterModelDiscoveryTargetID = targetID
+        }
+        .onReceive(navigation.$drafterModelDiscoveryRequest) { request in
+            drafterModelDiscoveryRequest = request
         }
         .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)

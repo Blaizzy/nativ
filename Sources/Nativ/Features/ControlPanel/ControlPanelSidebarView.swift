@@ -236,7 +236,7 @@ extension ControlPanelView {
             ForEach(ControlPanelTab.allCases) { tab in
                 sidebarTabButton(tab)
 
-                if tab == .chat {
+                if tab == .models {
                     ForEach(contentState.extensionSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }

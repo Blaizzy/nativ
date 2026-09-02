@@ -167,6 +167,7 @@ struct ChatComposer: View {
     let canSend: Bool
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onFindDraftModels: (String) -> Void
     let onSend: (Bool, Bool) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
@@ -467,7 +468,9 @@ struct ChatComposer: View {
             selectedModelDetail: selectedModelSupportsThinking
                 ? reasoningLevel.rawValue
                 : nil,
-            secondarySection: reasoningPickerSection,
+            showsFastIndicator: model.settings.speculativeDecodingActive,
+            secondarySections: modelPickerSecondarySections,
+            secondarySectionsForModel: modelPickerSecondarySections(for:),
             isModelLoading: model.isModelLoading,
             modelLoadingPercentage: model.modelLoadingPercentage,
             isDisabled: model.isModelLoading || viewModel.hasPendingRequests
@@ -519,7 +522,7 @@ struct ChatComposer: View {
     }
 
     private var languageModels: [LocalModel] {
-        localLibrary.models.filter { $0.capabilities.contains(.text) }
+        localLibrary.models.filter(\.isEligibleForLanguageModelPicker)
     }
 
     private var selectedModelID: String? {
@@ -534,9 +537,14 @@ struct ChatComposer: View {
     }
 
     private var modelPickerAccessibilityValue: String {
-        let value = selectedModelSupportsThinking
-            ? "\(selectedModelLabel), reasoning \(reasoningLevel.rawValue)"
-            : selectedModelLabel
+        var components = [selectedModelLabel]
+        if selectedModelSupportsThinking {
+            components.append("reasoning \(reasoningLevel.rawValue)")
+        }
+        if model.settings.speculativeDecodingActive {
+            components.append("speed Fast")
+        }
+        let value = components.joined(separator: ", ")
         guard model.isModelLoading, let percentage = model.modelLoadingPercentage else {
             return value
         }
@@ -705,21 +713,30 @@ struct ChatComposer: View {
     }
 
     private var selectedModelSupportsThinking: Bool {
-        model.settings.thinkingEnabled
-            || selectedLocalModel?.capabilities.contains(.reasoning) == true
+        guard let selectedModelID else {
+            return model.settings.thinkingEnabled
+        }
+        return modelSupportsThinking(
+            selectedModelID,
+            profile: model.settings.currentModelProfile
+        )
     }
 
     private var reasoningLevel: ChatReasoningLevel {
-        guard model.settings.thinkingEnabled else {
+        reasoningLevel(for: model.settings.currentModelProfile)
+    }
+
+    private func reasoningLevel(for profile: ModelConfigProfile) -> ChatReasoningLevel {
+        guard profile.thinkingEnabled else {
             return .off
         }
-        guard model.settings.thinkingBudgetEnabled,
-              !model.settings.speculativeDecodingActive
+        guard profile.thinkingBudgetEnabled,
+              !speculativeDecodingActive(in: profile)
         else {
             return .max
         }
 
-        switch model.settings.thinkingBudget {
+        switch profile.thinkingBudget {
         case ...512:
             return .low
         case ...2_048:
@@ -736,15 +753,20 @@ struct ChatComposer: View {
         return localLibrary.error ?? "No installed language models"
     }
 
-    private var reasoningPickerSection: ComposerModelPickerSecondarySection? {
-        guard selectedModelSupportsThinking else {
+    private func reasoningPickerSection(
+        for modelID: String,
+        profile: ModelConfigProfile
+    ) -> ComposerModelPickerSecondarySection? {
+        guard modelSupportsThinking(modelID, profile: profile) else {
             return nil
         }
+        let level = reasoningLevel(for: profile)
         return ComposerModelPickerSecondarySection(
+            id: "reasoning",
             title: "Reasoning",
-            selectedID: reasoningLevel.rawValue,
-            selectedLabel: reasoningLevel.rawValue,
-            options: availableReasoningLevels.map {
+            selectedID: level.rawValue,
+            selectedLabel: level.rawValue,
+            options: availableReasoningLevels(for: profile).map {
                 ComposerModelPickerSecondaryOption(
                     id: $0.rawValue,
                     title: $0.rawValue,
@@ -760,6 +782,127 @@ struct ChatComposer: View {
         )
     }
 
+    private var modelPickerSecondarySections: [ComposerModelPickerSecondarySection] {
+        guard let selectedModelID else { return [] }
+        return modelPickerSecondarySections(
+            for: selectedModelID,
+            profile: model.settings.currentModelProfile
+        )
+    }
+
+    private func modelPickerSecondarySections(
+        for modelID: String
+    ) -> [ComposerModelPickerSecondarySection] {
+        modelPickerSecondarySections(
+            for: modelID,
+            profile: modelPickerProfile(for: modelID)
+        )
+    }
+
+    private func modelPickerSecondarySections(
+        for modelID: String,
+        profile: ModelConfigProfile
+    ) -> [ComposerModelPickerSecondarySection] {
+        [
+            drafterPickerSection(for: modelID, profile: profile),
+            reasoningPickerSection(for: modelID, profile: profile),
+        ].compactMap { $0 }
+    }
+
+    private func modelPickerProfile(for modelID: String) -> ModelConfigProfile {
+        if modelID == selectedModelID {
+            return model.settings.currentModelProfile
+        }
+        if let profile = model.settings.modelProfile(for: modelID) {
+            return profile
+        }
+        let supportsReasoning = localLibrary.models.first {
+            $0.repoID == modelID
+        }?.capabilities.contains(.reasoning) == true
+        return ModelConfigProfile(thinkingEnabled: supportsReasoning)
+    }
+
+    private func modelSupportsThinking(
+        _ modelID: String,
+        profile: ModelConfigProfile
+    ) -> Bool {
+        profile.thinkingEnabled
+            || localLibrary.models.first { $0.repoID == modelID }?
+                .capabilities.contains(.reasoning) == true
+    }
+
+    private func compatibleDrafters(for modelID: String) -> [LocalModel] {
+        guard let targetModel = localLibrary.models.first(where: {
+            $0.repoID == modelID
+        }) else { return [] }
+        return DrafterModelCompatibility.compatibleDrafters(
+            in: localLibrary.models,
+            with: targetModel
+        )
+    }
+
+    private func drafterPickerSection(
+        for modelID: String,
+        profile: ModelConfigProfile
+    ) -> ComposerModelPickerSecondarySection {
+        let compatibleDrafters = compatibleDrafters(for: modelID)
+        let activeDraftModelID = speculativeDecodingActive(in: profile)
+            ? profile.draftModelID
+            : ""
+        var options = [
+            ComposerModelPickerSecondaryOption(id: "", title: "Normal", detail: "")
+        ]
+        options.append(contentsOf: compatibleDrafters.map { drafter in
+            ComposerModelPickerSecondaryOption(
+                id: drafter.repoID,
+                title: modelMenuLabel(drafter.repoID),
+                detail: drafter.drafterKindLabel ?? "Drafter",
+                summaryTitle: "Fast"
+            )
+        })
+
+        if !activeDraftModelID.isEmpty,
+           !options.contains(where: { $0.id == activeDraftModelID }) {
+            options.insert(
+                ComposerModelPickerSecondaryOption(
+                    id: activeDraftModelID,
+                    title: modelMenuLabel(activeDraftModelID),
+                    detail: "Current",
+                    summaryTitle: "Fast"
+                ),
+                at: 1
+            )
+        }
+
+        let hasCompatibleDrafters = !compatibleDrafters.isEmpty
+        return ComposerModelPickerSecondarySection(
+            id: "drafter",
+            title: "Speed",
+            selectedID: activeDraftModelID,
+            selectedLabel: activeDraftModelID.isEmpty
+                ? "Normal"
+                : "Fast",
+            options: options,
+            statusTitle: !hasCompatibleDrafters && localLibrary.isScanning
+                ? "Scanning for drafters…"
+                : nil,
+            actionTitle: !hasCompatibleDrafters && !localLibrary.isScanning
+                ? "Find Draft Models..."
+                : nil,
+            onAction: {
+                onFindDraftModels(modelID)
+            },
+            onSelect: selectDrafter
+        )
+    }
+
+    private func speculativeDecodingActive(in profile: ModelConfigProfile) -> Bool {
+        profile.speculativeDecodingEnabled
+            && !profile.draftModelID.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
+    }
+
     private var modelPickerHelp: String {
         if viewModel.hasPendingRequests || model.inferenceActivityInProgress {
             return "Models can’t be changed while a response is being generated."
@@ -771,8 +914,10 @@ struct ChatComposer: View {
     }
 
     private func modelMenuLabel(_ modelID: String) -> String {
-        let shortName = modelID.split(separator: "/").last.map(String.init) ?? modelID
-        return NativFormatting.truncateModelName(shortName, maxLength: 28)
+        NativFormatting.truncateModelName(
+            LocalModel.displayTitle(for: modelID),
+            maxLength: 28
+        )
     }
 
     private func select(_ localModel: LocalModel) {
@@ -783,8 +928,37 @@ struct ChatComposer: View {
         ) {}
     }
 
-    private var availableReasoningLevels: [ChatReasoningLevel] {
-        guard model.settings.speculativeDecodingActive else {
+    private func selectDrafter(_ drafterID: String) {
+        var settings = model.settings
+        if drafterID.isEmpty {
+            guard settings.speculativeDecodingActive else { return }
+            settings.speculativeDecodingEnabled = false
+        } else {
+            guard let drafter = localLibrary.models.first(where: {
+                $0.repoID == drafterID
+            }) else {
+                return
+            }
+            guard !settings.speculativeDecodingActive
+                    || settings.draftModelID != drafter.repoID
+                    || settings.draftKind != drafter.drafterKind
+            else {
+                return
+            }
+            settings.draftModelID = drafter.repoID
+            settings.draftKind = drafter.drafterKind ?? "auto"
+            settings.speculativeDecodingEnabled = true
+            settings.structuredOutputEnabled = false
+            settings.thinkingBudgetEnabled = false
+        }
+        model.settings = settings
+        model.restartServer()
+    }
+
+    private func availableReasoningLevels(
+        for profile: ModelConfigProfile
+    ) -> [ChatReasoningLevel] {
+        guard speculativeDecodingActive(in: profile) else {
             return ChatReasoningLevel.allCases
         }
         return ChatReasoningLevel.allCases.filter { $0.tokenBudget == nil }
@@ -990,14 +1164,53 @@ struct ComposerModelPickerSecondaryOption: Identifiable {
     let id: String
     let title: String
     let detail: String
+    let summaryTitle: String?
+
+    init(
+        id: String,
+        title: String,
+        detail: String,
+        summaryTitle: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.summaryTitle = summaryTitle
+    }
 }
 
-struct ComposerModelPickerSecondarySection {
+struct ComposerModelPickerSecondarySection: Identifiable {
+    let id: String
     let title: String
     let selectedID: String
     let selectedLabel: String
     let options: [ComposerModelPickerSecondaryOption]
+    let statusTitle: String?
+    let actionTitle: String?
+    let onAction: (() -> Void)?
     let onSelect: (String) -> Void
+
+    init(
+        id: String,
+        title: String,
+        selectedID: String,
+        selectedLabel: String,
+        options: [ComposerModelPickerSecondaryOption],
+        statusTitle: String? = nil,
+        actionTitle: String? = nil,
+        onAction: (() -> Void)? = nil,
+        onSelect: @escaping (String) -> Void
+    ) {
+        self.id = id
+        self.title = title
+        self.selectedID = selectedID
+        self.selectedLabel = selectedLabel
+        self.options = options
+        self.statusTitle = statusTitle
+        self.actionTitle = actionTitle
+        self.onAction = onAction
+        self.onSelect = onSelect
+    }
 }
 
 struct ComposerModelPicker: View {
@@ -1010,7 +1223,9 @@ struct ComposerModelPicker: View {
     let selectedModelLabel: String
     let selectedModelProvider: LocalModelProvider?
     let selectedModelDetail: String?
-    let secondarySection: ComposerModelPickerSecondarySection?
+    let showsFastIndicator: Bool
+    let secondarySections: [ComposerModelPickerSecondarySection]
+    let secondarySectionsForModel: ((String) -> [ComposerModelPickerSecondarySection])?
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
     let isDisabled: Bool
@@ -1033,7 +1248,8 @@ struct ComposerModelPicker: View {
                 selectedModelID: selectedModelID,
                 selectedModelLabel: selectedModelLabel,
                 selectedModelProvider: selectedModelProvider,
-                secondarySection: secondarySection,
+                secondarySections: secondarySections,
+                secondarySectionsForModel: secondarySectionsForModel,
                 isEnabled: !isDisabled,
                 usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
@@ -1088,6 +1304,7 @@ struct ComposerModelPicker: View {
             selectedModelLabel: selectedModelLabel,
             selectedModelProvider: selectedModelProvider,
             selectedModelDetail: selectedModelDetail,
+            showsFastIndicator: showsFastIndicator,
             isModelLoading: isModelLoading,
             modelLoadingPercentage: modelLoadingPercentage
         )
@@ -1118,7 +1335,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let selectedModelID: String?
     let selectedModelLabel: String
     let selectedModelProvider: LocalModelProvider?
-    let secondarySection: ComposerModelPickerSecondarySection?
+    let secondarySections: [ComposerModelPickerSecondarySection]
+    let secondarySectionsForModel: ((String) -> [ComposerModelPickerSecondarySection])?
     let isEnabled: Bool
     let usesSelectModelShortcut: Bool
     let statusLabel: String
@@ -1165,9 +1383,13 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
 
         private static let menuFont = NSFont.menuFont(ofSize: NSFont.systemFontSize)
         private weak var modelSummaryItem: NSMenuItem?
-        private weak var secondarySummaryItem: NSMenuItem?
+        private weak var presentedMenu: NSMenu?
+        private var presentedSecondarySections = [
+            String: ComposerModelPickerSecondarySection
+        ]()
+        private var secondarySummaryItems = [String: NSMenuItem]()
         private var modelOptionViews = [PersistentMenuActionView]()
-        private var secondaryOptionViews = [PersistentMenuActionView]()
+        private var secondaryOptionViews = [String: [PersistentMenuActionView]]()
 
         init(parent: ComposerModelPickerMenuControl) {
             self.parent = parent
@@ -1177,10 +1399,16 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             // Build the entire tree before tracking begins. Keeping both submenus
             // alive for the whole session prevents hover-driven view replacement.
             modelOptionViews.removeAll()
+            secondarySummaryItems.removeAll()
             secondaryOptionViews.removeAll()
             let menu = makeMenu()
+            presentedMenu = menu
             parent.onTrackingChanged(true)
-            defer { parent.onTrackingChanged(false) }
+            defer {
+                presentedMenu = nil
+                presentedSecondarySections.removeAll()
+                parent.onTrackingChanged(false)
+            }
             menu.update()
             menu.popUp(
                 positioning: nil,
@@ -1207,7 +1435,23 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             menu.addItem(modelItem)
             modelSummaryItem = modelItem
 
-            if let secondarySection = parent.secondarySection {
+            installSecondarySections(parent.secondarySections, in: menu)
+
+            return menu
+        }
+
+        private func installSecondarySections(
+            _ sections: [ComposerModelPickerSecondarySection],
+            in menu: NSMenu
+        ) {
+            for item in secondarySummaryItems.values {
+                menu.removeItem(item)
+            }
+            secondarySummaryItems.removeAll()
+            secondaryOptionViews.removeAll()
+            presentedSecondarySections.removeAll()
+
+            for secondarySection in sections {
                 let secondaryItem = NSMenuItem(
                     title: "\(secondarySection.title)   \(secondarySection.selectedLabel)",
                     action: nil,
@@ -1215,10 +1459,9 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                 )
                 secondaryItem.submenu = makeSecondaryMenu(secondarySection)
                 menu.addItem(secondaryItem)
-                secondarySummaryItem = secondaryItem
+                secondarySummaryItems[secondarySection.id] = secondaryItem
+                presentedSecondarySections[secondarySection.id] = secondarySection
             }
-
-            return menu
         }
 
         private func makeModelMenu() -> NSMenu {
@@ -1293,15 +1536,39 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                     image: nil,
                     isSelected: option.id == section.selectedID
                 ) { [weak self] in
-                    self?.selectSecondaryOption(option.id)
+                    self?.selectSecondaryOption(option.id, sectionID: section.id)
                 }
                 if let itemView = item.view as? PersistentMenuActionView {
-                    secondaryOptionViews.append(itemView)
+                    secondaryOptionViews[section.id, default: []].append(itemView)
                 }
                 menu.addItem(item)
             }
 
+            if let statusTitle = section.statusTitle {
+                menu.addItem(.separator())
+                let statusItem = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
+                statusItem.isEnabled = false
+                menu.addItem(statusItem)
+            } else if let actionTitle = section.actionTitle,
+                      section.onAction != nil {
+                menu.addItem(.separator())
+                let actionItem = NSMenuItem(
+                    title: actionTitle,
+                    action: #selector(performSecondaryAction(_:)),
+                    keyEquivalent: ""
+                )
+                actionItem.target = self
+                actionItem.representedObject = section.id
+                actionItem.isEnabled = true
+                menu.addItem(actionItem)
+            }
+
             return menu
+        }
+
+        @objc private func performSecondaryAction(_ sender: NSMenuItem) {
+            guard let sectionID = sender.representedObject as? String else { return }
+            presentedSecondarySections[sectionID]?.onAction?()
         }
 
         private func modelItem(
@@ -1347,6 +1614,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         }
 
         private func selectModel(_ repoID: String) {
+            let nextSecondarySections = parent.secondarySectionsForModel?(repoID)
             modelOptionViews.forEach { $0.isSelected = $0.optionID == repoID }
             modelSummaryItem?.title = "Model   \(modelMenuLabel(repoID))"
 
@@ -1355,26 +1623,36 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             } else {
                 parent.onSwitchModel(repoID)
             }
+
+            if let nextSecondarySections, let presentedMenu {
+                installSecondarySections(nextSecondarySections, in: presentedMenu)
+                presentedMenu.update()
+            }
         }
 
-        private func selectSecondaryOption(_ optionID: String) {
-            guard let section = parent.secondarySection,
+        private func selectSecondaryOption(_ optionID: String, sectionID: String) {
+            guard let section = presentedSecondarySections[sectionID],
                   let option = section.options.first(where: { $0.id == optionID })
             else { return }
 
-            secondaryOptionViews.forEach { $0.isSelected = $0.optionID == optionID }
-            secondarySummaryItem?.title = "\(section.title)   \(option.title)"
+            secondaryOptionViews[sectionID]?.forEach {
+                $0.isSelected = $0.optionID == optionID
+            }
+            secondarySummaryItems[sectionID]?.title =
+                "\(section.title)   \(option.summaryTitle ?? option.title)"
             section.onSelect(optionID)
         }
 
         func updateActionAvailability(_ isEnabled: Bool) {
             modelOptionViews.forEach { $0.isActionEnabled = isEnabled }
-            secondaryOptionViews.forEach { $0.isActionEnabled = isEnabled }
+            secondaryOptionViews.values.joined().forEach { $0.isActionEnabled = isEnabled }
         }
 
         private func modelMenuLabel(_ modelID: String) -> String {
-            let shortName = modelID.split(separator: "/").last.map(String.init) ?? modelID
-            return NativFormatting.truncateModelName(shortName, maxLength: 28)
+            NativFormatting.truncateModelName(
+                LocalModel.displayTitle(for: modelID),
+                maxLength: 28
+            )
         }
 
         private func providerImage(_ provider: LocalModelProvider?) -> NSImage? {
@@ -1437,11 +1715,19 @@ private struct ComposerModelPickerLabel: View {
     let selectedModelLabel: String
     let selectedModelProvider: LocalModelProvider?
     let selectedModelDetail: String?
+    let showsFastIndicator: Bool
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
 
     var body: some View {
         HStack(spacing: 5) {
+            if showsFastIndicator {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.black)
+                    .accessibilityHidden(true)
+            }
+
             Label {
                 HStack(spacing: 4) {
                     pickerTitle
