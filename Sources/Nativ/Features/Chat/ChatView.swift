@@ -3,7 +3,6 @@ import Foundation
 import NativServerKit
 import QuickLookThumbnailing
 import SwiftUI
-import Textual
 import UniformTypeIdentifiers
 
 struct ChatView: View {
@@ -548,6 +547,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
         Group {
             if usesCompactBubble {
                 ChatMessageText(
+                    messageID: message.id,
                     content: displayContent,
                     rendersMarkdown: rendersMarkdown,
                     isStreaming: message.isStreaming,
@@ -557,6 +557,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 .fixedSize(horizontal: true, vertical: false)
             } else {
                 ChatMessageText(
+                    messageID: message.id,
                     content: displayContent,
                     rendersMarkdown: rendersMarkdown,
                     isStreaming: message.isStreaming,
@@ -1740,6 +1741,7 @@ private struct ChatImageAttachmentView: View {
 }
 
 private struct ChatMessageText: View {
+    var messageID: UUID? = nil
     let content: String
     let rendersMarkdown: Bool
     let isStreaming: Bool
@@ -1752,85 +1754,18 @@ private struct ChatMessageText: View {
             Text(verbatim: content)
                 .textSelection(.enabled)
                 .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
-        } else if rendersMarkdown && isStreaming {
-            ChatStreamingMarkdownText(
+        } else if rendersMarkdown {
+            ChatMarkdownRenderer(
+                messageID: messageID,
                 content: content,
+                isStreaming: isStreaming,
                 fontScale: chatFontScale
             )
-        } else if rendersMarkdown {
-            StructuredText(
-                markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: content),
-                syntaxExtensions: [.math]
-            )
-            .textual.structuredTextStyle(.gitHub)
-            .textual.textSelection(.enabled)
-            .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         } else {
-            renderedText
+            Text(verbatim: content)
                 .textSelection(.enabled)
                 .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
         }
-    }
-
-    private var renderedText: Text {
-        guard rendersMarkdown,
-            let attributed = try? AttributedString(
-                markdown: content,
-                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-            )
-        else {
-            return Text(content)
-        }
-
-        return Text(attributed)
-    }
-}
-
-private struct ChatStreamingMarkdownText: View {
-    private static let chunkSpacing: CGFloat = 16
-
-    let document: NativStreamingMarkdownDocument
-    let fontScale: Double
-
-    init(content: String, fontScale: Double) {
-        document = NativMarkdownFormatting.streamingDocument(in: content)
-        self.fontScale = fontScale
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Self.chunkSpacing) {
-            ForEach(document.completedChunks) { chunk in
-                ChatStreamingMarkdownChunk(chunk: chunk)
-                    .equatable()
-            }
-
-            if !document.tail.isEmpty {
-                InlineText(
-                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
-                        in: document.tail
-                    ),
-                    syntaxExtensions: [.math]
-                )
-                .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .textual.structuredTextStyle(.gitHub)
-        .textual.textSelection(.enabled)
-        .font(ChatFontMetrics.bodyFont(scale: fontScale))
-    }
-}
-
-private struct ChatStreamingMarkdownChunk: View, Equatable {
-    let chunk: NativStreamingMarkdownDocument.Chunk
-
-    var body: some View {
-        StructuredText(
-            markdown: NativMarkdownFormatting.normalizedMathDelimiters(
-                in: chunk.markdown
-            ),
-            syntaxExtensions: [.math]
-        )
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
