@@ -195,12 +195,17 @@ def _validate_mapping_targets(
 
 
 def _entry(
-    model_types: set[str], aliases: dict[str, str] | None = None
+    model_types: set[str],
+    aliases: dict[str, str] | None = None,
+    kinds: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    return {
+    entry: dict[str, object] = {
         "model_types": sorted(model_types),
         "aliases": dict(sorted((aliases or {}).items())),
     }
+    if kinds is not None:
+        entry["kinds"] = dict(sorted(kinds.items()))
+    return entry
 
 
 def model_capabilities(site_packages: Path) -> dict[str, object]:
@@ -209,11 +214,40 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     vlm_models_root = mlx_vlm_root / "models"
 
     language_types = _loader_packages(vlm_models_root)
-    drafter_types = _loader_packages(mlx_vlm_root / "speculative" / "drafters")
+    drafters_root = mlx_vlm_root / "speculative" / "drafters"
+    drafter_types = _loader_packages(drafters_root)
+    drafter_initializer = drafters_root / "__init__.py"
+    explicit_drafter_kinds = _string_mapping(
+        drafter_initializer, "DRAFTER_KIND_BY_MODEL_TYPE"
+    )
+    default_drafter_kind = _literal_assignment(
+        _parse_module(drafter_initializer), "DEFAULT_DRAFTER_KIND"
+    )
+    known_drafter_kinds = _literal_assignment(
+        _parse_module(drafter_initializer), "KNOWN_DRAFTER_KINDS"
+    )
+    if (
+        not isinstance(default_drafter_kind, str)
+        or not isinstance(known_drafter_kinds, set)
+        or default_drafter_kind not in known_drafter_kinds
+        or any(not isinstance(kind, str) for kind in known_drafter_kinds)
+    ):
+        raise RuntimeError(f"{drafter_initializer} has invalid drafter kind metadata")
     vlm_alias_mapping = _string_mapping(mlx_vlm_root / "utils.py", "MODEL_REMAPPING")
     _validate_mapping_targets(vlm_alias_mapping, language_types | drafter_types)
     language_types = _apply_alias_precedence(language_types, vlm_alias_mapping)
     drafter_types = _apply_alias_precedence(drafter_types, vlm_alias_mapping)
+    resolved_drafter_kinds: dict[str, str] = {}
+    for model_type, kind in explicit_drafter_kinds.items():
+        loader = vlm_alias_mapping.get(model_type, model_type)
+        existing_kind = resolved_drafter_kinds.get(loader)
+        if existing_kind is not None and existing_kind != kind:
+            raise RuntimeError(f"Conflicting drafter kinds for loader {loader}")
+        resolved_drafter_kinds[loader] = kind
+    drafter_kinds = {
+        model_type: resolved_drafter_kinds.get(model_type, default_drafter_kind)
+        for model_type in drafter_types
+    }
 
     image_generation_types, image_editing_types = _image_model_types(vlm_models_root)
 
@@ -257,6 +291,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
         "speculative_drafters": _entry(
             drafter_types,
             _aliases_for(vlm_alias_mapping, drafter_types),
+            drafter_kinds,
         ),
         "image_generation": _entry(
             image_generation_types,
@@ -307,6 +342,7 @@ def validate_manifest(manifest: object) -> None:
             raise RuntimeError(f"Invalid {capability_name} capability entry")
         model_types = entry.get("model_types")
         aliases = entry.get("aliases")
+        kinds = entry.get("kinds")
         if (
             not isinstance(model_types, list)
             or not model_types
@@ -331,6 +367,19 @@ def validate_manifest(manifest: object) -> None:
             for alias, target in aliases.items()
         ):
             raise RuntimeError(f"Invalid {capability_name} aliases")
+        if capability_name == "speculative_drafters":
+            if (
+                not isinstance(kinds, dict)
+                or set(kinds) != set(model_types)
+                or any(
+                    not isinstance(kind, str)
+                    or kind not in {"dflash", "eagle3", "mtp"}
+                    for kind in kinds.values()
+                )
+            ):
+                raise RuntimeError("Invalid speculative drafter kinds")
+        elif kinds is not None:
+            raise RuntimeError(f"Unexpected {capability_name} model kinds")
 
 
 def generate_model_capabilities_manifest(site_packages: Path, output: Path) -> Path:

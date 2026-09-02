@@ -1,4 +1,5 @@
 import Foundation
+import NativServerKit
 
 extension Notification.Name {
     static let localModelLibraryDidChange = Notification.Name("LocalModelLibraryDidChange")
@@ -274,6 +275,220 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
     let contextSize: Int?
     let defaultSystemPrompt: String?
     let hiddenSize: Int?
+}
+
+struct DrafterModelConfiguration: Decodable, Equatable, Sendable {
+    struct DFlashConfiguration: Decodable, Equatable, Sendable {
+        let projectorType: String?
+        let markovRank: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case projectorType = "projector_type"
+            case markovRank = "markov_rank"
+        }
+
+        init(projectorType: String?, markovRank: Int?) {
+            self.projectorType = projectorType
+            self.markovRank = markovRank
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            projectorType = try? container.decode(String.self, forKey: .projectorType)
+            markovRank = try? container.decode(Int.self, forKey: .markovRank)
+        }
+    }
+
+    let modelType: String?
+    let speculatorsModelType: String?
+    let architectures: [String]
+    let dflashConfiguration: DFlashConfiguration?
+    let markovRank: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case modelType = "model_type"
+        case speculatorsModelType = "speculators_model_type"
+        case architectures
+        case dflashConfiguration = "dflash_config"
+        case markovRank = "markov_rank"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        modelType = try? container.decode(String.self, forKey: .modelType)
+        speculatorsModelType = try? container.decode(
+            String.self,
+            forKey: .speculatorsModelType
+        )
+        architectures = (try? container.decode(
+            [String].self,
+            forKey: .architectures
+        )) ?? []
+        dflashConfiguration = try? container.decode(
+            DFlashConfiguration.self,
+            forKey: .dflashConfiguration
+        )
+        markovRank = try? container.decode(Int.self, forKey: .markovRank)
+    }
+
+    init(config: [String: Any]) {
+        modelType = config["model_type"] as? String
+        speculatorsModelType = config["speculators_model_type"] as? String
+        architectures = config["architectures"] as? [String] ?? []
+        markovRank = (config["markov_rank"] as? NSNumber)?.intValue
+
+        if let dflashConfig = config["dflash_config"] as? [String: Any] {
+            dflashConfiguration = DFlashConfiguration(
+                projectorType: dflashConfig["projector_type"] as? String,
+                markovRank: (dflashConfig["markov_rank"] as? NSNumber)?.intValue
+            )
+        } else {
+            dflashConfiguration = nil
+        }
+    }
+}
+
+struct MLXDrafterMetadata: Equatable, Sendable {
+    let loaderModelType: String
+    let kind: String
+}
+
+/// Resolves config metadata to a speculative drafter loader bundled with Nativ.
+/// Repository names are intentionally not considered.
+struct MLXDrafterModelResolver: Sendable {
+    static let shared = Self(
+        registry: try? Nativ.modelTypeRegistry(),
+        fallbackKinds: [:]
+    )
+
+    private let registry: NativModelTypeRegistry?
+    private let fallbackKinds: [String: String]
+
+    private init(
+        registry: NativModelTypeRegistry?,
+        fallbackKinds: [String: String]
+    ) {
+        self.registry = registry
+        self.fallbackKinds = fallbackKinds
+    }
+
+    init(supportedDrafterKinds: [String: String]) {
+        registry = nil
+        fallbackKinds = supportedDrafterKinds
+    }
+
+    func metadata(for configuration: DrafterModelConfiguration?) -> MLXDrafterMetadata? {
+        guard let configuration else {
+            return nil
+        }
+
+        for candidate in candidateModelTypes(for: configuration) {
+            let loader: String
+            if let registry {
+                guard
+                    let bundledLoader = registry.loader(
+                        for: candidate,
+                        capability: .speculativeDrafters
+                    )
+                else {
+                    continue
+                }
+                loader = bundledLoader
+            } else {
+                guard fallbackKinds[candidate] != nil else {
+                    continue
+                }
+                loader = candidate
+            }
+
+            let kind =
+                registry?.drafterKind(for: candidate)
+                ?? fallbackKinds[loader]
+            if let kind {
+                return MLXDrafterMetadata(loaderModelType: loader, kind: kind)
+            }
+        }
+        return nil
+    }
+
+    static func inferredKind(fromModelType modelType: String?) -> String? {
+        guard let modelType = normalized(modelType) else {
+            return nil
+        }
+        let explicitKinds: [String: String] = [
+            "gemma4_assistant": "mtp",
+            "gemma4_unified_assistant": "mtp",
+            "inkling_mtp": "mtp",
+            "laguna": "dflash",
+            "muse_glimmer_assistant": "dflash",
+        ]
+        if let kind = explicitKinds[modelType] {
+            return kind
+        }
+        if modelType.contains("mtp") {
+            return "mtp"
+        }
+        if modelType.contains("dflash") || modelType.contains("dspark") {
+            return "dflash"
+        }
+        if modelType.contains("eagle") {
+            return "eagle3"
+        }
+        return nil
+    }
+
+    private func candidateModelTypes(
+        for configuration: DrafterModelConfiguration
+    ) -> [String] {
+        let modelType = Self.normalized(configuration.modelType)
+        let speculatorsModelType = Self.normalized(configuration.speculatorsModelType)
+        let architectures = configuration.architectures.map { $0.lowercased() }
+        var candidates: [String] = []
+
+        func append(_ candidate: String?) {
+            guard let candidate, !candidates.contains(candidate) else {
+                return
+            }
+            candidates.append(candidate)
+        }
+
+        if architectures.contains(where: { $0.contains("dflash2") }) {
+            append("dflash2")
+        } else if architectures.contains(where: { $0.contains("gemma4dspark") }) {
+            append("gemma4_dspark")
+        } else if architectures.contains(where: { $0.contains("dspark") }) {
+            append("dspark")
+        } else if architectures.contains(where: { $0.contains("eagle3") }) {
+            append("eagle3")
+        } else if let baseModelType = modelType,
+            architectures.contains(where: { $0.contains("dflash") })
+        {
+            append("\(baseModelType)_dflash")
+        }
+
+        if configuration.dflashConfiguration != nil {
+            if isDSpark(configuration) {
+                append("dspark")
+            } else if let baseModelType = modelType ?? speculatorsModelType {
+                append("\(baseModelType)_dflash")
+            }
+        }
+
+        append(modelType ?? speculatorsModelType)
+        return candidates
+    }
+
+    private func isDSpark(_ configuration: DrafterModelConfiguration) -> Bool {
+        configuration.dflashConfiguration?.projectorType?.lowercased() == "dspark"
+            || (configuration.markovRank ?? 0) > 0
+            || (configuration.dflashConfiguration?.markovRank ?? 0) > 0
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
+    }
 }
 
 enum LocalModelDiscovery {
@@ -1276,7 +1491,8 @@ enum LocalModelDiscovery {
         )
         var capabilities = Set<LocalModelCapability>()
 
-        if drafterKind(fromModelType: drafterModelType(in: config)) != nil {
+        let drafterConfiguration = DrafterModelConfiguration(config: config)
+        if MLXDrafterModelResolver.shared.metadata(for: drafterConfiguration) != nil {
             capabilities.insert(.drafter)
         }
 
@@ -1528,35 +1744,7 @@ enum LocalModelDiscovery {
     }
 
     static func drafterKind(fromModelType modelType: String?) -> String? {
-        guard let modelType = modelType?.lowercased(), !modelType.isEmpty else {
-            return nil
-        }
-        let exactKinds: [String: String] = [
-            "deepseek_v4_mtp": "mtp",
-            "eagle3": "eagle3",
-            "gemma4_assistant": "mtp",
-            "gemma4_unified_assistant": "mtp",
-            "glm4_moe_lite_mtp": "mtp",
-            "inkling_mtp": "mtp",
-            "qwen3_5_mtp": "mtp"
-        ]
-        if let kind = exactKinds[modelType] {
-            return kind
-        }
-        if modelType.contains("mtp") {
-            return "mtp"
-        }
-        if modelType.contains("dflash") {
-            return "dflash"
-        }
-        if modelType.contains("eagle") {
-            return "eagle3"
-        }
-        return nil
-    }
-
-    private static func drafterModelType(in config: [String: Any]) -> String? {
-        (config["model_type"] as? String) ?? (config["speculators_model_type"] as? String)
+        MLXDrafterModelResolver.inferredKind(fromModelType: modelType)
     }
 
     private static func hiddenSize(in config: [String: Any]) -> Int? {
@@ -1590,7 +1778,9 @@ enum LocalModelDiscovery {
             return (nil, nil)
         }
         return (
-            drafterKind(fromModelType: drafterModelType(in: config)),
+            MLXDrafterModelResolver.shared.metadata(
+                for: DrafterModelConfiguration(config: config)
+            )?.kind,
             hiddenSize(in: config)
         )
     }
