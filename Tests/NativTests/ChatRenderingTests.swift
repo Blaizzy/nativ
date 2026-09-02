@@ -73,44 +73,11 @@ final class ChatMarkdownRendererTests: XCTestCase {
 }
 
 final class ChatStreamingRenderPolicyTests: XCTestCase {
-  func testAdaptiveIntervalsUseNativSmoothCadence() {
+  func testStreamingUsesSmoothTwentyHertzCadence() {
+    XCTAssertEqual(ChatStreamingRenderPolicy.updatesPerSecond, 20)
     XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 0),
-      10
+      ChatStreamingRenderPolicy.flushInterval,
+      .seconds(1.0 / 20.0)
     )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 1_999),
-      10
-    )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 2_000),
-      9
-    )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 8_000),
-      8.5
-    )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 20_000),
-      8
-    )
-  }
-
-  func testCadenceNeverDropsBelowEightUpdatesPerSecond() {
-    for characterCount in [0, 2_000, 8_000, 20_000, 100_000, 1_000_000] {
-      XCTAssertGreaterThanOrEqual(
-        ChatStreamingRenderPolicy.updatesPerSecond(characterCount: characterCount),
-        8
-      )
-    }
-  }
-
-  func testCadenceNeverAcceleratesAsContentGrows() {
-    let counts = [0, 1_999, 2_000, 7_999, 8_000, 19_999, 20_000, 100_000]
-    let intervals = counts.map {
-      ChatStreamingRenderPolicy.flushIntervalSeconds(characterCount: $0)
-    }
-
-    XCTAssertEqual(intervals, intervals.sorted())
   }
 }
