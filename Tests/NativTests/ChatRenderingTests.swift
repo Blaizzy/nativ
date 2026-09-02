@@ -4,7 +4,7 @@ import XCTest
 
 final class ChatMarkdownRendererTests: XCTestCase {
   func testChatThemeDoesNotPaintASeparateDocumentCanvas() {
-    XCTAssertNil(Theme.nativChat.textBackgroundColor)
+    XCTAssertNil(Theme.nativChat(fontScale: 1).textBackgroundColor)
   }
 
   @MainActor
@@ -69,5 +69,49 @@ final class ChatMarkdownRendererTests: XCTestCase {
       let image = try XCTUnwrap(renderer.nsImage)
       XCTAssertGreaterThan(image.size.height, 40)
     }
+  }
+
+  @MainActor
+  func testFontScaleChangesMarkdownHeight() throws {
+    let content = Array(
+      repeating: "Font scaling should resize rendered Markdown along with the rest of Chat.",
+      count: 12
+    ).joined(separator: " ")
+
+    let compactHeight = try renderedHeight(content: content, fontScale: 0.85)
+    let largeHeight = try renderedHeight(content: content, fontScale: 1.5)
+
+    XCTAssertGreaterThan(largeHeight, compactHeight)
+  }
+
+  @MainActor
+  func testFontScaleChangesHighlightedCodeHeight() throws {
+    let lines = Array(
+      repeating: "let renderedMessage = ChatMarkdownRenderer()",
+      count: 12
+    ).joined(separator: "\n")
+    let content = "```swift\n\(lines)\n```"
+
+    let compactHeight = try renderedHeight(content: content, fontScale: 0.85)
+    let largeHeight = try renderedHeight(content: content, fontScale: 1.5)
+
+    XCTAssertGreaterThan(largeHeight, compactHeight)
+  }
+
+  @MainActor
+  private func renderedHeight(content: String, fontScale: Double) throws -> CGFloat {
+    let renderer = ImageRenderer(
+      content: ChatMarkdownRenderer(
+        messageID: UUID(),
+        content: content,
+        isStreaming: false,
+        fontScale: fontScale
+      )
+      .frame(width: 260)
+      .fixedSize(horizontal: false, vertical: true)
+    )
+    renderer.proposedSize = ProposedViewSize(width: 260, height: nil)
+
+    return try XCTUnwrap(renderer.nsImage).size.height
   }
 }
