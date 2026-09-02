@@ -539,13 +539,6 @@ struct ModelsView: View {
                     debounceMilliseconds: renderedSection == .installed ? 100 : 350
                 )
                 .frame(height: 32)
-                .overlay {
-                    if renderedSection == .installed {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.16), lineWidth: 1)
-                            .allowsHitTesting(false)
-                    }
-                }
 
                 if renderedSection == .discover, hubLibrary.isSearching {
                     ProgressView()
