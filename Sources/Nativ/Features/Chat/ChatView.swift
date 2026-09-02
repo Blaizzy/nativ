@@ -16,6 +16,7 @@ struct ChatView: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onFindDraftModels: (String) -> Void
     @State private var isDropTargeted = false
     @State private var previewedAttachment: ChatImageAttachment?
 
@@ -34,6 +35,7 @@ struct ChatView: View {
                 workspaceMode: workspaceMode,
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 onExploreImageModels: onExploreImageModels,
+                onFindDraftModels: onFindDraftModels,
                 onPreviewAttachment: { previewedAttachment = $0 }
             )
             .dropDestination(for: URL.self) { urls, _ in
@@ -158,6 +160,7 @@ private struct ChatTranscriptView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onFindDraftModels: (String) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
@@ -277,6 +280,7 @@ private struct ChatTranscriptView: View {
                     extensionManager: extensionManager,
                     workspaceMode: workspaceMode,
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
+                    onFindDraftModels: onFindDraftModels,
                     onHeightChange: { height in
                         let isInitialMeasurement = composerHeight == 0
                         composerHeight = height
@@ -399,6 +403,7 @@ private struct ChatComposerContainer: View {
     @ObservedObject var extensionManager: NativExtensionManager
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onFindDraftModels: (String) -> Void
     let onHeightChange: (CGFloat) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
@@ -424,6 +429,7 @@ private struct ChatComposerContainer: View {
                 && chat.canSend(isRunning: model.isRunning, selectedModelID: selectedModelID),
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onFindDraftModels: onFindDraftModels,
             onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,
@@ -2198,7 +2204,8 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
-        onExploreImageModels: { _ in }
+        onExploreImageModels: { _ in },
+        onFindDraftModels: { _ in }
     )
 }
 
