@@ -227,6 +227,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
       - path: Sources/Nativ/Features/Chat/ChatFontScale.swift
       - path: Sources/Nativ/Features/Chat/Rendering
+      - path: Sources/Nativ/Features/Chat/ChatTranscriptPresentation.swift
       - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
       - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
