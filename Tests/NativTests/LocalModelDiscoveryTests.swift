@@ -100,6 +100,22 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.text))
     }
 
+    func testClassifiesGraniteSpeech5CTCAsSpeechToText() async throws {
+        try makeTextModelSnapshot(
+            repoID: "ibm-granite/granite-speech-5.0-470m-turboctc",
+            modelType: "granite_speech5_ctc",
+            architectures: ["GraniteSpeech5ForCTC"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first)
+
+        XCTAssertTrue(model.capabilities.contains(.audio))
+        XCTAssertTrue(model.capabilities.contains(.speechToText))
+        XCTAssertFalse(model.capabilities.contains(.text))
+    }
+
     func testClassifiesLLMBasedEmbedderWithPoolingAsEmbeddingModel() async throws {
         try makeTextModelSnapshot(
             repoID: "org/qwen3-embedding",
