@@ -1189,6 +1189,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
     /// Emits the affected model ID for progress/state changes. `nil` denotes
     /// a structural change that can affect capacity for every download row.
     let rowUpdates = PassthroughSubject<String?, Never>()
+    /// Emits only after a model download succeeds.
+    let completedDownloads = PassthroughSubject<String, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
     private let progressClock = ContinuousClock()
@@ -1494,6 +1496,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         if let error {
             waiters.forEach { $0.resume(throwing: error) }
         } else {
+            completedDownloads.send(repoID)
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
             completion?()
             waiters.forEach { $0.resume() }
