@@ -2179,6 +2179,13 @@ private struct HubModelRow: View, @MainActor Equatable {
                                 if model.isGated {
                                     ModelPill(title: "Gated", systemImage: "lock")
                                 }
+                                if model.support == .unsupported {
+                                    ModelPill(
+                                        title: "Unsupported",
+                                        systemImage: "exclamationmark.triangle.fill",
+                                        color: .orange
+                                    )
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .clipped()
