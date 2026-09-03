@@ -213,6 +213,7 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
+      - path: Sources/Nativ/Features/Extensions/NativExtensionPackageInstaller.swift
       - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift
       - path: Sources/Nativ/Features/MCP/GitHubOAuth.swift
       - path: Sources/Nativ/Resources/MCPCatalog.json
