@@ -1516,7 +1516,6 @@ private struct ModelReadmePanel: View {
     let selection: ModelReadmeSelection
     @ObservedObject var store: HuggingFaceModelReadmeStore
     let onClose: () -> Void
-    @State private var isHubLinkHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1534,32 +1533,9 @@ private struct ModelReadmePanel: View {
             ModelProviderBadge(provider: selection.provider)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(modelName(selection.repoID))
-                        .font(.headline)
-                        .lineLimit(1)
-
-                    if let hubURL {
-                        Link(destination: hubURL) {
-                            Label("Open on Hugging Face", systemImage: "arrow.up.right")
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(isHubLinkHovered ? Color.accentColor : Color.secondary)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(
-                                    isHubLinkHovered
-                                        ? Color.accentColor.opacity(0.12) : Color.clear
-                                )
-                        )
-                        .contentShape(Rectangle())
-                        .onHover { isHubLinkHovered = $0 }
-                        .animation(.easeOut(duration: 0.12), value: isHubLinkHovered)
-                        .help("Open \(selection.repoID) on Hugging Face")
-                    }
-                }
+                Text(modelName(selection.repoID))
+                    .font(.headline)
+                    .lineLimit(1)
                 Text(selection.repoID)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1998,7 +1974,7 @@ private struct ActiveDownloadBannerRow: View {
 
                 Spacer()
 
-                HStack(spacing: 6) {
+                HStack(spacing: 10) {
                     Button(pauseResumeTitle, systemImage: pauseResumeSymbol, action: onPauseResume)
                         .help(pauseResumeTitle)
 
