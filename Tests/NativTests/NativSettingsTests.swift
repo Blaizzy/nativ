@@ -4,6 +4,38 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testPinnedModelsRoundTripInOrder() throws {
+        let settings = NativSettings(
+            pinnedModelIDs: ["org/most-used", "org/second"]
+        )
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+
+        XCTAssertEqual(decoded.pinnedModelIDs, ["org/most-used", "org/second"])
+    }
+
+    func testPinnedModelsNormalizeWhitespaceAndDuplicates() {
+        let settings = NativSettings(
+            pinnedModelIDs: [" org/model ", "", "org/model", "org/other"]
+        ).normalized()
+
+        XCTAssertEqual(settings.pinnedModelIDs, ["org/model", "org/other"])
+    }
+
+    func testMissingPinnedModelsDecodeAsEmptyForBackwardCompatibility() throws {
+        let settings = try PropertyListDecoder().decode(
+            NativSettings.self,
+            from: PropertyListSerialization.data(
+                fromPropertyList: ["modelSearchPath": NativSettings.defaultModelSearchPath],
+                format: .xml,
+                options: 0
+            )
+        )
+
+        XCTAssertTrue(settings.pinnedModelIDs.isEmpty)
+    }
+
     func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
         let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
 
