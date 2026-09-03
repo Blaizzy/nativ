@@ -100,6 +100,22 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.text))
     }
 
+    func testClassifiesGraniteSpeech5CTCAsSpeechToText() async throws {
+        try makeTextModelSnapshot(
+            repoID: "ibm-granite/granite-speech-5.0-470m-turboctc",
+            modelType: "granite_speech5_ctc",
+            architectures: ["GraniteSpeech5ForCTC"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first)
+
+        XCTAssertTrue(model.capabilities.contains(.audio))
+        XCTAssertTrue(model.capabilities.contains(.speechToText))
+        XCTAssertFalse(model.capabilities.contains(.text))
+    }
+
     func testClassifiesLLMBasedEmbedderWithPoolingAsEmbeddingModel() async throws {
         try makeTextModelSnapshot(
             repoID: "org/qwen3-embedding",
@@ -670,6 +686,73 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(chatModel.isEligibleForLanguageModelPicker)
     }
 
+    func testModelsSortByDisplayedTitleInsteadOfRepositoryOwner() async throws {
+        for repoID in [
+            "alpha/Zeta-2B",
+            "zeta/Alpha-10B",
+            "middle/Alpha-2B",
+        ] {
+            try makeTextModelSnapshot(
+                repoID: repoID,
+                modelType: "qwen3",
+                architectures: ["Qwen3ForCausalLM"],
+                sentenceTransformer: false
+            )
+        }
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        XCTAssertEqual(
+            models.map(\.repoID),
+            ["middle/Alpha-2B", "zeta/Alpha-10B", "alpha/Zeta-2B"]
+        )
+    }
+
+    func testDrafterCompatibilityMatchesTargetNameAndHiddenSize() {
+        let target = makeModel(
+            repoID: "mlx-community/Qwen3.8-27B-4bit",
+            capabilities: [.text],
+            hiddenSize: 5_120
+        )
+        let matchingDFlash = makeModel(
+            repoID: "z-lab/Qwen3.8-27B-DFlash2",
+            capabilities: [.text, .drafter],
+            drafterKind: "dflash",
+            hiddenSize: 5_120
+        )
+        let olderMTP = makeModel(
+            repoID: "mlx-community/Qwen3.6-27B-MTP-4bit",
+            capabilities: [.text, .drafter],
+            drafterKind: "mtp",
+            hiddenSize: 5_120
+        )
+        let wrongHiddenSize = makeModel(
+            repoID: "other/Qwen3.8-27B-EAGLE3",
+            capabilities: [.text, .drafter],
+            drafterKind: "eagle3",
+            hiddenSize: 4_096
+        )
+
+        XCTAssertTrue(DrafterModelCompatibility.isCompatible(matchingDFlash, with: target))
+        XCTAssertFalse(DrafterModelCompatibility.isCompatible(olderMTP, with: target))
+        XCTAssertFalse(DrafterModelCompatibility.isCompatible(wrongHiddenSize, with: target))
+    }
+
+    func testDrafterDiscoveryQueryRemovesConversionAndDrafterSuffixes() {
+        XCTAssertEqual(
+            DrafterModelCompatibility.discoveryQuery(
+                for: "mlx-community/Qwen3.8-27B-MLX-4bit"
+            ),
+            "Qwen3.8-27B"
+        )
+        XCTAssertEqual(
+            DrafterModelCompatibility.discoveryQuery(
+                for: "google/gemma-4-26B-A4B-it-assistant"
+            ),
+            "gemma-4-26B-A4B-it"
+        )
+    }
+
     func testRerankerIsClassifiedAndExcludedFromLanguageModelPicker() async throws {
         try makeTextModelSnapshot(
             repoID: "mlx-community/Qwen3-Reranker-0.6B-mxfp8",
@@ -708,7 +791,9 @@ final class LocalModelDiscoveryTests: XCTestCase {
 
     private func makeModel(
         repoID: String,
-        capabilities: Set<LocalModelCapability>
+        capabilities: Set<LocalModelCapability>,
+        drafterKind: String? = nil,
+        hiddenSize: Int? = nil
     ) -> LocalModel {
         LocalModel(
             repoID: repoID,
@@ -721,8 +806,8 @@ final class LocalModelDiscoveryTests: XCTestCase {
             contextSize: nil,
             provider: nil,
             capabilities: capabilities,
-            drafterKind: nil,
-            hiddenSize: nil
+            drafterKind: drafterKind,
+            hiddenSize: hiddenSize
         )
     }
 }

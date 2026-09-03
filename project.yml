@@ -18,6 +18,15 @@ packages:
   textual:
     url: https://github.com/gonzalezreal/textual.git
     exactVersion: 0.5.0
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    exactVersion: 2.4.1
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    exactVersion: 2.3.0
+  SwaTex:
+    url: https://github.com/PhraseHQ/SwaTex.git
+    exactVersion: 0.5.0
   mcp-swift-sdk:
     url: https://github.com/modelcontextprotocol/swift-sdk
     exactVersion: 0.12.1
@@ -118,6 +127,12 @@ targets:
         product: Sparkle
       - package: textual
         product: Textual
+      - package: MarkdownUI
+        product: MarkdownUI
+      - package: Highlightr
+        product: Highlightr
+      - package: SwaTex
+        product: SwaTexRender
       - package: ZIPFoundation
         product: ZIPFoundation
     postBuildScripts:
@@ -192,6 +207,7 @@ targets:
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
       - path: Sources/Nativ/Features/Models/ModelPrimaryTaskResolver.swift
       - path: Sources/Nativ/Features/Shared/NativBulkSelection.swift
+      - path: Sources/Nativ/Features/Developer/LogTextStorageMutation.swift
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationTypes.swift
@@ -210,6 +226,8 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
+      - path: Sources/Nativ/Features/Chat/ChatFontScale.swift
+      - path: Sources/Nativ/Features/Chat/Rendering
       - path: Sources/Nativ/Features/Chat/ChatTranscriptPresentation.swift
       - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
       - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
@@ -286,6 +304,12 @@ targets:
       - target: NativExtensionSDK
       - package: ZIPFoundation
         product: ZIPFoundation
+      - package: MarkdownUI
+        product: MarkdownUI
+      - package: Highlightr
+        product: Highlightr
+      - package: SwaTex
+        product: SwaTexRender
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests

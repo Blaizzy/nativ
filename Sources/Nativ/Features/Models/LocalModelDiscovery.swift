@@ -110,6 +110,14 @@ struct LocalModel: Identifiable, Equatable, Sendable {
         return components.joined(separator: "/")
     }
 
+    var displayTitle: String {
+        Self.displayTitle(for: repoID)
+    }
+
+    static func displayTitle(for modelID: String) -> String {
+        modelID.split(separator: "/").last.map(String.init) ?? modelID
+    }
+
     var isDeletable: Bool {
         source == .huggingFaceCache
     }
@@ -207,6 +215,71 @@ struct LocalModel: Identifiable, Equatable, Sendable {
             return Int(value).formatted() + suffix
         }
         return value.formatted(.number.precision(.fractionLength(1))) + suffix
+    }
+}
+
+enum DrafterModelCompatibility {
+    static func compatibleDrafters(
+        in models: [LocalModel],
+        with target: LocalModel
+    ) -> [LocalModel] {
+        models.filter { isCompatible($0, with: target) }
+    }
+
+    static func isCompatible(_ drafter: LocalModel, with target: LocalModel) -> Bool {
+        guard drafter.drafterKind != nil,
+              drafter.repoID != target.repoID,
+              pairingKey(for: drafter.repoID) == pairingKey(for: target.repoID)
+        else {
+            return false
+        }
+
+        if let drafterHiddenSize = drafter.hiddenSize,
+           let targetHiddenSize = target.hiddenSize,
+           drafterHiddenSize != targetHiddenSize {
+            return false
+        }
+        return true
+    }
+
+    static func discoveryQuery(for targetModelID: String) -> String {
+        let modelName = targetModelID
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .last
+            .map(String.init) ?? targetModelID
+        let components = modelName.components(separatedBy: modelNameSeparators)
+            .filter { !$0.isEmpty && !isNonTargetComponent($0) }
+        return components.isEmpty ? modelName : components.joined(separator: "-")
+    }
+
+    private static let modelNameSeparators = CharacterSet(charactersIn: "-_ ")
+    private static let nonTargetComponents: Set<String> = [
+        "assistant", "dflash", "dflash2", "draft", "drafter", "draftmodel",
+        "dspark", "eagle", "eagle3", "gguf", "mlx", "mtp", "speculator",
+        "bf16", "f16", "float16", "fp16", "fp8", "int4", "int8", "mxfp4",
+        "mxfp8", "quantized",
+    ]
+
+    private static func pairingKey(for modelID: String) -> String {
+        discoveryQuery(for: modelID)
+            .lowercased()
+            .unicodeScalars
+            .filter(CharacterSet.alphanumerics.contains)
+            .map(String.init)
+            .joined()
+    }
+
+    private static func isNonTargetComponent(_ component: String) -> Bool {
+        let normalized = component.lowercased()
+        if nonTargetComponents.contains(normalized) {
+            return true
+        }
+        if normalized.hasSuffix("bit"), Int(normalized.dropLast(3)) != nil {
+            return true
+        }
+        let dottedComponents = normalized.split(separator: ".").map(String.init)
+        return dottedComponents.count > 1
+            && dottedComponents.allSatisfy(nonTargetComponents.contains)
     }
 }
 
@@ -560,12 +633,12 @@ enum LocalModelDiscovery {
             fileManager: FileManager.default
         )
         do {
-            return Self.sortedByDisplayName(try Self.scanSynchronously(path: path) + externalModels)
+            return Self.sortedByDisplayTitle(try Self.scanSynchronously(path: path) + externalModels)
         } catch {
             guard !externalModels.isEmpty else {
                 throw error
             }
-            return Self.sortedByDisplayName(externalModels)
+            return Self.sortedByDisplayTitle(externalModels)
         }
     }
 
@@ -684,15 +757,15 @@ enum LocalModelDiscovery {
         return models
     }
 
-    private static func sortedByDisplayName(_ models: [LocalModel]) -> [LocalModel] {
+    private static func sortedByDisplayTitle(_ models: [LocalModel]) -> [LocalModel] {
         models.sorted { lhs, rhs in
-            switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
+            switch lhs.displayTitle.localizedStandardCompare(rhs.displayTitle) {
             case .orderedAscending:
                 return true
             case .orderedDescending:
                 return false
             case .orderedSame:
-                return lhs.repoID < rhs.repoID
+                return lhs.repoID.localizedStandardCompare(rhs.repoID) == .orderedAscending
             }
         }
     }

@@ -1897,7 +1897,7 @@ struct AudioView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 160)
             } else {
-                LazyVStack(spacing: 0) {
+                VStack(spacing: 0) {
                     ForEach(Array(filteredRecords.prefix(30).enumerated()), id: \.element.id) {
                         index, record in
                         AudioTranscriptRow(
