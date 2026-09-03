@@ -170,23 +170,43 @@ struct HubEmptyHint: View {
 
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
+    @State private var selection: Selection = .discover
+
+    private enum Selection: String, CaseIterable, Identifiable {
+        case discover = "Discover"
+        case installed = "Installed"
+
+        var id: String { rawValue }
+    }
 
     var body: some View {
         HubSectionScaffold(
-            title: "Extensions",
-            subtitle: "Packages that add features to Nativ."
+            title: "Nativ MarketPlace",
+            subtitle: "Discover and manage extensions for Nativ."
         ) {
-            EmptyView()
+            Picker("Extension view", selection: $selection) {
+                ForEach(Selection.allCases) { selection in
+                    Text(selection.rawValue).tag(selection)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 190)
         } content: {
-            if manager.records.isEmpty {
-                HubEmptyHint(
-                    icon: "square.stack.3d.up.slash",
-                    text: "No extensions installed."
-                )
-            } else {
-                VStack(spacing: 12) {
-                    ForEach(manager.records) { record in
-                        ExtensionRow(record: record, manager: manager)
+            switch selection {
+            case .discover:
+                NativExtensionMarketplaceView()
+            case .installed:
+                if manager.records.isEmpty {
+                    HubEmptyHint(
+                        icon: "square.stack.3d.up.slash",
+                        text: "No extensions installed."
+                    )
+                } else {
+                    VStack(spacing: 12) {
+                        ForEach(manager.records) { record in
+                            ExtensionRow(record: record, manager: manager)
+                        }
                     }
                 }
             }
