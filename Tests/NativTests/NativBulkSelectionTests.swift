@@ -41,6 +41,28 @@ struct NativBulkSelectionTests {
         #expect(selection.contains("hidden"))
     }
 
+    @Test("Selecting all activates selection mode and replaces hidden items")
+    func selectingAllReplacesSelection() {
+        var selection = NativBulkSelection<String>()
+        selection.toggle("hidden")
+
+        selection.selectAll(["first", "second"])
+
+        #expect(selection.isActive)
+        #expect(selection.ids == ["first", "second"])
+    }
+
+    @Test("Retaining visible items removes hidden selections")
+    func retainingVisibleItemsRemovesHiddenSelections() {
+        var selection = NativBulkSelection<String>()
+        selection.toggle("visible")
+        selection.toggle("hidden")
+
+        selection.retain(["visible"])
+
+        #expect(selection.ids == ["visible"])
+    }
+
     @Test("Finishing selection clears mode and selected items")
     func finishingSelectionResetsState() {
         var selection = NativBulkSelection<String>()
