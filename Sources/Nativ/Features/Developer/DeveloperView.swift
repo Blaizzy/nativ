@@ -2154,7 +2154,7 @@ private struct LogTextView: NSViewRepresentable {
         textView.usesFindPanel = true
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.textContainerInset = NSSize(width: 12, height: 12)
-        render(text, searchQuery: searchQuery, in: textView)
+        replaceAllText(text, searchQuery: searchQuery, in: textView)
         context.coordinator.renderedText = text
         context.coordinator.renderedQuery = searchQuery
 
@@ -2164,7 +2164,8 @@ private struct LogTextView: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         DispatchQueue.main.async { [weak textView] in
-            textView?.scrollToEndOfDocument(nil)
+            guard let textView else { return }
+            Self.scrollToBottom(textView)
         }
         return scrollView
     }
@@ -2180,18 +2181,67 @@ private struct LogTextView: NSViewRepresentable {
         }
 
         let shouldFollowOutput = isNearBottom(scrollView)
-        render(text, searchQuery: searchQuery, in: textView)
+        updateText(
+            text,
+            searchQuery: searchQuery,
+            previousText: context.coordinator.renderedText,
+            previousQuery: context.coordinator.renderedQuery,
+            in: textView
+        )
         context.coordinator.renderedText = text
         context.coordinator.renderedQuery = searchQuery
         if shouldFollowOutput {
-            textView.scrollToEndOfDocument(nil)
+            Self.scrollToBottom(textView)
         }
     }
 
-    private func render(_ text: String, searchQuery: String, in textView: NSTextView) {
+    private func replaceAllText(
+        _ text: String,
+        searchQuery: String,
+        in textView: NSTextView
+    ) {
         textView.textStorage?.setAttributedString(
             LogTextStyler.attributedString(text, searchQuery: searchQuery)
         )
+    }
+
+    private func updateText(
+        _ text: String,
+        searchQuery: String,
+        previousText: String,
+        previousQuery: String,
+        in textView: NSTextView
+    ) {
+        guard let textStorage = textView.textStorage else { return }
+        let mutation = LogTextStorageMutation.plan(
+            previousText: previousText,
+            previousQuery: previousQuery,
+            newText: text,
+            newQuery: searchQuery
+        )
+
+        switch mutation {
+        case .replaceAll:
+            replaceAllText(text, searchQuery: searchQuery, in: textView)
+        case .replaceSuffix(let offset):
+            let suffix = (text as NSString).substring(from: offset)
+            let existingSuffix = NSRange(
+                location: offset,
+                length: textStorage.length - offset
+            )
+            textStorage.replaceCharacters(
+                in: existingSuffix,
+                with: LogTextStyler.attributedString(
+                    suffix,
+                    searchQuery: searchQuery
+                )
+            )
+        }
+    }
+
+    private static func scrollToBottom(_ textView: NSTextView) {
+        let end = NSRange(location: textView.textStorage?.length ?? 0, length: 0)
+        textView.scrollRangeToVisible(end)
     }
 
     private func isNearBottom(_ scrollView: NSScrollView) -> Bool {
