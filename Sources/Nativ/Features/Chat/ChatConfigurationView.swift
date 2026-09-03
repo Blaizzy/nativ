@@ -175,6 +175,7 @@ struct ModelConfigurationView: View {
     @State private var modelConfiguration: LocalModelConfigurationMetadata?
     @State private var isLoadingModelConfiguration = false
     @State private var modelConfigurationRevision = 0
+    @State private var isConfirmingReset = false
     @StateObject private var draftModelLibrary = LocalModelLibrary()
 
     var body: some View {
@@ -231,11 +232,22 @@ struct ModelConfigurationView: View {
 
                 Spacer(minLength: 0)
 
-                Button(action: onReset) {
-                    Image(systemName: "arrow.counterclockwise")
+                Button("Reset model configuration", systemImage: "arrow.counterclockwise") {
+                    isConfirmingReset = true
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .help("Reset model configuration")
+                .confirmationDialog(
+                    "Reset model configuration?",
+                    isPresented: $isConfirmingReset,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset", role: .destructive, action: onReset)
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will restore all model configuration settings to their defaults.")
+                }
             }
 
             if settingsRequireRestart {
