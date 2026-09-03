@@ -5,6 +5,8 @@ struct NativBulkSelection<ID: Hashable> {
     private(set) var isActive = false
     private(set) var ids = Set<ID>()
 
+    var isEmpty: Bool { ids.isEmpty }
+
     func contains(_ id: ID) -> Bool {
         ids.contains(id)
     }
@@ -35,6 +37,19 @@ struct NativBulkSelection<ID: Hashable> {
         } else {
             ids.formUnion(candidateIDs)
         }
+    }
+
+    mutating func selectAll(_ candidateIDs: Set<ID>) {
+        isActive = true
+        ids = candidateIDs
+    }
+
+    mutating func retain(_ candidateIDs: Set<ID>) {
+        ids.formIntersection(candidateIDs)
+    }
+
+    mutating func remove<S: Sequence>(_ removedIDs: S) where S.Element == ID {
+        ids.subtract(removedIDs)
     }
 
     mutating func finish() {
@@ -130,12 +145,29 @@ extension View {
 }
 
 /// Shared controls for selecting every visible item and performing bulk deletion.
-struct NativBulkSelectionToolbar: View {
+struct NativBulkSelectionToolbar<Actions: View>: View {
     let selectedCount: Int
     let allSelected: Bool
     var isSelectAllEnabled = true
     let onToggleAll: () -> Void
     let onDelete: () -> Void
+    let actions: Actions
+
+    init(
+        selectedCount: Int,
+        allSelected: Bool,
+        isSelectAllEnabled: Bool = true,
+        onToggleAll: @escaping () -> Void,
+        onDelete: @escaping () -> Void,
+        @ViewBuilder actions: () -> Actions
+    ) {
+        self.selectedCount = selectedCount
+        self.allSelected = allSelected
+        self.isSelectAllEnabled = isSelectAllEnabled
+        self.onToggleAll = onToggleAll
+        self.onDelete = onDelete
+        self.actions = actions()
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -148,6 +180,8 @@ struct NativBulkSelectionToolbar: View {
 
             Spacer(minLength: 0)
 
+            actions
+
             Button(role: .destructive, action: onDelete) {
                 Label("Delete Selected", systemImage: "trash")
             }
@@ -159,5 +193,25 @@ struct NativBulkSelectionToolbar: View {
             Color.primary.opacity(0.04),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
+    }
+}
+
+extension NativBulkSelectionToolbar where Actions == EmptyView {
+    init(
+        selectedCount: Int,
+        allSelected: Bool,
+        isSelectAllEnabled: Bool = true,
+        onToggleAll: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.init(
+            selectedCount: selectedCount,
+            allSelected: allSelected,
+            isSelectAllEnabled: isSelectAllEnabled,
+            onToggleAll: onToggleAll,
+            onDelete: onDelete
+        ) {
+            EmptyView()
+        }
     }
 }
