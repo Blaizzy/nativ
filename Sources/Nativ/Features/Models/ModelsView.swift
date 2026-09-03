@@ -356,9 +356,6 @@ struct ModelsView: View {
         .onChange(of: localLibrary.models.map(\.repoID)) { _, _ in
             selectFirstVisibleReadmeIfNeeded(in: .installed)
         }
-        .onChange(of: eligibleVisibleModelIDs) { _, visibleIDs in
-            installedModelSelection.retain(visibleIDs)
-        }
         .onChange(of: hubLibrary.models.map(\.id)) { _, _ in
             selectFirstVisibleReadmeIfNeeded(in: .discover)
         }
@@ -552,6 +549,9 @@ struct ModelsView: View {
             switch renderedSection {
             case .installed:
                 installedFilterBar
+                    .onChange(of: eligibleVisibleModelIDs) { _, visibleIDs in
+                        installedModelSelection.retain(visibleIDs)
+                    }
                 if installedModelSelection.isActive {
                     installedSelectionBar(for: filteredLocalModels)
                 }
