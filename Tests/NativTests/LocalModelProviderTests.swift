@@ -1,3 +1,4 @@
+import NativServerKit
 import XCTest
 
 final class LocalModelProviderTests: XCTestCase {
@@ -295,6 +296,254 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         payload["safetensors"] = safetensors
         let data = try JSONSerialization.data(withJSONObject: payload)
         return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
+    }
+}
+
+final class HuggingFaceModelSupportTests: XCTestCase {
+    func testCanonicalAndAliasModelTypesAreSupported() throws {
+        let classifier = try makeClassifier()
+
+        for modelType in ["language-loader", "language-alias", "LANGUAGE-LOADER"] {
+            let result = classifier.classify(
+                configuration: try configuration(modelType: modelType),
+                pipelineTag: "text-generation",
+                tags: []
+            )
+
+            XCTAssertEqual(result, .supported, modelType)
+        }
+    }
+
+    func testSpeculatorModelTypeCanEstablishSupport() throws {
+        let result = try makeClassifier().classify(
+            configuration: configuration([
+                "model_type": "unrecognized-wrapper",
+                "speculators_model_type": "drafter-loader",
+            ]),
+            pipelineTag: "text-generation",
+            tags: ["draft-model"]
+        )
+
+        XCTAssertEqual(result, .supported)
+    }
+
+    func testUnknownStandardModelWithExplicitTaskIsUnsupported() throws {
+        let result = try makeClassifier().classify(
+            configuration: configuration([
+                "model_type": "not-in-the-bundled-runtime",
+                "architectures": ["UnsupportedForCausalLM"],
+            ]),
+            pipelineTag: "text-generation",
+            tags: []
+        )
+
+        XCTAssertEqual(result, .unsupported)
+    }
+
+    func testMissingEvidenceRemainsUnknown() throws {
+        let classifier = try makeClassifier()
+
+        XCTAssertEqual(
+            classifier.classify(
+                configuration: nil,
+                pipelineTag: "text-generation",
+                tags: []
+            ),
+            .unknown
+        )
+        XCTAssertEqual(
+            classifier.classify(
+                configuration: try configuration(modelType: "unrecognized"),
+                pipelineTag: nil,
+                tags: []
+            ),
+            .unknown
+        )
+        XCTAssertEqual(
+            classifier.classify(
+                configuration: try configuration([:]),
+                pipelineTag: "text-generation",
+                tags: []
+            ),
+            .unknown
+        )
+    }
+
+    func testCustomCodeEvidencePreventsUnsupportedClassification() throws {
+        let classifier = try makeClassifier()
+        let configurations: [[String: Any]] = [
+            [
+                "model_type": "unrecognized",
+                "model_file": "model.py",
+            ],
+            [
+                "model_type": "unrecognized",
+                "auto_map": ["AutoModel": "model.CustomModel"],
+            ],
+        ]
+
+        for payload in configurations {
+            XCTAssertEqual(
+                classifier.classify(
+                    configuration: try configuration(payload),
+                    pipelineTag: "text-generation",
+                    tags: []
+                ),
+                .unknown
+            )
+        }
+
+        for tag in ["custom_code", "trust_remote_code", "CUSTOM_CODE"] {
+            XCTAssertEqual(
+                classifier.classify(
+                    configuration: try configuration(modelType: "unrecognized"),
+                    pipelineTag: "text-generation",
+                    tags: [tag]
+                ),
+                .unknown,
+                tag
+            )
+        }
+    }
+
+    func testAmbiguousModalityAndDFlashMetadataRemainUnknown() throws {
+        let classifier = try makeClassifier()
+        let configurations: [[String: Any]] = [
+            [
+                "model_type": "unrecognized",
+                "vision_config": ["hidden_size": 1_024],
+            ],
+            [
+                "model_type": "unrecognized",
+                "audio_config": ["hidden_size": 1_024],
+            ],
+            [
+                "model_type": "unrecognized",
+                "dflash_config": ["num_layers": 1],
+            ],
+        ]
+
+        for payload in configurations {
+            XCTAssertEqual(
+                classifier.classify(
+                    configuration: try configuration(payload),
+                    pipelineTag: "text-generation",
+                    tags: []
+                ),
+                .unknown
+            )
+        }
+    }
+
+    func testExplicitSpecialLoaderArchitecturesAreSupported() throws {
+        let classifier = try makeClassifier()
+
+        for architecture in ["BoundaryExtractor", "DFlash2DraftModel"] {
+            let result = classifier.classify(
+                configuration: try configuration([
+                    "architectures": [architecture],
+                ]),
+                pipelineTag: nil,
+                tags: []
+            )
+
+            XCTAssertEqual(result, .supported, architecture)
+        }
+    }
+
+    func testConfigurationDecoderDistinguishesPresentMetadataFromNullValues() throws {
+        let populated = try configuration([
+            "model_type": "language-loader",
+            "architectures": ["ExampleForCausalLM"],
+            "vision_config": ["hidden_size": 1_024],
+            "audio_config": ["hidden_size": 768],
+            "dflash_config": ["num_layers": 1],
+            "auto_map": ["AutoModel": "model.CustomModel"],
+        ])
+
+        XCTAssertEqual(populated.modelType, "language-loader")
+        XCTAssertEqual(populated.architectures, ["ExampleForCausalLM"])
+        XCTAssertTrue(populated.hasVisionConfig)
+        XCTAssertTrue(populated.hasAudioConfig)
+        XCTAssertTrue(populated.hasDFlashConfig)
+        XCTAssertTrue(populated.usesCustomCode)
+
+        let nullMetadata = try configuration([
+            "model_type": "language-loader",
+            "vision_config": NSNull(),
+            "audio_config": NSNull(),
+            "dflash_config": NSNull(),
+            "auto_map": NSNull(),
+        ])
+
+        XCTAssertFalse(nullMetadata.hasVisionConfig)
+        XCTAssertFalse(nullMetadata.hasAudioConfig)
+        XCTAssertFalse(nullMetadata.hasDFlashConfig)
+        XCTAssertFalse(nullMetadata.usesCustomCode)
+    }
+
+    func testHubModelDecodingPropagatesConfigurationAndSupport() throws {
+        let payload: [String: Any] = [
+            "id": "test/unsupported-model",
+            "pipeline_tag": "text-generation",
+            "tags": ["safetensors"],
+            "config": [
+                "model_type": "definitely-not-a-bundled-loader",
+                "architectures": ["UnsupportedForCausalLM"],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let model = try JSONDecoder().decode(HuggingFaceModel.self, from: data)
+
+        XCTAssertEqual(model.configuration?.modelType, "definitely-not-a-bundled-loader")
+        XCTAssertEqual(model.configuration?.architectures, ["UnsupportedForCausalLM"])
+        XCTAssertEqual(model.support, .unsupported)
+    }
+
+    private func configuration(
+        modelType: String
+    ) throws -> HuggingFaceModelConfiguration {
+        try configuration(["model_type": modelType])
+    }
+
+    private func configuration(
+        _ payload: [String: Any]
+    ) throws -> HuggingFaceModelConfiguration {
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        return try JSONDecoder().decode(HuggingFaceModelConfiguration.self, from: data)
+    }
+
+    private func makeClassifier() throws -> HuggingFaceModelSupportClassifier {
+        let entry: (String, [String: String]) -> [String: Any] = { modelType, aliases in
+            [
+                "model_types": [modelType],
+                "aliases": aliases,
+            ]
+        }
+        let manifest: [String: Any] = [
+            "schema_version": 1,
+            "package_versions": [
+                "mlx-lm": "test",
+                "mlx-vlm": "test",
+                "mlx-audio": "test",
+            ],
+            "capabilities": [
+                "language": entry(
+                    "language-loader",
+                    ["language-alias": "language-loader"]
+                ),
+                "speculative_drafters": entry("drafter-loader", [:]),
+                "image_generation": entry("image-generator-loader", [:]),
+                "image_editing": entry("image-editor-loader", [:]),
+                "speech_to_text": entry("speech-recognizer-loader", [:]),
+                "text_to_speech": entry("speech-synthesizer-loader", [:]),
+                "embeddings": entry("embedding-loader", [:]),
+                "reranking": entry("reranker-loader", [:]),
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: manifest)
+        let registry = try NativModelTypeRegistry(data: data)
+        return HuggingFaceModelSupportClassifier(registry: registry)
     }
 }
 
