@@ -1450,17 +1450,17 @@ final class HuggingFaceDownloadManager: ObservableObject {
             repoID: repoID,
             cachePath: context.cachePath,
             token: normalizedToken,
-            progress: { progress in
+            progress: { [weak self] progress in
                 Task { @MainActor [weak self] in
                     self?.updateProgress(repoID, progress)
                 }
             },
-            transferSpeed: { bytesPerSecond in
+            transferSpeed: { [weak self] bytesPerSecond in
                 Task { @MainActor [weak self] in
                     self?.updateTransferSpeed(repoID, bytesPerSecond)
                 }
             },
-            phase: { phase in
+            phase: { [weak self] phase in
                 Task { @MainActor [weak self] in
                     self?.updatePhase(repoID, phase)
                 }
