@@ -19,7 +19,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             anchorView: anchorView,
             isPresented: $isPresented,
             gap: gap,
-            content: AnyView(content())
+            content: content
         )
     }
 
@@ -29,21 +29,61 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject {
-        private let panel: ArrowlessPopoverPanel
-        private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+        private var panel: ArrowlessPopoverPanel?
+        private var hostingView: NSHostingView<ArrowlessPopoverSurface<Content>>?
         private weak var anchorView: NSView?
         private var isPresented: Binding<Bool>?
         private var gap: CGFloat = 8
 
-        override init() {
-            panel = ArrowlessPopoverPanel(
+        func update(
+            anchorView: NSView,
+            isPresented: Binding<Bool>,
+            gap: CGFloat,
+            content: () -> Content
+        ) {
+            self.anchorView = anchorView
+            self.isPresented = isPresented
+            self.gap = gap
+
+            guard isPresented.wrappedValue else {
+                dismiss(updateBinding: false)
+                return
+            }
+
+            let surface = ArrowlessPopoverSurface(content: content())
+            if let hostingView {
+                hostingView.rootView = surface
+            } else {
+                let hostingView = NSHostingView(rootView: surface)
+                let panel = makePanel(hostingView: hostingView)
+                self.hostingView = hostingView
+                self.panel = panel
+            }
+            showPanel()
+        }
+
+        func dismiss(updateBinding: Bool = true) {
+            if updateBinding, isPresented?.wrappedValue == true {
+                isPresented?.wrappedValue = false
+            }
+            guard let panel, panel.isVisible || panel.parent != nil else {
+                return
+            }
+            if let parent = panel.parent {
+                parent.removeChildWindow(panel)
+            }
+            panel.orderOut(nil)
+        }
+
+        private func makePanel(
+            hostingView: NSHostingView<ArrowlessPopoverSurface<Content>>
+        ) -> ArrowlessPopoverPanel {
+            let panel = ArrowlessPopoverPanel(
                 contentRect: .zero,
                 styleMask: [.borderless],
                 backing: .buffered,
                 defer: true
             )
-            super.init()
-
             panel.isFloatingPanel = true
             panel.isOpaque = false
             panel.backgroundColor = .clear
@@ -56,40 +96,14 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 guard self?.isPresented?.wrappedValue == true else { return }
                 self?.isPresented?.wrappedValue = false
             }
-        }
-
-        func update(
-            anchorView: NSView,
-            isPresented: Binding<Bool>,
-            gap: CGFloat,
-            content: AnyView
-        ) {
-            self.anchorView = anchorView
-            self.isPresented = isPresented
-            self.gap = gap
-
-            guard isPresented.wrappedValue else {
-                dismiss(updateBinding: false)
-                return
-            }
-
-            hostingView.rootView = AnyView(ArrowlessPopoverSurface(content: content))
-            showPanel()
-        }
-
-        func dismiss(updateBinding: Bool = true) {
-            if updateBinding, isPresented?.wrappedValue == true {
-                isPresented?.wrappedValue = false
-            }
-            if let parent = panel.parent {
-                parent.removeChildWindow(panel)
-            }
-            panel.orderOut(nil)
+            return panel
         }
 
         private func showPanel() {
+            guard let panel, let hostingView else { return }
             guard let anchorView, let parentWindow = anchorView.window else {
                 DispatchQueue.main.async { [weak self] in
+                    guard self?.isPresented?.wrappedValue == true else { return }
                     self?.showPanel()
                 }
                 return
@@ -123,6 +137,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             in parentWindow: NSWindow,
             size: NSSize
         ) {
+            guard let panel else { return }
             let windowRect = anchorView.convert(anchorView.bounds, to: nil)
             let screenRect = parentWindow.convertToScreen(windowRect)
             var origin = NSPoint(
@@ -159,8 +174,8 @@ private final class ArrowlessPopoverPanel: NSPanel {
     }
 }
 
-private struct ArrowlessPopoverSurface: View {
-    let content: AnyView
+private struct ArrowlessPopoverSurface<Content: View>: View {
+    let content: Content
 
     var body: some View {
         content
