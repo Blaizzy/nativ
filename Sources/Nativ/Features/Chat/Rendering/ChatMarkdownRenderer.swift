@@ -20,7 +20,7 @@ struct ChatMarkdownRenderer: View {
       isStreaming: isStreaming
     )
     let markdown = Markdown(MarkdownContent(renderedContent))
-      .markdownTheme(.nativChat)
+      .markdownTheme(.nativChat(fontScale: fontScale))
       .markdownCodeSyntaxHighlighter(ChatCodeHighlighter.forScheme(colorScheme))
       .markdownInlineImageProvider(
         MathInlineProvider(
@@ -56,11 +56,11 @@ struct ChatMarkdownRenderer: View {
 }
 
 extension MarkdownUI.Theme {
-  static var nativChat: MarkdownUI.Theme {
+  static func nativChat(fontScale: Double) -> MarkdownUI.Theme {
     MarkdownUI.Theme.gitHub
       .text {
         BackgroundColor(nil)
-        FontSize(16)
+        FontSize(ChatFontMetrics.baseBodyPointSize * fontScale)
       }
   }
 }
