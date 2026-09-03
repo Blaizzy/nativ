@@ -106,6 +106,8 @@ private enum ChatTranscriptLayout {
     static let horizontalPadding: CGFloat = 32
     static let messageHorizontalInset: CGFloat = 32
     static let composerClearance: CGFloat = 48
+    static let composerFadeExtension: CGFloat = 40
+    static let scrollIndicatorClearance: CGFloat = 17
 }
 
 private struct ChatProjectContextBanner: View {
@@ -161,6 +163,8 @@ private struct ChatTranscriptView: View {
     @State private var atBottom = true
     @State private var userPausedAutoScroll = false
     @State private var userIsScrolling = false
+    @State private var composerHeight: CGFloat = 0
+    @State private var composerBackdropHeight: CGFloat = 0
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -171,14 +175,16 @@ private struct ChatTranscriptView: View {
         let latestUserMessageID = chat.latestUserMessageID
         let visibleItems = chat.visibleTranscriptItems
 
-        VStack(spacing: 0) {
-            transcript(
-                items: visibleItems,
-                forkableAssistantResponseIDs: forkableAssistantResponseIDs,
-                latestUserMessageID: latestUserMessageID
-            )
-
-            composerSurface
+        transcript(
+            items: visibleItems,
+            forkableAssistantResponseIDs: forkableAssistantResponseIDs,
+            latestUserMessageID: latestUserMessageID
+        )
+        .overlay(alignment: .bottom) {
+            ZStack(alignment: .bottom) {
+                composerBackdrop
+                composerSurface
+            }
         }
         .background(Color.nativMainContentBackground)
         .onChange(of: chat.currentSessionID) { _, _ in
@@ -232,7 +238,10 @@ private struct ChatTranscriptView: View {
                         + ChatTranscriptLayout.messageHorizontalInset
                 )
                 .padding(.top, 18)
-                .padding(.bottom, ChatTranscriptLayout.composerClearance)
+                .padding(
+                    .bottom,
+                    max(18, composerHeight + ChatTranscriptLayout.composerClearance)
+                )
                 .animation(.easeOut(duration: 0.25), value: items.count)
             }
             .defaultScrollAnchor(.bottom)
@@ -386,10 +395,36 @@ private struct ChatTranscriptView: View {
             extensionManager: extensionManager,
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
-            onFindDraftModels: onFindDraftModels
+            onFindDraftModels: onFindDraftModels,
+            onBackdropHeightChange: { composerBackdropHeight = $0 }
         )
-        .background(Color.nativMainContentBackground)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            composerHeight = height
+        }
         .zIndex(1)
+    }
+
+    private var composerBackdrop: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [
+                    Color.nativMainContentBackground.opacity(0),
+                    Color.nativMainContentBackground.opacity(0.84),
+                    Color.nativMainContentBackground,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: ChatTranscriptLayout.composerFadeExtension)
+
+            Color.nativMainContentBackground
+                .frame(height: max(72, composerBackdropHeight))
+        }
+        .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func imageModelSelectionRequests(
@@ -448,6 +483,7 @@ private struct ChatComposerContainer: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -478,7 +514,8 @@ private struct ChatComposerContainer: View {
                     languageModelSupportsTools: languageModelSupportsTools,
                     languageModelSupportsVision: languageModelSupportsVision
                 )
-            }
+            },
+            onBackdropHeightChange: onBackdropHeightChange
         )
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)

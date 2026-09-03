@@ -169,6 +169,7 @@ struct ChatComposer: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
     let onSend: (Bool, Bool) -> Void
+    let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
     @State private var showsKits = false
@@ -324,6 +325,11 @@ struct ChatComposer: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                onBackdropHeightChange(height + (composerVerticalPadding * 2))
+            }
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.width
             } action: { width in
