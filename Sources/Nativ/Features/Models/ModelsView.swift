@@ -356,6 +356,9 @@ struct ModelsView: View {
         .onChange(of: localLibrary.models.map(\.repoID)) { _, _ in
             selectFirstVisibleReadmeIfNeeded(in: .installed)
         }
+        .onChange(of: eligibleVisibleModelIDs) { _, visibleIDs in
+            installedModelSelection.retain(visibleIDs)
+        }
         .onChange(of: hubLibrary.models.map(\.id)) { _, _ in
             selectFirstVisibleReadmeIfNeeded(in: .discover)
         }
@@ -1031,9 +1034,13 @@ struct ModelsView: View {
     }
 
     private var selectedInstalledModels: [LocalModel] {
-        localLibrary.models.filter {
+        filteredLocalModels.filter {
             installedModelSelection.contains($0.repoID) && canSelectForDeletion($0)
         }
+    }
+
+    private var eligibleVisibleModelIDs: Set<String> {
+        Set(filteredLocalModels.filter(canSelectForDeletion).map(\.repoID))
     }
 
     private func canSelectForDeletion(_ localModel: LocalModel) -> Bool {
