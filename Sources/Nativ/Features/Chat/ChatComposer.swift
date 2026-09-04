@@ -1082,7 +1082,7 @@ struct ChatComposer: View {
             return blockingNotice.message
         }
         if viewModel.promptEditContext != nil {
-            return "Fork and regenerate (Return)"
+            return "Save and regenerate (Return)"
         }
         return "Send (Return)"
     }
@@ -1131,7 +1131,7 @@ private struct ChatPromptEditBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Editing prompt")
                     .fontWeight(.medium)
-                Text("Sending will create a new chat branch.")
+                Text("Sending will replace the latest response.")
                     .foregroundStyle(.secondary)
             }
 
