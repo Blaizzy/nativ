@@ -192,7 +192,8 @@ enum ChatToolExposurePolicy {
 
 enum ChatToolDiscoveryRegistry {
     static let toolName = "tool_search"
-    static let maximumResults = 6
+    static let maximumResults = 3
+    static let maximumResultDescriptionCharacters = 240
 
     static let definition = MLXChatToolDefinition(
         function: MLXChatFunctionDefinition(
@@ -254,6 +255,20 @@ enum ChatToolDiscoveryRegistry {
         .map(\.0)
     }
 
+    static func matches(
+        argumentsJSON: String?,
+        candidates: [ChatToolDiscoveryCandidate]
+    ) throws -> [ChatToolDiscoveryCandidate] {
+        guard let argumentsJSON,
+            let data = argumentsJSON.data(using: .utf8),
+            let request = try? JSONDecoder().decode(ChatToolDiscoveryRequest.self, from: data),
+            !request.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw ChatToolDiscoveryError.invalidArguments
+        }
+        return search(request.query, candidates: candidates)
+    }
+
     private static func normalized(_ value: String) -> String {
         value.lowercased()
             .replacingOccurrences(of: "_", with: " ")
@@ -270,6 +285,12 @@ enum ChatToolDiscoveryRegistry {
                 .map(String.init)
                 .filter { !ignored.contains($0) }
         )
+    }
+
+    static func resultDescription(_ description: String) -> String {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maximumResultDescriptionCharacters else { return trimmed }
+        return String(trimmed.prefix(maximumResultDescriptionCharacters)) + "…"
     }
 }
 
@@ -591,15 +612,8 @@ enum ChatToolDispatcher {
         call: MLXChatToolCall,
         context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
-        guard let arguments = call.function?.arguments,
-            let data = arguments.data(using: .utf8),
-            let request = try? JSONDecoder().decode(ChatToolDiscoveryRequest.self, from: data),
-            !request.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw ChatToolDiscoveryError.invalidArguments
-        }
-        let matches = ChatToolDiscoveryRegistry.search(
-            request.query,
+        let matches = try ChatToolDiscoveryRegistry.matches(
+            argumentsJSON: call.function?.arguments,
             candidates: context.discoverableTools
         )
         let payload = ChatToolDiscoveryPayload(
@@ -608,7 +622,7 @@ enum ChatToolDispatcher {
                 ChatToolDiscoveryMatch(
                     name: $0.name,
                     title: $0.title,
-                    description: $0.description,
+                    description: ChatToolDiscoveryRegistry.resultDescription($0.description),
                     source: $0.source
                 )
             },

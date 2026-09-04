@@ -430,6 +430,47 @@ struct NativKitTests {
         ])
     }
 
+    @Test("Enabling missing Kit components preserves pinned exposure modes")
+    func enablingMissingComponentsPreservesPinnedModes() throws {
+        let server = MCPServerConfig(name: "Example MCP", command: "example-mcp")
+        let custom = try CustomTool.make(
+            name: "Example Tool",
+            summary: "Example",
+            kind: .script,
+            script: "print('{}')",
+            parametersJSON: CustomTool.defaultParametersJSON
+        )
+        let missingTool = ChatSystemMonitorToolRegistry.toolName
+        let kit = makeKit(
+            id: "preserve-pinned-modes",
+            components: [
+                .mcpServer(.configured(id: server.id)),
+                .nativeTool(name: ChatWebSearchToolRegistry.toolName),
+                .nativeTool(name: missingTool),
+                .customTool(id: custom.id),
+            ]
+        )
+        var settings = NativSettings(
+            mcpServers: [server],
+            customTools: [custom],
+            disabledToolNames: [missingTool]
+        )
+        settings.setMCPServerExposureMode(.on, serverID: server.id)
+        settings.setToolExposureMode(.on, toolName: ChatWebSearchToolRegistry.toolName)
+        settings.setToolExposureMode(.on, toolName: custom.toolName, default: .automatic)
+
+        NativKitActivation.enableMissing(
+            in: kit,
+            settings: &settings,
+            mcpCatalog: .empty
+        )
+
+        #expect(settings.mcpServerExposureMode(for: settings.mcpServers[0]) == .on)
+        #expect(settings.toolExposureMode(for: ChatWebSearchToolRegistry.toolName) == .on)
+        #expect(settings.toolExposureMode(for: custom.toolName, default: .automatic) == .on)
+        #expect(settings.toolExposureMode(for: missingTool) == .automatic)
+    }
+
     private func makeKit(
         id: String,
         components: [NativKitComponent]

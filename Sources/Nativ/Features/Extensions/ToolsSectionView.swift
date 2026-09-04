@@ -315,7 +315,13 @@ private struct ToolRow: View {
             .buttonStyle(.plain)
             .help(tool.configuration == nil ? "Inspect / try" : "Configure")
             if let exposureMode {
-                ToolExposureModeControl(mode: exposureMode, title: tool.title)
+                ToolExposureModeControl(
+                    mode: exposureMode,
+                    title: tool.title,
+                    turnOffWarning: tool.toolNames.contains(
+                        ChatToolDiscoveryRegistry.toolName
+                    ) ? ToolExposureModeCopy.toolSearchTurnOffWarning : nil
+                )
             } else if tool.configuration != nil {
                 Button("Set Up", action: onInspect)
                     .buttonStyle(.bordered)

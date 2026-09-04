@@ -174,6 +174,49 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(matches.map(\.name), ["mcp__git__log"])
     }
 
+    func testToolDiscoveryBoundsMatchesAndReturnedDescriptions() async throws {
+        let candidates = (0 ..< 5).map { index in
+            ChatToolDiscoveryCandidate(
+                name: "mcp__example__search_\(index)",
+                title: "Example search \(index)",
+                description: "Search " + String(repeating: "x", count: 400),
+                source: "Example"
+            )
+        }
+
+        let matches = ChatToolDiscoveryRegistry.search("search", candidates: candidates)
+        let outcome = try await ChatToolDispatcher.execute(
+            call: makeCall(
+                name: ChatToolDiscoveryRegistry.toolName,
+                arguments: #"{"query":"search"}"#
+            ),
+            context: makeContext(discoverableTools: candidates)
+        )
+
+        XCTAssertEqual(matches.count, ChatToolDiscoveryRegistry.maximumResults)
+        XCTAssertEqual(
+            ChatToolDiscoveryRegistry.resultDescription(candidates[0].description).count,
+            ChatToolDiscoveryRegistry.maximumResultDescriptionCharacters + 1
+        )
+        XCTAssertFalse(outcome.content.contains(String(repeating: "x", count: 241)))
+    }
+
+    func testToolDiscoveryCanResolveMatchesBeforeDispatchingAParallelBatch() throws {
+        let candidate = ChatToolDiscoveryCandidate(
+            name: "mcp__git__status",
+            title: "Git status",
+            description: "Inspect repository changes",
+            source: "Git"
+        )
+
+        let matches = try ChatToolDiscoveryRegistry.matches(
+            argumentsJSON: #"{"query":"repository changes"}"#,
+            candidates: [candidate]
+        )
+
+        XCTAssertEqual(matches.map(\.name), [candidate.name])
+    }
+
     func testToolDiscoveryActivatesMatchedTools() async throws {
         let candidate = ChatToolDiscoveryCandidate(
             name: "mcp__sqlite__query",

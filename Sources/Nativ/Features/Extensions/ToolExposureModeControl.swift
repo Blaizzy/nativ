@@ -3,10 +3,12 @@ import SwiftUI
 struct ToolExposureModeControl: View {
     @Binding var mode: ToolExposureMode
     var title: String
+    var turnOffWarning: String?
+    @State private var showsTurnOffConfirmation = false
 
     var body: some View {
         Button {
-            mode = mode.next
+            select(mode.next)
         } label: {
             Image(systemName: mode.systemImage)
                 .font(.system(size: 12, weight: .semibold))
@@ -22,7 +24,7 @@ struct ToolExposureModeControl: View {
         .contextMenu {
             ForEach(ToolExposureMode.allCases, id: \.self) { option in
                 Button {
-                    mode = option
+                    select(option)
                 } label: {
                     Label {
                         Text("\(option.title) — \(option.availabilityText)")
@@ -38,7 +40,38 @@ struct ToolExposureModeControl: View {
         .accessibilityHint(
             "Click to switch to \(mode.next.title), \(mode.next.availabilityText.lowercased())."
         )
+        .alert("Turn Off \(title)?", isPresented: $showsTurnOffConfirmation) {
+            Button("Turn Off", role: .destructive) {
+                mode = .off
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(turnOffWarning ?? "")
+        }
     }
+
+    init(
+        mode: Binding<ToolExposureMode>,
+        title: String,
+        turnOffWarning: String? = nil
+    ) {
+        _mode = mode
+        self.title = title
+        self.turnOffWarning = turnOffWarning
+    }
+
+    private func select(_ newMode: ToolExposureMode) {
+        if newMode == .off, mode != .off, turnOffWarning != nil {
+            showsTurnOffConfirmation = true
+        } else {
+            mode = newMode
+        }
+    }
+}
+
+enum ToolExposureModeCopy {
+    static let toolSearchTurnOffWarning =
+        "Auto tools will be unavailable to chat until Tool Search is set to Auto or On."
 }
 
 struct ToolExposureModeExplanation: View {
@@ -49,7 +82,7 @@ struct ToolExposureModeExplanation: View {
     }
 }
 
-private extension ToolExposureMode {
+extension ToolExposureMode {
     var availabilityText: String {
         switch self {
         case .off: "Unavailable to chat"

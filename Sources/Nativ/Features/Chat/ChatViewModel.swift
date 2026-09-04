@@ -1588,7 +1588,7 @@ final class ChatViewModel: ObservableObject {
                 return
             }
 
-            let callableToolNames = Set(
+            var callableToolNames = Set(
                 ChatToolExposurePolicy.advertisedDefinitions(
                     from: availableTools.map {
                         ChatToolExposureCandidate(
@@ -1599,6 +1599,23 @@ final class ChatViewModel: ObservableObject {
                     activatedToolNames: activatedToolNames
                 ).map(\.function.name)
             )
+            let discoverableTools = availableTools
+                .filter {
+                    $0.exposureMode == .automatic
+                        && $0.definition.function.name != ChatToolDiscoveryRegistry.toolName
+                        && !activatedToolNames.contains($0.definition.function.name)
+                }
+                .map(\.discoveryCandidate)
+            if callableToolNames.contains(ChatToolDiscoveryRegistry.toolName) {
+                for toolCall in toolCalls
+                where toolCall.function?.name == ChatToolDiscoveryRegistry.toolName {
+                    let matches = try? ChatToolDiscoveryRegistry.matches(
+                        argumentsJSON: toolCall.function?.arguments,
+                        candidates: discoverableTools
+                    )
+                    callableToolNames.formUnion(matches?.map(\.name) ?? [])
+                }
+            }
 
             var insertionAnchor = assistantMessageID
             for (index, toolCall) in toolCalls.enumerated() {
@@ -1920,16 +1937,7 @@ final class ChatViewModel: ObservableObject {
                         terminalApprovalGranted: terminalApprovalGranted,
                         terminalDefaultWorkingDirectory: queuedRequest.toolScope
                             .terminalWorkingDirectory,
-                        discoverableTools: availableTools
-                            .filter {
-                                $0.exposureMode == .automatic
-                                    && $0.definition.function.name
-                                        != ChatToolDiscoveryRegistry.toolName
-                                    && !activatedToolNames.contains(
-                                        $0.definition.function.name
-                                    )
-                            }
-                            .map(\.discoveryCandidate),
+                        discoverableTools: discoverableTools,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
@@ -1997,6 +2005,7 @@ final class ChatViewModel: ObservableObject {
                         attachments: outcome.attachments
                     )
                     activatedToolNames.formUnion(outcome.activatedToolNames)
+                    callableToolNames.formUnion(outcome.activatedToolNames)
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
                     cancelToolMessages(

@@ -106,7 +106,17 @@ struct ChatCapabilitiesSheet: View {
 
     private var nativeToolItems: [GlobalChatCapabilityItem] {
         var seenConfigurations = Set<ChatNativeToolConfiguration>()
-        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+        let discovery = GlobalChatCapabilityItem(
+            id: "native-tool-\(ChatToolDiscoveryRegistry.toolName)",
+            target: .nativeTools([ChatToolDiscoveryRegistry.toolName]),
+            title: "Tool Search",
+            detail: "Find Auto tools without adding every tool to each prompt.",
+            kind: .tool,
+            systemImage: "magnifyingglass",
+            isAvailable: true,
+            setupSection: nil
+        )
+        let tools = ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
             if let configuration,
@@ -127,6 +137,7 @@ struct ChatCapabilitiesSheet: View {
                 setupSection: configuration?.isConfigured == false ? .tools : nil
             )
         }
+        return [discovery] + tools
     }
 
     var body: some View {
@@ -235,7 +246,11 @@ struct ChatCapabilitiesSheet: View {
             Spacer(minLength: 20)
 
             if let mode = exposureModeBinding(for: item) {
-                ToolExposureModeControl(mode: mode, title: item.title)
+                ToolExposureModeControl(
+                    mode: mode,
+                    title: item.title,
+                    turnOffWarning: toolSearchTurnOffWarning(for: item)
+                )
             } else if isEnabled(item) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 16, weight: .semibold))
@@ -261,6 +276,15 @@ struct ChatCapabilitiesSheet: View {
         case .mcpServer(let id):
             return model.settings.mcpServers.first { $0.id == id }?.isEnabled == true
         }
+    }
+
+    private func toolSearchTurnOffWarning(
+        for item: GlobalChatCapabilityItem
+    ) -> String? {
+        guard case .nativeTools(let toolNames) = item.target,
+            toolNames.contains(ChatToolDiscoveryRegistry.toolName)
+        else { return nil }
+        return ToolExposureModeCopy.toolSearchTurnOffWarning
     }
 
     private func exposureModeBinding(
