@@ -1637,7 +1637,7 @@ private struct ModelReadmePanel: View {
                     font: .system(size: 15),
                     fontSize: 15,
                     imagePolicy: .document,
-                    scrollsWideTables: true
+                    fitsTablesToWidth: true
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)

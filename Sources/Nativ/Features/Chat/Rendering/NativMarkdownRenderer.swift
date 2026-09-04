@@ -17,7 +17,7 @@ struct NativMarkdownRenderer: View {
   let font: Font
   let fontSize: CGFloat
   let imagePolicy: ImagePolicy
-  let scrollsWideTables: Bool
+  let fitsTablesToWidth: Bool
 
   init(
     content: String,
@@ -25,14 +25,14 @@ struct NativMarkdownRenderer: View {
     font: Font,
     fontSize: CGFloat,
     imagePolicy: ImagePolicy = .mathOnly,
-    scrollsWideTables: Bool = false
+    fitsTablesToWidth: Bool = false
   ) {
     self.content = content
     self.baseURL = baseURL
     self.font = font
     self.fontSize = fontSize
     self.imagePolicy = imagePolicy
-    self.scrollsWideTables = scrollsWideTables
+    self.fitsTablesToWidth = fitsTablesToWidth
   }
 
   var body: some View {
@@ -44,7 +44,7 @@ struct NativMarkdownRenderer: View {
     .markdownTheme(
       .nativMarkdown(
         fontSize: fontSize,
-        scrollsWideTables: scrollsWideTables
+        fitsTablesToWidth: fitsTablesToWidth
       )
     )
     .markdownCodeSyntaxHighlighter(ChatCodeHighlighter.forScheme(colorScheme))
@@ -76,7 +76,7 @@ struct NativMarkdownRenderer: View {
 extension MarkdownUI.Theme {
   static func nativMarkdown(
     fontSize: CGFloat,
-    scrollsWideTables: Bool = false
+    fitsTablesToWidth: Bool = false
   ) -> MarkdownUI.Theme {
     let theme = MarkdownUI.Theme.gitHub
       .text {
@@ -84,9 +84,9 @@ extension MarkdownUI.Theme {
         FontSize(fontSize)
       }
 
-    guard scrollsWideTables else { return theme }
+    guard fitsTablesToWidth else { return theme }
     return theme.table { configuration in
-      NativMarkdownTableOverflow(content: configuration.label)
+      NativMarkdownFittedTable(content: configuration.label)
     }
   }
 
@@ -95,43 +95,29 @@ extension MarkdownUI.Theme {
   }
 }
 
-private struct NativMarkdownTableOverflow<Content: View>: View {
-  private static var maximumRelativeWidth: CGFloat { 4 }
-
+private struct NativMarkdownFittedTable<Content: View>: View {
   // MarkdownUI stores theme builders outside the main actor. SwiftUI still reads
   // this immutable label only from `body` on the main actor.
   nonisolated(unsafe) private let content: Content
-  @State private var containerWidth: CGFloat?
 
   nonisolated init(content: Content) {
     self.content = content
   }
 
   var body: some View {
-    ScrollView(.horizontal) {
-      content
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: maximumWidth, alignment: .leading)
-        .markdownTableBorderStyle(
-          .init(color: Color.secondary.opacity(0.25))
+    content
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .markdownTableBorderStyle(
+        .init(color: Color.secondary.opacity(0.25))
+      )
+      .markdownTableBackgroundStyle(
+        .alternatingRows(
+          Color.clear,
+          Color.secondary.opacity(0.06)
         )
-        .markdownTableBackgroundStyle(
-          .alternatingRows(
-            Color.clear,
-            Color.secondary.opacity(0.06)
-          )
-        )
-    }
-    .onScrollGeometryChange(for: CGFloat.self, of: \.containerSize.width) {
-      _, newWidth in
-      guard containerWidth != newWidth else { return }
-      containerWidth = newWidth
-    }
-    .markdownMargin(top: 0, bottom: 16)
-  }
-
-  private var maximumWidth: CGFloat? {
-    containerWidth.map { $0 * Self.maximumRelativeWidth }
+      )
+      .markdownMargin(top: 0, bottom: 16)
   }
 }
 

@@ -100,27 +100,34 @@ final class ChatMarkdownRendererTests: XCTestCase {
   }
 
   @MainActor
-  func testDocumentRendererRendersWideTable() throws {
+  func testDocumentRendererWrapsTableCellsToFitAvailableWidth() throws {
     let content = """
       | Model | Context | Quantization | Architecture | Notes |
       | --- | ---: | --- | --- | --- |
-      | Example | 131072 | 4-bit | Mixture of experts | A deliberately wide table value |
+      | Example | 131072 | 4-bit | Mixture of experts | A deliberately long table value that should wrap when the table is narrow |
       """
+    let narrowHeight = try renderedDocumentHeight(content: content, width: 260)
+    let wideHeight = try renderedDocumentHeight(content: content, width: 900)
+
+    XCTAssertGreaterThan(narrowHeight, wideHeight)
+  }
+
+  @MainActor
+  private func renderedDocumentHeight(content: String, width: CGFloat) throws -> CGFloat {
     let renderer = ImageRenderer(
       content: NativMarkdownRenderer(
         content: content,
         font: .system(size: 15),
         fontSize: 15,
         imagePolicy: .document,
-        scrollsWideTables: true
+        fitsTablesToWidth: true
       )
-      .frame(width: 260)
+      .frame(width: width)
       .fixedSize(horizontal: false, vertical: true)
     )
-    renderer.proposedSize = ProposedViewSize(width: 260, height: nil)
+    renderer.proposedSize = ProposedViewSize(width: width, height: nil)
 
-    let image = try XCTUnwrap(renderer.nsImage)
-    XCTAssertGreaterThan(image.size.height, 20)
+    return try XCTUnwrap(renderer.nsImage).size.height
   }
 
   func testDocumentImageProviderLoadsLocalInlineImage() async throws {
