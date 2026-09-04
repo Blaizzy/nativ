@@ -92,6 +92,7 @@ final class AudioCaptureLibrary: ObservableObject {
     let meterState = AudioInputLevelState()
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
+    @Published private(set) var transcribingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
     @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
@@ -409,6 +410,7 @@ final class AudioCaptureLibrary: ObservableObject {
             }
             return
         }
+        clearLastError()
         processingRecordIDs.insert(record.id)
         Task { [weak self] in
             guard let self else {
@@ -419,7 +421,8 @@ final class AudioCaptureLibrary: ObservableObject {
                 kind: record.resolvedKind,
                 title: record.displayTitle,
                 duration: record.durationSeconds ?? 0,
-                automaticallySummarize: false
+                automaticallySummarize: record.summary?.isEmpty == false,
+                preserveExistingSummary: false
             )
         }
     }
@@ -604,10 +607,13 @@ final class AudioCaptureLibrary: ObservableObject {
         kind: AudioRecordKind,
         title: String,
         duration: TimeInterval,
-        automaticallySummarize: Bool
+        automaticallySummarize: Bool,
+        preserveExistingSummary: Bool = true
     ) async {
         let recordID = recordingURL.deletingPathExtension().lastPathComponent
+        transcribingRecordIDs.insert(recordID)
         defer {
+            transcribingRecordIDs.remove(recordID)
             processingRecordIDs.remove(recordID)
         }
 
@@ -625,8 +631,14 @@ final class AudioCaptureLibrary: ObservableObject {
                 applicationName: nil,
                 kind: kind,
                 title: analytics.record(withID: recordID)?.title ?? title,
-                persistAudioReference: true
+                persistAudioReference: true,
+                preserveExistingSummary: preserveExistingSummary
             )
+            transcribingRecordIDs.remove(recordID)
+
+            if !preserveExistingSummary {
+                removeSummaryFile(recordID: recordID)
+            }
 
             if automaticallySummarize {
                 do {
@@ -766,6 +778,16 @@ final class AudioCaptureLibrary: ObservableObject {
             .appendingPathComponent(recordID)
             .appendingPathExtension("summary.txt")
         try summary.write(to: summaryURL, atomically: true, encoding: .utf8)
+    }
+
+    private func removeSummaryFile(recordID: String) {
+        guard let directory = try? Self.recordingsDirectory else {
+            return
+        }
+        let summaryURL = directory
+            .appendingPathComponent(recordID)
+            .appendingPathExtension("summary.txt")
+        try? FileManager.default.removeItem(at: summaryURL)
     }
 
     private func fail(_ error: Error) {
