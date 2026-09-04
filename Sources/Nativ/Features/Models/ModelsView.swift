@@ -497,12 +497,8 @@ struct ModelsView: View {
         // whole scroller here made a card click wait for the visible rows to
         // be rebuilt before SwiftUI could present the README loading state.
         VStack(spacing: 0) {
-            switch renderedSection {
-            case .installed:
+            if renderedSection == .installed {
                 installedResultsHeader
-                    .modelsListRow(top: 0)
-            case .discover:
-                discoverResultsHeader
                     .modelsListRow(top: 0)
             }
 
@@ -583,7 +579,7 @@ struct ModelsView: View {
                     }
                 }
             case .discover:
-                discoverScroller(showsResultsHeader: showsResultsHeader)
+                discoverScroller()
             }
         }
     }
@@ -771,7 +767,7 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
-    private func discoverScroller(showsResultsHeader: Bool) -> some View {
+    private func discoverScroller() -> some View {
         if let error = hubLibrary.error {
             ScrollView {
                 ModelsNotice(
@@ -820,11 +816,6 @@ struct ModelsView: View {
             // every scroll pass is noticeably more expensive than Installed.
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if showsResultsHeader {
-                        discoverResultsHeader
-                            .modelsListRow(top: 0)
-                    }
-
                     ForEach(models) { hubModel in
                         HubModelRowContainer(
                             model: hubModel,
@@ -1301,21 +1292,6 @@ struct ModelsView: View {
             .fixedSize()
     }
 
-    private var discoverResultsHeader: some View {
-        HStack(spacing: 12) {
-            Spacer(minLength: 8)
-            openHubLink
-        }
-    }
-
-    private var openHubLink: some View {
-        Link(destination: hubModelsURL) {
-            Label("Open Hub", systemImage: "arrow.up.right")
-                .font(.caption)
-        }
-        .fixedSize()
-    }
-
     private var hubVisibilityPredicate: (HuggingFaceModel) -> Bool {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
@@ -1417,37 +1393,6 @@ struct ModelsView: View {
             access: hubAccessFilter,
             authenticationToken: modelState.effectiveHuggingFaceToken
         )
-    }
-
-    private var hubModelsURL: URL {
-        var components = URLComponents(string: "https://huggingface.co/models")!
-        var queryItems = [
-            URLQueryItem(name: "library", value: "safetensors"),
-            URLQueryItem(name: "sort", value: hubSort.hubWebValue),
-            URLQueryItem(name: "p", value: String(hubLibrary.pageNumber - 1)),
-        ]
-
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty {
-            queryItems.append(URLQueryItem(name: "search", value: query))
-        }
-        queryItems.append(
-            contentsOf:
-                hubCapabilityFilters
-            .sorted { $0.rawValue < $1.rawValue }
-            .map(\.hubQueryItem))
-
-        switch hubAccessFilter {
-        case .all:
-            break
-        case .open:
-            queryItems.append(URLQueryItem(name: "gated", value: "false"))
-        case .gated:
-            queryItems.append(URLQueryItem(name: "gated", value: "true"))
-        }
-
-        components.queryItems = queryItems
-        return components.url!
     }
 
 }
@@ -1574,6 +1519,7 @@ private struct ModelReadmePanel: View {
     let selection: ModelReadmeSelection
     @ObservedObject var store: HuggingFaceModelReadmeStore
     let onClose: () -> Void
+    @State private var isModelLinkHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1591,9 +1537,31 @@ private struct ModelReadmePanel: View {
             ModelProviderBadge(provider: selection.provider)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(modelName(selection.repoID))
-                    .font(.headline)
-                    .lineLimit(1)
+                if let hubURL {
+                    Link(destination: hubURL) {
+                        HStack(spacing: 4) {
+                            Text(modelName(selection.repoID))
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .underline(isModelLinkHovered)
+                                .lineLimit(1)
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.blue)
+                                .opacity(isModelLinkHovered ? 1 : 0)
+                                .accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { isModelLinkHovered = $0 }
+                    .help("Open \(selection.repoID) on Hugging Face Hub")
+                    .accessibilityLabel("Open \(selection.repoID) on Hugging Face Hub")
+                } else {
+                    Text(modelName(selection.repoID))
+                        .font(.headline)
+                        .lineLimit(1)
+                }
                 Text(selection.repoID)
                     .font(.caption)
                     .foregroundStyle(.secondary)
