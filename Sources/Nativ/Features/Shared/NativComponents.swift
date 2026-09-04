@@ -197,6 +197,267 @@ extension Color {
 // single tint over nested filled tiles, so a surface reads as one calm plane
 // rather than a stack of boxes. Prefer these over re-rolling a pill/badge/dot.
 
+/// The application-wide typography roles used by Nativ interface chrome.
+enum NativTypography {
+    enum Style {
+        case displayTitle
+        case pageTitle
+        case brandTitle
+        case sheetTitle
+        case detailTitle
+        case cardTitle
+        case compactCardTitle
+        case emptyStateTitle
+        case sidebarSectionTitle
+        case sidebarItem
+        case subsectionTitle
+        case sectionTitle
+        case rowTitleEmphasized
+        case rowTitle
+        case body
+        case supporting
+        case supportingEmphasized
+        case metadata
+        case metadataNumeric
+        case badge
+        case badgeMuted
+        case badgeStrong
+        case actionLabel
+        case statusBadge
+        case chartLabel
+        case technicalDisplayTitle
+        case technicalTitle
+        case technicalLabel
+        case code
+        case codeEmphasized
+
+        fileprivate var font: Font {
+            switch self {
+            case .displayTitle:
+                .system(size: 32, weight: .semibold)
+            case .pageTitle:
+                .system(size: 20, weight: .semibold)
+            case .brandTitle:
+                .system(size: 18, weight: .semibold)
+            case .sheetTitle:
+                .system(size: 18, weight: .semibold)
+            case .detailTitle:
+                .system(size: 17, weight: .semibold)
+            case .cardTitle:
+                .system(size: 15, weight: .semibold)
+            case .compactCardTitle:
+                .system(size: 14, weight: .semibold)
+            case .emptyStateTitle:
+                .system(size: 15, weight: .medium)
+            case .sidebarSectionTitle:
+                .system(size: 15, weight: .semibold)
+            case .sidebarItem:
+                .system(size: 15)
+            case .subsectionTitle:
+                .system(size: 14, weight: .semibold)
+            case .sectionTitle:
+                .system(size: 13, weight: .semibold)
+            case .rowTitleEmphasized:
+                .system(size: 13, weight: .semibold)
+            case .rowTitle:
+                .system(size: 13, weight: .medium)
+            case .body:
+                .system(size: 13)
+            case .supporting:
+                .system(size: 12)
+            case .supportingEmphasized:
+                .system(size: 12, weight: .medium)
+            case .metadata:
+                .system(size: 11)
+            case .metadataNumeric:
+                .system(size: 11).monospacedDigit()
+            case .badge:
+                .system(size: 10, weight: .semibold)
+            case .badgeMuted:
+                .system(size: 10, weight: .medium)
+            case .badgeStrong:
+                .system(size: 10, weight: .bold)
+            case .actionLabel:
+                .system(size: 11, weight: .medium)
+            case .statusBadge:
+                .system(size: 11, weight: .semibold)
+            case .chartLabel:
+                .system(size: 9)
+            case .technicalDisplayTitle:
+                .system(size: 16, weight: .semibold, design: .monospaced)
+            case .technicalTitle:
+                .system(size: 15, weight: .semibold, design: .monospaced)
+            case .technicalLabel:
+                .system(size: 12, weight: .medium, design: .monospaced)
+            case .code:
+                .system(size: 12, design: .monospaced)
+            case .codeEmphasized:
+                .system(size: 12, weight: .semibold, design: .monospaced)
+            }
+        }
+    }
+}
+
+private struct NativTypographyModifier: ViewModifier {
+    let style: NativTypography.Style
+
+    func body(content: Content) -> some View {
+        content.font(style.font)
+    }
+}
+
+/// The supported corner-radius roles for shared panel surfaces.
+enum NativPanelCornerRadius {
+    case compact
+    case standard
+    case large
+
+    fileprivate var value: CGFloat {
+        switch self {
+        case .compact: 10
+        case .standard: 12
+        case .large: 14
+        }
+    }
+}
+
+private struct NativPanelSurfaceModifier: ViewModifier {
+    let cornerRadius: NativPanelCornerRadius
+    let isHighlighted: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: cornerRadius.value,
+            style: .continuous
+        )
+
+        content
+            .background {
+                shape
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay {
+                        if isHighlighted {
+                            Color.primary.opacity(0.045)
+                        }
+                    }
+                    .clipShape(shape)
+            }
+            .overlay {
+                shape.stroke(
+                    isHighlighted
+                        ? Color.primary.opacity(0.16)
+                        : Color(nsColor: .separatorColor),
+                    lineWidth: 0.5
+                )
+            }
+    }
+}
+
+extension View {
+    /// Applies one of Nativ's application-wide typography roles.
+    func nativTextStyle(_ style: NativTypography.Style) -> some View {
+        modifier(NativTypographyModifier(style: style))
+    }
+
+    /// Applies Nativ's standard semantic panel surface.
+    func nativPanelStyle(
+        cornerRadius: NativPanelCornerRadius = .standard,
+        isHighlighted: Bool = false
+    ) -> some View {
+        modifier(
+            NativPanelSurfaceModifier(
+                cornerRadius: cornerRadius,
+                isHighlighted: isHighlighted
+            )
+        )
+    }
+}
+
+private struct NativTypographyPreview: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                previewSection("Titles") {
+                    previewRow("Display title", sample: "Welcome to Nativ", style: .displayTitle)
+                    previewRow("Page title", sample: "Extensions", style: .pageTitle)
+                    previewRow("Brand title", sample: "Nativ", style: .brandTitle)
+                    previewRow("Sheet title", sample: "Edit Tool", style: .sheetTitle)
+                    previewRow("Detail title", sample: "Featured Kit", style: .detailTitle)
+                    previewRow("Card title", sample: "Scheduled Task", style: .cardTitle)
+                    previewRow("Compact card title", sample: "Artifact.jpg", style: .compactCardTitle)
+                    previewRow("Empty-state title", sample: "Drop files here", style: .emptyStateTitle)
+                }
+
+                previewSection("Navigation and content") {
+                    previewRow("Sidebar section", sample: "Chats", style: .sidebarSectionTitle)
+                    previewRow("Sidebar item", sample: "Recent conversation", style: .sidebarItem)
+                    previewRow("Subsection title", sample: "Custom Servers", style: .subsectionTitle)
+                    previewRow("Section title", sample: "Capabilities", style: .sectionTitle)
+                    previewRow("Emphasized row", sample: "Image Generation", style: .rowTitleEmphasized)
+                    previewRow("Row title", sample: "Web Search", style: .rowTitle)
+                    previewRow("Body", sample: "Primary interface content", style: .body)
+                    previewRow("Supporting", sample: "Additional context and guidance", style: .supporting)
+                    previewRow("Supporting emphasized", sample: "Field or control label", style: .supportingEmphasized)
+                }
+
+                previewSection("Metadata and labels") {
+                    previewRow("Metadata", sample: "Updated today", style: .metadata)
+                    previewRow("Numeric metadata", sample: "12 of 48", style: .metadataNumeric)
+                    previewRow("Badge", sample: "BUILT-IN", style: .badge)
+                    previewRow("Muted badge", sample: "Optional", style: .badgeMuted)
+                    previewRow("Strong badge", sample: "PDF", style: .badgeStrong)
+                    previewRow("Action label", sample: "Enable", style: .actionLabel)
+                    previewRow("Status badge", sample: "Connected", style: .statusBadge)
+                    previewRow("Chart label", sample: "12 AM", style: .chartLabel)
+                }
+
+                previewSection("Technical") {
+                    previewRow("Technical display", sample: "web_search", style: .technicalDisplayTitle)
+                    previewRow("Technical title", sample: "read_file", style: .technicalTitle)
+                    previewRow("Technical label", sample: "POST", style: .technicalLabel)
+                    previewRow("Code", sample: #"{"query":"Nativ"}"#, style: .code)
+                    previewRow("Code emphasized", sample: "GET /v1/models", style: .codeEmphasized)
+                }
+            }
+            .padding(24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func previewSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .nativTextStyle(.sectionTitle)
+            content()
+        }
+    }
+
+    private func previewRow(
+        _ name: String,
+        sample: String,
+        style: NativTypography.Style
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(name)
+                .nativTextStyle(.metadata)
+                .foregroundStyle(.secondary)
+                .frame(width: 150, alignment: .leading)
+            Text(sample)
+                .nativTextStyle(style)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+#Preview("Typography") {
+    NativTypographyPreview()
+        .frame(width: 520, height: 760)
+}
+
 /// A semantic status color, shared by dots, badges, and tool states.
 enum NativStatusTone {
     case neutral
@@ -222,41 +483,74 @@ struct NativStatusDot: View {
     var pulsing: Bool = false
     var diameter: CGFloat = 7
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animating = false
 
     var body: some View {
         Circle()
             .fill(tone.color)
             .frame(width: diameter, height: diameter)
-            .opacity(pulsing && animating ? 0.35 : 1)
+            .opacity(pulsing && animating && !reduceMotion ? 0.35 : 1)
             .animation(
-                pulsing ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default,
+                pulsing && !reduceMotion
+                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                    : nil,
                 value: animating
             )
             .onAppear { animating = pulsing }
+            .onChange(of: pulsing) { _, newValue in
+                animating = newValue
+            }
     }
 }
 
-/// A compact capsule badge: a short label tinted by tone, with an optional leading symbol.
+/// A compact capsule badge with an optional leading status dot or symbol.
 struct NativStatusBadge: View {
     let text: String
     var tone: NativStatusTone = .neutral
     var symbol: String? = nil
+    var showsDot = false
 
     var body: some View {
         HStack(spacing: 4) {
+            if showsDot {
+                NativStatusDot(tone: tone, diameter: 6)
+            }
             if let symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 9, weight: .semibold))
             }
             Text(text)
         }
-        .font(.system(size: 10, weight: .semibold))
+        .nativTextStyle(.statusBadge)
         .foregroundStyle(tone.color)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(tone.color.opacity(0.12), in: Capsule())
+        .accessibilityElement(children: .combine)
     }
+}
+
+#Preview("Status Indicators") {
+    VStack(alignment: .leading) {
+        HStack {
+            NativStatusDot(tone: .neutral)
+            NativStatusDot(tone: .active)
+            NativStatusDot(tone: .success)
+            NativStatusDot(tone: .warning)
+            NativStatusDot(tone: .danger)
+        }
+
+        NativStatusBadge(text: "Inactive")
+        NativStatusBadge(text: "Active", tone: .active, showsDot: true)
+        NativStatusBadge(text: "Connected", tone: .success, showsDot: true)
+        NativStatusBadge(
+            text: "Needs attention",
+            tone: .warning,
+            symbol: "exclamationmark.triangle.fill"
+        )
+        NativStatusBadge(text: "Failed", tone: .danger)
+    }
+    .padding()
 }
 
 /// A monospaced code/JSON block with a subtle background and selectable text.
@@ -319,6 +613,27 @@ struct NativTintedIconTile: View {
             in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
         )
     }
+}
+
+#Preview("Panel Surfaces") {
+    VStack {
+        Text("Compact")
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .nativPanelStyle(cornerRadius: .compact)
+
+        Text("Standard")
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .nativPanelStyle()
+
+        Text("Highlighted")
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .nativPanelStyle(cornerRadius: .large, isHighlighted: true)
+    }
+    .padding()
+    .frame(width: 320)
 }
 
 /// A borderless close (X) button that reveals a soft circular hover hue —

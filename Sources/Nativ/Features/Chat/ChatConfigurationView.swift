@@ -175,6 +175,7 @@ struct ModelConfigurationView: View {
     @State private var modelConfiguration: LocalModelConfigurationMetadata?
     @State private var isLoadingModelConfiguration = false
     @State private var modelConfigurationRevision = 0
+    @State private var isConfirmingReset = false
     @StateObject private var draftModelLibrary = LocalModelLibrary()
 
     var body: some View {
@@ -231,11 +232,22 @@ struct ModelConfigurationView: View {
 
                 Spacer(minLength: 0)
 
-                Button(action: onReset) {
-                    Image(systemName: "arrow.counterclockwise")
+                Button("Reset model configuration", systemImage: "arrow.counterclockwise") {
+                    isConfirmingReset = true
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .help("Reset model configuration")
+                .confirmationDialog(
+                    "Reset model configuration?",
+                    isPresented: $isConfirmingReset,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset", role: .destructive, action: onReset)
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will restore all model configuration settings to their defaults.")
+                }
             }
 
             if settingsRequireRestart {
@@ -362,7 +374,7 @@ struct ModelConfigurationView: View {
         if modelConfiguration?.defaultSystemPrompt != nil {
             return settings.systemPrompt.isEmpty
                 ? "Template default shown above. Enter text to override it."
-                : "Custom prompt overrides the model's chat-template default."
+                : "Custom prompt overrides the model’s chat-template default."
         }
         return "No default system prompt was found in the chat template."
     }
@@ -505,7 +517,7 @@ struct ModelConfigurationView: View {
     private var draftModelMenu: some View {
         Menu {
             if !installedDrafters.isEmpty {
-                Section("Installed drafters") {
+                Section("Installed Drafters") {
                     ForEach(installedDrafters) { model in
                         Button(draftMenuTitle(for: model)) {
                             settings.draftModelID = model.repoID
@@ -514,7 +526,7 @@ struct ModelConfigurationView: View {
                 }
             }
             if !otherDraftCandidates.isEmpty {
-                Section("Other installed models") {
+                Section("Other Installed Models") {
                     ForEach(otherDraftCandidates) { model in
                         Button(model.displayName) {
                             settings.draftModelID = model.repoID

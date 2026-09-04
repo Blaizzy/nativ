@@ -4,7 +4,12 @@ struct PerplexityBrowsingProvider: WebBrowsingProviderClient {
     let provider = WebSearchProvider.perplexity
     let transport: WebBrowsingTransport
 
-    func search(apiKey: String, query: String, limit: Int) async throws -> [WebSearchResult] {
+    func search(
+        access: WebSearchProviderAccess,
+        query: String,
+        limit: Int
+    ) async throws -> [WebSearchResult] {
+        let apiKey = try access.apiKey(for: provider)
         let request = try transport.postRequest(
             url: "https://api.perplexity.ai/search",
             provider: provider,

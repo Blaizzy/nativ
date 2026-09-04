@@ -6,20 +6,6 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-@MainActor
-final class ControlPanelDependencies: ObservableObject {
-    lazy var chat = ChatViewModel()
-    lazy var mcpHost = MCPHostManager()
-    lazy var imageGeneration = ImageGenerationViewModel()
-    lazy var artifacts = ArtifactStore()
-    lazy var dashboard = DashboardViewModel()
-    lazy var systemMonitor = SystemMonitorStore()
-    lazy var launchAtLogin = LaunchAtLoginController()
-    lazy var downloads = HuggingFaceDownloadManager.shared
-    lazy var embeddingLibrary = LocalModelLibrary()
-    lazy var routineModelLibrary = LocalModelLibrary()
-}
-
 /// Filters `NativModel` down to values that can change control-panel chrome.
 @MainActor
 final class ControlPanelChromeState: ObservableObject {
@@ -27,12 +13,14 @@ final class ControlPanelChromeState: ObservableObject {
         let serverPort: Int
         let serverAPIKey: String?
         let modelSearchPath: String
+        let modelCacheVolumeIdentifier: String?
         let localModelSearchPaths: LocalModelSearchPaths
     }
 
     private struct SettingsProjection: Equatable {
         let languageModelID: String?
         let sidebarPinnedCollapsed: Bool
+        let sidebarProjectsCollapsed: Bool
         let sidebarFoldersCollapsed: Bool
         let sidebarSessionsCollapsed: Bool
         let artifactSettings: ArtifactSettings
@@ -47,6 +35,7 @@ final class ControlPanelChromeState: ObservableObject {
         var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
         var languageModelID: String?
         var sidebarPinnedCollapsed: Bool
+        var sidebarProjectsCollapsed: Bool
         var sidebarFoldersCollapsed: Bool
         var sidebarSessionsCollapsed: Bool
         var artifactSettings: ArtifactSettings
@@ -67,6 +56,7 @@ final class ControlPanelChromeState: ObservableObject {
             modelPreloadMemoryWarning: model.modelPreloadMemoryWarning,
             languageModelID: settings.languageModelID,
             sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
+            sidebarProjectsCollapsed: settings.sidebarProjectsCollapsed,
             sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
             sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
             artifactSettings: settings.artifactSettings
@@ -94,6 +84,7 @@ final class ControlPanelChromeState: ObservableObject {
             $0.modelPreloadMemoryWarning = model.modelPreloadMemoryWarning
             $0.languageModelID = settings.languageModelID
             $0.sidebarPinnedCollapsed = settings.sidebarPinnedCollapsed
+            $0.sidebarProjectsCollapsed = settings.sidebarProjectsCollapsed
             $0.sidebarFoldersCollapsed = settings.sidebarFoldersCollapsed
             $0.sidebarSessionsCollapsed = settings.sidebarSessionsCollapsed
             $0.artifactSettings = settings.artifactSettings
@@ -107,6 +98,7 @@ final class ControlPanelChromeState: ObservableObject {
         snapshot.modelPreloadMemoryWarning
     }
     var sidebarPinnedCollapsed: Bool { snapshot.sidebarPinnedCollapsed }
+    var sidebarProjectsCollapsed: Bool { snapshot.sidebarProjectsCollapsed }
     var sidebarFoldersCollapsed: Bool { snapshot.sidebarFoldersCollapsed }
     var sidebarSessionsCollapsed: Bool { snapshot.sidebarSessionsCollapsed }
     var artifactSettings: ArtifactSettings { snapshot.artifactSettings }
@@ -137,12 +129,14 @@ final class ControlPanelChromeState: ObservableObject {
         return SettingsProjection(
             languageModelID: settings.languageModelID,
             sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
+            sidebarProjectsCollapsed: settings.sidebarProjectsCollapsed,
             sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
             sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
             artifactSettings: ArtifactSettings(
                 serverPort: settings.serverPort,
                 serverAPIKey: settings.serverAPIKey,
                 modelSearchPath: settings.modelSearchPath,
+                modelCacheVolumeIdentifier: settings.externalModelCache?.volumeIdentifier,
                 localModelSearchPaths: settings.localModelSearchPaths
             )
         )

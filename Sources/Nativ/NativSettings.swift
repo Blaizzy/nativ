@@ -38,7 +38,8 @@ struct ServerAPIKeychain: ServerAPICredentialStoring {
             throw ServerAPICredentialPersistenceError.keychain(status)
         }
         guard let data = item as? Data,
-              let token = String(data: data, encoding: .utf8) else {
+            let token = String(data: data, encoding: .utf8)
+        else {
             throw ServerAPICredentialPersistenceError.invalidKeychainData
         }
         return ServerAPIAuthentication.normalizedToken(token)
@@ -55,7 +56,7 @@ struct ServerAPIKeychain: ServerAPICredentialStoring {
 
         let attributes: [String: Any] = [
             kSecValueData as String: Data(token.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         let updateStatus = SecItemUpdate(
             baseQuery as CFDictionary,
@@ -81,7 +82,7 @@ struct ServerAPIKeychain: ServerAPICredentialStoring {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true
+            kSecUseDataProtectionKeychain as String: true,
         ]
     }
 }
@@ -117,7 +118,8 @@ struct HuggingFaceCredentialKeychain: HuggingFaceCredentialStoring {
             throw ServerAPICredentialPersistenceError.keychain(status)
         }
         guard let data = item as? Data,
-              let token = String(data: data, encoding: .utf8) else {
+            let token = String(data: data, encoding: .utf8)
+        else {
             throw ServerAPICredentialPersistenceError.invalidKeychainData
         }
         return HuggingFaceAuthentication.normalizedToken(token)
@@ -134,7 +136,7 @@ struct HuggingFaceCredentialKeychain: HuggingFaceCredentialStoring {
 
         let attributes: [String: Any] = [
             kSecValueData as String: Data(token.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         let updateStatus = SecItemUpdate(
             baseQuery as CFDictionary,
@@ -160,7 +162,7 @@ struct HuggingFaceCredentialKeychain: HuggingFaceCredentialStoring {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true
+            kSecUseDataProtectionKeychain as String: true,
         ]
     }
 }
@@ -173,7 +175,8 @@ struct ServerAPITokenInfo: Equatable, Sendable {
 enum ServerAPIAuthentication {
     static func normalizedToken(_ token: String?) -> String? {
         guard let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
+            !trimmed.isEmpty
+        else {
             return nil
         }
         return trimmed
@@ -223,9 +226,9 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
         case .imageGeneration:
             "Image Generation"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .embeddings:
             "Embeddings"
         }
@@ -260,7 +263,8 @@ struct ModelPreloadMemoryWarning: Equatable, Identifiable, Sendable {
     let totalMemoryBytes: UInt64
 
     var message: String {
-        let candidateName = candidateModelID.split(separator: "/").last.map(String.init)
+        let candidateName =
+            candidateModelID.split(separator: "/").last.map(String.init)
             ?? candidateModelID
         let estimated = Self.byteCount(estimatedWorkingSetBytes)
         let budget = Self.byteCount(memoryBudgetBytes)
@@ -289,7 +293,7 @@ struct ModelPreloadMemoryWarning: Equatable, Identifiable, Sendable {
         totalMemoryBytes: UInt64
     ) -> Self? {
         guard currentSelections[candidateSlot] != candidateModelID,
-              workingSetBytesByModelID[candidateModelID] != nil
+            workingSetBytesByModelID[candidateModelID] != nil
         else {
             return nil
         }
@@ -381,12 +385,23 @@ struct ModelConfigProfile: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let defaults = ModelConfigProfile()
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled) ?? defaults.thinkingEnabled
-        thinkingBudgetEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingBudgetEnabled) ?? defaults.thinkingBudgetEnabled
-        thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget) ?? defaults.thinkingBudget
-        speculativeDecodingEnabled = try container.decodeIfPresent(Bool.self, forKey: .speculativeDecodingEnabled) ?? defaults.speculativeDecodingEnabled
-        draftModelID = try container.decodeIfPresent(String.self, forKey: .draftModelID) ?? defaults.draftModelID
-        draftKind = try container.decodeIfPresent(String.self, forKey: .draftKind) ?? defaults.draftKind
+        thinkingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled)
+            ?? defaults.thinkingEnabled
+        thinkingBudgetEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .thinkingBudgetEnabled)
+            ?? defaults.thinkingBudgetEnabled
+        thinkingBudget =
+            try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
+            ?? defaults.thinkingBudget
+        speculativeDecodingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .speculativeDecodingEnabled)
+            ?? defaults.speculativeDecodingEnabled
+        draftModelID =
+            try container.decodeIfPresent(String.self, forKey: .draftModelID)
+            ?? defaults.draftModelID
+        draftKind =
+            try container.decodeIfPresent(String.self, forKey: .draftKind) ?? defaults.draftKind
     }
 }
 
@@ -402,11 +417,16 @@ struct NativSettings: Codable, Equatable {
     static let serverSupportsEmbeddingModelArgument = false
 
     var modelSearchPath: String
+    var externalModelCache: ExternalModelCacheReference?
     var additionalModelSearchPaths: [String]
+    var pinnedModelIDs: [String]
     var languageModelID: String?
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
     var disabledToolNames: [String]
+    var fileReadRootPath: String?
+    var fileWriteRootPath: String?
+    var projectToolsEnabled: Bool
     var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
@@ -447,17 +467,23 @@ struct NativSettings: Codable, Equatable {
     var prefixCacheBlockSize: Int
     var chatFontScale: Double
     var sidebarPinnedCollapsed: Bool
+    var sidebarProjectsCollapsed: Bool
     var sidebarFoldersCollapsed: Bool
     var sidebarSessionsCollapsed: Bool
     var modelConfigs: [String: ModelConfigProfile]
 
     init(
         modelSearchPath: String = Self.defaultModelSearchPath,
+        externalModelCache: ExternalModelCacheReference? = nil,
         additionalModelSearchPaths: [String] = [],
+        pinnedModelIDs: [String] = [],
         languageModelID: String? = nil,
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
         disabledToolNames: [String] = [],
+        fileReadRootPath: String? = nil,
+        fileWriteRootPath: String? = nil,
+        projectToolsEnabled: Bool = true,
         skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
@@ -498,16 +524,22 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize: Int = 16,
         chatFontScale: Double = Self.defaultChatFontScale,
         sidebarPinnedCollapsed: Bool = false,
+        sidebarProjectsCollapsed: Bool = false,
         sidebarFoldersCollapsed: Bool = false,
         sidebarSessionsCollapsed: Bool = false,
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
         self.modelSearchPath = modelSearchPath
+        self.externalModelCache = externalModelCache
         self.additionalModelSearchPaths = additionalModelSearchPaths
+        self.pinnedModelIDs = pinnedModelIDs
         self.languageModelID = languageModelID
         self.mcpServers = mcpServers
         self.customTools = customTools
         self.disabledToolNames = disabledToolNames
+        self.fileReadRootPath = fileReadRootPath
+        self.fileWriteRootPath = fileWriteRootPath
+        self.projectToolsEnabled = projectToolsEnabled
         self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
@@ -548,6 +580,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.chatFontScale = chatFontScale
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
+        self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
         self.sidebarFoldersCollapsed = sidebarFoldersCollapsed
         self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
         self.modelConfigs = modelConfigs
@@ -555,11 +588,16 @@ struct NativSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case modelSearchPath
+        case externalModelCache
         case additionalModelSearchPaths
+        case pinnedModelIDs
         case languageModelID
         case mcpServers
         case customTools
         case disabledToolNames
+        case fileReadRootPath
+        case fileWriteRootPath
+        case projectToolsEnabled
         case skills
         case imageGenerationModelID
         case textToSpeechModelID
@@ -601,6 +639,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlockSize
         case chatFontScale
         case sidebarPinnedCollapsed
+        case sidebarProjectsCollapsed
         case sidebarFoldersCollapsed
         case sidebarSessionsCollapsed
         case modelConfigs
@@ -609,67 +648,173 @@ struct NativSettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let defaults = Self()
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let legacySelectedModelID = try container.decodeIfPresent(String.self, forKey: .selectedModelID)
-        let storedModelSearchPath = try container.decodeIfPresent(String.self, forKey: .modelSearchPath)
+        let legacySelectedModelID = try container.decodeIfPresent(
+            String.self, forKey: .selectedModelID)
+        let storedModelSearchPath = try container.decodeIfPresent(
+            String.self, forKey: .modelSearchPath)
         modelSearchPath = HuggingFaceCache.resolvedSearchPath(stored: storedModelSearchPath)
-        additionalModelSearchPaths = try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths) ?? defaults.additionalModelSearchPaths
-        languageModelID = try container.decodeIfPresent(String.self, forKey: .languageModelID) ?? legacySelectedModelID ?? defaults.languageModelID
-        mcpServers = try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers) ?? defaults.mcpServers
-        customTools = try container.decodeIfPresent([CustomTool].self, forKey: .customTools) ?? defaults.customTools
-        disabledToolNames = try container.decodeIfPresent([String].self, forKey: .disabledToolNames) ?? defaults.disabledToolNames
-        skills = try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
-        imageGenerationModelID = try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID) ?? defaults.imageGenerationModelID
-        textToSpeechModelID = try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID) ?? defaults.textToSpeechModelID
-        speechToTextModelID = try container.decodeIfPresent(String.self, forKey: .speechToTextModelID) ?? defaults.speechToTextModelID
-        embeddingModelID = try container.decodeIfPresent(String.self, forKey: .embeddingModelID) ?? defaults.embeddingModelID
-        serverAPIKey = try container.decodeIfPresent(String.self, forKey: .serverAPIKey) ?? defaults.serverAPIKey
-        huggingFaceToken = try container.decodeIfPresent(String.self, forKey: .huggingFaceToken) ?? defaults.huggingFaceToken
-        serverHost = try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
-        serverPort = try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
-        maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
-        maxKVSize = try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
-        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? defaults.systemPrompt
-        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? defaults.temperature
+        externalModelCache = try container.decodeIfPresent(
+            ExternalModelCacheReference.self,
+            forKey: .externalModelCache
+        )
+        additionalModelSearchPaths =
+            try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths)
+            ?? defaults.additionalModelSearchPaths
+        pinnedModelIDs =
+            try container.decodeIfPresent([String].self, forKey: .pinnedModelIDs)
+            ?? defaults.pinnedModelIDs
+        languageModelID =
+            try container.decodeIfPresent(String.self, forKey: .languageModelID)
+            ?? legacySelectedModelID ?? defaults.languageModelID
+        mcpServers =
+            try container.decodeIfPresent([MCPServerConfig].self, forKey: .mcpServers)
+            ?? defaults.mcpServers
+        customTools =
+            try container.decodeIfPresent([CustomTool].self, forKey: .customTools)
+            ?? defaults.customTools
+        disabledToolNames =
+            try container.decodeIfPresent([String].self, forKey: .disabledToolNames)
+            ?? defaults.disabledToolNames
+        fileReadRootPath =
+            try container.decodeIfPresent(String.self, forKey: .fileReadRootPath)
+            ?? defaults.fileReadRootPath
+        fileWriteRootPath =
+            try container.decodeIfPresent(String.self, forKey: .fileWriteRootPath)
+            ?? defaults.fileWriteRootPath
+        projectToolsEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .projectToolsEnabled)
+            ?? defaults.projectToolsEnabled
+        skills =
+            try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
+        imageGenerationModelID =
+            try container.decodeIfPresent(String.self, forKey: .imageGenerationModelID)
+            ?? defaults.imageGenerationModelID
+        textToSpeechModelID =
+            try container.decodeIfPresent(String.self, forKey: .textToSpeechModelID)
+            ?? defaults.textToSpeechModelID
+        speechToTextModelID =
+            try container.decodeIfPresent(String.self, forKey: .speechToTextModelID)
+            ?? defaults.speechToTextModelID
+        embeddingModelID =
+            try container.decodeIfPresent(String.self, forKey: .embeddingModelID)
+            ?? defaults.embeddingModelID
+        serverAPIKey =
+            try container.decodeIfPresent(String.self, forKey: .serverAPIKey)
+            ?? defaults.serverAPIKey
+        huggingFaceToken =
+            try container.decodeIfPresent(String.self, forKey: .huggingFaceToken)
+            ?? defaults.huggingFaceToken
+        serverHost =
+            try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
+        serverPort =
+            try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
+        maxTokens =
+            try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
+        maxKVSize =
+            try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
+        systemPrompt =
+            try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+            ?? defaults.systemPrompt
+        temperature =
+            try container.decodeIfPresent(Double.self, forKey: .temperature) ?? defaults.temperature
         topK = try container.decodeIfPresent(Int.self, forKey: .topK) ?? defaults.topK
         topP = try container.decodeIfPresent(Double.self, forKey: .topP) ?? defaults.topP
         minP = try container.decodeIfPresent(Double.self, forKey: .minP) ?? defaults.minP
-        repetitionPenaltyEnabled = try container.decodeIfPresent(Bool.self, forKey: .repetitionPenaltyEnabled) ?? defaults.repetitionPenaltyEnabled
-        repetitionPenalty = try container.decodeIfPresent(Double.self, forKey: .repetitionPenalty) ?? defaults.repetitionPenalty
-        kvQuantizationEnabled = try container.decodeIfPresent(Bool.self, forKey: .kvQuantizationEnabled) ?? defaults.kvQuantizationEnabled
+        repetitionPenaltyEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .repetitionPenaltyEnabled)
+            ?? defaults.repetitionPenaltyEnabled
+        repetitionPenalty =
+            try container.decodeIfPresent(Double.self, forKey: .repetitionPenalty)
+            ?? defaults.repetitionPenalty
+        kvQuantizationEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .kvQuantizationEnabled)
+            ?? defaults.kvQuantizationEnabled
         kvBits = try container.decodeIfPresent(Double.self, forKey: .kvBits) ?? defaults.kvBits
-        kvGroupSize = try container.decodeIfPresent(Int.self, forKey: .kvGroupSize) ?? defaults.kvGroupSize
-        quantizedKVStart = try container.decodeIfPresent(Int.self, forKey: .quantizedKVStart) ?? defaults.quantizedKVStart
-        turboQuantEnabled = try container.decodeIfPresent(Bool.self, forKey: .turboQuantEnabled) ?? defaults.turboQuantEnabled
-        thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled) ?? defaults.thinkingEnabled
-        thinkingBudgetEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingBudgetEnabled) ?? defaults.thinkingBudgetEnabled
-        thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget) ?? defaults.thinkingBudget
-        thinkingStartToken = try container.decodeIfPresent(String.self, forKey: .thinkingStartToken) ?? defaults.thinkingStartToken
-        thinkingEndToken = try container.decodeIfPresent(String.self, forKey: .thinkingEndToken) ?? defaults.thinkingEndToken
-        speculativeDecodingEnabled = try container.decodeIfPresent(Bool.self, forKey: .speculativeDecodingEnabled) ?? defaults.speculativeDecodingEnabled
-        draftModelID = try container.decodeIfPresent(String.self, forKey: .draftModelID) ?? defaults.draftModelID
-        draftKind = try container.decodeIfPresent(String.self, forKey: .draftKind) ?? defaults.draftKind
-        draftBlockSize = try container.decodeIfPresent(Int.self, forKey: .draftBlockSize) ?? defaults.draftBlockSize
-        structuredOutputEnabled = try container.decodeIfPresent(Bool.self, forKey: .structuredOutputEnabled) ?? defaults.structuredOutputEnabled
-        structuredOutputName = try container.decodeIfPresent(String.self, forKey: .structuredOutputName) ?? defaults.structuredOutputName
-        structuredOutputSchema = try container.decodeIfPresent(String.self, forKey: .structuredOutputSchema) ?? defaults.structuredOutputSchema
-        prefixCachingEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixCachingEnabled) ?? defaults.prefixCachingEnabled
-        prefixCacheBlocks = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks) ?? defaults.prefixCacheBlocks
-        prefixCacheBlockSize = try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize) ?? defaults.prefixCacheBlockSize
-        chatFontScale = try container.decodeIfPresent(Double.self, forKey: .chatFontScale) ?? defaults.chatFontScale
-        sidebarPinnedCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed) ?? defaults.sidebarPinnedCollapsed
-        sidebarFoldersCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed) ?? defaults.sidebarFoldersCollapsed
-        sidebarSessionsCollapsed = try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed) ?? defaults.sidebarSessionsCollapsed
-        modelConfigs = try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs) ?? defaults.modelConfigs
+        kvGroupSize =
+            try container.decodeIfPresent(Int.self, forKey: .kvGroupSize) ?? defaults.kvGroupSize
+        quantizedKVStart =
+            try container.decodeIfPresent(Int.self, forKey: .quantizedKVStart)
+            ?? defaults.quantizedKVStart
+        turboQuantEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .turboQuantEnabled)
+            ?? defaults.turboQuantEnabled
+        thinkingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled)
+            ?? defaults.thinkingEnabled
+        thinkingBudgetEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .thinkingBudgetEnabled)
+            ?? defaults.thinkingBudgetEnabled
+        thinkingBudget =
+            try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
+            ?? defaults.thinkingBudget
+        thinkingStartToken =
+            try container.decodeIfPresent(String.self, forKey: .thinkingStartToken)
+            ?? defaults.thinkingStartToken
+        thinkingEndToken =
+            try container.decodeIfPresent(String.self, forKey: .thinkingEndToken)
+            ?? defaults.thinkingEndToken
+        speculativeDecodingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .speculativeDecodingEnabled)
+            ?? defaults.speculativeDecodingEnabled
+        draftModelID =
+            try container.decodeIfPresent(String.self, forKey: .draftModelID)
+            ?? defaults.draftModelID
+        draftKind =
+            try container.decodeIfPresent(String.self, forKey: .draftKind) ?? defaults.draftKind
+        draftBlockSize =
+            try container.decodeIfPresent(Int.self, forKey: .draftBlockSize)
+            ?? defaults.draftBlockSize
+        structuredOutputEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .structuredOutputEnabled)
+            ?? defaults.structuredOutputEnabled
+        structuredOutputName =
+            try container.decodeIfPresent(String.self, forKey: .structuredOutputName)
+            ?? defaults.structuredOutputName
+        structuredOutputSchema =
+            try container.decodeIfPresent(String.self, forKey: .structuredOutputSchema)
+            ?? defaults.structuredOutputSchema
+        prefixCachingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .prefixCachingEnabled)
+            ?? defaults.prefixCachingEnabled
+        prefixCacheBlocks =
+            try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlocks)
+            ?? defaults.prefixCacheBlocks
+        prefixCacheBlockSize =
+            try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize)
+            ?? defaults.prefixCacheBlockSize
+        chatFontScale =
+            try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
+            ?? defaults.chatFontScale
+        sidebarPinnedCollapsed =
+            try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed)
+            ?? defaults.sidebarPinnedCollapsed
+        sidebarProjectsCollapsed =
+            try container.decodeIfPresent(Bool.self, forKey: .sidebarProjectsCollapsed)
+            ?? defaults.sidebarProjectsCollapsed
+        sidebarFoldersCollapsed =
+            try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed)
+            ?? defaults.sidebarFoldersCollapsed
+        sidebarSessionsCollapsed =
+            try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed)
+            ?? defaults.sidebarSessionsCollapsed
+        modelConfigs =
+            try container.decodeIfPresent([String: ModelConfigProfile].self, forKey: .modelConfigs)
+            ?? defaults.modelConfigs
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
+        try container.encodeIfPresent(externalModelCache, forKey: .externalModelCache)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
+        try container.encode(pinnedModelIDs, forKey: .pinnedModelIDs)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
         try container.encode(disabledToolNames, forKey: .disabledToolNames)
+        try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
+        try container.encodeIfPresent(fileWriteRootPath, forKey: .fileWriteRootPath)
+        try container.encode(projectToolsEnabled, forKey: .projectToolsEnabled)
         try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
@@ -708,6 +853,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(chatFontScale, forKey: .chatFontScale)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
+        try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
         try container.encode(sidebarFoldersCollapsed, forKey: .sidebarFoldersCollapsed)
         try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
         try container.encode(modelConfigs, forKey: .modelConfigs)
@@ -751,7 +897,8 @@ struct NativSettings: Codable, Equatable {
     ) -> Self {
         let storedSettings: Self
         if let data = try? Data(contentsOf: url),
-           let decoded = try? PropertyListDecoder().decode(Self.self, from: data) {
+            let decoded = try? PropertyListDecoder().decode(Self.self, from: data)
+        {
             storedSettings = decoded
         } else {
             storedSettings = Self()
@@ -846,22 +993,48 @@ struct NativSettings: Codable, Equatable {
         settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
+        var seenPinnedModelIDs = Set<String>()
+        settings.pinnedModelIDs = settings.pinnedModelIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seenPinnedModelIDs.insert($0).inserted }
+        let trimmedFileReadRoot =
+            settings.fileReadRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        settings.fileReadRootPath =
+            trimmedFileReadRoot.isEmpty
+            ? nil
+            : NSString(string: trimmedFileReadRoot).expandingTildeInPath
+        let trimmedFileWriteRoot =
+            settings.fileWriteRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        settings.fileWriteRootPath =
+            trimmedFileWriteRoot.isEmpty
+            ? nil
+            : NSString(string: trimmedFileWriteRoot).expandingTildeInPath
+        if settings.disabledToolNames.contains("read_file"),
+            !settings.disabledToolNames.contains("search_files")
+        {
+            settings.disabledToolNames.append("search_files")
+        }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         if let imageModelID = settings.imageGenerationModelID,
-           MLXImageModelResolver.isKnownImageEditOnlyModelID(imageModelID) {
+            MLXImageModelResolver.isKnownImageEditOnlyModelID(imageModelID)
+        {
             settings.imageGenerationModelID = nil
         }
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
         settings.embeddingModelID = Self.normalizedModelID(settings.embeddingModelID)
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
-        settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(settings.huggingFaceToken)
+        settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(
+            settings.huggingFaceToken)
         settings.serverHost = Self.normalizedServerHost(settings.serverHost)
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
-        settings.systemPrompt = settings.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.systemPrompt = settings.systemPrompt.trimmingCharacters(
+            in: .whitespacesAndNewlines)
         settings.temperature = min(max(settings.temperature, 0), 2)
         settings.topK = min(max(settings.topK, 0), 10_000)
         settings.topP = min(max(settings.topP, 0), 1)
@@ -871,17 +1044,21 @@ struct NativSettings: Codable, Equatable {
         settings.kvGroupSize = min(max(settings.kvGroupSize, 1), 1024)
         settings.quantizedKVStart = min(max(settings.quantizedKVStart, 0), 1_048_576)
         settings.thinkingBudget = min(max(settings.thinkingBudget, 1), 262_144)
-        settings.thinkingStartToken = Self.nonEmpty(settings.thinkingStartToken, fallback: "<think>")
+        settings.thinkingStartToken = Self.nonEmpty(
+            settings.thinkingStartToken, fallback: "<think>")
         settings.thinkingEndToken = Self.nonEmpty(settings.thinkingEndToken, fallback: "</think>")
-        settings.draftModelID = settings.draftModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.draftModelID = settings.draftModelID.trimmingCharacters(
+            in: .whitespacesAndNewlines)
         if !["auto", "dflash", "eagle3", "mtp"].contains(settings.draftKind) {
             settings.draftKind = "auto"
         }
         settings.draftBlockSize = min(max(settings.draftBlockSize, 0), 1024)
-        settings.structuredOutputName = Self.nonEmpty(settings.structuredOutputName, fallback: "Response")
+        settings.structuredOutputName = Self.nonEmpty(
+            settings.structuredOutputName, fallback: "Response")
         settings.prefixCacheBlocks = min(max(settings.prefixCacheBlocks, 1), 1_048_576)
         settings.prefixCacheBlockSize = min(max(settings.prefixCacheBlockSize, 1), 4096)
-        settings.chatFontScale = min(max(settings.chatFontScale, Self.minChatFontScale), Self.maxChatFontScale)
+        settings.chatFontScale = min(
+            max(settings.chatFontScale, Self.minChatFontScale), Self.maxChatFontScale)
         return settings
     }
 
@@ -892,9 +1069,10 @@ struct NativSettings: Codable, Equatable {
 
     mutating func stepChatFontScale(by delta: Int) {
         let steps = Self.chatFontScaleSteps
-        let current = steps.enumerated().min {
-            abs($0.element - chatFontScale) < abs($1.element - chatFontScale)
-        }?.offset ?? 0
+        let current =
+            steps.enumerated().min {
+                abs($0.element - chatFontScale) < abs($1.element - chatFontScale)
+            }?.offset ?? 0
         chatFontScale = steps[min(max(current + delta, 0), steps.count - 1)]
     }
 
@@ -903,11 +1081,13 @@ struct NativSettings: Codable, Equatable {
     }
 
     var allSidebarSectionsCollapsed: Bool {
-        sidebarPinnedCollapsed && sidebarFoldersCollapsed && sidebarSessionsCollapsed
+        sidebarPinnedCollapsed && sidebarProjectsCollapsed && sidebarFoldersCollapsed
+            && sidebarSessionsCollapsed
     }
 
     mutating func setAllSidebarSectionsCollapsed(_ collapsed: Bool) {
         sidebarPinnedCollapsed = collapsed
+        sidebarProjectsCollapsed = collapsed
         sidebarFoldersCollapsed = collapsed
         sidebarSessionsCollapsed = collapsed
     }
@@ -934,6 +1114,7 @@ struct NativSettings: Codable, Equatable {
         let lhsSpeculativeDecodingActive = lhs.speculativeDecodingActive
         let rhsSpeculativeDecodingActive = rhs.speculativeDecodingActive
         return lhs.modelSearchPath == rhs.modelSearchPath
+            && lhs.externalModelCache?.volumeIdentifier == rhs.externalModelCache?.volumeIdentifier
             && lhs.languageModelID == rhs.languageModelID
             && lhs.mcpServers == rhs.mcpServers
             && lhs.disabledToolNames == rhs.disabledToolNames
@@ -949,23 +1130,20 @@ struct NativSettings: Codable, Equatable {
             && lhs.maxTokens == rhs.maxTokens
             && lhs.maxKVSize == rhs.maxKVSize
             && lhs.kvQuantizationEnabled == rhs.kvQuantizationEnabled
-            && (!lhs.kvQuantizationEnabled || (
-                lhs.kvBits == rhs.kvBits
+            && (!lhs.kvQuantizationEnabled
+                || (lhs.kvBits == rhs.kvBits
                     && lhs.kvGroupSize == rhs.kvGroupSize
                     && lhs.quantizedKVStart == rhs.quantizedKVStart
-                    && lhs.turboQuantEnabled == rhs.turboQuantEnabled
-            ))
+                    && lhs.turboQuantEnabled == rhs.turboQuantEnabled))
             && lhsSpeculativeDecodingActive == rhsSpeculativeDecodingActive
-            && (!lhsSpeculativeDecodingActive || (
-                lhs.draftModelID == rhs.draftModelID
+            && (!lhsSpeculativeDecodingActive
+                || (lhs.draftModelID == rhs.draftModelID
                     && lhs.draftKind == rhs.draftKind
-                    && lhs.draftBlockSize == rhs.draftBlockSize
-            ))
+                    && lhs.draftBlockSize == rhs.draftBlockSize))
             && lhs.prefixCachingEnabled == rhs.prefixCachingEnabled
-            && (!lhs.prefixCachingEnabled || (
-                lhs.prefixCacheBlocks == rhs.prefixCacheBlocks
-                    && lhs.prefixCacheBlockSize == rhs.prefixCacheBlockSize
-            ))
+            && (!lhs.prefixCachingEnabled
+                || (lhs.prefixCacheBlocks == rhs.prefixCacheBlocks
+                    && lhs.prefixCacheBlockSize == rhs.prefixCacheBlockSize))
     }
 
     var serverBaseURL: URL {
@@ -1014,7 +1192,7 @@ struct NativSettings: Codable, Equatable {
         var arguments = [
             "--host", settings.serverHost,
             "--port", "\(settings.serverPort)",
-            "--max-tokens", "\(settings.maxTokens)"
+            "--max-tokens", "\(settings.maxTokens)",
         ]
 
         if let languageModelID = settings.languageModelID {
@@ -1029,7 +1207,9 @@ struct NativSettings: Codable, Equatable {
         if let speechToTextModelID = settings.speechToTextModelID {
             arguments.append(contentsOf: ["--stt-model", speechToTextModelID])
         }
-        if Self.serverSupportsEmbeddingModelArgument, let embeddingModelID = settings.embeddingModelID {
+        if Self.serverSupportsEmbeddingModelArgument,
+            let embeddingModelID = settings.embeddingModelID
+        {
             arguments.append(contentsOf: ["--embedding-model", embeddingModelID])
         }
 
@@ -1042,7 +1222,7 @@ struct NativSettings: Codable, Equatable {
             arguments.append(contentsOf: [
                 "--kv-quant-scheme", settings.turboQuantEnabled ? "turboquant" : "uniform",
                 "--kv-group-size", "\(settings.kvGroupSize)",
-                "--quantized-kv-start", "\(settings.quantizedKVStart)"
+                "--quantized-kv-start", "\(settings.quantizedKVStart)",
             ])
         }
 
@@ -1110,9 +1290,9 @@ struct NativSettings: Codable, Equatable {
     var chatResponseFormat: MLXChatResponseFormat? {
         let settings = normalized()
         guard settings.structuredOutputEnabled,
-              settings.structuredOutputValidationError == nil,
-              let data = settings.structuredOutputSchema.data(using: .utf8),
-              let schema = try? MLXJSONValue(jsonData: data)
+            settings.structuredOutputValidationError == nil,
+            let data = settings.structuredOutputSchema.data(using: .utf8),
+            let schema = try? MLXJSONValue(jsonData: data)
         else {
             return nil
         }
@@ -1164,13 +1344,13 @@ struct NativSettings: Codable, Equatable {
 
         let candidate = "http://\(urlHost(host)):8080"
         guard let components = URLComponents(string: candidate),
-              components.host != nil,
-              components.port == 8080,
-              components.path.isEmpty,
-              components.user == nil,
-              components.password == nil,
-              components.query == nil,
-              components.fragment == nil
+            components.host != nil,
+            components.port == 8080,
+            components.path.isEmpty,
+            components.user == nil,
+            components.password == nil,
+            components.query == nil,
+            components.fragment == nil
         else {
             return defaultServerHost
         }
@@ -1194,17 +1374,20 @@ struct NativSettings: Codable, Equatable {
     }
 
     static let defaultStructuredOutputSchema = """
-    {
-      "type": "object",
-      "properties": {},
-      "additionalProperties": true
-    }
-    """
+        {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": true
+        }
+        """
 
     private static var storageURL: URL {
-        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first
         let baseURL = applicationSupport ?? FileManager.default.homeDirectoryForCurrentUser
-        return baseURL
+        return
+            baseURL
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("Settings.plist")
     }

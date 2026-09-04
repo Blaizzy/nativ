@@ -4,7 +4,7 @@
 NATIV_BUNDLE_IDENTIFIER = dev.local.Nativ
 NATIV_SERVER_KIT_BUNDLE_IDENTIFIER = dev.local.NativServerKit
 NATIV_EXTENSION_SDK_BUNDLE_IDENTIFIER = dev.local.NativExtensionSDK
-NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER = dev.local.Nativ.VoiceDictationExtension
+NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER = $(NATIV_BUNDLE_IDENTIFIER).VoiceDictationExtension
 NATIV_SPARKLE_PUBLIC_KEY = A8x4wdNekd1aoWpU8bVdsNdOFzuua8nC1mfLCwGDSPk=
 // Client ID for Nativ's GitHub App. Device flow must be enabled for the app.
 // Put the real value in ignored Signing.local.xcconfig for local builds and in

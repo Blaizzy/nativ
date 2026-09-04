@@ -1,7 +1,74 @@
+import Darwin
 import XCTest
+
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testPinnedModelsRoundTripInOrder() throws {
+        let settings = NativSettings(
+            pinnedModelIDs: ["org/most-used", "org/second"]
+        )
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+
+        XCTAssertEqual(decoded.pinnedModelIDs, ["org/most-used", "org/second"])
+    }
+
+    func testPinnedModelsNormalizeWhitespaceAndDuplicates() {
+        let settings = NativSettings(
+            pinnedModelIDs: [" org/model ", "", "org/model", "org/other"]
+        ).normalized()
+
+        XCTAssertEqual(settings.pinnedModelIDs, ["org/model", "org/other"])
+    }
+
+    func testMissingPinnedModelsDecodeAsEmptyForBackwardCompatibility() throws {
+        let settings = try PropertyListDecoder().decode(
+            NativSettings.self,
+            from: PropertyListSerialization.data(
+                fromPropertyList: ["modelSearchPath": NativSettings.defaultModelSearchPath],
+                format: .xml,
+                options: 0
+            )
+        )
+
+        XCTAssertTrue(settings.pinnedModelIDs.isEmpty)
+    }
+
+    func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
+        let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
+
+        XCTAssertFalse(settings.isToolEnabled("read_file"))
+        XCTAssertFalse(settings.isToolEnabled("search_files"))
+    }
+
+    func testFileReadRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileReadRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileReadRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileReadRootPath, directory.path)
+    }
+
+    func testFileWriteRootRoundTripsAndNormalizesWhitespace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let settings = NativSettings(fileWriteRootPath: "  \(directory.path)  ")
+            .normalized()
+
+        XCTAssertEqual(settings.fileWriteRootPath, directory.path)
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+        XCTAssertEqual(decoded.fileWriteRootPath, directory.path)
+    }
+
     func testToolsAreEnabledByDefaultAndCanBeDisabled() throws {
         var settings = NativSettings()
 
@@ -392,7 +459,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
     }
 
-    func testChatClientAddsServerAuthorization() throws {
+    func testChatClientConfiguresRequest() throws {
         let client = NativChatClient(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
             apiKey: "nativ_chat_token"
@@ -409,10 +476,39 @@ final class NativSettingsTests: XCTestCase {
 
         let request = try client.makeURLRequest(payload: payload, accepts: "application/json")
 
+        XCTAssertEqual(request.timeoutInterval, 600)
         XCTAssertEqual(
             request.value(forHTTPHeaderField: "Authorization"),
             "Bearer nativ_chat_token"
         )
+    }
+
+    func testPromptTokenCountRequestUsesServerTokenizerEndpoint() throws {
+        let client = NativChatClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            apiKey: "nativ_chat_token"
+        )
+        let payload = MLXChatCompletionRequest(
+            model: "org/model",
+            messages: [MLXChatMessage(role: "user", content: "Hello")],
+            maxTokens: 512,
+            temperature: 0,
+            topK: 0,
+            topP: 1,
+            minP: 0,
+            enableThinking: true
+        )
+
+        let request = try client.makePromptTokenCountURLRequest(for: payload)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+
+        XCTAssertEqual(request.url?.path, "/v1/responses/input_tokens")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"), "Bearer nativ_chat_token")
+        XCTAssertEqual(json["model"] as? String, "org/model")
+        XCTAssertEqual(json["enable_thinking"] as? Bool, true)
+        XCTAssertNil(json["max_tokens"])
     }
 
     func testImageClientAddsServerAuthorization() throws {
@@ -545,17 +641,20 @@ final class NativSettingsTests: XCTestCase {
     func testSidebarSectionCollapseRoundTrips() throws {
         var settings = NativSettings()
         XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarProjectsCollapsed)
         XCTAssertFalse(settings.sidebarFoldersCollapsed)
         XCTAssertFalse(settings.sidebarSessionsCollapsed)
         XCTAssertFalse(settings.allSidebarSectionsCollapsed)
 
         settings.sidebarPinnedCollapsed = true
+        settings.sidebarProjectsCollapsed = true
         settings.sidebarSessionsCollapsed = true
         let decoded = try JSONDecoder().decode(
             NativSettings.self,
             from: JSONEncoder().encode(settings)
         )
         XCTAssertTrue(decoded.sidebarPinnedCollapsed)
+        XCTAssertTrue(decoded.sidebarProjectsCollapsed)
         XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertTrue(decoded.sidebarSessionsCollapsed)
         XCTAssertFalse(decoded.allSidebarSectionsCollapsed)
@@ -565,12 +664,14 @@ final class NativSettingsTests: XCTestCase {
         var settings = NativSettings()
         settings.setAllSidebarSectionsCollapsed(true)
         XCTAssertTrue(settings.sidebarPinnedCollapsed)
+        XCTAssertTrue(settings.sidebarProjectsCollapsed)
         XCTAssertTrue(settings.sidebarFoldersCollapsed)
         XCTAssertTrue(settings.sidebarSessionsCollapsed)
         XCTAssertTrue(settings.allSidebarSectionsCollapsed)
 
         settings.setAllSidebarSectionsCollapsed(false)
         XCTAssertFalse(settings.sidebarPinnedCollapsed)
+        XCTAssertFalse(settings.sidebarProjectsCollapsed)
         XCTAssertFalse(settings.sidebarFoldersCollapsed)
         XCTAssertFalse(settings.sidebarSessionsCollapsed)
         XCTAssertFalse(settings.allSidebarSectionsCollapsed)
@@ -580,8 +681,24 @@ final class NativSettingsTests: XCTestCase {
         let legacyJSON = Data(#"{"serverHost":"127.0.0.1","serverPort":8080}"#.utf8)
         let decoded = try JSONDecoder().decode(NativSettings.self, from: legacyJSON)
         XCTAssertFalse(decoded.sidebarPinnedCollapsed)
+        XCTAssertFalse(decoded.sidebarProjectsCollapsed)
         XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertFalse(decoded.sidebarSessionsCollapsed)
+    }
+
+    func testProjectToolsDefaultToEnabledAndRoundTripIndependently() throws {
+        XCTAssertTrue(NativSettings().projectToolsEnabled)
+
+        var settings = NativSettings()
+        settings.projectToolsEnabled = false
+        settings.disabledToolNames = ["terminal"]
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertFalse(decoded.projectToolsEnabled)
+        XCTAssertEqual(decoded.disabledToolNames, ["terminal"])
     }
 
     func testRememberProfileCapturesCurrentModelSettings() throws {
@@ -726,7 +843,9 @@ private enum TestCredentialStoreError: Error {
     case unavailable
 }
 
-private final class TestServerAPICredentialStore: ServerAPICredentialStoring, HuggingFaceCredentialStoring {
+private final class TestServerAPICredentialStore: ServerAPICredentialStoring,
+    HuggingFaceCredentialStoring
+{
     var token: String?
     var loadError: Error?
     var saveError: Error?
@@ -758,14 +877,15 @@ private final class TestServerAPICredentialStore: ServerAPICredentialStoring, Hu
 
 final class NativChatToolProtocolTests: XCTestCase {
     func testChatRequestEncodesImageToolAndToolChoice() throws {
-        let tool = MLXChatToolDefinition(function: MLXChatFunctionDefinition(
-            name: "generate_image",
-            description: "Generate an image",
-            parameters: .object([
-                "type": .string("object"),
-                "required": .array([.string("prompt")])
-            ])
-        ))
+        let tool = MLXChatToolDefinition(
+            function: MLXChatFunctionDefinition(
+                name: "generate_image",
+                description: "Generate an image",
+                parameters: .object([
+                    "type": .string("object"),
+                    "required": .array([.string("prompt")]),
+                ])
+            ))
         let request = MLXChatCompletionRequest(
             model: "org/language",
             messages: [MLXChatMessage(role: "user", content: "Draw a lighthouse")],
@@ -806,7 +926,7 @@ final class NativChatToolProtocolTests: XCTestCase {
                 content: #"{"ok":true}"#,
                 toolCallID: "call_123",
                 name: "generate_image"
-            )
+            ),
         ]
 
         let data = try JSONEncoder().encode(messages)
@@ -833,7 +953,8 @@ final class NativChatToolProtocolTests: XCTestCase {
         let message = try JSONDecoder().decode(MLXChatMessage.self, from: data)
         XCTAssertEqual(message.role, "assistant")
         XCTAssertEqual(message.toolCalls?.first?.function?.name, "generate_image")
-        XCTAssertTrue(message.toolCalls?.first?.function?.arguments?.contains("A lighthouse") == true)
+        XCTAssertTrue(
+            message.toolCalls?.first?.function?.arguments?.contains("A lighthouse") == true)
     }
 
     func testFragmentedToolCallsAccumulateByIndex() {
@@ -923,6 +1044,21 @@ final class NativChatToolProtocolTests: XCTestCase {
             )
         )
     }
+
+    func testPortConflictFailureIsDetectedFromServerLogs() {
+        let output = """
+            INFO:     Application startup complete.
+            ERROR:    [Errno 48] error while attempting to bind on address ('127.0.0.1', 8080): [errno 48] address already in use
+            INFO:     Waiting for application shutdown.
+            """
+
+        XCTAssertTrue(NativServerErrorMessage.isPortConflictFailure(in: output))
+        XCTAssertFalse(
+            NativServerErrorMessage.isPortConflictFailure(
+                in: "ERROR: Application startup failed."
+            )
+        )
+    }
 }
 
 extension Array where Element == String {
@@ -931,4 +1067,132 @@ extension Array where Element == String {
             self[$0] == first && self[index(after: $0)] == second
         }
     }
+}
+
+final class ServerPortProbeTests: XCTestCase {
+    func testProbeDetectsActiveListener() throws {
+        let listener = try makeLoopbackListener()
+        defer { close(listener.descriptor) }
+
+        XCTAssertEqual(
+            ServerPortProbe.availability(host: "127.0.0.1", port: listener.port),
+            .addressInUse
+        )
+    }
+
+    func testProbeAllowsImmediateReuseAfterServerClosesConnection() throws {
+        let listener = try makeLoopbackListener()
+        let client = try connectToLoopback(port: listener.port)
+        let accepted = accept(listener.descriptor, nil, nil)
+        guard accepted >= 0 else {
+            close(client)
+            close(listener.descriptor)
+            throw SocketTestError.operation("accept", errno)
+        }
+
+        close(listener.descriptor)
+        close(accepted)
+        var byte: UInt8 = 0
+        _ = recv(client, &byte, 1, 0)
+        close(client)
+
+        XCTAssertEqual(
+            ServerPortProbe.availability(host: "127.0.0.1", port: listener.port),
+            .available
+        )
+    }
+
+    private func makeLoopbackListener() throws -> (descriptor: Int32, port: Int) {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            throw SocketTestError.operation("socket", errno)
+        }
+
+        var reuseAddress: Int32 = 1
+        guard
+            setsockopt(
+                descriptor,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                &reuseAddress,
+                socklen_t(MemoryLayout.size(ofValue: reuseAddress))
+            ) == 0
+        else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("setsockopt", error)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(
+                    descriptor,
+                    $0,
+                    socklen_t(MemoryLayout<sockaddr_in>.size)
+                )
+            }
+        }
+        guard bindResult == 0, listen(descriptor, 1) == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("bind/listen", error)
+        }
+
+        var boundAddress = sockaddr_in()
+        var boundAddressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &boundAddress) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(descriptor, $0, &boundAddressLength)
+            }
+        }
+        guard nameResult == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("getsockname", error)
+        }
+
+        return (
+            descriptor,
+            Int(UInt16(bigEndian: boundAddress.sin_port))
+        )
+    }
+
+    private func connectToLoopback(port: Int) throws -> Int32 {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            throw SocketTestError.operation("socket", errno)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port)).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(
+                    descriptor,
+                    $0,
+                    socklen_t(MemoryLayout<sockaddr_in>.size)
+                )
+            }
+        }
+        guard result == 0 else {
+            let error = errno
+            close(descriptor)
+            throw SocketTestError.operation("connect", error)
+        }
+        return descriptor
+    }
+}
+
+private enum SocketTestError: Error {
+    case operation(String, Int32)
 }

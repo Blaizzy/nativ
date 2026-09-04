@@ -58,7 +58,7 @@ struct ExtensionsHubView: View {
                         Image(systemName: item.systemImage)
                             .frame(width: 18)
                         Text(item.rawValue)
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.sidebarItem)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10)
@@ -84,7 +84,7 @@ struct ExtensionsHubView: View {
     private var detail: some View {
         switch section {
         case .kits:
-            KitsSectionView(manager: manager, host: host, model: model)
+            KitsSectionView(manager: manager, model: model)
         case .extensions:
             ExtensionsSectionView(manager: manager)
         case .mcp:
@@ -126,13 +126,14 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.system(size: 20, weight: .semibold))
+                            .nativTextStyle(.pageTitle)
                         Text(subtitle)
-                            .font(.system(size: 12))
+                            .nativTextStyle(.supporting)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
                     action()
+                        .fixedSize(horizontal: true, vertical: true)
                 }
                 content()
             }
@@ -155,7 +156,7 @@ struct HubEmptyHint: View {
                 .font(.system(size: 26))
                 .foregroundStyle(.tertiary)
             Text(text)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
@@ -207,15 +208,15 @@ private struct ExtensionRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(record.manifest.displayName)
-                            .font(.system(size: 14, weight: .semibold))
+                            .nativTextStyle(.compactCardTitle)
                         if record.isIncluded { includedBadge }
                     }
                     Text(record.manifest.summary)
-                        .font(.system(size: 12))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("Version \(record.manifest.version)")
-                        .font(.system(size: 11))
+                        .nativTextStyle(.metadata)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 1)
                 }
@@ -249,13 +250,7 @@ private struct ExtensionRow: View {
     }
 
     private var includedBadge: some View {
-        Text("INCLUDED")
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.4)
-            .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+        NativStatusBadge(text: "Included", tone: .active)
     }
 
     private var permissions: some View {
@@ -306,9 +301,7 @@ private struct ExtensionRow: View {
         actionTitle: String?
     ) -> some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(status.color)
-                .frame(width: 7, height: 7)
+            NativStatusDot(tone: status.nativTone)
             Text(permission.displayName)
             Text("· \(status.title)")
                 .foregroundStyle(.secondary)
@@ -326,6 +319,16 @@ private struct ExtensionRow: View {
             in: Capsule()
         )
         .contentShape(Capsule())
+    }
+}
+
+private extension NativExtensionPermissionStatus {
+    var nativTone: NativStatusTone {
+        switch self {
+        case .granted: .success
+        case .denied: .danger
+        case .notRequested: .neutral
+        }
     }
 }
 
@@ -408,7 +411,7 @@ private struct SkillsSectionView: View {
             Button {
                 editing = NativSkill()
             } label: {
-                Label("Add skill", systemImage: "plus")
+                Label("Add Skill", systemImage: "plus")
             }
         } content: {
             VStack(spacing: 0) {
@@ -488,16 +491,16 @@ private struct SkillRow: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(skill.name.isEmpty ? "Untitled skill" : skill.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .nativTextStyle(.rowTitle)
                 Text(skill.instructions)
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 12)
             if isBuiltIn {
                 Text("Built-in")
-                    .font(.system(size: 10, weight: .medium))
+                    .nativTextStyle(.badgeMuted)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
@@ -536,16 +539,16 @@ private struct SkillEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(skill.name.isEmpty ? "New Skill" : "Edit Skill")
-                .font(.system(size: 15, weight: .semibold))
+                .nativTextStyle(.sheetTitle)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Name").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Name").nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
                 TextField("e.g. Concise replies", text: $skill.name)
                     .textFieldStyle(.roundedBorder)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("Instructions").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Instructions").nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
                 TextEditor(text: $skill.instructions)
-                    .font(.system(size: 12, design: .monospaced))
+                    .nativTextStyle(.code)
                     .frame(minHeight: 160)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)

@@ -25,7 +25,6 @@ struct DeveloperView: View {
     @State private var selectedEndpointCategory: ServerEndpointCategory = .openAI
     @State private var selectedEndpointAvailability: ServerEndpointAvailability = .available
     @State private var contentAboveLogHeight: CGFloat?
-    @StateObject private var runtimeSettings = RuntimeSettingsStore()
     @FocusState private var focusedEndpointField: EndpointEditorField?
 
     var body: some View {
@@ -48,7 +47,6 @@ struct DeveloperView: View {
                                 VStack(alignment: .leading, spacing: Self.contentSpacing) {
                                     runtimeGrid
                                     serverEndpointsPanel
-                                    liveSettingsPanel
                                     authenticationPanels
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -247,25 +245,6 @@ struct DeveloperView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-    }
-
-    private var liveSettingsPanel: some View {
-        RuntimeSettingsPanel(store: runtimeSettings)
-            .task(id: liveSettingsEndpointID) {
-                guard model.isRunning else { return }
-                runtimeSettings.onServerAccepted { applied in
-                    model.adoptLiveServerSettings(applied)
-                }
-                runtimeSettings.connect(
-                    to: model.settings.serverBaseURL,
-                    apiKey: model.settings.serverAPIKey
-                )
-            }
-    }
-
-    private var liveSettingsEndpointID: String {
-        let key = model.settings.serverAPIKey ?? ""
-        return "\(model.isRunning)|\(model.settings.serverBaseURL.absoluteString)|\(key.count)"
     }
 
     private var serverEndpointsPanel: some View {
@@ -550,7 +529,7 @@ struct DeveloperView: View {
     private func logPanelActions(_ output: LogOutput) -> some View {
         HStack(spacing: 8) {
             LogToolbarActionButton(
-                title: "Copy visible logs",
+                title: "Copy Visible Logs",
                 systemImage: "doc.on.doc",
                 hoverTint: .blue,
                 isDisabled: output.visibleLineCount == 0
@@ -559,7 +538,7 @@ struct DeveloperView: View {
             }
 
             LogToolbarActionButton(
-                title: "Clear logs",
+                title: "Clear Logs",
                 systemImage: "trash",
                 hoverTint: .red,
                 isDisabled: model.serverLogs.text.isEmpty
@@ -807,7 +786,7 @@ private struct ServerAPIAuthenticationPanel: View {
             ) {
                 credentialAttribute(
                     title: "Token",
-                    value: tokenInfo?.maskedValue ?? "Not available",
+                    value: tokenInfo?.maskedValue ?? NativFormatting.missingValue,
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
@@ -1032,6 +1011,7 @@ private struct ServerAPIAuthenticationPanel: View {
                         ? .caption.monospaced().weight(.medium)
                         : .callout.weight(.medium)
                 )
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
                 .lineLimit(1)
         }
     }
@@ -1124,7 +1104,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
                 if isAddingToken {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Add Hugging Face token")
+                        Text("Add Hugging Face Token")
                             .font(.caption.weight(.semibold))
 
                         tokenEditor
@@ -1158,7 +1138,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             Text(logoutConfirmationMessage)
         }
         .alert(
-            "Hugging Face Authentication Error",
+            "Hugging Face authentication error",
             isPresented: Binding(
                 get: { managementError != nil },
                 set: { if !$0 { managementError = nil } }
@@ -1263,7 +1243,7 @@ private struct HuggingFaceAuthenticationPanel: View {
             ) {
                 credentialAttribute(
                     title: "Token",
-                    value: activeTokenInfo?.maskedValue ?? "Not available",
+                    value: activeTokenInfo?.maskedValue ?? NativFormatting.missingValue,
                     systemImage: "ellipsis.rectangle",
                     monospaced: true
                 )
@@ -1351,7 +1331,7 @@ private struct HuggingFaceAuthenticationPanel: View {
 
     private var manageTokensLink: some View {
         Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
-            Label("HF Hub", systemImage: "arrow.up.right")
+            Label("Hugging Face Hub", systemImage: "arrow.up.right")
         }
         .buttonStyle(.bordered)
     }
@@ -1429,9 +1409,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         case .loading:
             "Checking…"
         case .loaded(let metadata):
-            metadata.name ?? "Not reported"
+            metadata.name ?? NativFormatting.missingValue
         case .unavailable:
-            "Unavailable"
+            NativFormatting.missingValue
         }
     }
 
@@ -1442,9 +1422,9 @@ private struct HuggingFaceAuthenticationPanel: View {
         case .loading:
             "Checking…"
         case .loaded(let metadata):
-            metadata.permission ?? "Not reported"
+            metadata.permission ?? NativFormatting.missingValue
         case .unavailable:
-            "Unavailable"
+            NativFormatting.missingValue
         }
     }
 
@@ -1465,6 +1445,7 @@ private struct HuggingFaceAuthenticationPanel: View {
                         ? .caption.monospaced().weight(.medium)
                         : .callout.weight(.medium)
                 )
+                .accessibilityLabel(NativFormatting.accessibleValue(value))
                 .lineLimit(1)
         }
     }
@@ -1619,8 +1600,6 @@ private struct ServerEndpoint: Identifiable {
         .init(method: .get, path: "/v1/cache/stats", category: .metrics),
         .init(method: .post, path: "/v1/cache/reset", category: .metrics),
         .init(method: .post, path: "/unload", category: .metrics),
-        .init(method: .get, path: "/v1/settings", category: .metrics),
-        .init(method: .patch, path: "/v1/settings", category: .metrics),
     ]
 }
 
@@ -1644,7 +1623,6 @@ private enum ServerEndpointCategory: String, CaseIterable, Identifiable {
 private enum ServerEndpointMethod: String {
     case get = "GET"
     case post = "POST"
-    case patch = "PATCH"
     case delete = "DELETE"
 
     var displayTitle: String {
@@ -1655,7 +1633,6 @@ private enum ServerEndpointMethod: String {
         switch self {
         case .get: .blue
         case .post: .green
-        case .patch: .orange
         case .delete: .red
         }
     }
@@ -1671,12 +1648,12 @@ private struct ServerEndpointRow: View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
                 Text(endpoint.method.displayTitle)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .nativTextStyle(.codeEmphasized)
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .font(.system(size: 12, design: .monospaced))
+                    .nativTextStyle(.code)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -1880,6 +1857,7 @@ private struct RuntimeInfoCard: View {
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .accessibilityLabel(NativFormatting.accessibleValue(value))
 
                 if let progress {
                     HStack(spacing: 8) {
@@ -2022,7 +2000,7 @@ private enum SystemRuntimeInfo {
 
     static let mlxVLMVersion: String = {
         guard let distributionURL = try? Nativ.distributionURL() else {
-            return "Unavailable"
+            return NativFormatting.missingValue
         }
         let libraryURL = distributionURL.appendingPathComponent("python/lib", isDirectory: true)
         guard let pythonDirectories = try? FileManager.default.contentsOfDirectory(
@@ -2030,7 +2008,7 @@ private enum SystemRuntimeInfo {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return "Unavailable"
+            return NativFormatting.missingValue
         }
 
         for pythonDirectory in pythonDirectories where pythonDirectory.lastPathComponent.hasPrefix("python") {
@@ -2050,7 +2028,7 @@ private enum SystemRuntimeInfo {
                 return String(name.dropFirst("mlx_vlm-".count).dropLast(".dist-info".count))
             }
         }
-        return "Unavailable"
+        return NativFormatting.missingValue
     }()
 
     static var usedMemoryBytes: UInt64 {
@@ -2176,7 +2154,7 @@ private struct LogTextView: NSViewRepresentable {
         textView.usesFindPanel = true
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.textContainerInset = NSSize(width: 12, height: 12)
-        render(text, searchQuery: searchQuery, in: textView)
+        replaceAllText(text, searchQuery: searchQuery, in: textView)
         context.coordinator.renderedText = text
         context.coordinator.renderedQuery = searchQuery
 
@@ -2186,7 +2164,8 @@ private struct LogTextView: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         DispatchQueue.main.async { [weak textView] in
-            textView?.scrollToEndOfDocument(nil)
+            guard let textView else { return }
+            Self.scrollToBottom(textView)
         }
         return scrollView
     }
@@ -2202,18 +2181,67 @@ private struct LogTextView: NSViewRepresentable {
         }
 
         let shouldFollowOutput = isNearBottom(scrollView)
-        render(text, searchQuery: searchQuery, in: textView)
+        updateText(
+            text,
+            searchQuery: searchQuery,
+            previousText: context.coordinator.renderedText,
+            previousQuery: context.coordinator.renderedQuery,
+            in: textView
+        )
         context.coordinator.renderedText = text
         context.coordinator.renderedQuery = searchQuery
         if shouldFollowOutput {
-            textView.scrollToEndOfDocument(nil)
+            Self.scrollToBottom(textView)
         }
     }
 
-    private func render(_ text: String, searchQuery: String, in textView: NSTextView) {
+    private func replaceAllText(
+        _ text: String,
+        searchQuery: String,
+        in textView: NSTextView
+    ) {
         textView.textStorage?.setAttributedString(
             LogTextStyler.attributedString(text, searchQuery: searchQuery)
         )
+    }
+
+    private func updateText(
+        _ text: String,
+        searchQuery: String,
+        previousText: String,
+        previousQuery: String,
+        in textView: NSTextView
+    ) {
+        guard let textStorage = textView.textStorage else { return }
+        let mutation = LogTextStorageMutation.plan(
+            previousText: previousText,
+            previousQuery: previousQuery,
+            newText: text,
+            newQuery: searchQuery
+        )
+
+        switch mutation {
+        case .replaceAll:
+            replaceAllText(text, searchQuery: searchQuery, in: textView)
+        case .replaceSuffix(let offset):
+            let suffix = (text as NSString).substring(from: offset)
+            let existingSuffix = NSRange(
+                location: offset,
+                length: textStorage.length - offset
+            )
+            textStorage.replaceCharacters(
+                in: existingSuffix,
+                with: LogTextStyler.attributedString(
+                    suffix,
+                    searchQuery: searchQuery
+                )
+            )
+        }
+    }
+
+    private static func scrollToBottom(_ textView: NSTextView) {
+        let end = NSRange(location: textView.textStorage?.length ?? 0, length: 0)
+        textView.scrollRangeToVisible(end)
     }
 
     private func isNearBottom(_ scrollView: NSScrollView) -> Bool {

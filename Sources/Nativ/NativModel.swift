@@ -29,8 +29,18 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
     let id = UUID()
     let modelID: String?
     let message: String
+    private let titleOverride: String?
+
+    init(modelID: String?, message: String, title: String? = nil) {
+        self.modelID = modelID
+        self.message = message
+        titleOverride = title
+    }
 
     var title: String {
+        if let titleOverride {
+            return titleOverride
+        }
         guard let modelID else {
             return "Couldn’t load model"
         }
@@ -61,6 +71,7 @@ final class ServerLogStore {
 @MainActor
 @Observable
 final class NativModel: ChatModelSwitchingSurface {
+    let kitLibrary: NativKitLibrary
     private(set) var isRunning = false
     let serverLogs = ServerLogStore()
     private(set) var metrics: NativMetrics?
@@ -74,6 +85,7 @@ final class NativModel: ChatModelSwitchingSurface {
     private(set) var modelSwitchInProgress = false
     private(set) var modelSwitchTargetID: String?
     private var modelSwitchWatchdog: Task<Void, Never>?
+    @ObservationIgnored private var inferenceActivity: InferenceActivityCoordinator?
     private(set) var modelLoadingProgress: Double?
     private(set) var modelLoadFailure: ModelLoadFailure?
     private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
@@ -112,7 +124,8 @@ final class NativModel: ChatModelSwitchingSurface {
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
 
-    init() {
+    init(kitLibrary: NativKitLibrary? = nil) {
+        self.kitLibrary = kitLibrary ?? NativKitLibrary()
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
         isRunning = server.isRunning
@@ -121,6 +134,36 @@ final class NativModel: ChatModelSwitchingSurface {
         migrateCustomHuggingFaceCredentialIfNeeded()
     }
 
+    func observeInferenceActivity(_ coordinator: InferenceActivityCoordinator) {
+        inferenceActivity = coordinator
+        observeInferenceActivityChanges()
+    }
+
+    var inferenceActivityInProgress: Bool {
+        inferenceActivity?.hasActiveOperations == true
+    }
+
+    private func observeInferenceActivityChanges() {
+        guard let inferenceActivity else {
+            return
+        }
+        withObservationTracking {
+            _ = inferenceActivity.hasActiveOperations
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.observeInferenceActivityChanges()
+                self.notifyMenuStateChanged()
+            }
+        }
+    }
+
+    /// GUI apps inherit launchd's environment, which excludes exports from
+    /// shell startup files. Probe the user's login shell once for any missing
+    /// Hugging Face cache or authentication variables. Environment tokens stay
+    /// in memory; only a token entered in Developer settings is persisted.
     private func resolveHuggingFaceEnvironmentFromLoginShell() {
         let processEnvironment = ProcessInfo.processInfo.environment
         let needsCacheEnvironment = !HuggingFaceCache.isConfigured(in: processEnvironment)
@@ -250,7 +293,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     var loadedModelDisplay: String {
-        metrics?.server.displayLoadedModel ?? "None"
+        metrics?.server.displayLoadedModel ?? NativFormatting.missingValue
     }
 
     var isModelLoading: Bool {
@@ -308,18 +351,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     var unavailableMetricsText: String {
-        lastMetricsError == nil ? "Waiting for server..." : "Metrics unavailable"
-    }
-
-    func adoptLiveServerSettings(_ applied: [String: RuntimeSettingValue]) {
-        guard !applied.isEmpty else { return }
-        var updated = settings
-        guard RuntimeSettingsMirror.fold(applied, into: &updated) else { return }
-        settings = updated
-        if var snapshot = settingsAppliedAtServerStart {
-            _ = RuntimeSettingsMirror.fold(applied, into: &snapshot)
-            settingsAppliedAtServerStart = snapshot.normalized()
-        }
+        lastMetricsError == nil ? "Waiting for server…" : "Metrics unavailable"
     }
 
     var settingsRequireRestart: Bool {
@@ -367,7 +399,17 @@ final class NativModel: ChatModelSwitchingSurface {
             // still comes up.
             launchArguments.removeSubrange(modelFlagIndex...(modelFlagIndex + 1))
             modelLoadingProgress = nil
-            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Pick a chat model to load one.\n")
+            settings.languageModelID = nil
+            let modelName = languageModelID.split(separator: "/").last.map(String.init)
+                ?? languageModelID
+            setModelLoadFailure(
+                modelID: languageModelID,
+                message: "The model is not supported and is not loaded.",
+                title: "Could not load \(modelName)",
+                logMessage: "\(languageModelID) is not a text-generation model — "
+                    + "starting the server without pre-loading it. "
+                    + "Choose a language model to load one."
+            )
         }
         if let speechToTextModelID = settings.normalized().speechToTextModelID,
            let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(
@@ -380,6 +422,12 @@ final class NativModel: ChatModelSwitchingSurface {
             appendLog("\n\(speechIssue) Starting the server without it — dictation stays unavailable until that model is replaced or repaired.\n")
         }
         do {
+            if !server.isRunning {
+                let target = settings.normalized()
+                if ServerPortProbe.availability(host: target.serverHost, port: target.serverPort) == .addressInUse {
+                    throw NativError.portInUse(host: target.serverHost, port: target.serverPort)
+                }
+            }
             var launchEnvironment = settings.launchEnvironment
             launchEnvironment["MLX_PLATFORM_ANALYTICS_DB_PATH"] = currentAnalyticsDatabaseURL().path
             if let effectiveHuggingFaceToken {
@@ -400,6 +448,9 @@ final class NativModel: ChatModelSwitchingSurface {
             huggingFaceTokenAppliedAtServerStart = effectiveHuggingFaceToken
             appendLog("\nmlx-vlm-server is already running.\n")
             shouldStartMetrics = true
+        } catch NativError.portInUse(let host, let port) {
+            modelLoadingProgress = nil
+            appendLog("\nCan't start mlx-vlm-server: \(host):\(port) is already in use by another process. Stop that process or choose a different port in Settings, then try again.\n")
         } catch {
             modelLoadingProgress = nil
             appendLog("\nFailed to start mlx-vlm-server: \(error)\n")
@@ -411,6 +462,10 @@ final class NativModel: ChatModelSwitchingSurface {
         notifyMenuStateChanged()
     }
 
+    /// Returns true only when the model is present locally and its config's
+    /// architectures are all non-generative (e.g. a BERT/RoBERTa encoder), which
+    /// mlx-vlm cannot load as a chat model. Any uncertainty returns false, so a
+    /// genuine chat model is never skipped.
     private func isKnownNonGenerativeModel(_ repoID: String) -> Bool {
         let cacheName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
         let fileManager = FileManager.default
@@ -467,7 +522,7 @@ final class NativModel: ChatModelSwitchingSurface {
         }
 
         do {
-            appendLog("\nStopping mlx-vlm-server...\n")
+            appendLog("\nStopping mlx-vlm-server…\n")
             requestedServerStopReason = reason
             try server.stop()
         } catch NativError.notRunning {
@@ -589,7 +644,7 @@ final class NativModel: ChatModelSwitchingSurface {
         availableModels: [LocalModel],
         onSelectionAccepted: @escaping () -> Void = {}
     ) -> Bool {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return false
         }
 
@@ -613,6 +668,9 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func confirmPendingModelPreloadSwitch() {
+        guard !inferenceActivityInProgress else {
+            return
+        }
         guard let pendingModelPreloadSwitch else {
             modelPreloadMemoryWarning = nil
             return
@@ -636,7 +694,7 @@ final class NativModel: ChatModelSwitchingSurface {
         to modelID: String?,
         for slot: ModelPreloadSlot
     ) {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return
         }
         clearModelLoadFailure()
@@ -846,6 +904,11 @@ final class NativModel: ChatModelSwitchingSurface {
                     self.appendLog(
                         "\nmlx-vlm-server stopped after Nativ requested \(stopReason.rawValue) (status \(status))\n"
                     )
+                } else if NativServerErrorMessage.isPortConflictFailure(in: self.currentServerOutput) {
+                    let target = self.settingsAppliedAtServerStart ?? self.settings.normalized()
+                    self.appendLog(
+                        "\nmlx-vlm-server couldn't start: \(target.serverHost):\(target.serverPort) is already in use by another process. Stop that process or choose a different port in Settings, then start the server again.\n"
+                    )
                 } else {
                     self.appendLog(
                         "\nmlx-vlm-server stopped unexpectedly (status \(status); Nativ did not request a stop)\n"
@@ -1012,9 +1075,18 @@ final class NativModel: ChatModelSwitchingSurface {
         }
     }
 
-    private func setModelLoadFailure(modelID: String?, message: String) {
-        modelLoadFailure = ModelLoadFailure(modelID: modelID, message: message)
-        appendLog("\n\(message)\n")
+    private func setModelLoadFailure(
+        modelID: String?,
+        message: String,
+        title: String? = nil,
+        logMessage: String? = nil
+    ) {
+        modelLoadFailure = ModelLoadFailure(
+            modelID: modelID,
+            message: message,
+            title: title
+        )
+        appendLog("\n\(logMessage ?? message)\n")
         notifyMenuStateChanged()
     }
 
@@ -1088,6 +1160,17 @@ final class NativModel: ChatModelSwitchingSurface {
         onMenuStateChanged?()
     }
 
+    /// Unlocks the model controls if a switch never reports back.
+    ///
+    /// `modelSwitchInProgress` normally clears once metrics confirm the newly
+    /// started server. When that server comes up but never serves metrics, the
+    /// flag used to stay set forever, disabling the model picker and the
+    /// start/stop buttons with no way to recover short of relaunching.
+    ///
+    /// Each switch replaces the previous watchdog, so only the newest one can
+    /// fire. Comparing the target alone is not enough: switching away from a
+    /// model and back again would otherwise let the first watchdog time out the
+    /// second switch early.
     private func armModelSwitchWatchdog(
         timeout: TimeInterval = NativModel.modelSwitchTimeout
     ) {

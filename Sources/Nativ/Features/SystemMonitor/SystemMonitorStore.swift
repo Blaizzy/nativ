@@ -120,7 +120,7 @@ struct SystemDiskIdentity: Equatable, Sendable {
     var volumeName = "Macintosh HD"
     var fileSystem = "APFS"
     var mountPoint = "/"
-    var deviceIdentifier = "--"
+    var deviceIdentifier = NativFormatting.missingValue
     var model = "Internal storage"
     var connection = "Internal"
     var isEncrypted: Bool?
@@ -139,11 +139,11 @@ struct SystemDiskIdentity: Equatable, Sendable {
 
 struct SystemMonitorIdentity: Equatable, Sendable {
     var computerName = Host.current().localizedName ?? "This Mac"
-    var modelIdentifier = "--"
+    var modelIdentifier = NativFormatting.missingValue
     var modelNumber: String?
     var enclosureColorCode: String?
     var productionYear: Int?
-    var serialNumber = "--"
+    var serialNumber = NativFormatting.missingValue
     var chipName = "Apple silicon"
     var physicalCoreCount = ProcessInfo.processInfo.processorCount
     var logicalCoreCount = ProcessInfo.processInfo.activeProcessorCount
@@ -155,7 +155,7 @@ struct SystemMonitorIdentity: Equatable, Sendable {
     var nominalCPUFrequencyHz: UInt64?
     var operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
     var displayName = "Built-in display"
-    var displayResolution = "--"
+    var displayResolution = NativFormatting.missingValue
     var displayRefreshRate: Double?
     var disk = SystemDiskIdentity()
 
@@ -188,6 +188,33 @@ struct SystemMonitorSnapshot: Equatable, Sendable {
     var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 }
 
+struct SystemMonitorObservationPolicy {
+    private var observerIDs: Set<UUID> = []
+    private(set) var isPaused = false
+
+    mutating func begin(_ observerID: UUID) -> Bool {
+        let inserted = observerIDs.insert(observerID).inserted
+        return inserted && observerIDs.count == 1 && !isPaused
+    }
+
+    mutating func end(_ observerID: UUID) -> Bool {
+        guard observerIDs.remove(observerID) != nil else { return false }
+        return observerIDs.isEmpty && !isPaused
+    }
+
+    mutating func pause() -> Bool {
+        guard !isPaused else { return false }
+        isPaused = true
+        return !observerIDs.isEmpty
+    }
+
+    mutating func resume() -> Bool {
+        guard isPaused else { return false }
+        isPaused = false
+        return !observerIDs.isEmpty
+    }
+}
+
 @MainActor
 @Observable
 final class SystemMonitorStore {
@@ -208,13 +235,34 @@ final class SystemMonitorStore {
     private let displayFPSSampler = SystemDisplayFPSSampler()
     private let aneSampler = SystemANEUtilizationSampler()
     private var samplingTask: Task<Void, Never>?
+    private var observationPolicy = SystemMonitorObservationPolicy()
     private let historyLimit = 300
 
     isolated deinit {
         samplingTask?.cancel()
     }
 
-    func start() {
+    func beginObservation(_ observerID: UUID) {
+        guard observationPolicy.begin(observerID) else { return }
+        startSampling()
+    }
+
+    func endObservation(_ observerID: UUID) {
+        guard observationPolicy.end(observerID) else { return }
+        stopSampling()
+    }
+
+    func pause() {
+        guard observationPolicy.pause() else { return }
+        stopSampling()
+    }
+
+    func resume() {
+        guard observationPolicy.resume() else { return }
+        startSampling()
+    }
+
+    private func startSampling() {
         guard samplingTask == nil else { return }
         isSampling = true
         displayFPSSampler.start()
@@ -236,7 +284,7 @@ final class SystemMonitorStore {
         }
     }
 
-    func stop() {
+    private func stopSampling() {
         samplingTask?.cancel()
         samplingTask = nil
         displayFPSSampler.stop()
@@ -829,7 +877,7 @@ private actor SystemMetricsCollector {
                 ?? volume["FilesystemType"] as? String
                 ?? "APFS",
             mountPoint: volume["MountPoint"] as? String ?? "/",
-            deviceIdentifier: volume["DeviceIdentifier"] as? String ?? "--",
+            deviceIdentifier: volume["DeviceIdentifier"] as? String ?? NativFormatting.missingValue,
             model: device?["MediaName"] as? String ?? "Internal storage",
             connection: device?["BusProtocol"] as? String
                 ?? volume["BusProtocol"] as? String
