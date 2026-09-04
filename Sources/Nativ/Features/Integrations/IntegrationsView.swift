@@ -870,6 +870,7 @@ private struct IntegrationModelPickerLabel: View {
                    colorScheme == .dark {
                     Circle()
                         .fill(Color.white.opacity(0.94))
+                        .frame(width: 18, height: 18)
                 }
 
                 if let provider = model.provider,
@@ -878,6 +879,7 @@ private struct IntegrationModelPickerLabel: View {
                         .resizable()
                         .scaledToFit()
                         .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                        .frame(width: 15, height: 15)
                 } else if let provider = model.provider {
                     Text(provider.monogram)
                         .font(.system(size: provider.monogram.count > 2 ? 7 : 9, weight: .bold))
@@ -888,7 +890,7 @@ private struct IntegrationModelPickerLabel: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 16, height: 16)
+            .frame(width: 18, height: 18)
             .accessibilityHidden(true)
         }
     }
