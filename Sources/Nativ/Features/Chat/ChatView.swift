@@ -1846,7 +1846,7 @@ private struct ChatThinkingBubble: View {
                             .padding(14)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
