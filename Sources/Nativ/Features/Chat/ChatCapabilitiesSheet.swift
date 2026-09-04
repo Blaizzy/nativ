@@ -116,7 +116,9 @@ struct ChatCapabilitiesSheet: View {
             isAvailable: true,
             setupSection: nil
         )
-        let tools = ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+        let tools: [GlobalChatCapabilityItem] = ChatToolRegistry.descriptors(
+            canEditImage: false
+        ).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
             if let configuration,
