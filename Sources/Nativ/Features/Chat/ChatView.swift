@@ -223,8 +223,15 @@ private struct ChatTranscriptView: View {
                         }
                     }
 
+                    // Keep the overlay clearance inside the scroll target so pinning lands
+                    // above the composer rather than aligning hidden content behind it.
                     Color.clear
-                        .frame(height: 1)
+                        .frame(
+                            height: max(
+                                18,
+                                composerHeight + ChatTranscriptLayout.composerClearance
+                            )
+                        )
                         .id(ChatTranscriptScrollTarget.bottom)
                 }
                 .frame(
@@ -238,10 +245,6 @@ private struct ChatTranscriptView: View {
                         + ChatTranscriptLayout.messageHorizontalInset
                 )
                 .padding(.top, 18)
-                .padding(
-                    .bottom,
-                    max(18, composerHeight + ChatTranscriptLayout.composerClearance)
-                )
                 .animation(.easeOut(duration: 0.25), value: items.count)
             }
             .defaultScrollAnchor(.bottom)
