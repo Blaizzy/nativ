@@ -4232,6 +4232,7 @@ private struct RequestDetailView: View {
                 RequestDetailMetric(title: "Prompt tokens", value: NativFormatting.integer(request.promptTokens))
                 RequestDetailMetric(title: "Output tokens", value: NativFormatting.integer(request.generatedTokens))
                 RequestDetailMetric(title: "Elapsed", value: "\(NativFormatting.seconds(fromMilliseconds: request.requestElapsedMilliseconds))s")
+                RequestDetailMetric(title: "Time to first token", value: NativFormatting.milliseconds(request.ttftMilliseconds.map(Double.init)))
                 RequestDetailMetric(title: "Prefill", value: "\(NativFormatting.decimal(request.resolvedPrefillTokensPerSecond)) tok/s")
                 RequestDetailMetric(title: "Decode", value: "\(NativFormatting.decimal(request.resolvedDecodeTokensPerSecond)) tok/s")
                 RequestDetailMetric(title: "Peak memory", value: NativFormatting.gigabytes(fromBytes: request.peakMemoryBytes))
@@ -4335,6 +4336,8 @@ private struct DashboardRecentRequestsDataRow: View {
             Text(NativFormatting.integer(request.promptTokens))
         case .completion:
             Text(NativFormatting.integer(request.completionTokens))
+        case .ttft:
+            Text(NativFormatting.milliseconds(request.ttftMilliseconds.map(Double.init)))
         case .prefill:
             Text(NativFormatting.decimal(request.resolvedPrefillTokensPerSecond))
         case .decode:
@@ -4538,6 +4541,7 @@ private enum DashboardRecentRequestsColumn: CaseIterable {
     case mode
     case prompt
     case completion
+    case ttft
     case prefill
     case decode
     case request
@@ -4560,6 +4564,8 @@ private enum DashboardRecentRequestsColumn: CaseIterable {
             "Prompt"
         case .completion:
             "Completion"
+        case .ttft:
+            "TTFT"
         case .prefill:
             "Prefill tok/s"
         case .decode:
@@ -4587,6 +4593,8 @@ private enum DashboardRecentRequestsColumn: CaseIterable {
             86
         case .completion:
             104
+        case .ttft:
+            96
         case .prefill, .decode, .request:
             132
         case .elapsed:
@@ -4602,7 +4610,7 @@ private enum DashboardRecentRequestsColumn: CaseIterable {
             .leading
         case .finish, .mode:
             .center
-        case .prompt, .completion, .prefill, .decode, .request, .elapsed, .peakMemory:
+        case .prompt, .completion, .ttft, .prefill, .decode, .request, .elapsed, .peakMemory:
             .trailing
         }
     }
