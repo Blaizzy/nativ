@@ -4,7 +4,7 @@ import SwiftUI
 
 struct MCPSectionView: View {
     @ObservedObject var host: MCPHostManager
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @State private var editing: MCPServerConfig?
     @State private var pendingDelete: MCPServerConfig?
 
@@ -18,7 +18,7 @@ struct MCPSectionView: View {
             Button {
                 editing = MCPServerConfig(name: "", isEnabled: true)
             } label: {
-                Label("Add your own", systemImage: "plus")
+                Label("Add MCP Server", systemImage: "plus")
             }
         } content: {
             if catalog.entries.isEmpty && customServers.isEmpty {
@@ -29,7 +29,7 @@ struct MCPSectionView: View {
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     if !catalog.entries.isEmpty {
-                        serverGroup(title: "Built in") {
+                        serverGroup(title: "Built-in") {
                             ForEach(Array(catalog.entries.enumerated()), id: \.element.id) { index, entry in
                                 if index > 0 { Divider() }
                                 builtInServerRow(entry)
@@ -39,8 +39,8 @@ struct MCPSectionView: View {
 
                     serverGroup(title: "Custom") {
                         if customServers.isEmpty {
-                            Text("No custom servers added.")
-                                .font(.system(size: 12))
+                            Text("No custom servers have been added.")
+                                .nativTextStyle(.supporting)
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
                         } else {
@@ -95,7 +95,7 @@ struct MCPSectionView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .nativTextStyle(.subsectionTitle)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
             content()
@@ -171,14 +171,14 @@ private struct MCPServerRow: View {
     @State private var copiedAuthorizationCode = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: showsGitHubSetup ? 10 : 0) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 NativStatusDot(tone: statusTone, pulsing: isConnecting)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name.isEmpty ? "Untitled server" : server.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .nativTextStyle(.rowTitle)
                     Text(statusText)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
@@ -225,7 +225,7 @@ private struct MCPServerRow: View {
                 ) {
                     HStack(spacing: 6) {
                         Text(code)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .nativTextStyle(.codeEmphasized)
                             .textSelection(.enabled)
                             .padding(.horizontal, 10)
                             .frame(height: 26)
@@ -247,22 +247,21 @@ private struct MCPServerRow: View {
             } else if case .installingGitHub(let installationURL) = state {
                 GitHubSetupCallout(
                     icon: "folder.badge.plus",
-                    title: "Choose repository access",
+                    title: "Choose Repository Access",
                     message: "GitHub authorization is complete. Select which repositories Nativ can use. You can change this later on GitHub.",
                     actionTitle: "Choose repositories",
                     actionIcon: "arrow.up.right",
                     destination: installationURL
                 )
                 .padding(.leading, 20)
+            } else if case .failed(let failure) = state,
+                      let details = failure.details,
+                      !details.isEmpty {
+                MCPConnectionFailureCallout(details: details)
+                    .padding(.leading, 20)
             }
         }
         .padding(.vertical, 11)
-    }
-
-    private var showsGitHubSetup: Bool {
-        if case .authorizingGitHub = state { return true }
-        if case .installingGitHub = state { return true }
-        return false
     }
 
     private var isConnecting: Bool {
@@ -287,7 +286,7 @@ private struct MCPServerRow: View {
         case .connecting: "Connecting\u{2026}"
         case .authorizingGitHub: "Authorization required"
         case .installingGitHub: "Repository access required"
-        case .failed(let message): message.isEmpty ? "Failed to connect" : message
+        case .failed(let failure): failure.message.isEmpty ? "Failed to connect" : failure.message
         case .disabled: "Off"
         case .none: server.isEnabled ? "Not connected" : "Off"
         }
@@ -297,6 +296,31 @@ private struct MCPServerRow: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(code, forType: .string)
         copiedAuthorizationCode = true
+    }
+}
+
+private struct MCPConnectionFailureCallout: View {
+    let details: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .accessibilityHidden(true)
+
+            Text(details)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: 650, alignment: .leading)
+        .background(Color.red.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.red.opacity(0.16), lineWidth: 1)
+        }
     }
 }
 
@@ -337,10 +361,10 @@ private struct GitHubSetupCallout<Accessory: View>: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .nativTextStyle(.sectionTitle)
 
                 Text(message)
-                    .font(.system(size: 11))
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -404,23 +428,23 @@ private struct MCPServerJSON: Codable {
         case isEnabled
     }
 
-    init(name: String, command: String, arguments: [String], environment: [String: String], isEnabled: Bool) {
-        self.name = name
-        self.command = command
-        self.arguments = arguments
-        self.environment = environment
-        self.isEnabled = isEnabled
+    init(server: MCPServerConfig) {
+        name = server.name
+        command = server.command
+        arguments = server.arguments
+        environment = server.environment
+        isEnabled = server.isEnabled
     }
 
     // Lenient: the scaffold and pasted standard mcp.json entries may omit name
     // and isEnabled.
     init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        name = (try? c.decode(String.self, forKey: .name)) ?? ""
-        command = (try? c.decode(String.self, forKey: .command)) ?? ""
-        arguments = (try? c.decode([String].self, forKey: .arguments)) ?? []
-        environment = (try? c.decode([String: String].self, forKey: .environment)) ?? [:]
-        isEnabled = (try? c.decode(Bool.self, forKey: .isEnabled)) ?? true
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        command = try container.decode(String.self, forKey: .command)
+        arguments = try container.decodeIfPresent([String].self, forKey: .arguments) ?? []
+        environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
     }
 }
 
@@ -438,70 +462,81 @@ private struct MCPServerEditor: View {
     let onCancel: () -> Void
 
     @State private var server: MCPServerConfig
-    @State private var editingJSON: Bool
-    @State private var jsonText: String
+    @State private var launchCommandText: String
+    @State private var launchCommandError: String?
+    @State private var editingJSON = false
+    @State private var jsonText = ""
     @State private var jsonError: String?
 
     init(server: MCPServerConfig, onSave: @escaping (MCPServerConfig) -> Void, onCancel: @escaping () -> Void) {
         _server = State(initialValue: server)
+        _launchCommandText = State(
+            initialValue: server.command.isEmpty
+                ? ""
+                : MCPLaunchCommand(
+                    executable: server.command,
+                    arguments: server.arguments
+                ).rendered
+        )
         self.onSave = onSave
         self.onCancel = onCancel
-        // A brand-new server (nothing filled in) opens straight into a
-        // pre-bracketed JSON scaffold so you can just type — or paste a
-        // standard mcp.json entry.
-        let isNew = server.name.isEmpty && server.command.isEmpty && server.arguments.isEmpty
-        _editingJSON = State(initialValue: isNew)
-        _jsonText = State(initialValue: isNew ? mcpJSONScaffold : "")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(server.name.isEmpty ? "New MCP Server" : "Edit MCP Server")
-                    .font(.system(size: 15, weight: .semibold))
+                    .nativTextStyle(.sheetTitle)
                 Spacer()
                 Toggle("Edit as JSON", isOn: $editingJSON)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .onChange(of: editingJSON) { _, on in
-                        if on { jsonText = currentJSON() } else { applyJSON() }
+                    .onChange(of: editingJSON) { _, isEditingJSON in
+                        switchEditorMode(isEditingJSON: isEditingJSON)
                     }
             }
 
             if editingJSON {
                 TextEditor(text: $jsonText)
-                    .font(.system(size: 12, design: .monospaced))
+                    .nativTextStyle(.code)
                     .frame(minHeight: 220)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
                     )
+                    .onChange(of: jsonText) { _, _ in
+                        validateJSON()
+                    }
                 if let jsonError {
                     Text(jsonError)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.red)
                 }
             } else {
-                field("Name") {
-                    TextField("e.g. filesystem", text: $server.name)
+                field("Name (optional)") {
+                    TextField("Derived from the command if left empty", text: $server.name)
                         .textFieldStyle(.roundedBorder)
                 }
-                field("Command") {
-                    TextField("e.g. npx", text: $server.command)
+                field("Launch command") {
+                    TextField(
+                        "/Applications/Humla.app/Contents/MacOS/humla-mcp",
+                        text: $launchCommandText
+                    )
+                        .nativTextStyle(.code)
                         .textFieldStyle(.roundedBorder)
-                }
-                field("Arguments (one per line)") {
-                    TextEditor(text: argumentsText)
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(height: 70)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-                        )
+                    Text("Paste the executable and any arguments on one line. Nativ launches it directly over stdio without invoking a shell.")
+                        .nativTextStyle(.supporting)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let launchCommandError {
+                        Text(launchCommandError)
+                            .nativTextStyle(.supporting)
+                            .foregroundStyle(.red)
+                    }
                 }
                 field("Environment (KEY=VALUE per line)") {
                     TextEditor(text: environmentText)
-                        .font(.system(size: 12, design: .monospaced))
+                        .nativTextStyle(.code)
                         .frame(height: 60)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
@@ -514,15 +549,15 @@ private struct MCPServerEditor: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                 Button("Save") {
-                    if editingJSON { applyJSON() }
-                    guard jsonError == nil else { return }
+                    if editingJSON {
+                        guard applyJSON() else { return }
+                    } else {
+                        guard applyLaunchCommand() else { return }
+                    }
                     onSave(server)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(
-                    server.name.trimmingCharacters(in: .whitespaces).isEmpty
-                        || server.command.trimmingCharacters(in: .whitespaces).isEmpty
-                )
+                .disabled(!canSave)
             }
         }
         .padding(20)
@@ -532,16 +567,9 @@ private struct MCPServerEditor: View {
     @ViewBuilder
     private func field<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(label).nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
             content()
         }
-    }
-
-    private var argumentsText: Binding<String> {
-        Binding(
-            get: { server.arguments.joined(separator: "\n") },
-            set: { server.arguments = $0.split(separator: "\n", omittingEmptySubsequences: true).map(String.init) }
-        )
     }
 
     private var environmentText: Binding<String> {
@@ -560,34 +588,91 @@ private struct MCPServerEditor: View {
         )
     }
 
+    private var canSave: Bool {
+        if editingJSON {
+            return decodedJSONServer() != nil
+        }
+        return (try? MCPLaunchCommand(parsing: launchCommandText)) != nil
+    }
+
+    private func switchEditorMode(isEditingJSON: Bool) {
+        if isEditingJSON {
+            _ = applyLaunchCommand()
+            jsonText = server.command.isEmpty ? mcpJSONScaffold : currentJSON()
+            validateJSON()
+        } else if applyJSON() {
+            launchCommandText = MCPLaunchCommand(
+                executable: server.command,
+                arguments: server.arguments
+            ).rendered
+        }
+    }
+
+    @discardableResult
+    private func applyLaunchCommand() -> Bool {
+        do {
+            let launchCommand = try MCPLaunchCommand(parsing: launchCommandText)
+            server.command = launchCommand.executable
+            server.arguments = launchCommand.arguments
+            if server.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                server.name = launchCommand.suggestedName
+            }
+            launchCommandError = nil
+            return true
+        } catch {
+            launchCommandError = error.localizedDescription
+            return false
+        }
+    }
+
     private func currentJSON() -> String {
-        let payload = MCPServerJSON(
-            name: server.name,
-            command: server.command,
-            arguments: server.arguments,
-            environment: server.environment,
-            isEnabled: server.isEnabled
-        )
+        let payload = MCPServerJSON(server: server)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(payload), let text = String(data: data, encoding: .utf8) else {
+        guard let data = try? encoder.encode(payload),
+              let text = String(data: data, encoding: .utf8)
+        else {
             return "{}"
         }
         return text
     }
 
-    private func applyJSON() {
-        guard let data = jsonText.data(using: .utf8) else { return }
-        do {
-            let payload = try JSONDecoder().decode(MCPServerJSON.self, from: data)
-            server.name = payload.name
-            server.command = payload.command
-            server.arguments = payload.arguments
-            server.environment = payload.environment
-            server.isEnabled = payload.isEnabled
+    private func validateJSON() {
+        if decodedJSONServer() == nil {
+            jsonError = "Enter a valid Nativ MCP server JSON object."
+        } else {
             jsonError = nil
-        } catch {
-            jsonError = "Invalid JSON: \(error.localizedDescription)"
         }
+    }
+
+    @discardableResult
+    private func applyJSON() -> Bool {
+        guard let decoded = decodedJSONServer() else {
+            validateJSON()
+            return false
+        }
+        server = decoded
+        jsonError = nil
+        return true
+    }
+
+    private func decodedJSONServer() -> MCPServerConfig? {
+        guard let data = jsonText.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(MCPServerJSON.self, from: data),
+              !payload.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+
+        var decoded = server
+        decoded.name = payload.name
+        decoded.command = payload.command
+        decoded.arguments = payload.arguments
+        decoded.environment = payload.environment
+        decoded.isEnabled = payload.isEnabled
+        if decoded.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            decoded.name = MCPLaunchCommand(executable: decoded.command).suggestedName
+        }
+        return decoded
     }
 }

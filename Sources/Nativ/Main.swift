@@ -126,52 +126,10 @@ private struct NativApplication: App {
         .defaultSize(width: 1240, height: 720)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowBackgroundDragBehavior(.enabled)
         .commands {
-            CommandGroup(after: .appInfo) {
-                CheckForUpdatesCommand(updater: appDelegate.softwareUpdater.updater)
-            }
-
-            CommandGroup(replacing: .newItem) {
-                Button("New Chat") {
-                    appDelegate.createNewChat()
-                }
-                .keyboardShortcut("n")
-            }
-
-            CommandGroup(replacing: .sidebar) {
-                Button("Toggle Sidebar") {
-                    appDelegate.toggleSidebar()
-                }
-                .keyboardShortcut("s", modifiers: [.control, .command])
-            }
-
-            CommandGroup(after: .sidebar) {
-                Button("Collapse All Sections") {
-                    appDelegate.toggleAllSidebarSections()
-                }
-                .keyboardShortcut(".", modifiers: [.command, .option])
-
-                Button("Increase Chat Font Size") {
-                    appDelegate.increaseChatFontSize()
-                }
-                .keyboardShortcut("+", modifiers: .command)
-                Button("Decrease Chat Font Size") {
-                    appDelegate.decreaseChatFontSize()
-                }
-                .keyboardShortcut("-", modifiers: .command)
-                Button("Reset Chat Font Size") {
-                    appDelegate.resetChatFontSize()
-                }
-                .keyboardShortcut("0", modifiers: .command)
-            }
-
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
-                    appDelegate.openSettings()
-                }
-                .keyboardShortcut(",")
-            }
+            NativApplicationCommands(appDelegate: appDelegate)
         }
     }
 }
@@ -179,10 +137,18 @@ private struct NativApplication: App {
 private struct NativRootView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
+    @StateObject private var controlPanelDependencies: ControlPanelDependencies
     let appDelegate: AppDelegate
 
+    init(appDelegate: AppDelegate) {
+        self.appDelegate = appDelegate
+        _controlPanelDependencies = StateObject(
+            wrappedValue: appDelegate.makeControlPanelDependencies()
+        )
+    }
+
     var body: some View {
-        appDelegate.rootView
+        appDelegate.rootView(controlPanelDependencies: controlPanelDependencies)
             .onAppear {
                 applyAppearance(appearance)
                 appDelegate.registerMainWindowOpener {

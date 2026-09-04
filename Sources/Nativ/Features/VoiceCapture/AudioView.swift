@@ -133,7 +133,7 @@ private enum AudioModelUsagePeriod: String, CaseIterable, Identifiable {
 
 @MainActor
 struct AudioView: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
     @ObservedObject private var animations: VoiceAnimationPreferences
@@ -254,6 +254,7 @@ struct AudioView: View {
                 Button("Open System Settings") {
                     captureLibrary.openPermissionSettings()
                 }
+                .keyboardShortcut(.defaultAction)
                 Button("Not Now", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
@@ -261,6 +262,7 @@ struct AudioView: View {
                 Button("OK", role: .cancel) {
                     captureLibrary.clearLastError()
                 }
+                .keyboardShortcut(.defaultAction)
             }
         } message: {
             Text(captureLibrary.lastErrorMessage ?? "Audio capture failed.")
@@ -337,7 +339,7 @@ struct AudioView: View {
         }
         .padding(.horizontal, 22)
         .padding(.leading, titleLeadingInset)
-        .padding(.top, 20)
+        .controlPanelDetailHeaderTopPadding()
         .padding(.bottom, 16)
     }
 
@@ -379,7 +381,7 @@ struct AudioView: View {
         switch destination {
         case .record:
             AudioPage(
-                title: "Record audio",
+                title: "Record Audio",
                 subtitle: "Capture audio from your Mac and turn it into searchable text",
                 maxContentWidth: 1_120
             ) {
@@ -398,7 +400,7 @@ struct AudioView: View {
             }
         case .history:
             AudioPage(
-                title: "Audio library",
+                title: "Audio Library",
                 subtitle: "Review persistent recordings alongside dictation history"
             ) {
                 savedCapturesPanel
@@ -406,7 +408,7 @@ struct AudioView: View {
             }
         case .model:
             AudioPage(
-                title: "Speech-to-text model",
+                title: "Speech-to-Text Model",
                 subtitle: "Choose which installed model handles voice transcription"
             ) {
                 modelConfigurationPanel
@@ -421,7 +423,7 @@ struct AudioView: View {
             }
         case .shortcuts:
             AudioPage(
-                title: "Keyboard shortcuts",
+                title: "Keyboard Shortcuts",
                 subtitle: "Customize the global commands for recording and retranscription"
             ) {
                 shortcutConfigurationPanel
@@ -480,7 +482,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Dictation activity")
+                    Text("Dictation Activity")
                         .font(.headline)
                     Text("Words spoken over the last 14 days")
                         .font(.caption)
@@ -1055,7 +1057,7 @@ struct AudioView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Audio source")
+                    Text("Audio Source")
                         .font(.headline)
                     Text("Choose your microphone and verify its level before recording.")
                         .font(.caption)
@@ -1167,7 +1169,7 @@ struct AudioView: View {
                 .disabled(!inputVolume.isSupported || captureLibrary.isBusy)
                 .help(
                     inputVolume.isSupported
-                        ? "Adjust the selected microphone's input volume"
+                        ? "Adjust the selected microphone’s input volume"
                         : "This microphone controls input volume in hardware"
                 )
 
@@ -1262,7 +1264,7 @@ struct AudioView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("New recording")
+                    Text("New Recording")
                         .font(.headline)
                     Text("Capture audio, then transcribe it locally when you finish.")
                         .font(.caption)
@@ -1281,7 +1283,7 @@ struct AudioView: View {
                         )
                     }
                 } label: {
-                    Label("Start recording", systemImage: "record.circle")
+                    Label("Start Recording", systemImage: "record.circle")
                         .font(.callout.weight(.semibold))
                         .frame(minWidth: 164)
                 }
@@ -1295,7 +1297,7 @@ struct AudioView: View {
 
             HStack(alignment: .center, spacing: 20) {
                 capturePreferenceRow(
-                    title: "Auto-summary",
+                    title: "Auto-Summary",
                     detail: "Create summarized notes automatically after each recording.",
                     systemImage: "sparkles",
                     tint: .purple,
@@ -1307,7 +1309,7 @@ struct AudioView: View {
                     .frame(height: 52)
 
                 capturePreferenceRow(
-                    title: "Transcription suggestions",
+                    title: "Transcription Suggestions",
                     detail: "Prompt me when a supported meeting app begins using the microphone.",
                     systemImage: "person.2.wave.2.fill",
                     tint: tint,
@@ -1364,7 +1366,7 @@ struct AudioView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if captureLibrary.phase == .recording {
-                    Text(formatDuration(captureLibrary.elapsed))
+                    Text(NativFormatting.clockDuration(captureLibrary.elapsed))
                         .font(.title2.weight(.semibold).monospacedDigit())
                 }
             }
@@ -1481,7 +1483,7 @@ struct AudioView: View {
                 "Recording from \(inputDevices.selectionTitle)."
             }
         case .processing:
-            "The recording is safely stored locally while your speech model creates text."
+            "The recording is safely stored locally while your speech-to-text model creates text."
         }
     }
 
@@ -1552,7 +1554,7 @@ struct AudioView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Transcription model")
+                    Text("Transcription Model")
                         .font(.headline)
                     Text("This model handles voice dictation everywhere you use Nativ.")
                         .font(.caption)
@@ -1651,7 +1653,7 @@ struct AudioView: View {
                     .foregroundStyle(.orange)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("No speech model found")
+                    Text("No speech-to-text model found")
                         .font(.subheadline.weight(.semibold))
                     Text("Download or add a compatible model to a configured local model path.")
                         .font(.caption)
@@ -1660,7 +1662,7 @@ struct AudioView: View {
 
                 Spacer(minLength: 12)
 
-                Button("Find models", action: onOpenSpeechModels)
+                Button("Open Models", action: onOpenSpeechModels)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
@@ -1722,7 +1724,7 @@ struct AudioView: View {
     private var animationPicker: some View {
         VStack(alignment: .leading, spacing: 28) {
             animationSection(
-                title: "Voice dictation",
+                title: "Voice Dictation",
                 subtitle: "Shown while you dictate text with a global shortcut.",
                 styles: VoiceAnimationPreferences.dictationStyles,
                 purpose: .dictation
@@ -1774,7 +1776,7 @@ struct AudioView: View {
                         )
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Capture sound")
+                        Text("Capture Sound")
                             .font(.headline)
                         Text("Used for voice dictation and recordings.")
                             .font(.caption)
@@ -2369,7 +2371,7 @@ struct AudioView: View {
     private var shortcutConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
-                Label("Global voice shortcuts", systemImage: "keyboard")
+                Label("Global Voice Shortcuts", systemImage: "keyboard")
                     .font(.headline)
                 Text("Changes take effect immediately, including outside Nativ.")
                     .font(.caption)
@@ -2379,7 +2381,7 @@ struct AudioView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Hands-free")
+                        Text("Hands-Free")
                             .font(.callout.weight(.medium))
                         Text(handsFreeDescription)
                             .font(.caption)
@@ -2399,13 +2401,13 @@ struct AudioView: View {
                 )
 
                 shortcutRow(
-                    title: "Dictation shortcut",
+                    title: "Dictation Shortcut",
                     shortcut: shortcuts.recordShortcut,
                     kind: .record
                 )
 
                 shortcutRow(
-                    title: "Retry recent audio",
+                    title: "Retry Recent Audio",
                     shortcut: shortcuts.retryShortcut,
                     kind: .retry
                 )
@@ -2424,7 +2426,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Recent dictations")
+                    Text("Recent Dictations")
                         .font(.headline)
                     Text("Search and reuse transcripts stored locally.")
                         .font(.caption)
@@ -2460,7 +2462,7 @@ struct AudioView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 160)
             } else {
-                LazyVStack(spacing: 0) {
+                VStack(spacing: 0) {
                     ForEach(Array(filteredRecords.prefix(30).enumerated()), id: \.element.id) {
                         index, record in
                         AudioTranscriptRow(
@@ -2490,7 +2492,7 @@ struct AudioView: View {
                 }
                 Spacer()
                 Button(action: chooseAudioToImport) {
-                    Label("Upload audio", systemImage: "square.and.arrow.up")
+                    Label("Add Recording", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -2498,7 +2500,7 @@ struct AudioView: View {
                 Button {
                     destination = .record
                 } label: {
-                    Label("New recording", systemImage: "plus")
+                    Label("New Recording", systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -2510,7 +2512,7 @@ struct AudioView: View {
                 } description: {
                     Text("Start a recording to create your local audio library.")
                 } actions: {
-                    Button("Record audio") {
+                    Button("Start Recording") {
                         destination = .record
                     }
                     .buttonStyle(.borderedProminent)
@@ -2546,9 +2548,9 @@ struct AudioView: View {
 
     private func chooseAudioToImport() {
         let panel = NSOpenPanel()
-        panel.title = "Upload audio"
-        panel.message = "Choose an audio file to transcribe and summarize locally."
-        panel.prompt = "Upload"
+        panel.title = "Add Recording"
+        panel.message = "Choose a recording to transcribe and summarize locally."
+        panel.prompt = "Add"
         panel.allowedContentTypes = [.audio]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -2592,7 +2594,7 @@ struct AudioView: View {
             .controlSize(.small)
 
             Menu {
-                Button("Restore default") {
+                Button("Restore Default") {
                     switch kind {
                     case .record:
                         shortcuts.resetRecordShortcut()
@@ -2723,14 +2725,7 @@ struct AudioView: View {
     }
 
     private var formattedSavedTime: String {
-        let seconds = analytics.estimatedTimeSaved
-        if seconds < 60 {
-            return "\(Int(seconds.rounded())) sec"
-        }
-        if seconds < 3_600 {
-            return "\(Int((seconds / 60).rounded())) min"
-        }
-        return String(format: "%.1f hr", seconds / 3_600)
+        NativFormatting.elapsedDuration(analytics.estimatedTimeSaved)
     }
 
     private func handleViewAppear() {
@@ -2826,16 +2821,6 @@ struct AudioView: View {
         shortcutConflict = nil
     }
 
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(duration.rounded(.down)))
-        let hours = totalSeconds / 3_600
-        let minutes = (totalSeconds % 3_600) / 60
-        let seconds = totalSeconds % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%d:%02d", minutes, seconds)
-    }
 }
 
 private struct AudioInputLevelMeterView: View {
@@ -3342,7 +3327,7 @@ private struct AudioCaptureRecordRow: View {
                         Text(record.recordedAt.formatted(date: .abbreviated, time: .shortened))
                         if let duration = record.durationSeconds {
                             Text("·")
-                            Text(Self.formatDuration(duration))
+                            Text(NativFormatting.clockDuration(duration))
                         }
                         if !record.transcript.isEmpty {
                             Text("·")
@@ -3411,9 +3396,9 @@ private struct AudioCaptureRecordRow: View {
                             Label("Regenerate", systemImage: "arrow.clockwise")
                         }
                         Divider()
-                        Button("Copy transcript", action: copyTranscript)
+                        Button("Copy Transcript", action: copyTranscript)
                         if let summary = record.summary, !summary.isEmpty {
-                            Button("Copy summary") {
+                            Button("Copy Summary") {
                                 copy(summary, detail: .summary)
                             }
                         }
@@ -3421,7 +3406,7 @@ private struct AudioCaptureRecordRow: View {
                     Divider()
                     Button("Reveal in Finder", action: onReveal)
                         .disabled(!audioIsAvailable)
-                    Button("Delete recording", role: .destructive, action: onDelete)
+                    Button("Delete Recording", role: .destructive, action: onDelete)
                 } label: {
                     Image(systemName: "ellipsis")
                         .frame(width: 18)
@@ -3562,7 +3547,7 @@ private struct AudioCaptureRecordRow: View {
             if let summary = record.summary, !summary.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     detailHeader(
-                        title: "AI-generated notes",
+                        title: "AI-Generated Notes",
                         detail: .summary,
                         text: summary
                     )
@@ -3673,16 +3658,6 @@ private struct AudioCaptureRecordRow: View {
         }
     }
 
-    private static func formatDuration(_ duration: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(duration.rounded(.down)))
-        let hours = totalSeconds / 3_600
-        let minutes = (totalSeconds % 3_600) / 60
-        let seconds = totalSeconds % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%d:%02d", minutes, seconds)
-    }
 }
 
 private struct ShortcutCaptureSheet: View {
@@ -3778,7 +3753,9 @@ private final class ShortcutRecorderNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func flagsChanged(with event: NSEvent) {
-        let modifiers = VoiceShortcutModifiers(eventFlags: event.modifierFlags)
+        let modifiers = VoiceShortcutModifiers(
+            cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+        )
         if modifiers.isEmpty {
             if !pendingModifiers.isEmpty {
                 onCapture?(

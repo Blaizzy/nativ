@@ -161,6 +161,7 @@ enum ModelPrimaryTaskResolver {
         "fireredasr2",
         "glmasr",
         "granite_speech",
+        "granite_speech5_ctc",
         "lasr",
         "lasr_ctc",
         "moonshine",

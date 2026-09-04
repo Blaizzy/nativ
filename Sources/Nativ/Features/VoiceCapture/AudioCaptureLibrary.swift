@@ -65,13 +65,13 @@ enum AudioCaptureLibraryError: LocalizedError {
         case .missingSpeechModel:
             "Install a speech-to-text model before transcribing recordings."
         case .missingLanguageModel:
-            "Select a language model before generating a summary."
+            "Choose a language model before generating a summary."
         case .recordingUnavailable:
             "The saved audio file is no longer available."
         case .invalidAudioFile:
             "The selected file does not contain a readable audio track."
         case .emptyTranscript:
-            "The recording was saved, but the speech model did not produce a transcript."
+            "The recording was saved, but the speech-to-text model did not produce a transcript."
         }
     }
 }
@@ -912,6 +912,7 @@ final class AudioCaptureLibrary: ObservableObject {
     private static func copyImportedAudio(from sourceURL: URL) throws -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
         let fileName = "Imported Audio \(formatter.string(from: Date())) \(UUID().uuidString.prefix(8))"
         let destinationURL = try recordingsDirectory

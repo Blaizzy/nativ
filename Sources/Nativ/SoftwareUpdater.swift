@@ -34,10 +34,14 @@ final class SoftwareUpdater {
     init() {
         NativApplicationIcon.registerForInAppUse()
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: false,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+    }
+
+    func start() {
+        updaterController.startUpdater()
     }
 }
 

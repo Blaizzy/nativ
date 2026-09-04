@@ -73,6 +73,16 @@ enum HuggingFaceSortDirection: Int, CaseIterable, Hashable, Identifiable, Sendab
 }
 
 enum HuggingFaceCapabilityFilter {
+    /// `draft-model` is the emerging convention, but older and vendor-specific
+    /// repositories use these aliases. `speculative-decoding` is deliberately
+    /// only a search candidate: config metadata must still identify a drafter.
+    static let drafterCandidateTags = [
+        "draft-model",
+        "drafter",
+        "speculative-decoding-draft",
+        "speculative-decoding",
+    ]
+
     /// Reasoning, tool calling, and drafter are Hub model tags rather than pipeline tasks.
     /// Apply them to the API request so Discover searches the full matching
     /// catalog instead of filtering a small window of unrelated trending models.
@@ -88,6 +98,17 @@ enum HuggingFaceCapabilityFilter {
             tags.append("draft-model")
         }
         return tags
+    }
+
+    static func hubTagSets(
+        for capabilities: Set<LocalModelCapability>
+    ) -> [[String]] {
+        let canonicalTags = hubTags(for: capabilities)
+        guard capabilities.contains(.drafter) else {
+            return [canonicalTags]
+        }
+        let commonTags = canonicalTags.filter { $0 != "draft-model" }
+        return drafterCandidateTags.map { commonTags + [$0] }
     }
 
     /// Select the canonical Hub task for a single Nativ model capability.
@@ -151,6 +172,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let id: String
     let downloads: Int
     let likes: Int
+    let trendingScore: Double
+    let lastModified: String?
     let pipelineTag: String?
     let libraryName: String?
     let tags: [String]
@@ -164,17 +187,21 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let sizeBytes: Int64?
     let capabilities: Set<LocalModelCapability>
     let memoryEstimate: LocalModelMemoryEstimate?
+    let drafterKind: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case downloads
         case likes
+        case trendingScore
+        case lastModified
         case pipelineTag = "pipeline_tag"
         case libraryName = "library_name"
         case tags
         case isPrivate = "private"
         case gated
         case safetensors
+        case modelConfiguration = "config"
     }
 
     init(from decoder: Decoder) throws {
@@ -182,11 +209,18 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         id = try container.decode(String.self, forKey: .id)
         downloads = try container.decodeIfPresent(Int.self, forKey: .downloads) ?? 0
         likes = try container.decodeIfPresent(Int.self, forKey: .likes) ?? 0
+        trendingScore =
+            try container.decodeIfPresent(Double.self, forKey: .trendingScore) ?? 0
+        lastModified = try container.decodeIfPresent(String.self, forKey: .lastModified)
         pipelineTag = try container.decodeIfPresent(String.self, forKey: .pipelineTag)
         libraryName = try container.decodeIfPresent(String.self, forKey: .libraryName)
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         safetensors = try container.decodeIfPresent(HuggingFaceSafetensors.self, forKey: .safetensors)
+        let modelConfiguration = try? container.decode(
+            DrafterModelConfiguration.self,
+            forKey: .modelConfiguration
+        )
 
         if let value = try? container.decode(Bool.self, forKey: .gated) {
             isGated = value
@@ -198,10 +232,15 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
 
         provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
         sizeBytes = safetensors?.sizeBytes
+        drafterKind =
+            MLXDrafterModelResolver.shared.metadata(
+                for: modelConfiguration
+            )?.kind
         capabilities = Self.resolveCapabilities(
             pipelineTag: pipelineTag,
             libraryName: libraryName,
-            tags: tags
+            tags: tags,
+            configIdentifiesDrafter: drafterKind != nil
         )
         memoryEstimate = Self.resolveMemoryEstimate(
             repoID: id,
@@ -293,7 +332,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     private static func resolveCapabilities(
         pipelineTag: String?,
         libraryName: String?,
-        tags: [String]
+        tags: [String],
+        configIdentifiesDrafter: Bool
     ) -> Set<LocalModelCapability> {
         let pipeline = pipelineTag?.lowercased() ?? ""
         let descriptors = ([pipelineTag, libraryName].compactMap { $0 } + tags)
@@ -385,6 +425,9 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         if !normalizedTags.isDisjoint(with: drafterTags) {
             result.insert(.drafter)
         }
+        if configIdentifiesDrafter {
+            result.insert(.drafter)
+        }
         return result
     }
 }
@@ -461,24 +504,53 @@ enum HuggingFaceHubError: LocalizedError {
     case invalidResponse
     case requestFailed(Int, String)
     case pythonUnavailable
-    case downloadFailed(String)
     case downloadStalled
     case anotherDownloadInProgress(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "Hugging Face returned an invalid response."
+            "Hugging Face Hub returned an invalid response."
         case .requestFailed(let status, let message):
-            message.isEmpty ? "Hugging Face request failed (HTTP \(status))." : message
+            message.isEmpty ? "Hugging Face Hub request failed (HTTP \(status))." : message
         case .pythonUnavailable:
             "The bundled model downloader is unavailable."
-        case .downloadFailed(let message):
-            message.isEmpty ? "The model download failed." : message
         case .downloadStalled:
             "The model download stopped responding after multiple automatic retries. Check your connection and try again."
         case .anotherDownloadInProgress(let modelID):
             "Wait for \(modelID) to finish downloading before starting another model download."
+        }
+    }
+}
+
+enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
+    case gatedRepository
+    case message(String)
+
+    init(processOutput: String) {
+        let normalizedOutput = processOutput.lowercased()
+        if normalizedOutput.contains("gatedrepoerror")
+            || normalizedOutput.contains("cannot access gated repo")
+            || normalizedOutput.contains("is restricted and you are not in the authorized list") {
+            self = .gatedRepository
+            return
+        }
+
+        let usefulMessage = processOutput
+            .split(whereSeparator: { $0.isNewline || $0 == "\r" })
+            .suffix(4)
+            .joined(separator: "\n")
+        self = .message(
+            usefulMessage.isEmpty ? "The model download failed. Try again." : usefulMessage
+        )
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .gatedRepository:
+            "This gated model requires access approval from its publisher."
+        case .message(let message):
+            message
         }
     }
 }
@@ -490,39 +562,44 @@ private struct HuggingFaceHubClient: Sendable {
         capabilities: Set<LocalModelCapability>,
         token: String?
     ) async throws -> HuggingFaceModelPage {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "huggingface.co"
-        components.path = "/api/models"
-
-        let hubFilters = ["safetensors"]
-            + HuggingFaceCapabilityFilter.hubTags(for: capabilities)
-        var queryItems = [
-            URLQueryItem(name: "filter", value: hubFilters.joined(separator: ",")),
-            URLQueryItem(name: "sort", value: sort.apiSortValue),
-            // The Hub API currently rejects ascending requests for every sort.
-            // Ascending results are prepared locally by the library below.
-            URLQueryItem(name: "direction", value: HuggingFaceSortDirection.descending.apiValue),
-            URLQueryItem(name: "limit", value: "50")
-        ]
-        if let pipelineTag = HuggingFaceCapabilityFilter.pipelineTag(for: capabilities) {
-            queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
-        }
-        queryItems.append(contentsOf: [
-            "downloads", "likes", "pipeline_tag", "library_name", "tags",
-            "private", "gated", "safetensors"
-        ].map { URLQueryItem(name: "expand[]", value: $0) })
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedQuery.isEmpty {
-            queryItems.append(URLQueryItem(name: "search", value: trimmedQuery))
-        }
-        components.queryItems = queryItems
+        let urls = try HuggingFaceCapabilityFilter.hubTagSets(for: capabilities).map {
+            hubTags in
+            var components = URLComponents()
+            components.scheme = "https"
+            components.host = "huggingface.co"
+            components.path = "/api/models"
 
-        guard let url = components.url else {
-            throw HuggingFaceHubError.invalidResponse
-        }
+            let hubFilters = ["safetensors"] + hubTags
+            var queryItems = [
+                URLQueryItem(name: "filter", value: hubFilters.joined(separator: ",")),
+                URLQueryItem(name: "sort", value: sort.apiSortValue),
+                // The Hub API currently rejects ascending requests for every sort.
+                // Ascending results are prepared locally by the library below.
+                URLQueryItem(
+                    name: "direction",
+                    value: HuggingFaceSortDirection.descending.apiValue
+                ),
+                URLQueryItem(name: "limit", value: "50"),
+            ]
+            if let pipelineTag = HuggingFaceCapabilityFilter.pipelineTag(for: capabilities) {
+                queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
+            }
+            queryItems.append(
+                contentsOf: Self.expandedFields.map {
+                    URLQueryItem(name: "expand[]", value: $0)
+                })
+            if !trimmedQuery.isEmpty {
+                queryItems.append(URLQueryItem(name: "search", value: trimmedQuery))
+            }
+            components.queryItems = queryItems
 
-        return try await page(at: url, token: token)
+            guard let url = components.url else {
+                throw HuggingFaceHubError.invalidResponse
+            }
+            return url
+        }
+        return try await pages(at: urls, token: token)
     }
 
     func modelData(id: String, token: String?) async throws -> Data {
@@ -530,10 +607,9 @@ private struct HuggingFaceHubClient: Sendable {
         components.scheme = "https"
         components.host = "huggingface.co"
         components.path = "/api/models/\(id)"
-        components.queryItems = [
-            "downloads", "likes", "pipeline_tag", "library_name", "tags",
-            "private", "gated", "safetensors"
-        ].map { URLQueryItem(name: "expand[]", value: $0) }
+        components.queryItems = Self.expandedFields.map {
+            URLQueryItem(name: "expand[]", value: $0)
+        }
 
         guard let url = components.url else {
             throw HuggingFaceHubError.invalidResponse
@@ -555,7 +631,6 @@ private struct HuggingFaceHubClient: Sendable {
     }
 
     func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
-
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("MLXPlatform/1.0", forHTTPHeaderField: "User-Agent")
@@ -575,7 +650,37 @@ private struct HuggingFaceHubClient: Sendable {
             }
         return HuggingFaceModelPage(
             models: models,
-            nextPageURL: nextPageURL(from: httpResponse.value(forHTTPHeaderField: "Link"))
+            nextPageURLs: [
+                nextPageURL(from: httpResponse.value(forHTTPHeaderField: "Link"))
+            ].compactMap { $0 }
+        )
+    }
+
+    func pages(at urls: [URL], token: String?) async throws -> HuggingFaceModelPage {
+        let indexedPages = try await withThrowingTaskGroup(
+            of: (Int, HuggingFaceModelPage).self,
+            returning: [(Int, HuggingFaceModelPage)].self
+        ) { group in
+            for (index, url) in urls.enumerated() {
+                group.addTask {
+                    (index, try await page(at: url, token: token))
+                }
+            }
+
+            var pages: [(Int, HuggingFaceModelPage)] = []
+            for try await page in group {
+                pages.append(page)
+            }
+            return pages.sorted { $0.0 < $1.0 }
+        }
+
+        var seenIDs = Set<String>()
+        let models = indexedPages.flatMap(\.1.models).filter {
+            seenIDs.insert($0.id).inserted
+        }
+        return HuggingFaceModelPage(
+            models: models,
+            nextPageURLs: indexedPages.flatMap(\.1.nextPageURLs)
         )
     }
 
@@ -590,11 +695,16 @@ private struct HuggingFaceHubClient: Sendable {
         }
         return URL(string: String(nextLink[nextLink.index(after: start)..<end]))
     }
+
+    private static let expandedFields = [
+        "downloads", "likes", "trendingScore", "lastModified", "pipeline_tag",
+        "library_name", "tags", "private", "gated", "safetensors", "config",
+    ]
 }
 
 private struct HuggingFaceModelPage: Sendable {
     let models: [HuggingFaceModel]
-    let nextPageURL: URL?
+    let nextPageURLs: [URL]
 }
 
 struct HuggingFaceCuratedModelLoader: Sendable {
@@ -699,7 +809,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var activeSort: HuggingFaceModelSort = .downloads
     private var activeDirection: HuggingFaceSortDirection = .descending
     private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
-    private var nextPageURL: URL?
+    private var nextPageURLs: [URL] = []
     private let pageSize = 24
     private let maximumPageCount = 5
     private let maximumFillFetches = 8
@@ -721,7 +831,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         error = nil
         models = []
         buffer = []
-        nextPageURL = nil
+        nextPageURLs = []
         pageNumber = 1
         activeSort = sort
         activeDirection = direction
@@ -737,8 +847,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     token: token
                 )
                 try Task.checkCancellation()
-                self.buffer = page.models
-                self.nextPageURL = page.nextPageURL
+                self.mergeIntoBuffer(page.models)
+                self.nextPageURLs = page.nextPageURLs
                 let needsStableLocalOrdering = sort.sortsBySize || direction == .ascending
                 let targetCount = needsStableLocalOrdering
                     ? self.maximumPageCount * self.pageSize : self.pageSize
@@ -746,7 +856,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 if needsStableLocalOrdering {
                     // Local ordering spans Nativ's complete five-page window.
                     // Stop here so later pagination cannot reshuffle earlier pages.
-                    self.nextPageURL = nil
+                    self.nextPageURLs = []
                 }
                 try Task.checkCancellation()
                 self.models = self.slice(forPage: 1)
@@ -770,7 +880,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         error = nil
         models = []
         buffer = []
-        nextPageURL = nil
+        nextPageURLs = []
         pageNumber = 1
         activeSort = .downloads
         activeDirection = .descending
@@ -799,7 +909,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
 
     var canGoToNextPage: Bool {
         guard !isSearching, pageNumber < maximumPageCount else { return false }
-        return orderedVisible.count > pageNumber * pageSize || nextPageURL != nil
+        return orderedVisible.count > pageNumber * pageSize || !nextPageURLs.isEmpty
     }
 
     func goToPreviousPage() {
@@ -813,7 +923,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         guard canGoToNextPage else { return }
         let target = pageNumber + 1
 
-        if orderedVisible.count >= target * pageSize || nextPageURL == nil {
+        if orderedVisible.count >= target * pageSize || nextPageURLs.isEmpty {
             pageNumber = target
             models = slice(forPage: target)
             error = nil
@@ -847,14 +957,22 @@ final class HuggingFaceModelLibrary: ObservableObject {
     }
 
     private func fillBuffer(upTo count: Int, token: String?) async throws {
-        var fetches = 0
-        while orderedVisible.count < count, let url = nextPageURL, fetches < maximumFillFetches {
-            let nextPage = try await client.page(at: url, token: token)
+        var fetchRounds = 0
+        while orderedVisible.count < count,
+            !nextPageURLs.isEmpty,
+            fetchRounds < maximumFillFetches
+        {
+            let nextPage = try await client.pages(at: nextPageURLs, token: token)
             try Task.checkCancellation()
-            buffer.append(contentsOf: nextPage.models)
-            nextPageURL = nextPage.nextPageURL
-            fetches += 1
+            mergeIntoBuffer(nextPage.models)
+            nextPageURLs = nextPage.nextPageURLs
+            fetchRounds += 1
         }
+    }
+
+    private func mergeIntoBuffer(_ models: [HuggingFaceModel]) {
+        var knownIDs = Set(buffer.map(\.id))
+        buffer.append(contentsOf: models.filter { knownIDs.insert($0.id).inserted })
     }
 
     private func slice(forPage number: Int) -> [HuggingFaceModel] {
@@ -864,21 +982,56 @@ final class HuggingFaceModelLibrary: ObservableObject {
         return Array(ordered[start..<min(start + pageSize, ordered.count)])
     }
 
-    /// Buffered results in display order. The Hub only provides descending
-    /// server-side results, so ascending and size ordering are applied locally
-    /// after the complete app-sized result window has been fetched.
+    /// Buffered results in display order. Drafter discovery merges several Hub
+    /// tag searches, so every sort is applied locally after de-duplication.
     private var orderedBuffer: [HuggingFaceModel] {
-        if activeSort.sortsBySize {
-            return buffer.sorted { lhs, rhs in
-                switch (lhs.sizeBytes, rhs.sizeBytes) {
-                case let (lhsSize?, rhsSize?):
-                    return activeDirection == .ascending ? lhsSize < rhsSize : lhsSize > rhsSize
-                case (nil, _): return false
-                case (_, nil): return true
+        buffer.sorted { lhs, rhs in
+            let isAscending = activeDirection == .ascending
+            switch activeSort {
+            case .downloads:
+                if lhs.downloads != rhs.downloads {
+                    return isAscending
+                        ? lhs.downloads < rhs.downloads : lhs.downloads > rhs.downloads
+                }
+            case .trending:
+                if lhs.trendingScore != rhs.trendingScore {
+                    return isAscending
+                        ? lhs.trendingScore < rhs.trendingScore
+                        : lhs.trendingScore > rhs.trendingScore
+                }
+            case .likes:
+                if lhs.likes != rhs.likes {
+                    return isAscending ? lhs.likes < rhs.likes : lhs.likes > rhs.likes
+                }
+            case .recentlyUpdated:
+                if lhs.lastModified != rhs.lastModified {
+                    switch (lhs.lastModified, rhs.lastModified) {
+                    case (let lhsDate?, let rhsDate?):
+                        return isAscending ? lhsDate < rhsDate : lhsDate > rhsDate
+                    case (nil, _):
+                        return false
+                    case (_, nil):
+                        return true
+                    }
+                }
+            case .size:
+                if lhs.sizeBytes != rhs.sizeBytes {
+                    switch (lhs.sizeBytes, rhs.sizeBytes) {
+                    case (let lhsSize?, let rhsSize?):
+                        return isAscending ? lhsSize < rhsSize : lhsSize > rhsSize
+                    case (nil, _):
+                        return false
+                    case (_, nil):
+                        return true
+                    }
                 }
             }
+            let comparison = lhs.id.localizedCaseInsensitiveCompare(rhs.id)
+            if comparison != .orderedSame {
+                return comparison == .orderedAscending
+            }
+            return lhs.id < rhs.id
         }
-        return activeDirection == .ascending ? Array(buffer.reversed()) : buffer
     }
 
     private var orderedVisible: [HuggingFaceModel] {
@@ -992,7 +1145,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let isDownloading: Bool
         let progress: Double
         let isPaused: Bool
-        let error: String?
+        let error: HuggingFaceDownloadFailure?
     }
 
     struct ActiveDownload: Identifiable, Equatable {
@@ -1009,22 +1162,30 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private final class DownloadContext {
         let modelID: String
         let cachePath: String
+        let volumeIdentifier: String?
         let token: String?
         var onCompletion: (() -> Void)?
         var operation: HuggingFaceDownloadOperation?
         var task: Task<Void, Never>?
         var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
-        init(modelID: String, cachePath: String, token: String?, onCompletion: (() -> Void)?) {
+        init(
+            modelID: String,
+            cachePath: String,
+            volumeIdentifier: String?,
+            token: String?,
+            onCompletion: (() -> Void)?
+        ) {
             self.modelID = modelID
             self.cachePath = cachePath
+            self.volumeIdentifier = volumeIdentifier
             self.token = token
             self.onCompletion = onCompletion
         }
     }
 
     @Published private(set) var downloads: [ActiveDownload] = []
-    @Published private(set) var errorByModelID: [String: String] = [:]
+    @Published private(set) var errorByModelID: [String: HuggingFaceDownloadFailure] = [:]
     /// Emits the affected model ID for progress/state changes. `nil` denotes
     /// a structural change that can affect capacity for every download row.
     let rowUpdates = PassthroughSubject<String?, Never>()
@@ -1078,7 +1239,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     }
 
     func reportError(_ message: String, for modelID: String) {
-        errorByModelID[modelID] = message
+        errorByModelID[modelID] = .message(message)
     }
 
     func capacityBlocker(sizeBytes: Int64?, cachePath: String) -> String? {
@@ -1096,26 +1257,29 @@ final class HuggingFaceDownloadManager: ObservableObject {
         repoID: String,
         sizeBytes: Int64?,
         cachePath: String,
+        volumeIdentifier: String?,
         token: String?,
         onCompletion: @escaping () -> Void
     ) {
         guard contexts[repoID] == nil else { return }
-        if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-            errorByModelID[repoID] = blocker
-            rowUpdates.send(repoID)
-            return
-        }
         do {
+            _ = try ExternalModelCacheReference.validateForUse(
+                path: cachePath,
+                expectedVolumeIdentifier: volumeIdentifier
+            )
+            if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
+                throw HuggingFaceDownloadFailure.message(blocker)
+            }
             try enqueue(
                 repoID: repoID,
                 sizeBytes: sizeBytes,
                 cachePath: cachePath,
+                volumeIdentifier: volumeIdentifier,
                 token: token,
                 onCompletion: onCompletion
             )
         } catch {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorByModelID[repoID] = downloadFailure(for: error)
             rowUpdates.send(repoID)
         }
     }
@@ -1124,11 +1288,13 @@ final class HuggingFaceDownloadManager: ObservableObject {
         repoID: String,
         sizeBytes: Int64?,
         cachePath: String,
+        volumeIdentifier: String?,
         token: String?
     ) async throws {
         let expandedCachePath = LocalModelDiscovery.expandedPath(cachePath)
         if let context = contexts[repoID] {
-            guard context.cachePath == expandedCachePath else {
+            guard context.cachePath == expandedCachePath,
+                  context.volumeIdentifier == volumeIdentifier else {
                 throw HuggingFaceHubError.anotherDownloadInProgress(repoID)
             }
         } else {
@@ -1137,12 +1303,12 @@ final class HuggingFaceDownloadManager: ObservableObject {
                     repoID: repoID,
                     sizeBytes: sizeBytes,
                     cachePath: expandedCachePath,
+                    volumeIdentifier: volumeIdentifier,
                     token: token,
                     onCompletion: nil
                 )
             } catch {
-                errorByModelID[repoID] =
-                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                errorByModelID[repoID] = downloadFailure(for: error)
                 rowUpdates.send(repoID)
                 throw error
             }
@@ -1173,6 +1339,17 @@ final class HuggingFaceDownloadManager: ObservableObject {
 
     func resumeDownload(_ modelID: String) {
         guard let context = contexts[modelID], state(for: modelID) == .paused else { return }
+        do {
+            _ = try ExternalModelCacheReference.validateForUse(
+                path: context.cachePath,
+                expectedVolumeIdentifier: context.volumeIdentifier
+            )
+        } catch {
+            context.task?.cancel()
+            context.operation?.cancel()
+            finishDownload(repoID: modelID, error: downloadFailure(for: error))
+            return
+        }
         context.operation?.resume()
         setState(modelID, .downloading)
     }
@@ -1181,6 +1358,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         guard let context = contexts[modelID] else { return }
         let task = context.task
         let cachePath = context.cachePath
+        let volumeIdentifier = context.volumeIdentifier
         task?.cancel()
         let waiters = Array(context.waiters.values)
         removeContext(modelID)
@@ -1189,7 +1367,11 @@ final class HuggingFaceDownloadManager: ObservableObject {
         Task {
             await task?.value
             await Task.detached(priority: .utility) {
-                HuggingFaceSnapshotDownloader.removeDownload(repoID: modelID, cachePath: cachePath)
+                HuggingFaceSnapshotDownloader.removeDownload(
+                    repoID: modelID,
+                    cachePath: cachePath,
+                    volumeIdentifier: volumeIdentifier
+                )
             }.value
         }
     }
@@ -1226,13 +1408,18 @@ final class HuggingFaceDownloadManager: ObservableObject {
         repoID: String,
         sizeBytes: Int64?,
         cachePath: String,
+        volumeIdentifier: String?,
         token: String?,
         onCompletion: (() -> Void)?
     ) throws {
-        let expandedCachePath = LocalModelDiscovery.expandedPath(cachePath)
+        let cacheURL = try ExternalModelCacheReference.validateForUse(
+            path: cachePath,
+            expectedVolumeIdentifier: volumeIdentifier
+        )
         let context = DownloadContext(
             modelID: repoID,
-            cachePath: expandedCachePath,
+            cachePath: cacheURL.path,
+            volumeIdentifier: volumeIdentifier,
             token: token,
             onCompletion: onCompletion
         )
@@ -1300,8 +1487,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let completion = context.onCompletion
         let waiters = Array(context.waiters.values)
         if let error {
-            errorByModelID[repoID] =
-                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorByModelID[repoID] = downloadFailure(for: error)
         }
         removeContext(repoID)
 
@@ -1406,6 +1592,15 @@ final class HuggingFaceDownloadManager: ObservableObject {
         rowUpdates.send(nil)
     }
 
+    private func downloadFailure(for error: Error) -> HuggingFaceDownloadFailure {
+        if let failure = error as? HuggingFaceDownloadFailure {
+            return failure
+        }
+        return .message(
+            (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        )
+    }
+
     private func cancelWaiter(_ waiterID: UUID, modelID: String) {
         contexts[modelID]?.waiters.removeValue(forKey: waiterID)?
             .resume(throwing: CancellationError())
@@ -1442,9 +1637,18 @@ private enum HuggingFaceSnapshotDownloader {
         }
     }
 
-    static func removeDownload(repoID: String, cachePath: String) {
+    static func removeDownload(
+        repoID: String,
+        cachePath: String,
+        volumeIdentifier: String?
+    ) {
+        guard let cacheURL = try? ExternalModelCacheReference.validateForUse(
+            path: cachePath,
+            expectedVolumeIdentifier: volumeIdentifier
+        ) else {
+            return
+        }
         let repositoryDirectory = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
-        let cacheURL = URL(fileURLWithPath: cachePath, isDirectory: true)
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: cacheURL.appendingPathComponent(repositoryDirectory, isDirectory: true))
         try? fileManager.removeItem(
@@ -1563,11 +1767,11 @@ struct HuggingFaceDownloadProgressState: Equatable {
         let estimatedBytes = checkpointDisplayedBytes
             + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
         // Transfer bytes are only an estimate of reconstructed bytes. Cap the
-        // estimate at the first finalizing byte so it cannot show 100%, but can
-        // still switch the UI and stall watchdog into their finalizing state.
+        // estimate at the first finishing byte so it cannot show 100%, but can
+        // still switch the UI and stall watchdog into their finishing state.
         let activeLimit = min(
             Int64(
-                (Double(totalBytes) * ModelDownloadProgressPresentation.finalizingThreshold)
+                (Double(totalBytes) * ModelDownloadProgressPresentation.finishingThreshold)
                     .rounded(.up)
             ),
             totalBytes
@@ -1599,19 +1803,19 @@ struct HuggingFaceDownloadProgressState: Equatable {
         !isPaused && now.timeIntervalSince(lastActivity) >= timeout
     }
 
-    var isFinalizing: Bool {
-        ModelDownloadProgressPresentation.isFinalizing(progress?.fractionCompleted ?? 0)
+    var isFinishing: Bool {
+        ModelDownloadProgressPresentation.isFinishing(progress?.fractionCompleted ?? 0)
     }
 }
 
 enum ModelDownloadProgressPresentation {
-    /// The final fraction of a download is spent committing blobs and creating
-    /// the snapshot. Keep 100% reserved for a download that has actually
-    /// completed and disappeared from the active-download UI.
-    static let finalizingThreshold = 0.995
+    /// Xet can continue reconstructing model files after the measurable
+    /// transfer estimate reaches its safe limit. Present that interval as a
+    /// distinct finishing state instead of leaving a percentage visibly stuck.
+    static let finishingThreshold = 0.95
 
-    static func isFinalizing(_ progress: Double) -> Bool {
-        progress >= finalizingThreshold
+    static func isFinishing(_ progress: Double) -> Bool {
+        progress >= finishingThreshold
     }
 
     static func activePercentage(_ progress: Double) -> Int {
@@ -1678,8 +1882,8 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
         lock.withLock { state.isStalled(timeout: timeout, isPaused: isPaused) }
     }
 
-    var isFinalizing: Bool {
-        lock.withLock { state.isFinalizing }
+    var isFinishing: Bool {
+        lock.withLock { state.isFinishing }
     }
 }
 
@@ -2016,7 +2220,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             }
             if !flags.paused {
                 transferSpeed(activity.bytesPerSecond)
-                let timeout = activity.isFinalizing
+                let timeout = activity.isFinishing
                     ? Self.finalizationStallTimeout
                     : Self.stallTimeout
                 if activity.isStalled(timeout: timeout, isPaused: false) {
@@ -2040,11 +2244,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
         guard process.terminationStatus == 0 else {
             let message = String(decoding: output.snapshot(), as: UTF8.self)
-            let usefulMessage = message
-                .split(whereSeparator: { $0.isNewline || $0 == "\r" })
-                .suffix(4)
-                .joined(separator: "\n")
-            throw HuggingFaceHubError.downloadFailed(usefulMessage)
+            throw HuggingFaceDownloadFailure(processOutput: message)
         }
     }
 
