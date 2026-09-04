@@ -54,7 +54,8 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
 
 private func makeContext(
     imageModelID: String? = nil,
-    modelSearchPath: String = ""
+    modelSearchPath: String = "",
+    discoverableTools: [ChatToolDiscoveryCandidate] = []
 ) -> ChatToolExecutionContext {
     ChatToolExecutionContext(
         imageGenerationModelID: imageModelID,
@@ -65,7 +66,8 @@ private func makeContext(
         additionalModelSearchPaths: [],
         analyticsDatabaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathComponent("Analytics.sqlite3")
+            .appendingPathComponent("Analytics.sqlite3"),
+        discoverableTools: discoverableTools
     )
 }
 
@@ -74,6 +76,97 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
+    func testToolExposurePolicyKeepsAutoAndOffToolsOutOfInitialPrompt() {
+        let automatic = ChatToolExposureCandidate(
+            definition: ChatSystemMonitorToolRegistry.definitions()[0],
+            exposureMode: .automatic
+        )
+        let on = ChatToolExposureCandidate(
+            definition: ChatTerminalToolRegistry.definition,
+            exposureMode: .on
+        )
+        let off = ChatToolExposureCandidate(
+            definition: ChatImageToolRegistry.definitions(canEdit: false)[0],
+            exposureMode: .off
+        )
+
+        let initialNames = ChatToolExposurePolicy.advertisedDefinitions(
+            from: [automatic, on, off],
+            activatedToolNames: []
+        ).map(\.function.name)
+        let activatedNames = ChatToolExposurePolicy.advertisedDefinitions(
+            from: [automatic, on, off],
+            activatedToolNames: [
+                automatic.definition.function.name,
+                off.definition.function.name,
+            ]
+        ).map(\.function.name)
+
+        XCTAssertEqual(initialNames, [on.definition.function.name, ChatToolDiscoveryRegistry.toolName])
+        XCTAssertTrue(activatedNames.contains(automatic.definition.function.name))
+        XCTAssertTrue(activatedNames.contains(on.definition.function.name))
+        XCTAssertFalse(activatedNames.contains(off.definition.function.name))
+        XCTAssertEqual(activatedNames.last, ChatToolDiscoveryRegistry.toolName)
+    }
+
+    func testToolDiscoveryFindsRelevantAutoTools() {
+        let candidates = [
+            ChatToolDiscoveryCandidate(
+                name: "mcp__git__log",
+                title: "Git log",
+                description: "Read repository commit history",
+                source: "Git"
+            ),
+            ChatToolDiscoveryCandidate(
+                name: "generate_image",
+                title: "Generate Image",
+                description: "Create an image from a prompt",
+                source: "Built-in"
+            ),
+        ]
+
+        let matches = ChatToolDiscoveryRegistry.search(
+            "repository history",
+            candidates: candidates
+        )
+
+        XCTAssertEqual(matches.map(\.name), ["mcp__git__log"])
+    }
+
+    func testToolDiscoveryActivatesMatchedTools() async throws {
+        let candidate = ChatToolDiscoveryCandidate(
+            name: "mcp__sqlite__query",
+            title: "Query SQLite",
+            description: "Run a read-only SQL query",
+            source: "SQLite"
+        )
+        let outcome = try await ChatToolDispatcher.execute(
+            call: makeCall(
+                name: ChatToolDiscoveryRegistry.toolName,
+                arguments: #"{"query":"query sqlite"}"#
+            ),
+            context: makeContext(discoverableTools: [candidate])
+        )
+
+        XCTAssertEqual(outcome.activatedToolNames, Set([candidate.name]))
+        XCTAssertTrue(outcome.content.contains(candidate.name))
+    }
+
+    func testToolDiscoveryRejectsEmptyQueries() async {
+        do {
+            _ = try await ChatToolDispatcher.execute(
+                call: makeCall(
+                    name: ChatToolDiscoveryRegistry.toolName,
+                    arguments: #"{"query":"  "}"#
+                ),
+                context: makeContext()
+            )
+            XCTFail("Expected an invalid-arguments error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "tool_search requires a non-empty query.")
+        }
+    }
+
     func testBuiltInToolsUseThePresentationOrder() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
@@ -974,6 +1067,13 @@ final class ChatToolPresentationTests: XCTestCase {
 
     func testTitlePinnedForEveryToolAndStatus() {
         let expected: [String: [ChatTranscriptMessage.ToolStatus?: String]] = [
+            ChatToolDiscoveryRegistry.toolName: [
+                nil: "Tool search", .preparing: "Finding available tools…",
+                .running: "Finding available tools…", .succeeded: "Found available tools",
+                .failed: "Tool search", .cancelled: "Tool search",
+                .awaitingImageModelSelection: "Tool search",
+                .awaitingConsent: "Tool search", .declined: "Tool search",
+            ],
             "generate_image": [
                 nil: "Image tool", .preparing: "Checking image model…",
                 .running: "Generating image…", .succeeded: "Generated image",
@@ -1079,6 +1179,7 @@ final class ChatToolPresentationTests: XCTestCase {
 
     func testSymbolNamePinnedForEveryToolAndStatus() {
         let toolNames = [
+            ChatToolDiscoveryRegistry.toolName,
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
@@ -1089,6 +1190,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
+            ChatToolDiscoveryRegistry.toolName: "magnifyingglass",
             "generate_image": "photo",
             "edit_image": "photo",
             ChatSystemMonitorToolRegistry.toolName: "cpu",

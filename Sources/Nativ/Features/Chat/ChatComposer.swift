@@ -427,7 +427,7 @@ struct ChatComposer: View {
     }
 
     private func globalToolIsEnabled(_ toolName: String, isAvailable: Bool) -> Bool {
-        isAvailable && model.settings.isToolEnabled(toolName)
+        isAvailable && model.settings.toolExposureMode(for: toolName) == .on
     }
 
     private func toggleGlobalBrowsingTool(
@@ -442,10 +442,9 @@ struct ChatComposer: View {
             return
         }
 
-        model.settings.setToolEnabled(
-            !model.settings.isToolEnabled(toolName),
-            toolName: toolName
-        )
+        let mode: ToolExposureMode =
+            model.settings.toolExposureMode(for: toolName) == .on ? .off : .on
+        model.settings.setToolExposureMode(mode, toolName: toolName)
         showsAddPanel = false
     }
 

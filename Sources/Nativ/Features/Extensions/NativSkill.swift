@@ -38,6 +38,9 @@ extension NativSkill {
         data — or perform an action — that you can't reliably answer from memory.
         - Read each tool's name and description, pick the most specific one, and \
         pass complete, valid JSON arguments that match its schema.
+        - If the visible tools do not cover the user's request, use tool_search \
+        with a short capability query. Matching Auto tools will become available \
+        for the next step.
         - Chain tools when a task needs several steps: use each result to decide \
         the next call, and stop once you can fully answer.
         - Ground your reply in the results — reference concrete values (paths, \

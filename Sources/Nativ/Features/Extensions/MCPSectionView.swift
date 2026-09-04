@@ -13,7 +13,7 @@ struct MCPSectionView: View {
     var body: some View {
         HubSectionScaffold(
             title: "MCP",
-            subtitle: "Connect Model Context Protocol servers so tool-capable models can use their tools."
+            subtitle: "Connect MCP servers without adding every tool to every model prompt."
         ) {
             Button {
                 editing = MCPServerConfig(name: "", isEnabled: true)
@@ -28,6 +28,7 @@ struct MCPSectionView: View {
                 )
             } else {
                 VStack(alignment: .leading, spacing: 22) {
+                    ToolExposureModeExplanation()
                     if !catalog.entries.isEmpty {
                         serverGroup(title: "Built-in") {
                             ForEach(Array(catalog.entries.enumerated()), id: \.element.id) { index, entry in
@@ -112,7 +113,10 @@ struct MCPSectionView: View {
         return MCPServerRow(
             server: presentation,
             state: configured.flatMap { host.states[$0.id] } ?? .disabled,
-            onToggle: { toggle(entry) },
+            exposureMode: configured.map {
+                model.settings.mcpServerExposureMode(for: $0)
+            } ?? .off,
+            onExposureModeChange: { setExposureMode($0, for: entry) },
             onReconnect: configured.map { server in { host.reconnect(server.id) } },
             onEdit: { editing = presentation },
             onDelete: configured.map { server in { pendingDelete = server } }
@@ -123,30 +127,36 @@ struct MCPSectionView: View {
         MCPServerRow(
             server: server,
             state: host.states[server.id],
-            onToggle: { toggle(server) },
+            exposureMode: model.settings.mcpServerExposureMode(for: server),
+            onExposureModeChange: { setExposureMode($0, for: server) },
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
             onDelete: { pendingDelete = server }
         )
     }
 
-    private func toggle(_ entry: MCPCatalogEntry) {
+    private func setExposureMode(_ mode: ToolExposureMode, for entry: MCPCatalogEntry) {
         var servers = model.settings.mcpServers
         catalog.setEnabled(
-            !catalog.isEnabled(entry, in: servers),
+            mode != .off,
             for: entry,
             in: &servers
         )
-        model.settings.mcpServers = servers
+        var settings = model.settings
+        settings.mcpServers = servers
+        if let server = catalog.configuredServer(for: entry, in: servers) {
+            settings.setMCPServerExposureMode(mode, serverID: server.id)
+        }
+        model.settings = settings
     }
 
-    private func toggle(_ server: MCPServerConfig) {
-        guard let i = model.settings.mcpServers.firstIndex(where: { $0.id == server.id }) else { return }
-        model.settings.mcpServers[i].isEnabled.toggle()
+    private func setExposureMode(_ mode: ToolExposureMode, for server: MCPServerConfig) {
+        model.settings.setMCPServerExposureMode(mode, serverID: server.id)
     }
 
     private func delete(_ server: MCPServerConfig) {
         model.settings.mcpServers.removeAll { $0.id == server.id }
+        model.settings.removeMCPServerExposureMode(serverID: server.id)
     }
 
     private func save(_ server: MCPServerConfig) {
@@ -163,7 +173,8 @@ struct MCPSectionView: View {
 private struct MCPServerRow: View {
     let server: MCPServerConfig
     let state: MCPServerConnectionState?
-    let onToggle: () -> Void
+    let exposureMode: ToolExposureMode
+    let onExposureModeChange: (ToolExposureMode) -> Void
     let onReconnect: (() -> Void)?
     let onEdit: () -> Void
     let onDelete: (() -> Void)?
@@ -208,10 +219,13 @@ private struct MCPServerRow: View {
                     .menuIndicator(.hidden)
                     .frame(width: 22)
                 }
-                Toggle("", isOn: Binding(get: { server.isEnabled }, set: { _ in onToggle() }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+                ToolExposureModeControl(
+                    mode: Binding(
+                        get: { exposureMode },
+                        set: onExposureModeChange
+                    ),
+                    title: server.name.isEmpty ? "Untitled server" : server.name
+                )
             }
 
             if case .authorizingGitHub(let code, let verificationURL) = state {

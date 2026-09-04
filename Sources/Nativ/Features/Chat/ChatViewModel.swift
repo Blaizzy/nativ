@@ -70,6 +70,22 @@ final class ChatViewModel: ObservableObject {
         var characterLimit: Int
     }
 
+    private struct AvailableTool {
+        let definition: MLXChatToolDefinition
+        let title: String
+        let source: String
+        let exposureMode: ToolExposureMode
+
+        var discoveryCandidate: ChatToolDiscoveryCandidate {
+            ChatToolDiscoveryCandidate(
+                name: definition.function.name,
+                title: title,
+                description: definition.function.description,
+                source: source
+            )
+        }
+    }
+
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
@@ -1470,6 +1486,7 @@ final class ChatViewModel: ObservableObject {
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
+        var activatedToolNames = Set<String>()
         let fileReadTracker = ChatReadFileTracker()
         let fileSearchTracker = ChatSearchFilesTracker()
         let fileOperationRunID = UUID()
@@ -1498,6 +1515,11 @@ final class ChatViewModel: ObservableObject {
         while true {
             try Task.checkCancellation()
             let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
+            let availableTools = availableTools(
+                for: queuedRequest,
+                before: assistantMessageID,
+                settings: activeSettings
+            )
             documentContext = try await fittedDocumentContext(
                 documentContext,
                 messages: documentMessages,
@@ -1505,6 +1527,8 @@ final class ChatViewModel: ObservableObject {
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
                 settings: activeSettings,
+                availableTools: availableTools,
+                activatedToolNames: activatedToolNames,
                 effectiveContextLimit: effectiveContextLimit,
                 client: client
             )
@@ -1518,6 +1542,8 @@ final class ChatViewModel: ObservableObject {
                     before: assistantMessageID,
                     advertisesTools: advertisesTools,
                     settings: activeSettings,
+                    availableTools: availableTools,
+                    activatedToolNames: activatedToolNames,
                     documentContexts: documentContext.result.contexts
                 )
             else {
@@ -1562,6 +1588,18 @@ final class ChatViewModel: ObservableObject {
                 return
             }
 
+            let callableToolNames = Set(
+                ChatToolExposurePolicy.advertisedDefinitions(
+                    from: availableTools.map {
+                        ChatToolExposureCandidate(
+                            definition: $0.definition,
+                            exposureMode: $0.exposureMode
+                        )
+                    },
+                    activatedToolNames: activatedToolNames
+                ).map(\.function.name)
+            )
+
             var insertionAnchor = assistantMessageID
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
@@ -1585,6 +1623,23 @@ final class ChatViewModel: ObservableObject {
                     throw NativChatError.invalidResponse
                 }
                 insertionAnchor = toolMessageID
+
+                guard let calledToolName = toolCall.function?.name,
+                    callableToolNames.contains(calledToolName)
+                else {
+                    let name = toolCall.function?.name ?? "unknown"
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .failed,
+                        content: ChatToolDispatcher.failurePayload(
+                            toolName: nil,
+                            error: ChatToolAccessError.unavailable(name)
+                        ),
+                        attachments: []
+                    )
+                    continue
+                }
 
                 let customTool = toolCall.function?.name.flatMap { toolName in
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
@@ -1865,6 +1920,14 @@ final class ChatViewModel: ObservableObject {
                         terminalApprovalGranted: terminalApprovalGranted,
                         terminalDefaultWorkingDirectory: queuedRequest.toolScope
                             .terminalWorkingDirectory,
+                        discoverableTools: availableTools
+                            .filter {
+                                $0.exposureMode == .automatic
+                                    && !activatedToolNames.contains(
+                                        $0.definition.function.name
+                                    )
+                            }
+                            .map(\.discoveryCandidate),
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
@@ -1931,6 +1994,7 @@ final class ChatViewModel: ObservableObject {
                         content: outcome.content,
                         attachments: outcome.attachments
                     )
+                    activatedToolNames.formUnion(outcome.activatedToolNames)
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch is CancellationError {
                     cancelToolMessages(
@@ -1983,6 +2047,136 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func availableTools(
+        for queuedRequest: QueuedChatRequest,
+        before assistantMessageID: UUID,
+        settings: NativSettings
+    ) -> [AvailableTool] {
+        guard let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
+            let assistantIndex = sessionMessages.firstIndex(where: {
+                $0.id == assistantMessageID
+            })
+        else {
+            return []
+        }
+
+        let precedingMessages = sessionMessages[..<assistantIndex]
+        let canEditImage = precedingMessages.contains { message in
+            message.imageAttachments.contains { $0.chatAttachmentKind == .image }
+        }
+        var tools: [AvailableTool] = []
+        var names = Set<String>()
+
+        func append(
+            _ definition: MLXChatToolDefinition,
+            title: String,
+            source: String,
+            exposureMode: ToolExposureMode
+        ) {
+            guard exposureMode != .off, names.insert(definition.function.name).inserted else {
+                return
+            }
+            tools.append(
+                AvailableTool(
+                    definition: definition,
+                    title: title,
+                    source: source,
+                    exposureMode: exposureMode
+                )
+            )
+        }
+
+        for descriptor in ChatToolRegistry.descriptors(canEditImage: canEditImage) {
+            let definition = descriptor.definition
+            let name = definition.function.name
+            guard nativeToolIsAvailable(
+                name,
+                configuration: descriptor.configuration,
+                queuedRequest: queuedRequest,
+                settings: settings
+            ) else {
+                continue
+            }
+            append(
+                definition,
+                title: descriptor.configuration?.displayName ?? humanizedToolName(name),
+                source: "Built-in",
+                exposureMode: settings.toolExposureMode(for: name)
+            )
+        }
+
+        for customTool in settings.customTools {
+            guard let definition = try? customTool.definition() else { continue }
+            append(
+                definition,
+                title: customTool.name,
+                source: "Custom",
+                exposureMode: settings.toolExposureMode(
+                    for: customTool.toolName,
+                    default: .automatic
+                )
+            )
+        }
+
+        if let mcpHost {
+            for server in settings.mcpServers {
+                let serverMode = settings.mcpServerExposureMode(for: server)
+                guard serverMode != .off else { continue }
+                let displayNames = mcpHost.tools(forServer: server.id).reduce(
+                    into: [String: String]()
+                ) { names, tool in
+                    names[tool.name] = tool.displayName
+                }
+                for definition in mcpHost.toolDefinitions(forServer: server.id) {
+                    let name = definition.function.name
+                    append(
+                        definition,
+                        title: displayNames[name] ?? humanizedToolName(name),
+                        source: server.name.isEmpty ? "MCP" : server.name,
+                        exposureMode: settings.toolExposureMode(
+                            for: name,
+                            default: serverMode
+                        )
+                    )
+                }
+            }
+        }
+
+        return tools
+    }
+
+    private func nativeToolIsAvailable(
+        _ toolName: String,
+        configuration: ChatNativeToolConfiguration?,
+        queuedRequest: QueuedChatRequest,
+        settings: NativSettings
+    ) -> Bool {
+        if queuedRequest.toolScope.isProject,
+            ChatToolScope.projectToolNames.contains(toolName)
+        {
+            return queuedRequest.toolScope.projectToolsAreAvailable
+        }
+
+        switch configuration {
+        case .webSearch:
+            return ChatWebSearchToolRegistry.isConfigured()
+        case .webRead:
+            return ChatWebReadToolRegistry.isConfigured()
+        case .fileRead:
+            return FileReadAccessPolicy.isConfigured(rootPath: settings.fileReadRootPath)
+        case .fileWrite:
+            return FileWriteAccessPolicy.isConfigured(rootPath: settings.fileWriteRootPath)
+        case nil:
+            return true
+        }
+    }
+
+    private func humanizedToolName(_ name: String) -> String {
+        name.split(separator: "_")
+            .map { String($0).capitalized }
+            .joined(separator: " ")
+    }
+
     private func fittedDocumentContext(
         _ current: PreparedDocumentContext,
         messages: [ChatTranscriptMessage],
@@ -1990,6 +2184,8 @@ final class ChatViewModel: ObservableObject {
         before assistantMessageID: UUID,
         advertisesTools: Bool,
         settings: NativSettings,
+        availableTools: [AvailableTool],
+        activatedToolNames: Set<String>,
         effectiveContextLimit: Int?,
         client: NativChatClient
     ) async throws -> PreparedDocumentContext {
@@ -2008,6 +2204,8 @@ final class ChatViewModel: ObservableObject {
                         before: assistantMessageID,
                         advertisesTools: advertisesTools,
                         settings: settings,
+                        availableTools: availableTools,
+                        activatedToolNames: activatedToolNames,
                         documentContexts: prepared.result.contexts
                     )
                 else { return prepared }
@@ -2025,6 +2223,8 @@ final class ChatViewModel: ObservableObject {
                             before: assistantMessageID,
                             advertisesTools: advertisesTools,
                             settings: settings,
+                            availableTools: availableTools,
+                            activatedToolNames: activatedToolNames,
                             documentContexts: [:]
                         )
                     else { return prepared }
@@ -2074,6 +2274,8 @@ final class ChatViewModel: ObservableObject {
         before assistantMessageID: UUID,
         advertisesTools: Bool,
         settings: NativSettings,
+        availableTools: [AvailableTool],
+        activatedToolNames: Set<String>,
         documentContexts: [UUID: String]
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
@@ -2092,45 +2294,17 @@ final class ChatViewModel: ObservableObject {
         }
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        var toolDefinitions: [MLXChatToolDefinition] =
-            advertisesToolsForModel
-            ? ChatToolRegistry.definitions(
-                canEditImage: precedingMessages.contains { message in
-                    message.imageAttachments.contains { $0.chatAttachmentKind == .image }
-                }
-            )
-            : []
+        var toolDefinitions: [MLXChatToolDefinition] = []
         if advertisesToolsForModel {
-            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
-            let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
-            let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
-            let fileReadIsConfigured = FileReadAccessPolicy.isConfigured(
-                rootPath: settings.fileReadRootPath
+            toolDefinitions = ChatToolExposurePolicy.advertisedDefinitions(
+                from: availableTools.map {
+                    ChatToolExposureCandidate(
+                        definition: $0.definition,
+                        exposureMode: $0.exposureMode
+                    )
+                },
+                activatedToolNames: activatedToolNames
             )
-            let fileReadToolsAreEnabled = ChatReadFileToolRegistry.toolNames.allSatisfy(
-                settings.isToolEnabled
-            )
-            let fileWriteIsConfigured = FileWriteAccessPolicy.isConfigured(
-                rootPath: settings.fileWriteRootPath
-            )
-            toolDefinitions.removeAll {
-                let toolName = $0.function.name
-                if queuedRequest.toolScope.isProject,
-                    ChatToolScope.projectToolNames.contains(toolName)
-                {
-                    return !queuedRequest.toolScope.projectToolsAreAvailable
-                }
-                return !settings.isToolEnabled(toolName)
-                    || ($0.function.name == ChatWebSearchToolRegistry.toolName
-                        && !webSearchIsConfigured)
-                    || ($0.function.name == ChatWebReadToolRegistry.toolName
-                        && !webReadIsConfigured)
-                    || (ChatReadFileToolRegistry.toolNames.contains($0.function.name)
-                        && (!fileReadIsConfigured || !fileReadToolsAreEnabled))
-                    || (ChatFileWriteToolRegistry.toolNames.contains($0.function.name)
-                        && !fileWriteIsConfigured)
-            }
         }
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
