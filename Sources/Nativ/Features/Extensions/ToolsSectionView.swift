@@ -23,8 +23,7 @@ struct ToolsSectionView: View {
             .buttonStyle(.borderedProminent)
         } content: {
             VStack(alignment: .leading, spacing: 22) {
-                ToolExposureModeExplanation()
-                toolGroup(title: "Built-in", tools: nativeTools)
+                toolGroup(title: "Built-in", tools: nativeTools, showsModeHint: true)
 
                 if !customTools.isEmpty {
                     toolGroup(title: "Custom", tools: customTools)
@@ -116,12 +115,26 @@ struct ToolsSectionView: View {
     }
 
     @ViewBuilder
-    private func toolGroup(title: String, tools: [ToolItem]) -> some View {
+    private func toolGroup(
+        title: String,
+        tools: [ToolItem],
+        showsModeHint: Bool = false
+    ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title.uppercased())
-                .nativTextStyle(.badge)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 6)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title.uppercased())
+                    .nativTextStyle(.badge)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if showsModeHint {
+                    Text("Click to cycle")
+                        .nativTextStyle(.metadata)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize()
+                        .frame(width: 30)
+                }
+            }
+            .padding(.bottom, 6)
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                 if index > 0 { Divider() }
                 ToolRow(
