@@ -199,6 +199,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
 struct IntegrationModelDescriptor: Identifiable, Equatable, Sendable {
     let id: String
     let displayName: String
+    let provider: LocalModelProvider?
     let contextWindow: Int?
     let supportsVision: Bool
     let supportsReasoning: Bool

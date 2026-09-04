@@ -8,6 +8,7 @@ extension IntegrationModelDescriptor {
         self.init(
             id: localModel.repoID,
             displayName: localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID,
+            provider: localModel.provider,
             contextWindow: localModel.contextSize,
             supportsVision: localModel.capabilities.contains(.vision),
             supportsReasoning: localModel.capabilities.contains(.reasoning),
@@ -674,7 +675,8 @@ private struct IntegrationDetailView: View {
             } else {
                 Picker("Model", selection: $viewModel.selectedModelID) {
                     ForEach(viewModel.eligibleModels) { model in
-                        Text(model.id).tag(Optional(model.id))
+                        IntegrationModelPickerLabel(model: model)
+                            .tag(Optional(model.id))
                     }
                 }
                 .labelsHidden()
@@ -852,6 +854,43 @@ private struct IntegrationDetailView: View {
 
     private func formatContext(_ count: Int) -> String {
         count >= 1_000 ? "\(count / 1_000)K context" : "\(count) context"
+    }
+}
+
+private struct IntegrationModelPickerLabel: View {
+    let model: IntegrationModelDescriptor
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Label {
+            Text(model.id)
+        } icon: {
+            ZStack {
+                if model.provider?.needsLightIconBackgroundInDarkMode == true,
+                   colorScheme == .dark {
+                    Circle()
+                        .fill(Color.white.opacity(0.94))
+                }
+
+                if let provider = model.provider,
+                   let image = LocalModelProviderIcon.image(for: provider) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                } else if let provider = model.provider {
+                    Text(provider.monogram)
+                        .font(.system(size: provider.monogram.count > 2 ? 7 : 9, weight: .bold))
+                        .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                } else {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .accessibilityHidden(true)
+        }
     }
 }
 
