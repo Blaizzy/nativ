@@ -419,6 +419,7 @@ struct NativSettings: Codable, Equatable {
     var modelSearchPath: String
     var externalModelCache: ExternalModelCacheReference?
     var additionalModelSearchPaths: [String]
+    var pinnedModelIDs: [String]
     var languageModelID: String?
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
@@ -475,6 +476,7 @@ struct NativSettings: Codable, Equatable {
         modelSearchPath: String = Self.defaultModelSearchPath,
         externalModelCache: ExternalModelCacheReference? = nil,
         additionalModelSearchPaths: [String] = [],
+        pinnedModelIDs: [String] = [],
         languageModelID: String? = nil,
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
@@ -530,6 +532,7 @@ struct NativSettings: Codable, Equatable {
         self.modelSearchPath = modelSearchPath
         self.externalModelCache = externalModelCache
         self.additionalModelSearchPaths = additionalModelSearchPaths
+        self.pinnedModelIDs = pinnedModelIDs
         self.languageModelID = languageModelID
         self.mcpServers = mcpServers
         self.customTools = customTools
@@ -587,6 +590,7 @@ struct NativSettings: Codable, Equatable {
         case modelSearchPath
         case externalModelCache
         case additionalModelSearchPaths
+        case pinnedModelIDs
         case languageModelID
         case mcpServers
         case customTools
@@ -656,6 +660,9 @@ struct NativSettings: Codable, Equatable {
         additionalModelSearchPaths =
             try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths)
             ?? defaults.additionalModelSearchPaths
+        pinnedModelIDs =
+            try container.decodeIfPresent([String].self, forKey: .pinnedModelIDs)
+            ?? defaults.pinnedModelIDs
         languageModelID =
             try container.decodeIfPresent(String.self, forKey: .languageModelID)
             ?? legacySelectedModelID ?? defaults.languageModelID
@@ -800,6 +807,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
         try container.encodeIfPresent(externalModelCache, forKey: .externalModelCache)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
+        try container.encode(pinnedModelIDs, forKey: .pinnedModelIDs)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
@@ -985,6 +993,10 @@ struct NativSettings: Codable, Equatable {
         settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
+        var seenPinnedModelIDs = Set<String>()
+        settings.pinnedModelIDs = settings.pinnedModelIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seenPinnedModelIDs.insert($0).inserted }
         let trimmedFileReadRoot =
             settings.fileReadRootPath?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

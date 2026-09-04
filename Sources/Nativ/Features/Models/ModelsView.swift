@@ -549,6 +549,9 @@ struct ModelsView: View {
             switch renderedSection {
             case .installed:
                 installedFilterBar
+                    .onChange(of: eligibleVisibleModelIDs) { _, visibleIDs in
+                        installedModelSelection.retain(visibleIDs)
+                    }
                 if installedModelSelection.isActive {
                     installedSelectionBar(for: filteredLocalModels)
                 }
@@ -590,6 +593,8 @@ struct ModelsView: View {
     private func installedRows(showsResultsHeader: Bool) -> some View {
         let visibleModels = filteredLocalModels
         let normalizedSettings = modelState.settings.normalized()
+        let pinnedIDs = Set(normalizedSettings.pinnedModelIDs)
+            .intersection(visibleModels.lazy.map(\.repoID))
 
         if let error = localLibrary.error {
             ModelsNotice(
@@ -623,7 +628,15 @@ struct ModelsView: View {
                     .modelsListRow(top: 0)
             }
 
-            ForEach(visibleModels) { localModel in
+            ForEach(Array(visibleModels.enumerated()), id: \.element.id) { index, localModel in
+                if shouldShowPinnedHeading(at: index, in: visibleModels, pinnedIDs: pinnedIDs) {
+                    ModelsPinnedSectionHeader(title: "Pinned", systemImage: "pin.fill")
+                        .modelsListRow(top: 8, bottom: 2)
+                }
+                if shouldShowOtherModelsHeading(at: index, in: visibleModels, pinnedIDs: pinnedIDs) {
+                    ModelsPinnedSectionHeader(title: "All models", systemImage: "square.stack.3d.up")
+                        .modelsListRow(top: 12, bottom: 2)
+                }
                 let preloadSlots = preloadSlots(for: localModel)
                 let selectedSlots = Set(
                     ModelPreloadSlot.allCases.filter {
@@ -649,6 +662,7 @@ struct ModelsView: View {
                         && !isModelInUse(localModel.repoID),
                     isSelecting: installedModelSelection.isActive,
                     isSelectedForDeletion: installedModelSelection.contains(localModel.repoID),
+                    isPinned: pinnedIDs.contains(localModel.repoID),
                     onSetPreload: { slot, isEnabled in
                         if isEnabled {
                             model.requestPreloadedModelSwitch(
@@ -668,6 +682,7 @@ struct ModelsView: View {
                         )
                     },
                     onToggleSelection: { toggleInstalledModelSelection(localModel) },
+                    onTogglePin: { togglePin(for: localModel.repoID) },
                     onDelete: { deleteInstalledModel(localModel) }
                 )
                 .equatable()
@@ -1025,15 +1040,20 @@ struct ModelsView: View {
             if settings.speechToTextModelID == localModel.repoID {
                 settings.speechToTextModelID = nil
             }
+            settings.pinnedModelIDs.removeAll { $0 == localModel.repoID }
             model.settings = settings
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
         }
     }
 
     private var selectedInstalledModels: [LocalModel] {
-        localLibrary.models.filter {
+        filteredLocalModels.filter {
             installedModelSelection.contains($0.repoID) && canSelectForDeletion($0)
         }
+    }
+
+    private var eligibleVisibleModelIDs: Set<String> {
+        Set(filteredLocalModels.filter(canSelectForDeletion).map(\.repoID))
     }
 
     private func canSelectForDeletion(_ localModel: LocalModel) -> Bool {
@@ -1052,6 +1072,34 @@ struct ModelsView: View {
         installedModelSelection.finish()
     }
 
+    private func togglePin(for modelID: String) {
+        var settings = model.settings
+        if settings.pinnedModelIDs.contains(modelID) {
+            settings.pinnedModelIDs.removeAll { $0 == modelID }
+        } else {
+            settings.pinnedModelIDs.insert(modelID, at: 0)
+        }
+        model.settings = settings.normalized()
+    }
+
+    private func shouldShowPinnedHeading(
+        at index: Int,
+        in models: [LocalModel],
+        pinnedIDs: Set<String>
+    ) -> Bool {
+        index == 0 && pinnedIDs.contains(models[index].repoID)
+    }
+
+    private func shouldShowOtherModelsHeading(
+        at index: Int,
+        in models: [LocalModel],
+        pinnedIDs: Set<String>
+    ) -> Bool {
+        !pinnedIDs.isEmpty
+            && !pinnedIDs.contains(models[index].repoID)
+            && (index == 0 || pinnedIDs.contains(models[index - 1].repoID))
+    }
+
     private var filteredLocalModels: [LocalModel] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         var models =
@@ -1066,11 +1114,22 @@ struct ModelsView: View {
         models = models.filter { typeFilter.matches($0.capabilities) }
 
         let settings = modelState.settings.normalized()
+        let pinOrder = Dictionary(
+            uniqueKeysWithValues: settings.pinnedModelIDs.enumerated().map { ($1, $0) }
+        )
         let selectedModelIDs = Set(
             ModelPreloadSlot.allCases.compactMap {
                 settings.modelID(for: $0)
             })
         return models.enumerated().sorted { lhs, rhs in
+            let lhsPinIndex = pinOrder[lhs.element.repoID]
+            let rhsPinIndex = pinOrder[rhs.element.repoID]
+            if lhsPinIndex != nil || rhsPinIndex != nil {
+                if let lhsPinIndex, let rhsPinIndex {
+                    return lhsPinIndex < rhsPinIndex
+                }
+                return lhsPinIndex != nil
+            }
             let lhsIsSelected = selectedModelIDs.contains(lhs.element.repoID)
             let rhsIsSelected = selectedModelIDs.contains(rhs.element.repoID)
             if lhsIsSelected != rhsIsSelected {
@@ -1633,9 +1692,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let canDelete: Bool
     let isSelecting: Bool
     let isSelectedForDeletion: Bool
+    let isPinned: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onShowReadme: () -> Void
     let onToggleSelection: () -> Void
+    let onTogglePin: () -> Void
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
@@ -1654,6 +1715,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             && lhs.canDelete == rhs.canDelete
             && lhs.isSelecting == rhs.isSelecting
             && lhs.isSelectedForDeletion == rhs.isSelectedForDeletion
+            && lhs.isPinned == rhs.isPinned
     }
 
     private var isSelected: Bool {
@@ -1687,6 +1749,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                             Text(modelName(localModel.displayName))
                                 .font(.body.weight(.semibold))
                                 .lineLimit(1)
+                            if isPinned {
+                                ModelPill(
+                                    title: "Pinned",
+                                    systemImage: "pin.fill",
+                                    color: .accentColor
+                                )
+                            }
                             if let sourceLabel = localModel.source.badgeLabel {
                                 ModelPill(
                                     title: sourceLabel,
@@ -1778,6 +1847,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 
             if !isSelecting {
                 loadButton
+                pinButton
                 modelActionsMenu
             }
         }
@@ -1791,6 +1861,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             accessibilityLabel: "Select \(localModel.repoID)",
             action: onToggleSelection
         )
+        .contextMenu {
+            Button(
+                isPinned ? "Unpin Model" : "Pin Model",
+                systemImage: isPinned ? "pin.slash" : "pin",
+                action: onTogglePin
+            )
+        }
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -1817,6 +1894,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                 .help("Deleting model")
         } else {
             Menu {
+                Button(
+                    isPinned ? "Unpin Model" : "Pin Model",
+                    systemImage: isPinned ? "pin.slash" : "pin",
+                    action: onTogglePin
+                )
+
+                Divider()
+
                 if let snapshotURL = localModel.snapshotURL {
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
@@ -1849,6 +1934,21 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             )
             .accessibilityLabel("Actions for \(localModel.repoID)")
         }
+    }
+
+    private var pinButton: some View {
+        Button(
+            isPinned ? "Unpin Model" : "Pin Model",
+            systemImage: isPinned ? "pin.fill" : "pin",
+            action: onTogglePin
+        )
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
+        .frame(width: 30, height: 30)
+        .contentShape(Rectangle())
+        .help(isPinned ? "Unpin from the top of the model list" : "Pin to the top of the model list")
+        .accessibilityValue(isPinned ? "Pinned" : "Not pinned")
     }
 
     @ViewBuilder
@@ -1904,6 +2004,20 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             return "Preload \(localModel.repoID) for \(preferredPreloadSlot.displayName)"
         }
         return "\(localModel.repoID) has no supported preload role"
+    }
+}
+
+private struct ModelsPinnedSectionHeader: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
