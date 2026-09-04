@@ -2,7 +2,6 @@ import AppKit
 import Carbon.HIToolbox
 import Charts
 import SwiftUI
-import Textual
 import UniformTypeIdentifiers
 
 private enum AudioDestination: String, CaseIterable, Identifiable {
@@ -2896,13 +2895,11 @@ private struct AudioCaptureRecordRow: View {
                     )
 
                     ScrollView {
-                        StructuredText(
-                            markdown: NativMarkdownFormatting.normalizedMathDelimiters(in: summary),
-                            syntaxExtensions: [.math]
+                        NativMarkdownRenderer(
+                            content: MathPreprocessor.preprocess(summary),
+                            font: .callout,
+                            fontSize: NSFont.preferredFont(forTextStyle: .callout).pointSize
                         )
-                        .textual.structuredTextStyle(.gitHub)
-                        .textual.textSelection(.enabled)
-                        .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: 360)

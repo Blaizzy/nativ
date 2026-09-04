@@ -15,9 +15,6 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.9.4
-  textual:
-    url: https://github.com/gonzalezreal/textual.git
-    exactVersion: 0.5.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
@@ -125,8 +122,6 @@ targets:
         embed: true
       - package: Sparkle
         product: Sparkle
-      - package: textual
-        product: Textual
       - package: MarkdownUI
         product: MarkdownUI
       - package: Highlightr
@@ -289,7 +284,6 @@ targets:
       - path: Sources/Nativ/NativModel.swift
       - path: Sources/Nativ/Utilities/ServerPortProbe.swift
       - path: Sources/Nativ/Utilities/Formatting.swift
-      - path: Sources/Nativ/Utilities/MarkdownFormatting.swift
       - path: Sources/Nativ/Features/Shared/NativComponents.swift
       - path: Sources/Nativ/Features/Shared/PersistedDataChangeHub.swift
       - path: Sources/Nativ/Features/Shared/InferenceActivityCoordinator.swift
