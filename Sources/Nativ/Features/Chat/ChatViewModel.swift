@@ -889,26 +889,26 @@ final class ChatViewModel: ObservableObject {
 
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
-                let sourceSession = currentSessionSnapshot,
                 let revision = ChatPromptRevision.make(
                     messageID: promptEditContext.messageID,
                     content: prompt,
                     attachments: imageAttachments,
                     modelID: modelID,
-                    in: sourceSession.messages
+                    in: messages
                 )
             else {
                 return
             }
 
-            let branch = ChatConversationBranch.make(
-                from: sourceSession,
-                messages: revision.messages
-            )
-            activateBranch(branch, restoring: composerSnapshot)
+            let editedMessageID = promptEditContext.messageID
+            messages = revision.messages
+            draft = composerSnapshot?.draft ?? ""
+            pendingImageAttachments = composerSnapshot?.attachments ?? []
+            discardPromptEditing()
+            persistCurrentSession(updateTimestamp: true)
             enqueueGeneration(
-                for: promptEditContext.messageID,
-                in: branch.id,
+                for: editedMessageID,
+                in: currentSession.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
                 languageModelSupportsVision: languageModelSupportsVision,

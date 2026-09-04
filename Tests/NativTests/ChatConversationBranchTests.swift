@@ -1,6 +1,38 @@
 import XCTest
 
 final class ChatConversationBranchTests: XCTestCase {
+    func testRevisingLatestPromptReplacesItsResponseHistoryWithoutChangingSession() throws {
+        let firstUser = ChatTranscriptMessage(role: .user, content: "First prompt")
+        let firstAssistant = ChatTranscriptMessage(role: .assistant, content: "First response")
+        let latestUser = ChatTranscriptMessage(role: .user, content: "Original prompt")
+        let latestAssistant = ChatTranscriptMessage(role: .assistant, content: "Old response")
+        let sessionID = UUID()
+        var session = ChatSession(
+            id: sessionID,
+            title: "First prompt",
+            createdAt: .now,
+            updatedAt: .now,
+            messages: [firstUser, firstAssistant, latestUser, latestAssistant]
+        )
+
+        let revision = try XCTUnwrap(
+            ChatPromptRevision.make(
+                messageID: latestUser.id,
+                content: "Edited prompt",
+                attachments: [],
+                modelID: "test/model",
+                in: session.messages
+            )
+        )
+        session.messages = revision.messages
+
+        XCTAssertEqual(session.id, sessionID)
+        XCTAssertEqual(session.messages.map(\.id), [firstUser.id, firstAssistant.id, latestUser.id])
+        XCTAssertEqual(session.messages.last?.content, "Edited prompt")
+        XCTAssertEqual(session.messages.last?.modelID, "test/model")
+        XCTAssertFalse(session.messages.contains(where: { $0.id == latestAssistant.id }))
+    }
+
     func testCompletedAssistantResponsesAreForkable() {
         let firstUser = ChatTranscriptMessage(role: .user, content: "First prompt")
         let firstAssistant = ChatTranscriptMessage(role: .assistant, content: "First response")
