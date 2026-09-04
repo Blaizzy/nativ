@@ -876,10 +876,7 @@ private struct IntegrationModelPickerLabel: View {
                 if let provider = model.provider,
                    let image = LocalModelProviderIcon.image(for: provider) {
                     Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
                         .foregroundStyle(Color(nsColor: provider.iconTintColor))
-                        .frame(width: 15, height: 15)
                 } else if let provider = model.provider {
                     Text(provider.monogram)
                         .font(.system(size: provider.monogram.count > 2 ? 7 : 9, weight: .bold))
