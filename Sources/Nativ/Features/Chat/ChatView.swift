@@ -223,6 +223,8 @@ private struct ChatTranscriptView: View {
                     }
                 }
 
+                // Keep the overlay clearance inside the scroll target so pinning lands
+                // above the composer rather than aligning hidden content behind it.
                 Color.clear
                     .frame(
                         height: max(
