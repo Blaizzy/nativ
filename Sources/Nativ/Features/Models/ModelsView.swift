@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import Textual
 
 private enum ModelsPageSection: String, CaseIterable, Identifiable {
     case installed = "Installed"
@@ -1627,22 +1626,19 @@ private struct ModelReadmePanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let markdown = store.markdown {
             ScrollView {
-                StructuredText(
-                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
-                        in: HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
+                NativMarkdownRenderer(
+                    content: MathPreprocessor.preprocess(
+                        HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
                             markdown,
                             modelTitle: modelName(selection.repoID)
                         )
                     ),
                     baseURL: readmeAssetBaseURL,
-                    syntaxExtensions: [.math]
+                    font: .system(size: 15),
+                    fontSize: 15,
+                    imagePolicy: .document,
+                    scrollsWideTables: true
                 )
-                .textual.structuredTextStyle(.gitHub)
-                .textual.tableStyle(.overflow(relativeWidth: 4))
-                .textual.imageAttachmentLoader(.image(relativeTo: readmeAssetBaseURL))
-                .textual.overflowMode(.scroll)
-                .textual.textSelection(.enabled)
-                .font(.system(size: 15))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
             }

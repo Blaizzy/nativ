@@ -1,3 +1,4 @@
+import AppKit
 import MarkdownUI
 import SwiftUI
 import XCTest
@@ -96,6 +97,72 @@ final class ChatMarkdownRendererTests: XCTestCase {
     let largeHeight = try renderedHeight(content: content, fontScale: 1.5)
 
     XCTAssertGreaterThan(largeHeight, compactHeight)
+  }
+
+  @MainActor
+  func testDocumentRendererRendersWideTable() throws {
+    let content = """
+      | Model | Context | Quantization | Architecture | Notes |
+      | --- | ---: | --- | --- | --- |
+      | Example | 131072 | 4-bit | Mixture of experts | A deliberately wide table value |
+      """
+    let renderer = ImageRenderer(
+      content: NativMarkdownRenderer(
+        content: content,
+        font: .system(size: 15),
+        fontSize: 15,
+        imagePolicy: .document,
+        scrollsWideTables: true
+      )
+      .frame(width: 260)
+      .fixedSize(horizontal: false, vertical: true)
+    )
+    renderer.proposedSize = ProposedViewSize(width: 260, height: nil)
+
+    let image = try XCTUnwrap(renderer.nsImage)
+    XCTAssertGreaterThan(image.size.height, 20)
+  }
+
+  func testDocumentImageProviderLoadsLocalInlineImage() async throws {
+    let pngData = try XCTUnwrap(
+      Data(
+        base64Encoded:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      )
+    )
+    let imageURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("png")
+    try pngData.write(to: imageURL, options: .atomic)
+    defer { try? FileManager.default.removeItem(at: imageURL) }
+
+    let provider = NativMarkdownInlineImageProvider(
+      fontSize: 15,
+      color: .labelColor,
+      policy: .document
+    )
+
+    _ = try await provider.image(with: imageURL, label: "Local image")
+  }
+
+  func testMathOnlyImageProviderRejectsDocumentImages() async {
+    let provider = NativMarkdownInlineImageProvider(
+      fontSize: 15,
+      color: .labelColor,
+      policy: .mathOnly
+    )
+
+    do {
+      _ = try await provider.image(
+        with: URL(string: "https://example.com/image.png")!,
+        label: "Remote image"
+      )
+      XCTFail("The math-only provider should not fetch document images")
+    } catch is NativMarkdownInlineImageProvider.UnsupportedURL {
+      // Expected.
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
   }
 
   @MainActor
