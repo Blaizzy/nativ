@@ -10,6 +10,7 @@ private enum ModelConfigurationLayoutMetrics {
     static let topInset: CGFloat = 32
     static let transitionDuration: TimeInterval = 0.3
     static let resizeHandleWidth: CGFloat = 9
+    static let headerTrailingControlClearance: CGFloat = 52
 }
 
 struct ModelConfigurationLayout<Content: View>: View {
@@ -261,7 +262,7 @@ struct ModelConfigurationView: View {
             }
         }
         .padding(.leading, 16)
-        .padding(.trailing, 16)
+        .padding(.trailing, ModelConfigurationLayoutMetrics.headerTrailingControlClearance)
         .padding(.top, 13)
         .padding(.bottom, 16)
     }
