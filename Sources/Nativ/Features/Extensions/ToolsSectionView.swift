@@ -160,7 +160,17 @@ struct ToolsSectionView: View {
 
     private var nativeTools: [ToolItem] {
         var seenConfigurations = Set<ChatNativeToolConfiguration>()
-        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+        let discoveryTool = ToolItem(
+            name: ChatToolDiscoveryRegistry.toolName,
+            toolNames: [ChatToolDiscoveryRegistry.toolName],
+            title: "Tool Search",
+            detail: "Find Auto tools without adding every tool to each prompt.",
+            parameters: ChatToolDiscoveryRegistry.definition.function.parameters,
+            isBuiltIn: true
+        )
+        let chatTools: [ToolItem] = ChatToolRegistry.descriptors(
+            canEditImage: false
+        ).compactMap { descriptor in
             let configuration = descriptor.configuration
             if let configuration,
                 configuration.toolNames.count > 1,
@@ -180,6 +190,7 @@ struct ToolsSectionView: View {
                 configuration: configuration
             )
         }
+        return [discoveryTool] + chatTools
     }
 
     private func setExposureMode(_ mode: ToolExposureMode, for tool: ToolItem) {

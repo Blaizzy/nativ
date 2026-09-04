@@ -1923,6 +1923,8 @@ final class ChatViewModel: ObservableObject {
                         discoverableTools: availableTools
                             .filter {
                                 $0.exposureMode == .automatic
+                                    && $0.definition.function.name
+                                        != ChatToolDiscoveryRegistry.toolName
                                     && !activatedToolNames.contains(
                                         $0.definition.function.name
                                     )
@@ -2073,7 +2075,10 @@ final class ChatViewModel: ObservableObject {
             source: String,
             exposureMode: ToolExposureMode
         ) {
-            guard exposureMode != .off, names.insert(definition.function.name).inserted else {
+            let name = definition.function.name
+            guard names.insert(name).inserted,
+                exposureMode != .off || name == ChatToolDiscoveryRegistry.toolName
+            else {
                 return
             }
             tools.append(
@@ -2085,6 +2090,15 @@ final class ChatViewModel: ObservableObject {
                 )
             )
         }
+
+        append(
+            ChatToolDiscoveryRegistry.definition,
+            title: "Tool Search",
+            source: "Built-in",
+            exposureMode: settings.toolExposureMode(
+                for: ChatToolDiscoveryRegistry.toolName
+            )
+        )
 
         for descriptor in ChatToolRegistry.descriptors(canEditImage: canEditImage) {
             let definition = descriptor.definition

@@ -106,6 +106,19 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.toolExposureMode(for: "get_server_stats"), .off)
     }
 
+    func testToolExposureModeCyclesThroughAllThreeStates() {
+        XCTAssertEqual(ToolExposureMode.off.next, .automatic)
+        XCTAssertEqual(ToolExposureMode.off.next.next, .on)
+        XCTAssertEqual(ToolExposureMode.off.next.next.next, .off)
+    }
+
+    func testToolSearchDefaultsToOn() {
+        XCTAssertEqual(
+            NativSettings().toolExposureMode(for: ChatToolDiscoveryRegistry.toolName),
+            .on
+        )
+    }
+
     func testMCPServerExposureModeControlsConnectionAndPromptExposure() {
         let server = MCPServerConfig(name: "Git", command: "git-mcp")
         var settings = NativSettings(mcpServers: [server])

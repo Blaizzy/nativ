@@ -410,6 +410,14 @@ enum ToolExposureMode: String, Codable, CaseIterable, Equatable, Sendable {
     case automatic
     case on
 
+    var next: Self {
+        switch self {
+        case .off: .automatic
+        case .automatic: .on
+        case .on: .off
+        }
+    }
+
     var title: String {
         switch self {
         case .off: "Off"
@@ -1138,6 +1146,7 @@ struct NativSettings: Codable, Equatable {
     }
 
     static let defaultDirectToolNames: Set<String> = [
+        ChatToolDiscoveryRegistry.toolName,
         "read_file",
         "search_files",
         "write_file",

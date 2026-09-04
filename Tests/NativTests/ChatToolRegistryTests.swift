@@ -89,13 +89,17 @@ final class ChatToolRegistryTests: XCTestCase {
             definition: ChatImageToolRegistry.definitions(canEdit: false)[0],
             exposureMode: .off
         )
+        let discovery = ChatToolExposureCandidate(
+            definition: ChatToolDiscoveryRegistry.definition,
+            exposureMode: .automatic
+        )
 
         let initialNames = ChatToolExposurePolicy.advertisedDefinitions(
-            from: [automatic, on, off],
+            from: [automatic, on, off, discovery],
             activatedToolNames: []
         ).map(\.function.name)
         let activatedNames = ChatToolExposurePolicy.advertisedDefinitions(
-            from: [automatic, on, off],
+            from: [automatic, on, off, discovery],
             activatedToolNames: [
                 automatic.definition.function.name,
                 off.definition.function.name,
@@ -107,6 +111,43 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertTrue(activatedNames.contains(on.definition.function.name))
         XCTAssertFalse(activatedNames.contains(off.definition.function.name))
         XCTAssertEqual(activatedNames.last, ChatToolDiscoveryRegistry.toolName)
+    }
+
+    func testToolSearchOffMakesAutoToolsUnreachable() {
+        let candidates = [
+            ChatToolExposureCandidate(
+                definition: ChatSystemMonitorToolRegistry.definitions()[0],
+                exposureMode: .automatic
+            ),
+            ChatToolExposureCandidate(
+                definition: ChatToolDiscoveryRegistry.definition,
+                exposureMode: .off
+            ),
+        ]
+
+        XCTAssertTrue(
+            ChatToolExposurePolicy.advertisedDefinitions(
+                from: candidates,
+                activatedToolNames: []
+            ).isEmpty
+        )
+    }
+
+    func testToolSearchOnIsAdvertisedWithoutOtherAutoTools() {
+        let candidates = [
+            ChatToolExposureCandidate(
+                definition: ChatToolDiscoveryRegistry.definition,
+                exposureMode: .on
+            )
+        ]
+
+        XCTAssertEqual(
+            ChatToolExposurePolicy.advertisedDefinitions(
+                from: candidates,
+                activatedToolNames: []
+            ).map(\.function.name),
+            [ChatToolDiscoveryRegistry.toolName]
+        )
     }
 
     func testToolDiscoveryFindsRelevantAutoTools() {

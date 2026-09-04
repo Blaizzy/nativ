@@ -5,52 +5,72 @@ struct ToolExposureModeControl: View {
     var title: String
 
     var body: some View {
-        Picker("Agent access", selection: $mode) {
+        Button {
+            mode = mode.next
+        } label: {
+            Image(systemName: mode.systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(mode.tint)
+                .frame(width: 30, height: 24)
+                .background(
+                    mode.tint.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
             ForEach(ToolExposureMode.allCases, id: \.self) { option in
-                Text(option.title).tag(option)
+                Button {
+                    mode = option
+                } label: {
+                    Label {
+                        Text("\(option.title) — \(option.availabilityText)")
+                    } icon: {
+                        Image(systemName: option == mode ? "checkmark" : option.systemImage)
+                    }
+                }
             }
         }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .controlSize(.small)
-        .frame(width: 168)
-        .help(helpText)
+        .help(mode.availabilityText)
         .accessibilityLabel("Agent access for \(title)")
-        .accessibilityValue(mode.title)
-        .accessibilityHint(helpText)
-    }
-
-    private var helpText: String {
-        switch mode {
-        case .off:
-            "Off prevents the agent from using this capability."
-        case .automatic:
-            "Auto keeps it out of regular prompts and lets the agent find it when needed."
-        case .on:
-            "On includes it in every tool-capable model prompt."
-        }
+        .accessibilityValue(mode.availabilityText)
+        .accessibilityHint(
+            "Click to switch to \(mode.next.title), \(mode.next.availabilityText.lowercased())."
+        )
     }
 }
 
 struct ToolExposureModeExplanation: View {
     var body: some View {
-        HStack(spacing: 14) {
-            explanation("Off", "Unavailable")
-            explanation("Auto", "Discoverable")
-            explanation("On", "Always shared")
-        }
+        Text("Click the access button to cycle between Off, Auto, and On.")
         .nativTextStyle(.metadata)
         .foregroundStyle(.secondary)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "Off is unavailable. Auto is discoverable when needed. On is shared with every model prompt."
-        )
+    }
+}
+
+private extension ToolExposureMode {
+    var availabilityText: String {
+        switch self {
+        case .off: "Unavailable to chat"
+        case .automatic: "Discoverable"
+        case .on: "Available to chat"
+        }
     }
 
-    private func explanation(_ title: String, _ detail: String) -> some View {
-        HStack(spacing: 4) {
-            Text(title).fontWeight(.semibold)
-            Text(detail)
+    var systemImage: String {
+        switch self {
+        case .off: "minus"
+        case .automatic: "magnifyingglass"
+        case .on: "checkmark"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .off: .secondary
+        case .automatic: .blue
+        case .on: .green
         }
     }
 }

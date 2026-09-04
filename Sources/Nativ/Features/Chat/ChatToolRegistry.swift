@@ -160,15 +160,31 @@ enum ChatToolExposurePolicy {
         from candidates: [ChatToolExposureCandidate],
         activatedToolNames: Set<String>
     ) -> [MLXChatToolDefinition] {
-        var definitions = candidates.compactMap { candidate in
+        let discoveryCandidate = candidates.first {
+            $0.definition.function.name == ChatToolDiscoveryRegistry.toolName
+        }
+        let callableCandidates = candidates.filter {
+            $0.definition.function.name != ChatToolDiscoveryRegistry.toolName
+        }
+        var definitions = callableCandidates.compactMap { candidate in
             let name = candidate.definition.function.name
             return candidate.exposureMode == .on
                 || (candidate.exposureMode == .automatic && activatedToolNames.contains(name))
                 ? candidate.definition
                 : nil
         }
-        if candidates.contains(where: { $0.exposureMode == .automatic }) {
-            definitions.append(ChatToolDiscoveryRegistry.definition)
+        if let discoveryCandidate {
+            let shouldAdvertise = switch discoveryCandidate.exposureMode {
+            case .off:
+                false
+            case .automatic:
+                callableCandidates.contains { $0.exposureMode == .automatic }
+            case .on:
+                true
+            }
+            if shouldAdvertise {
+                definitions.append(discoveryCandidate.definition)
+            }
         }
         return definitions
     }
