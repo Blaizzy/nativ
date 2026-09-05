@@ -216,10 +216,9 @@ final class RoutineRunner {
         while true {
             try Task.checkCancellation()
             let toolRequest = model.tools.prepareRequest(
-                scope: .standalone(settings: settings), canEditImage: false,
-                activatedToolNames: Set(capabilities.tools.map { $0.definition.function.name }),
+                allowing: capabilities.tools.map(\.definition),
                 mcpHost: mcpHost
-            ).restricted(to: capabilities.tools.map(\.definition))
+            )
             let advertisesTools =
                 !toolRequest.definitions.isEmpty
                 && ChatToolRoundGate.advertisesTools(atRound: toolRound)

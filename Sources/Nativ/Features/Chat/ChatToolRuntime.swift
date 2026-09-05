@@ -31,7 +31,8 @@ struct ChatAvailableTool: Equatable {
             name: definition.function.name,
             title: title,
             description: definition.function.description,
-            source: sourceName
+            source: sourceName,
+            parameters: definition.function.parameters
         )
     }
 }
@@ -41,12 +42,50 @@ struct ChatToolRequest {
     fileprivate let tools: [ChatAvailableTool]
     fileprivate let scope: ChatToolScope
     fileprivate let canEditImage: Bool
+}
 
-    func restricted(to allowedDefinitions: [MLXChatToolDefinition]) -> Self {
-        Self(
-            definitions: definitions.filter { allowedDefinitions.contains($0) },
-            tools: tools, scope: scope, canEditImage: canEditImage
-        )
+struct ChatToolSelection {
+    private(set) var toolNames: [String]
+
+    init(toolNames: [String] = []) {
+        self.toolNames = toolNames
+    }
+
+    init(history: [ChatTranscriptMessage]) {
+        let previousTurn = history.lastIndex(where: { $0.role == .user }).map { history[$0...] }
+        var seen = Set<String>()
+        toolNames = previousTurn?.reversed().compactMap { message in
+            guard message.role == .tool, message.toolStatus == .succeeded,
+                let name = message.toolName, name != ChatToolDiscoveryRegistry.toolName,
+                seen.insert(name).inserted
+            else { return nil }
+            return name
+        } ?? []
+    }
+
+    mutating func record(
+        call: MLXChatToolCall,
+        outcome: ChatToolExecutionOutcome,
+        request: ChatToolRequest
+    ) {
+        guard let name = call.function?.name else { return }
+        if name == ChatToolDiscoveryRegistry.toolName {
+            if !outcome.activatedToolNames.isEmpty {
+                toolNames = outcome.activatedToolNames.sorted()
+            }
+        } else if request.tools.contains(where: {
+            $0.definition.function.name == name && $0.exposureMode == .automatic
+        }) {
+            toolNames.removeAll { $0 == name }
+            toolNames.insert(name, at: 0)
+        }
+    }
+
+    fileprivate func advertisedNames(in tools: [ChatAvailableTool]) -> Set<String> {
+        let available = Set(tools.filter { $0.exposureMode == .automatic }.map { $0.definition.function.name })
+        var seen = Set<String>()
+        return Set(toolNames.filter { available.contains($0) && seen.insert($0).inserted }
+            .prefix(ChatToolDiscoveryRegistry.maximumResults))
     }
 }
 
@@ -76,9 +115,10 @@ final class ChatToolRuntime {
         for (id, execution) in executions {
             let name = execution.tool.definition.function.name
             let changedFileAccess = !execution.scope.isProject
-                && ChatToolScope.projectToolNames.contains(name)
-                && (previous.fileReadRootPath != settings.fileReadRootPath
-                    || previous.fileWriteRootPath != settings.fileWriteRootPath)
+                && ((ChatReadFileToolRegistry.toolNames.contains(name)
+                    && previous.fileReadRootPath != settings.fileReadRootPath)
+                    || (ChatFileWriteToolRegistry.toolNames.contains(name)
+                        && previous.fileWriteRootPath != settings.fileWriteRootPath))
             if !isAvailable(execution.tool, scope: execution.scope) || changedFileAccess {
                 executions[id]?.revoked = true
                 execution.task.cancel()
@@ -89,7 +129,7 @@ final class ChatToolRuntime {
     func prepareRequest(
         scope: ChatToolScope,
         canEditImage: Bool,
-        activatedToolNames: Set<String>,
+        selection: ChatToolSelection,
         mcpHost: (any ChatToolMCPHost)?
     ) -> ChatToolRequest {
         let tools = catalog(scope: scope, canEditImage: canEditImage, mcpHost: mcpHost)
@@ -97,10 +137,22 @@ final class ChatToolRuntime {
             from: tools.map {
                 ChatToolExposureCandidate(definition: $0.definition, exposureMode: $0.exposureMode)
             },
-            activatedToolNames: activatedToolNames
+            activatedToolNames: selection.advertisedNames(in: tools)
         )
         return ChatToolRequest(
             definitions: definitions, tools: tools, scope: scope, canEditImage: canEditImage
+        )
+    }
+
+    func prepareRequest(
+        allowing definitions: [MLXChatToolDefinition],
+        mcpHost: (any ChatToolMCPHost)?
+    ) -> ChatToolRequest {
+        let scope = ChatToolScope.standalone(settings: settings)
+        let tools = catalog(scope: scope, canEditImage: false, mcpHost: mcpHost)
+            .filter { definitions.contains($0.definition) }
+        return ChatToolRequest(
+            definitions: tools.map(\.definition), tools: tools, scope: scope, canEditImage: false
         )
     }
 

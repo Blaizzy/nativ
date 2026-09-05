@@ -148,6 +148,7 @@ struct ChatToolDiscoveryCandidate: Equatable, Sendable {
     let title: String
     let description: String
     let source: String
+    var parameters: MLXJSONValue = .object([:])
 }
 
 struct ChatToolExposureCandidate: Equatable, Sendable {
@@ -199,7 +200,7 @@ enum ChatToolDiscoveryRegistry {
         function: MLXChatFunctionDefinition(
             name: toolName,
             description:
-                "Find tools that are available in Auto mode but not currently shown. Use this when the user asks for a capability that the visible tools do not cover. Matching tools become available after this call.",
+                "Find Auto tools by capability, service, tool name, or parameter. Use this when the visible tools do not cover the task. Up to three matching tools become available in the next step, replacing the previous Auto selection. If nothing matches, rephrase the query.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -223,31 +224,31 @@ enum ChatToolDiscoveryRegistry {
     ) -> [ChatToolDiscoveryCandidate] {
         let normalizedQuery = normalized(query)
         let queryTerms = terms(in: normalizedQuery)
-        guard !normalizedQuery.isEmpty, !queryTerms.isEmpty else { return [] }
+        guard !normalizedQuery.isEmpty, !queryTerms.isEmpty, limit > 0 else { return [] }
 
         return candidates.compactMap { candidate in
-            let searchable = normalized(
-                "\(candidate.name) \(candidate.title) \(candidate.description) \(candidate.source)"
-            )
-            let searchableTerms = terms(in: searchable)
-            var score = searchable.contains(normalizedQuery) ? 100 : 0
+            let fields = [
+                (terms(in: normalized(candidate.name)), 40),
+                (terms(in: normalized(candidate.title + " " + candidate.source)), 30),
+                (terms(in: normalized(candidate.description)), 20),
+                (terms(in: normalized(parameterText(candidate.parameters))), 10),
+            ]
+            var score = normalized(candidate.name) == normalizedQuery ? 200 : 0
             for term in queryTerms {
-                if searchableTerms.contains(term) {
-                    score += 20
-                } else if searchableTerms.contains(where: {
-                    ($0.count >= 4 && term.hasPrefix($0))
-                        || (term.count >= 4 && $0.hasPrefix(term))
-                }) {
-                    score += 14
-                } else if searchable.contains(term) {
-                    score += 8
-                }
+                score += fields.map { words, weight in
+                    if words.contains(term) { return weight }
+                    if words.contains(where: {
+                        ($0.count >= 4 && term.hasPrefix($0))
+                            || (term.count >= 4 && $0.hasPrefix(term))
+                    }) { return weight / 2 }
+                    return 0
+                }.max() ?? 0
             }
             return score == 0 ? nil : (candidate, score)
         }
         .sorted {
             if $0.1 == $1.1 {
-                return $0.0.name.localizedStandardCompare($1.0.name) == .orderedAscending
+                return $0.0.name < $1.0.name
             }
             return $0.1 > $1.1
         }
@@ -270,9 +271,41 @@ enum ChatToolDiscoveryRegistry {
     }
 
     private static func normalized(_ value: String) -> String {
-        value.lowercased()
+        value.replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
+    }
+
+    private static func parameterText(_ schema: MLXJSONValue) -> String {
+        switch schema {
+        case .object(let object):
+            return object.sorted(by: { $0.key < $1.key }).map { key, value in
+                switch key {
+                case "title", "description", "enum":
+                    return parameterText(value)
+                case "properties":
+                    guard case .object(let properties) = value else { return "" }
+                    return properties.sorted(by: { $0.key < $1.key }).map {
+                        $0.key + " " + parameterText($0.value)
+                    }.joined(separator: " ")
+                case "items", "anyOf", "oneOf", "allOf":
+                    return parameterText(value)
+                case "$defs", "definitions":
+                    guard case .object(let definitions) = value else { return "" }
+                    return definitions.values.map(parameterText).joined(separator: " ")
+                default:
+                    return ""
+                }
+            }.joined(separator: " ")
+        case .array(let values):
+            return values.map(parameterText).joined(separator: " ")
+        case .string(let value):
+            return value
+        default:
+            return ""
+        }
     }
 
     private static func terms(in value: String) -> Set<String> {
@@ -628,7 +661,7 @@ enum ChatToolDispatcher {
             },
             message: matches.isEmpty
                 ? "No matching Auto tools were found."
-                : "Matching tools are now available. Call the best match by name in the next step."
+                : "These Auto tools replace the previous selection for the next step. Use their provided schemas; search again when you need a different capability."
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

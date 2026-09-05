@@ -1471,7 +1471,6 @@ final class ChatViewModel: ObservableObject {
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
-        var activatedToolNames = Set<String>()
         let fileReadTracker = ChatReadFileTracker()
         let fileSearchTracker = ChatSearchFilesTracker()
         let fileOperationRunID = UUID()
@@ -1484,6 +1483,9 @@ final class ChatViewModel: ObservableObject {
             throw NativChatError.invalidResponse
         }
         let documentMessages = Array(initialMessages[..<initialAssistantIndex])
+        var toolSelection = ChatToolSelection(history: Array(
+            documentMessages.prefix { $0.id != queuedRequest.userMessageID }
+        ))
         var documentContext = PreparedDocumentContext(
             result: try await documentContextBuilder.contexts(for: documentMessages),
             characterLimit: ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
@@ -1503,7 +1505,7 @@ final class ChatViewModel: ObservableObject {
             let toolRequest = toolRuntime.prepareRequest(
                 scope: queuedRequest.toolScope,
                 canEditImage: canEditImage(for: queuedRequest, before: assistantMessageID),
-                activatedToolNames: activatedToolNames,
+                selection: toolSelection,
                 mcpHost: mcpHost
             )
             documentContext = try await fittedDocumentContext(
@@ -1699,7 +1701,7 @@ final class ChatViewModel: ObservableObject {
                         content: outcome.content,
                         attachments: outcome.attachments
                     )
-                    activatedToolNames.formUnion(outcome.activatedToolNames)
+                    toolSelection.record(call: toolCall, outcome: outcome, request: toolRequest)
                     appModel?.refreshMetricsIfRunning(force: true)
                 } catch ChatToolExecutionError.declined(let content) {
                     updateToolMessage(

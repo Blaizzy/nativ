@@ -153,6 +153,30 @@ final class ChatToolRuntimeTests: XCTestCase {
         }
     }
 
+    func testUnrelatedSettingsDoNotCancelAnActiveTool() async throws {
+        let host = RuntimeMCPHost()
+        var settings = settings(host: host, mode: .on)
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepare(runtime, host: host)
+        let gate = ChatToolConsentGate()
+        let id = UUID()
+        host.operation = {
+            let approved = await gate.awaitDecision(for: id)
+            try Task.checkCancellation()
+            return approved ? "complete" : "unexpected"
+        }
+        let execution = Task {
+            try await runtime.execute(call: call(), request: request, context: context(), mcpHost: host)
+        }
+        await waitUntil { gate.pendingCount == 1 }
+        settings.setToolExposureMode(.off, toolName: "get_system_stats")
+        settings.fileReadRootPath = FileManager.default.temporaryDirectory.path
+        runtime.updateSettings(settings)
+        gate.confirm(id)
+        let result = try await execution.value
+        XCTAssertEqual(result.content, "complete")
+    }
+
     func testDuplicateNamesAreUnavailableInsteadOfRoutingToAnArbitraryTool() {
         let host = RuntimeMCPHost()
         host.definitions.append(host.definitions[0])
@@ -182,7 +206,7 @@ final class ChatToolRuntimeTests: XCTestCase {
     func testRestrictedRequestCannotExecuteAnUnselectedOnTool() async {
         let host = RuntimeMCPHost()
         let runtime = ChatToolRuntime(settings: settings(host: host, mode: .on))
-        let request = prepare(runtime, host: host).restricted(to: [host.definitions[0]])
+        let request = runtime.prepareRequest(allowing: [host.definitions[0]], mcpHost: host)
         XCTAssertEqual(request.definitions.map(\.function.name), [toolName])
         await assertUnavailable {
             try await runtime.execute(
@@ -215,6 +239,94 @@ final class ChatToolRuntimeTests: XCTestCase {
         }
     }
 
+    func testFollowUpReusesOnlySuccessfulToolsFromThePreviousTurn() {
+        let history = [
+            ChatTranscriptMessage(role: .user, content: "Earlier task"),
+            ChatTranscriptMessage(role: .tool, content: "old", toolName: "old_tool", toolStatus: .succeeded),
+            ChatTranscriptMessage(role: .user, content: "Read history"),
+            ChatTranscriptMessage(role: .tool, content: "found", toolName: "tool_search", toolStatus: .succeeded),
+            ChatTranscriptMessage(role: .tool, content: "history", toolName: toolName, toolStatus: .succeeded),
+            ChatTranscriptMessage(role: .tool, content: "failed", toolName: "failed_tool", toolStatus: .failed),
+        ]
+        let selection = ChatToolSelection(history: history)
+        XCTAssertEqual(selection.toolNames, [toolName])
+        let host = RuntimeMCPHost()
+        var settings = settings(host: host, mode: .automatic)
+        let runtime = ChatToolRuntime(settings: settings)
+        let followUp = runtime.prepareRequest(
+            scope: .standalone(settings: settings), canEditImage: false, selection: selection, mcpHost: host
+        )
+        XCTAssertTrue(followUp.definitions.contains { $0.function.name == toolName })
+        settings.setToolExposureMode(.off, toolName: toolName)
+        runtime.updateSettings(settings)
+        let disabled = runtime.prepareRequest(
+            scope: .standalone(settings: settings), canEditImage: false, selection: selection, mcpHost: host
+        )
+        XCTAssertFalse(disabled.definitions.contains { $0.function.name == toolName })
+        XCTAssertTrue(ChatToolSelection(history: []).toolNames.isEmpty)
+        XCTAssertTrue(ChatToolSelection(history: history + [
+            ChatTranscriptMessage(role: .user, content: "Unrelated task"),
+            ChatTranscriptMessage(role: .assistant, content: "No tools needed"),
+        ]).toolNames.isEmpty)
+    }
+
+    func testRepeatedDiscoveryIsStableAndNewSearchReplacesAutoSchemas() async throws {
+        let host = RuntimeMCPHost()
+        host.definitions = (0..<8).map { index in
+            MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+                name: "mcp__test__tool_\(index)",
+                description: index < 4 ? "Astronomy observations" : "Botany specimens",
+                parameters: .object(["type": .string("object")])
+            ))
+        }
+        let runtime = ChatToolRuntime(settings: settings(host: host, mode: .automatic))
+        var selection = ChatToolSelection()
+        var matches = Set<String>()
+        for query in ["astronomy", "astronomy", "botany"] {
+            let request = runtime.prepareRequest(
+                scope: .standalone(settings: NativSettings()), canEditImage: false,
+                selection: selection, mcpHost: host
+            )
+            let call = call(name: "tool_search", arguments: #"{"query":"\#(query)"}"#)
+            let result = try await runtime.execute(call: call, request: request, context: context(), mcpHost: host)
+            if query == "astronomy" && !matches.isEmpty {
+                XCTAssertEqual(result.activatedToolNames, matches)
+            }
+            matches = result.activatedToolNames
+            selection.record(call: call, outcome: result, request: request)
+        }
+        let request = runtime.prepareRequest(
+            scope: .standalone(settings: NativSettings()), canEditImage: false,
+            selection: selection, mcpHost: host
+        )
+        let exposed = request.definitions.filter { $0.function.name.hasPrefix("mcp__test__") }
+        XCTAssertEqual(exposed.count, ChatToolDiscoveryRegistry.maximumResults)
+        XCTAssertTrue(exposed.allSatisfy { $0.function.description.contains("Botany") })
+        XCTAssertEqual(Set(exposed.map(\.function.name)), matches)
+    }
+
+    func testPreparedPayloadKeepsLargeAutoCatalogOutOfInitialRequest() throws {
+        let host = RuntimeMCPHost()
+        host.definitions = (0..<100).map { index in
+            MLXChatToolDefinition(function: MLXChatFunctionDefinition(
+                name: "mcp__test__tool_\(index)", description: String(repeating: "description ", count: 100),
+                parameters: .object(["type": .string("object")])
+            ))
+        }
+        let runtime = ChatToolRuntime(settings: settings(host: host, mode: .automatic))
+        let initial = prepare(runtime, host: host)
+        let initialBytes = try JSONEncoder().encode(initial.definitions)
+        let fullBytes = try JSONEncoder().encode(host.definitions)
+        XCTAssertFalse(initial.definitions.contains { $0.function.name.hasPrefix("mcp__test__") })
+        XCTAssertLessThan(initialBytes.count, fullBytes.count)
+
+        let activated = prepare(runtime, host: host, activated: Set(host.definitions.map(\.function.name)))
+        XCTAssertEqual(
+            activated.definitions.filter { $0.function.name.hasPrefix("mcp__test__") }.count,
+            ChatToolDiscoveryRegistry.maximumResults
+        )
+    }
+
     private func settings(host: RuntimeMCPHost, mode: ToolExposureMode) -> NativSettings {
         var settings = NativSettings(mcpServers: [host.server])
         settings.setMCPServerExposureMode(mode, serverID: host.server.id)
@@ -226,7 +338,7 @@ final class ChatToolRuntimeTests: XCTestCase {
     ) -> ChatToolRequest {
         runtime.prepareRequest(
             scope: .standalone(settings: NativSettings()), canEditImage: false,
-            activatedToolNames: activated, mcpHost: host
+            selection: ChatToolSelection(toolNames: activated.sorted()), mcpHost: host
         )
     }
 

@@ -251,6 +251,36 @@ final class ChatToolRegistryTests: XCTestCase {
         }
     }
 
+    func testDiscoverySearchesParameterNamesAndDescriptions() {
+        let candidate = ChatToolDiscoveryCandidate(
+            name: "mcp__storage__lookup", title: "Lookup", description: "Find an item", source: "Storage",
+            parameters: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "postalCode": .object([
+                        "type": .string("string"), "description": .string("Delivery destination")
+                    ])
+                ])
+            ])
+        )
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("postal code", candidates: [candidate]), [candidate])
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("delivery", candidates: [candidate]), [candidate])
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("string", candidates: [candidate]).isEmpty)
+    }
+
+    func testDiscoveryPrefersExactNamesAndAvoidsIncidentalSubstringMatches() {
+        let exact = ChatToolDiscoveryCandidate(
+            name: "git_log", title: "Git log", description: "Commit history", source: "Git"
+        )
+        let incidental = ChatToolDiscoveryCandidate(
+            name: "catalog", title: "Catalog", description: "Digital catalog", source: "Library"
+        )
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("git log", candidates: [incidental, exact]), [exact])
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("git", candidates: [incidental]).isEmpty)
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("unknown capability", candidates: [exact]).isEmpty)
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("git", candidates: [exact], limit: 0).isEmpty)
+    }
+
     func testBuiltInToolsUseThePresentationOrder() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
