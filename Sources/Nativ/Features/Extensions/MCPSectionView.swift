@@ -113,10 +113,14 @@ struct MCPSectionView: View {
         return MCPServerRow(
             server: presentation,
             state: configured.flatMap { host.states[$0.id] } ?? .disabled,
-            exposureMode: configured.map {
-                model.settings.mcpServerExposureMode(for: $0)
-            } ?? .off,
-            onExposureModeChange: { setExposureMode($0, for: entry) },
+            exposureMode: Binding(
+                get: {
+                    guard let server = catalog.configuredServer(for: entry, in: model.settings.mcpServers)
+                    else { return .off }
+                    return model.settings.mcpServerExposureMode(for: server)
+                },
+                set: { setExposureMode($0, for: entry) }
+            ),
             onReconnect: configured.map { server in { host.reconnect(server.id) } },
             onEdit: { editing = presentation },
             onDelete: configured.map { server in { pendingDelete = server } }
@@ -127,8 +131,14 @@ struct MCPSectionView: View {
         MCPServerRow(
             server: server,
             state: host.states[server.id],
-            exposureMode: model.settings.mcpServerExposureMode(for: server),
-            onExposureModeChange: { setExposureMode($0, for: server) },
+            exposureMode: Binding(
+                get: {
+                    guard let current = model.settings.mcpServers.first(where: { $0.id == server.id })
+                    else { return .off }
+                    return model.settings.mcpServerExposureMode(for: current)
+                },
+                set: { setExposureMode($0, for: server) }
+            ),
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
             onDelete: { pendingDelete = server }
@@ -173,8 +183,7 @@ struct MCPSectionView: View {
 private struct MCPServerRow: View {
     let server: MCPServerConfig
     let state: MCPServerConnectionState?
-    let exposureMode: ToolExposureMode
-    let onExposureModeChange: (ToolExposureMode) -> Void
+    @Binding var exposureMode: ToolExposureMode
     let onReconnect: (() -> Void)?
     let onEdit: () -> Void
     let onDelete: (() -> Void)?
@@ -220,10 +229,7 @@ private struct MCPServerRow: View {
                     .frame(width: 22)
                 }
                 ToolExposureModeControl(
-                    mode: Binding(
-                        get: { exposureMode },
-                        set: onExposureModeChange
-                    ),
+                    mode: $exposureMode,
                     title: server.name.isEmpty ? "Untitled server" : server.name
                 )
             }
