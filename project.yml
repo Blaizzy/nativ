@@ -215,6 +215,9 @@ targets:
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionPackageInstaller.swift
       - path: Sources/Nativ/Features/Models/NativTaskModelSelection.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceTranscriptInsertionTarget.swift
+      - path: Sources/Nativ/Features/Extensions/Declarative/NativWorkflowServices.swift
+      - path: Sources/Nativ/Features/Extensions/Declarative/NativWorkflowRunner.swift
       - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift
       - path: Sources/Nativ/Features/MCP/GitHubOAuth.swift
       - path: Sources/Nativ/Resources/MCPCatalog.json
