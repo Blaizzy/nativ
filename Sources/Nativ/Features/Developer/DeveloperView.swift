@@ -47,6 +47,7 @@ struct DeveloperView: View {
                                 VStack(alignment: .leading, spacing: Self.contentSpacing) {
                                     runtimeGrid
                                     serverEndpointsPanel
+                                    MarketplaceCatalogSettingsPanel()
                                     authenticationPanels
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -603,6 +604,75 @@ struct DeveloperView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(endpoint.absoluteURL(baseURL: model.settings.serverBaseURL), forType: .string)
+    }
+}
+
+private struct MarketplaceCatalogSettingsPanel: View {
+    @AppStorage(NativExtensionCatalogPreferences.overrideKey)
+    private var catalogURLOverride = ""
+
+    private var validationMessage: String? {
+        guard !catalogURLOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        do {
+            _ = try NativExtensionCatalogPreferences.sourceURL(override: catalogURLOverride)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.grid.2x2")
+                    .foregroundStyle(.blue)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("MarketPlace Catalog")
+                        .font(.callout.weight(.semibold))
+                    Text("Leave blank to use the production catalog.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField(
+                    NativExtensionCatalogPreferences.productionURL.absoluteString,
+                    text: $catalogURLOverride
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.monospaced())
+                .accessibilityLabel("Extension catalog URL")
+
+                if !catalogURLOverride.isEmpty {
+                    Button("Reset") {
+                        catalogURLOverride = ""
+                    }
+                }
+            }
+
+            if let validationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Text("Local development accepts http://localhost; other catalogs must use HTTPS.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
     }
 }
 
