@@ -112,6 +112,83 @@ final class ChatToolRuntimeTests: XCTestCase {
         }
     }
 
+    func testUnknownNamesDoNotAliasToolsOrReportDisabledPermissions() async {
+        let runtime = ChatToolRuntime()
+        let request = prepareProject(runtime)
+        for _ in 0..<2 {
+            do {
+                _ = try await runtime.execute(
+                    call: call(name: "bash", arguments: #"{"command":"pwd"}"#),
+                    request: request, context: context(),
+                    requestApproval: { XCTFail("Unknown tool requested approval"); return true }
+                )
+                XCTFail("Unknown tool executed")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("Unknown tool"))
+                XCTAssertFalse(error.localizedDescription.contains("Off"))
+            }
+        }
+    }
+
+    func testAccessErrorsDistinguishDiscoveryOffAndMissingConfiguration() async {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.automatic, toolName: "terminal")
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepare(runtime)
+        do {
+            _ = try await runtime.execute(call: call(name: "terminal"), request: request, context: context())
+            XCTFail("Undiscovered tool executed")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("tool_search"))
+            XCTAssertFalse(error.localizedDescription.contains("Off"))
+        }
+        settings.setToolExposureMode(.off, toolName: "tool_search")
+        runtime.updateSettings(settings)
+        do {
+            _ = try await runtime.execute(call: call(name: "terminal"), request: request, context: context())
+            XCTFail("Undiscovered tool executed")
+        } catch {
+            XCTAssertEqual(error as? ChatToolAccessError, .notAdvertised("terminal"))
+        }
+        settings.setToolExposureMode(.off, toolName: "terminal")
+        runtime.updateSettings(settings)
+        do {
+            _ = try await runtime.execute(call: call(name: "terminal"), request: request, context: context())
+            XCTFail("Disabled tool executed")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Off"))
+            XCTAssertFalse(error.localizedDescription.contains("discovered"))
+        }
+        do {
+            _ = try await runtime.execute(call: call(name: "read_file"), request: request, context: context())
+            XCTFail("Unconfigured tool executed")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("unavailable"))
+            XCTAssertFalse(error.localizedDescription.contains("Off"))
+            XCTAssertFalse(error.localizedDescription.contains("Unknown"))
+        }
+    }
+
+    func testProjectSwitchRevokesPendingTerminalApproval() async {
+        var settings = NativSettings()
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepareProject(runtime)
+        let gate = ChatToolConsentGate()
+        let id = UUID()
+        let execution = Task {
+            try await runtime.execute(
+                call: call(name: "terminal", arguments: #"{"command":"pwd"}"#),
+                request: request, context: context(), requestApproval: { await gate.awaitDecision(for: id) }
+            )
+        }
+        await waitUntil { gate.pendingCount == 1 }
+        settings.projectToolsEnabled = false
+        runtime.updateSettings(settings)
+        gate.confirm(id)
+        await assertUnavailable { try await execution.value }
+        XCTAssertEqual(gate.pendingCount, 0)
+    }
+
     func testOldRequestCannotExecuteAfterToolIsOff() async throws {
         let host = RuntimeMCPHost()
         var settings = settings(host: host, mode: .on)
@@ -301,6 +378,18 @@ final class ChatToolRuntimeTests: XCTestCase {
                 requestApproval: { XCTFail("Unselected tool requested approval"); return true }
             )
         }
+    }
+
+    func testRestrictedDiscoveryDoesNotExposeUnselectedCapabilities() async throws {
+        let host = RuntimeMCPHost()
+        let runtime = ChatToolRuntime(settings: settings(host: host, mode: .automatic))
+        let request = runtime.prepareRequest(allowing: [ChatToolDiscoveryRegistry.definition], mcpHost: host)
+        let result = try await runtime.execute(
+            call: call(name: "tool_search", arguments: #"{"query":"repository history"}"#),
+            request: request, context: context(), mcpHost: host
+        )
+        XCTAssertTrue(result.activatedToolNames.isEmpty)
+        XCTAssertFalse(result.content.contains(toolName))
     }
 
     func testSettingsChangeDuringApprovalCannotAuthorizeAnEditedCustomTool() async throws {

@@ -132,7 +132,7 @@ final class ChatToolRuntime {
         selection: ChatToolSelection,
         mcpHost: (any ChatToolMCPHost)?
     ) -> ChatToolRequest {
-        let tools = catalog(scope: scope, canEditImage: canEditImage, mcpHost: mcpHost)
+        let tools = availableTools(scope: scope, canEditImage: canEditImage, mcpHost: mcpHost)
         let definitions = ChatToolExposurePolicy.advertisedDefinitions(
             from: tools.map {
                 ChatToolExposureCandidate(definition: $0.definition, exposureMode: $0.exposureMode)
@@ -149,7 +149,7 @@ final class ChatToolRuntime {
         mcpHost: (any ChatToolMCPHost)?
     ) -> ChatToolRequest {
         let scope = ChatToolScope.standalone(settings: settings)
-        let tools = catalog(scope: scope, canEditImage: false, mcpHost: mcpHost)
+        let tools = availableTools(scope: scope, canEditImage: false, mcpHost: mcpHost)
             .filter { definitions.contains($0.definition) }
         return ChatToolRequest(
             definitions: tools.map(\.definition), tools: tools, scope: scope, canEditImage: false
@@ -169,7 +169,7 @@ final class ChatToolRuntime {
         guard request.definitions.contains(where: { $0.function.name == name }),
             let tool = request.tools.first(where: { $0.definition.function.name == name })
         else {
-            throw ChatToolAccessError.unavailable(name)
+            throw accessError(for: name, request: request, mcpHost: mcpHost)
         }
         try validate(tool, request: request, mcpHost: mcpHost)
 
@@ -214,9 +214,13 @@ final class ChatToolRuntime {
                     let content = try await ChatSwitchModelToolExecutor().execute(call: call, appModel: model)
                     result = ChatToolExecutionOutcome(content: content, attachments: [])
                 } else {
-                    let available = self.catalog(
+                    let allowedNames = Set(request.tools.map(\.definition.function.name))
+                    let available = self.availableTools(
                         scope: request.scope, canEditImage: request.canEditImage, mcpHost: mcpHost
-                    ).filter { $0.definition.function.name != ChatToolDiscoveryRegistry.toolName }
+                    ).filter {
+                        $0.definition.function.name != ChatToolDiscoveryRegistry.toolName
+                            && allowedNames.contains($0.definition.function.name)
+                    }
                     let providedNames = Set(request.definitions.map(\.function.name))
                     context.availableTools = available.filter {
                         $0.exposureMode == .on && providedNames.contains($0.definition.function.name)
@@ -240,7 +244,7 @@ final class ChatToolRuntime {
             }
         } catch {
             if executions[id]?.revoked == true {
-                throw ChatToolAccessError.unavailable(name)
+                throw ChatToolAccessError.revoked(name)
             }
             throw error
         }
@@ -252,8 +256,9 @@ final class ChatToolRuntime {
         mcpHost: (any ChatToolMCPHost)?
     ) throws {
         let name = tool.definition.function.name
+        if isOff(tool) { throw ChatToolAccessError.disabled(name) }
         guard isAvailable(tool, scope: request.scope),
-            let current = catalog(
+            let current = availableTools(
                 scope: request.scope, canEditImage: request.canEditImage, mcpHost: mcpHost
             ).first(where: { $0.definition.function.name == name }),
             current.source == tool.source, current.definition == tool.definition
@@ -261,20 +266,14 @@ final class ChatToolRuntime {
     }
 
     private func isAvailable(_ tool: ChatAvailableTool, scope: ChatToolScope) -> Bool {
+        guard !isOff(tool) else { return false }
         let name = tool.definition.function.name
         switch tool.source {
         case .custom(let custom):
             return settings.customTools.contains(custom)
-                && settings.toolExposureMode(for: name, default: .automatic) != .off
         case .mcp(let server):
-            guard settings.mcpServers.contains(server),
-                settings.mcpServerExposureMode(for: server) != .off
-            else { return false }
-            return settings.toolExposureMode(
-                for: name, default: settings.mcpServerExposureMode(for: server)
-            ) != .off
+            return settings.mcpServers.contains(server)
         case .builtIn:
-            guard settings.toolExposureMode(for: name) != .off else { return false }
             if scope.isProject, ChatToolScope.projectToolNames.contains(name) {
                 return scope.projectToolsAreAvailable && settings.projectToolsEnabled
             }
@@ -293,11 +292,54 @@ final class ChatToolRuntime {
         }
     }
 
-    private func catalog(
+    private func isOff(_ tool: ChatAvailableTool) -> Bool {
+        let name = tool.definition.function.name
+        switch tool.source {
+        case .builtIn:
+            return settings.toolExposureMode(for: name) == .off
+        case .custom:
+            return settings.toolExposureMode(for: name, default: .automatic) == .off
+        case .mcp(let original):
+            guard let server = settings.mcpServers.first(where: { $0.id == original.id }) else { return false }
+            let mode = settings.mcpServerExposureMode(for: server)
+            return mode == .off || settings.toolExposureMode(for: name, default: mode) == .off
+        }
+    }
+
+    private func accessError(
+        for name: String, request: ChatToolRequest, mcpHost: (any ChatToolMCPHost)?
+    ) -> ChatToolAccessError {
+        let candidates = catalog(canEditImage: request.canEditImage, mcpHost: mcpHost)
+            .filter { $0.definition.function.name == name }
+        guard let tool = candidates.first else {
+            return request.tools.contains { $0.definition.function.name == name }
+                ? .unavailable(name) : .unknown(name)
+        }
+        guard candidates.count == 1 else { return .unavailable(name) }
+        if isOff(tool) { return .disabled(name) }
+        guard isAvailable(tool, scope: request.scope) else { return .unavailable(name) }
+        if tool.exposureMode == .automatic,
+            settings.toolExposureMode(for: ChatToolDiscoveryRegistry.toolName) != .off,
+            request.tools.contains(where: { $0.definition.function.name == name }),
+            request.definitions.contains(where: { $0.function.name == ChatToolDiscoveryRegistry.toolName }) {
+            return .notDiscovered(name)
+        }
+        return .notAdvertised(name)
+    }
+
+    private func availableTools(
         scope: ChatToolScope,
         canEditImage: Bool,
         mcpHost: (any ChatToolMCPHost)?
     ) -> [ChatAvailableTool] {
+        let tools = catalog(canEditImage: canEditImage, mcpHost: mcpHost)
+        let counts = Dictionary(grouping: tools, by: { $0.definition.function.name }).mapValues(\.count)
+        return tools.filter {
+            counts[$0.definition.function.name] == 1 && isAvailable($0, scope: scope)
+        }
+    }
+
+    private func catalog(canEditImage: Bool, mcpHost: (any ChatToolMCPHost)?) -> [ChatAvailableTool] {
         var tools = [ChatAvailableTool(
             definition: ChatToolDiscoveryRegistry.definition,
             title: "Tool Search", source: .builtIn,
@@ -320,7 +362,7 @@ final class ChatToolRuntime {
             )
         }
         if let mcpHost {
-            for server in settings.mcpServers where settings.mcpServerExposureMode(for: server) != .off {
+            for server in settings.mcpServers {
                 tools += mcpHost.toolDefinitions(forServer: server.id).map { definition in
                     ChatAvailableTool(
                         definition: definition, title: definition.function.name, source: .mcp(server),
@@ -331,10 +373,7 @@ final class ChatToolRuntime {
                 }
             }
         }
-        let counts = Dictionary(grouping: tools, by: { $0.definition.function.name }).mapValues(\.count)
-        return tools.filter {
-            counts[$0.definition.function.name] == 1 && isAvailable($0, scope: scope)
-        }
+        return tools
     }
 
     private func approvalRequirement(

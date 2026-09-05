@@ -432,13 +432,28 @@ enum ChatUnknownToolError: LocalizedError {
     }
 }
 
-enum ChatToolAccessError: LocalizedError {
+enum ChatToolAccessError: LocalizedError, Equatable {
+    case unknown(String)
+    case disabled(String)
+    case notDiscovered(String)
+    case notAdvertised(String)
     case unavailable(String)
+    case revoked(String)
 
     var errorDescription: String? {
         switch self {
+        case .unknown(let name):
+            "Unknown tool: \(name). Use an exact name from the provided tool schemas, not an invented alias."
+        case .disabled(let name):
+            "The tool \(name) is Off. Only the user can enable it; do not retry or try to bypass this choice."
+        case .notDiscovered(let name):
+            "The Auto tool \(name) has not been provided for this request. Use tool_search, then use its schema in the next step."
+        case .notAdvertised(let name):
+            "The tool \(name) was not provided for this request. Use only the provided tool schemas."
         case .unavailable(let name):
-            "The tool \(name) is Off, unavailable, or has not been discovered for this request."
+            "The tool \(name) is unavailable or its configuration changed. Ask the user to check its setup, connection, and project access before retrying."
+        case .revoked(let name):
+            "The call to \(name) was cancelled because its permissions or configuration changed. Use current tool schemas and obtain new approval where required."
         }
     }
 }
