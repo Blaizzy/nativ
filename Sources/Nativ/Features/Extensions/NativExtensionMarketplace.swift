@@ -1,34 +1,7 @@
 import Foundation
+import NativExtensionSDK
 import Observation
 import SwiftUI
-
-struct NativExtensionCatalogDocument: Decodable, Sendable {
-    let schemaVersion: Int
-    let extensions: [NativExtensionCatalogEntry]
-}
-
-struct NativExtensionCatalogEntry: Decodable, Identifiable, Sendable {
-    let id: String
-    let displayName: String
-    let summary: String
-    let developer: String
-    let version: String
-    let category: String
-    let systemImage: String
-    let status: Status
-
-    enum Status: String, Decodable, Sendable {
-        case preview
-        case available
-
-        var title: String {
-            switch self {
-            case .preview: "Preview"
-            case .available: "Available"
-            }
-        }
-    }
-}
 
 @MainActor
 @Observable
@@ -36,13 +9,17 @@ final class NativExtensionCatalogStore {
     enum Phase: Equatable {
         case idle
         case loading
-        case loaded
-        case failed
+        case loaded([NativExtensionCatalogEntry])
+        case failed(String)
     }
 
-    private(set) var entries: [NativExtensionCatalogEntry] = []
     private(set) var phase: Phase = .idle
     var query = ""
+
+    var entries: [NativExtensionCatalogEntry] {
+        guard case .loaded(let entries) = phase else { return [] }
+        return entries
+    }
 
     var filteredEntries: [NativExtensionCatalogEntry] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -50,40 +27,32 @@ final class NativExtensionCatalogStore {
         return entries.filter {
             $0.displayName.localizedStandardContains(trimmedQuery)
                 || $0.summary.localizedStandardContains(trimmedQuery)
-                || $0.category.localizedStandardContains(trimmedQuery)
+                || $0.category.rawValue.localizedStandardContains(trimmedQuery)
         }
     }
 
-    func load() async {
-        guard phase == .idle else { return }
-        await refresh()
-    }
-
-    func refresh() async {
+    func refresh(catalogURLOverride: String) async {
+        let usesProductionCatalog = catalogURLOverride
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         phase = .loading
         do {
-            entries = try await fetchRemoteCatalog()
-            phase = .loaded
+            let sourceURL = try NativExtensionCatalogPreferences.sourceURL(
+                override: catalogURLOverride
+            )
+            let catalog = try await NativExtensionCatalogClient().fetch(from: sourceURL)
+            try Task.checkCancellation()
+            phase = .loaded(catalog.extensions)
         } catch {
-            guard let bundledEntries = loadBundledCatalog() else {
-                phase = .failed
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 return
             }
-            entries = bundledEntries
-            phase = .loaded
+            guard usesProductionCatalog,
+                  let bundledEntries = loadBundledCatalog() else {
+                phase = .failed(error.localizedDescription)
+                return
+            }
+            phase = .loaded(bundledEntries)
         }
-    }
-
-    private func fetchRemoteCatalog() async throws -> [NativExtensionCatalogEntry] {
-        let url = URL(
-            string: "https://blaizzy.github.io/nativ/extensions/catalog.json"
-        )!
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let response = response as? HTTPURLResponse,
-              (200..<300).contains(response.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
-        return try decode(data)
     }
 
     private func loadBundledCatalog() -> [NativExtensionCatalogEntry]? {
@@ -93,30 +62,29 @@ final class NativExtensionCatalogStore {
         ), let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return try? decode(data)
-    }
-
-    private func decode(_ data: Data) throws -> [NativExtensionCatalogEntry] {
-        let document = try JSONDecoder().decode(NativExtensionCatalogDocument.self, from: data)
-        guard document.schemaVersion == 1 else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: [], debugDescription: "Unsupported extension catalog schema")
-            )
+        guard let catalog = try? JSONDecoder().decode(NativExtensionCatalog.self, from: data),
+              (try? NativExtensionCatalogValidator.validate(
+                  catalog,
+                  sourceURL: NativExtensionCatalogPreferences.productionURL
+              )) != nil else {
+            return nil
         }
-        return document.extensions
+        return catalog.extensions
     }
 }
 
 struct NativExtensionMarketplaceView: View {
     @State private var store = NativExtensionCatalogStore()
+    @AppStorage(NativExtensionCatalogPreferences.overrideKey)
+    private var catalogURLOverride = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             searchField
             content
         }
-        .task {
-            await store.load()
+        .task(id: catalogURLOverride) {
+            await store.refresh(catalogURLOverride: catalogURLOverride)
         }
     }
 
@@ -146,13 +114,15 @@ struct NativExtensionMarketplaceView: View {
             ProgressView("Loading extensions…")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
-        case .failed:
+        case .failed(let message):
             VStack(spacing: 10) {
-                Text("The extension marketplace could not be loaded.")
+                Text(message)
                     .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                 Button("Try Again") {
-                    Task { await store.refresh() }
+                    Task {
+                        await store.refresh(catalogURLOverride: catalogURLOverride)
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
@@ -193,10 +163,11 @@ private struct NativExtensionMarketplaceCard: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 NativTintedIconTile(symbol: entry.systemImage, size: 44)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.displayName)
                         .nativTextStyle(.compactCardTitle)
-                    Text(entry.category)
+                    Text(entry.category.rawValue)
                         .nativTextStyle(.metadata)
                         .foregroundStyle(.secondary)
                 }
@@ -216,7 +187,8 @@ private struct NativExtensionMarketplaceCard: View {
                 Spacer(minLength: 8)
                 Link(
                     "View on Web",
-                    destination: URL(string: "https://blaizzy.github.io/nativ/extensions/")!
+                    destination: entry.homepage
+                        ?? URL(string: "https://blaizzy.github.io/nativ/extensions/")!
                 )
                 .controlSize(.small)
             }
@@ -231,5 +203,14 @@ private struct NativExtensionMarketplaceCard: View {
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
         }
         .accessibilityElement(children: .contain)
+    }
+}
+
+private extension NativExtensionCatalogEntry.Status {
+    var title: String {
+        switch self {
+        case .preview: "Preview"
+        case .available: "Available"
+        }
     }
 }
