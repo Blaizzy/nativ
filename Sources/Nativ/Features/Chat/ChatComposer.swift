@@ -234,7 +234,9 @@ struct ChatComposer: View {
                             editorContentHeight = height
                         },
                         fontScale: model.settings.chatFontScale,
-                        focusToken: viewModel.composerFocusToken
+                        focusToken: viewModel.composerFocusToken,
+                        allowsDefaultActionWhenEmpty: viewModel.pendingImageAttachments.isEmpty
+                            && viewModel.promptEditContext == nil
                     )
 
                     if viewModel.draft.isEmpty {
@@ -2305,6 +2307,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let onContentHeightChange: (CGFloat) -> Void
     var fontScale: Double = 1.0
     var focusToken: Int = 0
+    var allowsDefaultActionWhenEmpty = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -2323,6 +2326,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.onSubmit = context.coordinator.handleSubmit
         textView.onCancel = context.coordinator.handleCancel
         textView.onPasteImage = context.coordinator.handlePasteImage
+        textView.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
@@ -2366,6 +2370,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
+
+        (textView as? ChatComposerNSTextView)?.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
 
         if !textView.hasMarkedText(), textView.string != text {
             textView.string = text
@@ -2482,6 +2488,7 @@ private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
+    var allowsDefaultActionWhenEmpty = false
 
     override func keyDown(with event: NSEvent) {
         // Return confirms a marked composition in input methods such as Japanese
@@ -2499,6 +2506,11 @@ private final class ChatComposerNSTextView: NSTextView {
 
         switch ComposerReturnBehavior.resolve(for: event) {
         case .submit:
+            if allowsDefaultActionWhenEmpty, string.isEmpty,
+                window?.performKeyEquivalent(with: event) == true
+            {
+                return
+            }
             onSubmit?()
         case .insertNewline:
             insertText("\n", replacementRange: selectedRange())
