@@ -224,6 +224,7 @@ targets:
         buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
+      - path: Sources/Nativ/Features/Chat/ChatToolRuntime.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
       - path: Sources/Nativ/Features/Chat/ChatStreamEventRelay.swift
