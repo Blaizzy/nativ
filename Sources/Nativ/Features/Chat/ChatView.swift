@@ -114,6 +114,24 @@ private struct ChatProjectContextBanner: View {
     let project: ChatProject
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
+    let toolExposureModes: [String: ToolExposureMode]
+
+    private var restrictedModes: [ToolExposureMode] {
+        [.off, .automatic].filter { mode in toolExposureModes.values.contains(mode) }
+    }
+
+    private var toolStatus: String {
+        restrictedModes.map { mode in
+            "\(toolExposureModes.values.filter { $0 == mode }.count) \(mode.title)"
+        }.joined(separator: " · ")
+    }
+
+    private var toolStatusHelp: String {
+        restrictedModes.map { mode in
+            let names = toolExposureModes.filter { $0.value == mode }.keys.sorted().joined(separator: ", ")
+            return "\(mode.title): \(names)."
+        }.joined(separator: " ") + " Off tools are unavailable; Auto tools require discovery. Manage access in Extensions → Tools."
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -136,6 +154,13 @@ private struct ChatProjectContextBanner: View {
                 Text(rootIsAvailable ? "Tools Off" : "Unavailable")
                     .nativTextStyle(.badgeMuted)
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
+            } else if !restrictedModes.isEmpty {
+                Text(toolStatus)
+                    .nativTextStyle(.badgeMuted)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(toolStatusHelp)
+                    .accessibilityLabel(toolStatusHelp)
             }
         }
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
@@ -251,7 +276,10 @@ private struct ChatTranscriptView: View {
                     ChatProjectContextBanner(
                         project: project,
                         rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: model.settings.projectToolsEnabled
+                        toolsEnabled: model.settings.projectToolsEnabled,
+                        toolExposureModes: Dictionary(uniqueKeysWithValues: ChatToolScope.projectToolNames.map {
+                            ($0, model.settings.toolExposureMode(for: $0))
+                        })
                     )
                 }
             }

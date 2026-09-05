@@ -23,6 +23,8 @@ Auto exposure includes at most three selected tools. A successful search replace
 
 ## App checks
 
+Projects provide read_file, search_files, write_file, patch, and terminal directly with default settings, using the project folder without requiring a standalone file-access folder. Explicit Off and Auto choices remain in effect. The project header identifies restricted modes; turning off Project tools or losing the folder removes all five capabilities. Test the actual request definitions and execution, not only the Project setting.
+
 1. Set System Stats to Auto and Tool Search to On. In a fresh chat, ask the model to check CPU and memory usage. Expect discovery, then a separate model request containing and calling the matching tool.
 2. Ask it to check again. The recently used Auto tool should be directly available. Set it Off, then repeat: its executor must not run. Other enabled tools retain their own availability and approval rules.
 3. Ask for a harmless Terminal command. While approval is pending, turn Terminal Off. The pending operation should fail promptly; a late approval cannot execute it. Turn it On and submit a fresh request to verify normal approval still works.

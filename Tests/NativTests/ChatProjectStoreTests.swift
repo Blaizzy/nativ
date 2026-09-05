@@ -76,7 +76,7 @@ final class ChatProjectStoreTests: XCTestCase {
         XCTAssertFalse(scope.projectToolsAreAvailable)
     }
 
-    func testProjectToolSwitchIsIndependentFromStandaloneToolSwitches() throws {
+    func testProjectScopeDoesNotGrantIndividualToolPermissions() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 

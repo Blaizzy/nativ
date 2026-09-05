@@ -26,6 +26,76 @@ private final class RuntimeMCPHost: ChatToolMCPHost {
 final class ChatToolRuntimeTests: XCTestCase {
     private let toolName = "mcp__test__history"
 
+    func testProjectEssentialsAreDirectWithoutStandaloneFolders() throws {
+        for settings in [NativSettings(), try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))] {
+            let runtime = ChatToolRuntime(settings: settings)
+            let request = prepareProject(runtime)
+            XCTAssertTrue(ChatToolScope.projectToolNames.isSubset(of: Set(request.definitions.map(\.function.name))))
+            XCTAssertNil(settings.fileReadRootPath)
+            XCTAssertNil(settings.fileWriteRootPath)
+        }
+    }
+
+    func testProjectPreservesExplicitModesAcrossSettingsRoundTrip() async throws {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.off, toolName: "terminal")
+        settings.setToolExposureMode(.automatic, toolName: "write_file")
+        settings = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(settings))
+        let runtime = ChatToolRuntime(settings: settings)
+        let first = prepareProject(runtime)
+        let names = Set(first.definitions.map(\.function.name))
+        XCTAssertFalse(names.contains("terminal"))
+        XCTAssertFalse(names.contains("write_file"))
+        XCTAssertTrue(names.contains("read_file"))
+
+        let discovery = try await runtime.execute(
+            call: call(name: "tool_search", arguments: #"{"query":"write_file"}"#),
+            request: first, context: context()
+        )
+        XCTAssertTrue(discovery.activatedToolNames.contains("write_file"))
+        let next = prepareProject(runtime, activated: discovery.activatedToolNames)
+        XCTAssertTrue(next.definitions.contains { $0.function.name == "write_file" })
+        await assertUnavailable {
+            try await runtime.execute(
+                call: self.call(name: "terminal", arguments: #"{"command":"pwd"}"#),
+                request: next, context: self.context(),
+                requestApproval: { XCTFail("Off tool requested approval"); return true }
+            )
+        }
+    }
+
+    func testProjectToolsRequireBothFolderAndProjectPermission() async {
+        var settings = NativSettings()
+        settings.projectToolsEnabled = false
+        for request in [prepareProject(ChatToolRuntime(), rootPath: nil), prepareProject(ChatToolRuntime(settings: settings))] {
+            XCTAssertTrue(ChatToolScope.projectToolNames.isDisjoint(with: Set(request.definitions.map(\.function.name))))
+        }
+        let runtime = ChatToolRuntime()
+        let request = prepareProject(runtime)
+        runtime.updateSettings(settings)
+        await assertUnavailable {
+            try await runtime.execute(
+                call: self.call(name: "terminal", arguments: #"{"command":"pwd"}"#),
+                request: request, context: self.context(),
+                requestApproval: { XCTFail("Disabled project requested approval"); return true }
+            )
+        }
+    }
+
+    func testProjectWriteUsesItsRootWithoutStandaloneFileAccess() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = ChatToolRuntime()
+        let request = prepareProject(runtime, rootPath: root.path)
+        let result = try await runtime.execute(
+            call: call(name: "write_file", arguments: #"{"path":"index.html","content":"<html>Test</html>"}"#),
+            request: request, context: context(), requestApproval: { true }
+        )
+        XCTAssertTrue(result.content.contains("\"ok\":true"))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("index.html"), encoding: .utf8), "<html>Test</html>")
+    }
+
     func testOldRequestCannotExecuteAfterToolIsOff() async throws {
         let host = RuntimeMCPHost()
         var settings = settings(host: host, mode: .on)
@@ -331,6 +401,17 @@ final class ChatToolRuntimeTests: XCTestCase {
         var settings = NativSettings(mcpServers: [host.server])
         settings.setMCPServerExposureMode(mode, serverID: host.server.id)
         return settings
+    }
+
+    private func prepareProject(
+        _ runtime: ChatToolRuntime,
+        rootPath: String? = FileManager.default.temporaryDirectory.path,
+        activated: Set<String> = []
+    ) -> ChatToolRequest {
+        runtime.prepareRequest(
+            scope: ChatToolScope(projectID: UUID(), projectName: "Test", rootPath: rootPath, projectToolsEnabled: true),
+            canEditImage: false, selection: ChatToolSelection(toolNames: activated.sorted()), mcpHost: nil
+        )
     }
 
     private func prepare(

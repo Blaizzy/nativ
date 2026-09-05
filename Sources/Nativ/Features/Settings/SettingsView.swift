@@ -224,7 +224,7 @@ struct SettingsView: View {
                 settingsRow(
                     title: "Allow Tools",
                     description:
-                        "Allow projects to read and write files in their project folder and run terminal commands with approval.",
+                        "Allow file tools in the project folder and terminal commands with approval. Individual Off, Auto, and On choices in Extensions → Tools still apply.",
                     systemImage: "folder.badge.gearshape"
                 ) {
                     Toggle("", isOn: projectToolsEnabledBinding)
