@@ -9,7 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     let softwareUpdater = SoftwareUpdater()
     private let voiceDictationExtension = VoiceDictationExtension()
     private lazy var extensionManager = NativExtensionManager(
-        builtInExtensions: [voiceDictationExtension]
+        builtInExtensions: [voiceDictationExtension],
+        declarativeServices: { [model] in .live(model: model) }
     )
     private let controlPanelNavigation = ControlPanelNavigation()
     private let controlPanelSharedDependencies = ControlPanelSharedDependencies()
