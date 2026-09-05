@@ -16,9 +16,41 @@ private struct ChatContextWindowUsage: Equatable {
     }
 }
 
-private struct ChatContextWindowRing: View {
+@MainActor
+private enum ChatContextWindowFormatting {
+    static let percentageFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.numberStyle = .percent
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    static let tokenCountFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    static func percentage(_ fraction: Double) -> String {
+        percentageFormatter.string(from: NSNumber(value: fraction))
+            ?? "\(Int((fraction * 100).rounded()))%"
+    }
+
+    static func tokenCount(_ value: Int) -> String {
+        tokenCountFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+}
+
+private struct ChatContextWindowRing: View, Equatable {
     let usage: ChatContextWindowUsage
     @State private var showsDetails = false
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.usage == rhs.usage
+    }
 
     var body: some View {
         ZStack {
@@ -38,7 +70,7 @@ private struct ChatContextWindowRing: View {
         .onHover { showsDetails = $0 }
         .background {
             NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6) {
-                Text("Context window: \(usage.remainingPercentage)% remaining")
+                Text(verbatim: "Context window: \(remainingPercentageText) remaining")
                     .monospacedDigit()
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
@@ -46,10 +78,17 @@ private struct ChatContextWindowRing: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Model context window")
-        .accessibilityValue(
-            "\(usage.remainingPercentage) percent remaining, "
-                + "\(usage.usedTokens.formatted()) of \(usage.capacityTokens.formatted()) tokens used"
-        )
+        .accessibilityValue(Text(verbatim: accessibilityValue))
+    }
+
+    private var remainingPercentageText: String {
+        ChatContextWindowFormatting.percentage(1 - usage.usedFraction)
+    }
+
+    private var accessibilityValue: String {
+        "\(usage.remainingPercentage) percent remaining, "
+            + "\(ChatContextWindowFormatting.tokenCount(usage.usedTokens)) of "
+            + "\(ChatContextWindowFormatting.tokenCount(usage.capacityTokens)) tokens used"
     }
 
     private var ringColor: Color {
@@ -292,6 +331,7 @@ struct ChatComposer: View {
 
                     if let contextWindowUsage {
                         ChatContextWindowRing(usage: contextWindowUsage)
+                            .equatable()
                     }
 
                     modelPicker
