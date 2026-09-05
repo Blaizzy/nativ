@@ -214,11 +214,15 @@ final class ChatToolRuntime {
                     let content = try await ChatSwitchModelToolExecutor().execute(call: call, appModel: model)
                     result = ChatToolExecutionOutcome(content: content, attachments: [])
                 } else {
-                    context.discoverableTools = self.catalog(
+                    let available = self.catalog(
                         scope: request.scope, canEditImage: request.canEditImage, mcpHost: mcpHost
-                    ).filter {
+                    ).filter { $0.definition.function.name != ChatToolDiscoveryRegistry.toolName }
+                    let providedNames = Set(request.definitions.map(\.function.name))
+                    context.availableTools = available.filter {
+                        $0.exposureMode == .on && providedNames.contains($0.definition.function.name)
+                    }.map(\.discoveryCandidate)
+                    context.discoverableTools = available.filter {
                         $0.exposureMode == .automatic
-                            && $0.definition.function.name != ChatToolDiscoveryRegistry.toolName
                     }.map(\.discoveryCandidate)
                     result = try await ChatToolDispatcher.execute(call: call, context: context)
                 }

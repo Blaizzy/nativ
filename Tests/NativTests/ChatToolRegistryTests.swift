@@ -174,6 +174,33 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertEqual(matches.map(\.name), ["mcp__git__log"])
     }
 
+    func testDiscoveryRejectsWeakDescriptionOnlyMatches() {
+        let image = ChatImageToolRegistry.definitions(canEdit: false)[0]
+        let candidate = ChatToolDiscoveryCandidate(
+            name: image.function.name, title: "Generate Image", description: image.function.description,
+            source: "Built-in", parameters: image.function.parameters
+        )
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("create HTML file with game code", candidates: [candidate]).isEmpty)
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("create invoice", candidates: [candidate]).isEmpty)
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("generate image of a cat", candidates: [candidate]), [candidate])
+    }
+
+    func testDiscoveryFindsFileCreationUsingActualToolDefinitions() {
+        let candidates = ChatToolRegistry.descriptors(canEditImage: false).map {
+            ChatToolDiscoveryCandidate(
+                name: $0.definition.function.name,
+                title: $0.definition.function.name.replacingOccurrences(of: "_", with: " "),
+                description: $0.definition.function.description, source: "Built-in",
+                parameters: $0.definition.function.parameters
+            )
+        }
+        for query in ["create HTML file with game code", "file creation HTML file"] {
+            let matches = ChatToolDiscoveryRegistry.search(query, candidates: candidates)
+            XCTAssertEqual(matches.first?.name, "write_file", query)
+            XCTAssertFalse(matches.contains { $0.name == "generate_image" }, query)
+        }
+    }
+
     func testToolDiscoveryBoundsMatchesAndReturnedDescriptions() async throws {
         let candidates = (0 ..< 5).map { index in
             ChatToolDiscoveryCandidate(

@@ -33,6 +33,7 @@ struct ChatToolExecutionContext: Sendable {
     var terminalDefaultWorkingDirectory: String? = nil
     var terminalToolDependencies = ChatTerminalToolDependencies.live
     var discoverableTools: [ChatToolDiscoveryCandidate] = []
+    var availableTools: [ChatToolDiscoveryCandidate] = []
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -200,7 +201,7 @@ enum ChatToolDiscoveryRegistry {
         function: MLXChatFunctionDefinition(
             name: toolName,
             description:
-                "Find Auto tools by capability, service, tool name, or parameter. Use this when the visible tools do not cover the task. Up to three matching tools become available in the next step, replacing the previous Auto selection. If nothing matches, rephrase the query.",
+                "Find tools by capability, service, tool name, or parameter when the provided tools do not cover the task. Already available matches can be used immediately. Up to three matching Auto tools become available in the next step, replacing the previous Auto selection. If nothing matches, rephrase the query.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -226,7 +227,7 @@ enum ChatToolDiscoveryRegistry {
         let queryTerms = terms(in: normalizedQuery)
         guard !normalizedQuery.isEmpty, !queryTerms.isEmpty, limit > 0 else { return [] }
 
-        return candidates.compactMap { candidate in
+        return candidates.compactMap { candidate -> (ChatToolDiscoveryCandidate, Int)? in
             let fields = [
                 (terms(in: normalized(candidate.name)), 40),
                 (terms(in: normalized(candidate.title + " " + candidate.source)), 30),
@@ -234,8 +235,9 @@ enum ChatToolDiscoveryRegistry {
                 (terms(in: normalized(parameterText(candidate.parameters))), 10),
             ]
             var score = normalized(candidate.name) == normalizedQuery ? 200 : 0
+            var matchedTerms = 0
             for term in queryTerms {
-                score += fields.map { words, weight in
+                let weight = fields.map { words, weight in
                     if words.contains(term) { return weight }
                     if words.contains(where: {
                         ($0.count >= 4 && term.hasPrefix($0))
@@ -243,8 +245,15 @@ enum ChatToolDiscoveryRegistry {
                     }) { return weight / 2 }
                     return 0
                 }.max() ?? 0
+                score += weight
+                if weight > 0 { matchedTerms += 1 }
             }
-            return score == 0 ? nil : (candidate, score)
+            let namesToolOrService = [candidate.name, candidate.title, candidate.source].contains {
+                let identity = terms(in: normalized($0))
+                return !identity.isEmpty && identity.isSubset(of: queryTerms)
+            }
+            guard matchedTerms >= min(2, queryTerms.count) || namesToolOrService else { return nil }
+            return (candidate, score)
         }
         .sorted {
             if $0.1 == $1.1 {
@@ -448,7 +457,13 @@ private struct ChatToolDiscoveryMatch: Encodable {
 private struct ChatToolDiscoveryPayload: Encodable {
     let ok: Bool
     let matches: [ChatToolDiscoveryMatch]
+    var alreadyAvailable: [String] = []
     let message: String
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, matches, message
+        case alreadyAvailable = "already_available"
+    }
 }
 
 private enum ChatToolDiscoveryError: LocalizedError {
@@ -647,11 +662,14 @@ enum ChatToolDispatcher {
     ) async throws -> ChatToolExecutionOutcome {
         let matches = try ChatToolDiscoveryRegistry.matches(
             argumentsJSON: call.function?.arguments,
-            candidates: context.discoverableTools
+            candidates: context.discoverableTools + context.availableTools
         )
+        let availableNames = Set(context.availableTools.map(\.name))
+        let alreadyAvailable = matches.filter { availableNames.contains($0.name) }.map(\.name)
+        let discovered = matches.filter { !availableNames.contains($0.name) }
         let payload = ChatToolDiscoveryPayload(
             ok: true,
-            matches: matches.map {
+            matches: discovered.map {
                 ChatToolDiscoveryMatch(
                     name: $0.name,
                     title: $0.title,
@@ -659,16 +677,17 @@ enum ChatToolDispatcher {
                     source: $0.source
                 )
             },
+            alreadyAvailable: alreadyAvailable,
             message: matches.isEmpty
-                ? "No matching Auto tools were found."
-                : "These Auto tools replace the previous selection for the next step. Use their provided schemas; search again when you need a different capability."
+                ? "No matching available or Auto tools were found. Rephrase the query or ask the user to check tool access."
+                : "Use already_available tools with their provided schemas. Matches become available next step, replacing the previous Auto selection."
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return ChatToolExecutionOutcome(
             content: String(decoding: try encoder.encode(payload), as: UTF8.self),
             attachments: [],
-            activatedToolNames: Set(matches.map(\.name))
+            activatedToolNames: Set(discovered.map(\.name))
         )
     }
 

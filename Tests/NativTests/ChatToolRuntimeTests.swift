@@ -96,6 +96,22 @@ final class ChatToolRuntimeTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("index.html"), encoding: .utf8), "<html>Test</html>")
     }
 
+    func testDiscoveryPointsToAlreadyProvidedToolsWithoutActivatingThem() async throws {
+        let runtime = ChatToolRuntime()
+        let request = prepareProject(runtime)
+        for query in ["create HTML file with game code", "file creation HTML file", "terminal"] {
+            let result = try await runtime.execute(
+                call: call(name: "tool_search", arguments: #"{"query":"\#(query)"}"#),
+                request: request, context: context()
+            )
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.content.utf8)) as? [String: Any])
+            let available = try XCTUnwrap(payload["already_available"] as? [String])
+            XCTAssertTrue(available.contains(query == "terminal" ? "terminal" : "write_file"))
+            XCTAssertTrue(result.activatedToolNames.isEmpty)
+            XCTAssertFalse(result.content.contains("generate_image"))
+        }
+    }
+
     func testOldRequestCannotExecuteAfterToolIsOff() async throws {
         let host = RuntimeMCPHost()
         var settings = settings(host: host, mode: .on)
