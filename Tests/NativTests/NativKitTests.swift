@@ -1,4 +1,5 @@
 import Foundation
+import NativServerKit
 import Testing
 
 @Suite("Kits")
