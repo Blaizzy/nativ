@@ -31,6 +31,10 @@ enum NativSystemPermissionController {
         }
     }
 
+    static func hasMicrophoneAccess() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
     static func hasInsertTextAccess() -> Bool {
         // macOS can authorize synthesized paste events through either the
         // dedicated Post Event service or the broader Accessibility grant
