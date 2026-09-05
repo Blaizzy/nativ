@@ -7,6 +7,7 @@ enum NativExtensionPackageError: LocalizedError, Equatable {
     case duplicateIdentifier(String)
     case externalPackageClaimsIncluded
     case unsupportedExternalRuntime
+    case missingWorkflowDocument
     case runtimeUnavailable
     case olderVersionRejected(identifier: String, installed: String, candidate: String)
     case malformedManifest(String)
@@ -22,7 +23,9 @@ enum NativExtensionPackageError: LocalizedError, Equatable {
         case .externalPackageClaimsIncluded:
             "Only extensions shipped inside Nativ can declare themselves as included."
         case .unsupportedExternalRuntime:
-            "An installed extension must declare the extensionFoundation runtime."
+            "Only extensions shipped inside Nativ can use the builtIn runtime."
+        case .missingWorkflowDocument:
+            "The extension package does not contain Workflow.json."
         case .runtimeUnavailable:
             "The extension was installed, but its ExtensionFoundation runtime is not available yet."
         case .olderVersionRejected(let identifier, let installed, let candidate):
@@ -37,6 +40,8 @@ enum NativExtensionPackageError: LocalizedError, Equatable {
 struct NativExtensionInstalledPackage: Sendable {
     let manifest: NativExtensionManifest
     let packageURL: URL
+    /// Present only for the declarative runtime, and only once validated.
+    let workflow: NativExtensionWorkflow?
 }
 
 /// A package that could not be loaded, kept so the Extensions page can explain
@@ -102,7 +107,10 @@ struct NativExtensionPackageInstaller {
 
     /// `DecodingError`'s own description does not name the offending field, which
     /// is the only thing an extension author needs in order to fix the file.
-    private static func describe(_ error: DecodingError) -> String {
+    private static func describe(
+        _ error: DecodingError,
+        document: String = "Manifest.json"
+    ) -> String {
         func path(_ context: DecodingError.Context) -> String {
             context.codingPath.map(\.stringValue).joined(separator: ".")
         }
@@ -110,17 +118,47 @@ struct NativExtensionPackageInstaller {
         case .keyNotFound(let key, let context):
             let parent = path(context)
             let location = parent.isEmpty ? "" : " in “\(parent)”"
-            return "Manifest.json is missing the required field “\(key.stringValue)”\(location)."
+            return "\(document) is missing the required field “\(key.stringValue)”\(location)."
         case .typeMismatch(_, let context),
              .valueNotFound(_, let context),
              .dataCorrupted(let context):
             let field = path(context)
             return field.isEmpty
-                ? "Manifest.json is not valid JSON."
-                : "Manifest.json has an unexpected value for “\(field)”."
+                ? "\(document) is not valid JSON."
+                : "\(document) has an unexpected value for “\(field)”."
         @unknown default:
-            return "Manifest.json could not be read."
+            return "\(document) could not be read."
         }
+    }
+
+    /// Reads and validates `Workflow.json`, or returns nil for a runtime that
+    /// does not use one.
+    func loadWorkflow(
+        at packageURL: URL,
+        manifest: NativExtensionManifest
+    ) throws -> NativExtensionWorkflow? {
+        guard manifest.runtime == .declarative else {
+            return nil
+        }
+        let workflowURL = packageURL.appendingPathComponent(
+            NativExtensionManifest.workflowDocumentName
+        )
+        guard fileManager.fileExists(atPath: workflowURL.path) else {
+            throw NativExtensionPackageError.missingWorkflowDocument
+        }
+        let workflow: NativExtensionWorkflow
+        do {
+            workflow = try JSONDecoder().decode(
+                NativExtensionWorkflow.self,
+                from: Data(contentsOf: workflowURL)
+            )
+        } catch let error as DecodingError {
+            throw NativExtensionPackageError.malformedManifest(
+                Self.describe(error, document: NativExtensionManifest.workflowDocumentName)
+            )
+        }
+        try NativExtensionWorkflowValidator.validate(workflow, manifest: manifest)
+        return workflow
     }
 
     func loadInstalledPackages(
@@ -152,7 +190,8 @@ struct NativExtensionPackageInstaller {
                 }
                 manifests[manifest.id] = NativExtensionInstalledPackage(
                     manifest: manifest,
-                    packageURL: entry
+                    packageURL: entry,
+                    workflow: try loadWorkflow(at: entry, manifest: manifest)
                 )
             } catch {
                 issues.append(
@@ -188,9 +227,12 @@ struct NativExtensionPackageInstaller {
         // The builtIn runtime means the code ships inside Nativ, so an installed
         // package declaring it has nothing to run and would otherwise sit in the
         // list forever reporting a missing runtime.
-        guard manifest.runtime == .extensionFoundation else {
+        guard manifest.runtime != .builtIn else {
             throw NativExtensionPackageError.unsupportedExternalRuntime
         }
+        // Validate the workflow before anything is copied, so a package that
+        // could never run is refused rather than installed and then broken.
+        _ = try loadWorkflow(at: sourceURL, manifest: manifest)
 
         let destinationURL = packageURL(for: manifest.id)
         let replaced = try? loadManifest(at: destinationURL)

@@ -317,6 +317,139 @@ final class NativExtensionPackageInstallerTests: XCTestCase {
         }
     }
 
+    // MARK: - Declarative packages
+
+    @discardableResult
+    private func makeDeclarativePackage(
+        id: String = "com.example.rewrite",
+        permissions: [String] = [
+            "accessibility.readSelection", "accessibility.insertText", "models.language",
+        ],
+        workflow: [String: Any]? = nil,
+        omitWorkflow: Bool = false
+    ) throws -> URL {
+        let packageURL = root.appendingPathComponent(
+            "\(UUID().uuidString).nativextension",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: packageURL,
+            withIntermediateDirectories: true
+        )
+        try write(
+            [
+                "schemaVersion": 1,
+                "id": id,
+                "version": "1.0.0",
+                "minimumNativVersion": "1.0.0",
+                "displayName": "Rewrite",
+                "summary": "Rewrites the selection.",
+                "developer": "Example",
+                "systemImage": "wand.and.sparkles",
+                "included": false,
+                "runtime": "declarative",
+                "workflow": "Workflow.json",
+                "contributions": [
+                    "commands": [["id": "\(id).improve", "title": "Improve"]]
+                ],
+                "permissions": permissions,
+            ],
+            to: packageURL.appendingPathComponent("Manifest.json")
+        )
+        guard !omitWorkflow else { return packageURL }
+        let document: [String: Any] = workflow ?? [
+            "schemaVersion": 2,
+            "triggers": [["id": "improve", "type": "command", "commandID": "\(id).improve"]],
+            "steps": [
+                ["id": "selection", "type": "text.readSelection"],
+                [
+                    "id": "rewrite", "type": "model.invoke", "task": "language",
+                    "inputs": ["prompt": "Improve {{selection.text}}"],
+                ],
+                [
+                    "id": "apply", "type": "text.replaceSelection",
+                    "inputs": ["text": "{{rewrite.text}}"],
+                ],
+            ],
+        ]
+        try write(document, to: packageURL.appendingPathComponent("Workflow.json"))
+        return packageURL
+    }
+
+    func testDeclarativePackageInstallsAndCarriesItsWorkflow() throws {
+        let result = try install(makeDeclarativePackage())
+
+        XCTAssertEqual(result.manifest.runtime, .declarative)
+        let loaded = installer.loadInstalledPackages(reservedIdentifiers: [])
+        let installed = try XCTUnwrap(loaded.manifests["com.example.rewrite"])
+        XCTAssertEqual(installed.workflow?.steps.count, 3)
+        XCTAssertTrue(loaded.issues.isEmpty)
+    }
+
+    func testDeclarativePackageWithoutAWorkflowDocumentIsRejected() throws {
+        XCTAssertThrowsError(
+            try install(makeDeclarativePackage(omitWorkflow: true))
+        ) { error in
+            XCTAssertEqual(
+                error as? NativExtensionPackageError,
+                .missingWorkflowDocument
+            )
+        }
+    }
+
+    /// The install-time half of the permission rule: a package cannot ship a
+    /// step it never asked permission for.
+    func testDeclarativePackageUsingAnUndeclaredPermissionIsRejected() throws {
+        XCTAssertThrowsError(
+            try install(makeDeclarativePackage(permissions: ["accessibility.insertText"]))
+        ) { error in
+            XCTAssertEqual(
+                error as? NativExtensionWorkflowError,
+                .undeclaredPermission(
+                    step: "selection",
+                    operation: "text.readSelection",
+                    permission: .readSelection
+                )
+            )
+        }
+    }
+
+    func testDeclarativePackageUsingAnUnimplementedOperationIsRejected() throws {
+        XCTAssertThrowsError(
+            try install(
+                makeDeclarativePackage(
+                    permissions: ["screen.capture"],
+                    workflow: [
+                        "schemaVersion": 2,
+                        "triggers": [[
+                            "id": "t", "type": "command",
+                            "commandID": "com.example.rewrite.improve",
+                        ]],
+                        "steps": [["id": "a", "type": "screen.capture"]],
+                    ]
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NativExtensionWorkflowError,
+                .unimplementedOperation(step: "a", operation: "screen.capture")
+            )
+        }
+    }
+
+    func testMalformedWorkflowIsReportedAgainstTheWorkflowDocument() throws {
+        let packageURL = try makeDeclarativePackage(omitWorkflow: true)
+        try Data("{".utf8).write(to: packageURL.appendingPathComponent("Workflow.json"))
+
+        XCTAssertThrowsError(try install(packageURL)) { error in
+            let message = (error as? NativExtensionPackageError)?.errorDescription ?? ""
+            XCTAssertTrue(
+                message.contains("Workflow.json"),
+                "Expected the error to name the workflow document, got: \(message)"
+            )
+        }
+    }
+
     // MARK: - Removing
 
     func testRemoveDeletesTheInstalledPackage() throws {
