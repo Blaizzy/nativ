@@ -10,7 +10,6 @@ private enum ModelConfigurationLayoutMetrics {
     static let topInset: CGFloat = 32
     static let transitionDuration: TimeInterval = 0.3
     static let resizeHandleWidth: CGFloat = 9
-    static let headerTrailingControlClearance: CGFloat = 52
 }
 
 struct ModelConfigurationLayout<Content: View>: View {
@@ -232,12 +231,27 @@ struct ModelConfigurationView: View {
                     .font(.title3.weight(.semibold))
 
                 Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                if settingsRequireRestart {
+                    Label("Server restart required", systemImage: "arrow.clockwise")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("Request settings apply to the next message.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
 
                 Button("Reset model configuration", systemImage: "arrow.counterclockwise") {
                     isConfirmingReset = true
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .frame(width: ControlPanelLayout.topControlSize)
                 .help("Reset model configuration")
                 .confirmationDialog(
                     "Reset model configuration?",
@@ -250,19 +264,9 @@ struct ModelConfigurationView: View {
                     Text("This will restore all model configuration settings to their defaults.")
                 }
             }
-
-            if settingsRequireRestart {
-                Label("Server restart required", systemImage: "arrow.clockwise")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-            } else {
-                Text("Request settings apply to the next message.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(.leading, 16)
-        .padding(.trailing, ModelConfigurationLayoutMetrics.headerTrailingControlClearance)
+        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding)
         .padding(.top, 13)
         .padding(.bottom, 16)
     }
