@@ -3,33 +3,69 @@ import Foundation
 public enum NativExtensionRuntimeKind: String, Codable, Hashable, Sendable {
     case builtIn
     case extensionFoundation
+    /// Composed from `Workflow.json` and executed in process. Carries no
+    /// executable code, which is what makes it safe to install from a catalog.
+    case declarative
 }
 
 public enum NativExtensionPermission: String, Codable, CaseIterable, Hashable, Sendable {
+    case readSelection = "accessibility.readSelection"
+    case accessibilityInsertText = "accessibility.insertText"
+    case readClipboard = "clipboard.read"
+    case writeClipboard = "clipboard.write"
+    case screenCapture = "screen.capture"
+    case saveFile = "file.save"
     case microphone
     case systemAudioCapture = "audio.systemCapture"
-    case accessibilityInsertText = "accessibility.insertText"
-    case modelsSpeechToText = "models.speechToText"
     case overlay
     case notifications
     case namespacedStorage = "storage.namespaced"
+    case modelsLanguage = "models.language"
+    case modelsVision = "models.vision"
+    case modelsImageGeneration = "models.imageGeneration"
+    case modelsImageEditing = "models.imageEditing"
+    case modelsSpeechToText = "models.speechToText"
+    case modelsTextToSpeech = "models.textToSpeech"
+    case modelsEmbedding = "models.embedding"
 
     public var displayName: String {
         switch self {
+        case .readSelection:
+            "Read selected text"
+        case .accessibilityInsertText:
+            "Insert text"
+        case .readClipboard:
+            "Read clipboard"
+        case .writeClipboard:
+            "Write clipboard"
+        case .screenCapture:
+            "Capture the screen"
+        case .saveFile:
+            "Save files"
         case .microphone:
             "Microphone"
         case .systemAudioCapture:
             "System audio"
-        case .accessibilityInsertText:
-            "Insert text"
-        case .modelsSpeechToText:
-            "Speech-to-text models"
         case .overlay:
             "Screen overlay"
         case .notifications:
             "Notifications"
         case .namespacedStorage:
             "Extension storage"
+        case .modelsLanguage:
+            "Language models"
+        case .modelsVision:
+            "Vision models"
+        case .modelsImageGeneration:
+            "Image generation models"
+        case .modelsImageEditing:
+            "Image editing models"
+        case .modelsSpeechToText:
+            "Speech-to-text models"
+        case .modelsTextToSpeech:
+            "Text-to-speech models"
+        case .modelsEmbedding:
+            "Embedding models"
         }
     }
 }
@@ -124,6 +160,8 @@ public struct NativExtensionContributions: Codable, Hashable, Sendable {
 public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     public static let currentSchemaVersion = 1
     public static let defaultExtensionPoint = "com.nativ.extension"
+    public static let workflowDocumentName = "Workflow.json"
+    public static let dashboardDocumentName = "Dashboard.json"
     /// The schema under which omitting the field was legal. Deliberately a
     /// literal, not `currentSchemaVersion` — otherwise raising the current
     /// version would silently reinterpret every existing manifest as new.
@@ -142,6 +180,10 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
     public let runtime: NativExtensionRuntimeKind
     public let extensionPoint: String
     public let runtimeBundleIdentifier: String?
+    /// Relative name of the workflow document. Required by the declarative
+    /// runtime, meaningless to the others.
+    public let workflow: String?
+    public let dashboard: String?
     public let contributions: NativExtensionContributions
     public let permissions: [NativExtensionPermission]
 
@@ -159,6 +201,8 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
         runtime: NativExtensionRuntimeKind,
         extensionPoint: String = NativExtensionManifest.defaultExtensionPoint,
         runtimeBundleIdentifier: String? = nil,
+        workflow: String? = nil,
+        dashboard: String? = nil,
         contributions: NativExtensionContributions = .init(),
         permissions: [NativExtensionPermission] = []
     ) {
@@ -175,6 +219,8 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
         self.runtime = runtime
         self.extensionPoint = extensionPoint
         self.runtimeBundleIdentifier = runtimeBundleIdentifier
+        self.workflow = workflow
+        self.dashboard = dashboard
         self.contributions = contributions
         self.permissions = permissions
     }
@@ -215,6 +261,8 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
             String.self,
             forKey: .runtimeBundleIdentifier
         )
+        workflow = try container.decodeIfPresent(String.self, forKey: .workflow)
+        dashboard = try container.decodeIfPresent(String.self, forKey: .dashboard)
         contributions = try container.decodeIfPresent(
             NativExtensionContributions.self,
             forKey: .contributions
@@ -235,6 +283,8 @@ public enum NativExtensionManifestError: LocalizedError, Equatable {
     case invalidIdentifier(String)
     case invalidVersion(String)
     case missingRuntimeBundleIdentifier
+    case missingWorkflow
+    case unexpectedRuntimeBundleIdentifier
     case incompatibleHost(required: String, current: String)
     case invalidContributionIdentifier(String)
     case duplicateContribution(String)
@@ -249,6 +299,10 @@ public enum NativExtensionManifestError: LocalizedError, Equatable {
             "“\(version)” is not a valid semantic version."
         case .missingRuntimeBundleIdentifier:
             "An ExtensionFoundation extension must declare a runtime bundle identifier."
+        case .missingWorkflow:
+            "A declarative extension must declare its Workflow.json."
+        case .unexpectedRuntimeBundleIdentifier:
+            "A declarative extension runs in Nativ and cannot declare a runtime bundle identifier."
         case .incompatibleHost(let required, let current):
             "This extension requires Nativ \(required) or later. This copy is \(current)."
         case .invalidContributionIdentifier(let identifier):
@@ -273,11 +327,21 @@ public enum NativExtensionManifestValidator {
         guard isValidIdentifier(manifest.extensionPoint) else {
             throw NativExtensionManifestError.invalidIdentifier(manifest.extensionPoint)
         }
-        if manifest.runtime == .extensionFoundation {
+        switch manifest.runtime {
+        case .extensionFoundation:
             guard let runtimeBundleIdentifier = manifest.runtimeBundleIdentifier,
                   isValidIdentifier(runtimeBundleIdentifier) else {
                 throw NativExtensionManifestError.missingRuntimeBundleIdentifier
             }
+        case .declarative:
+            guard manifest.workflow == NativExtensionManifest.workflowDocumentName else {
+                throw NativExtensionManifestError.missingWorkflow
+            }
+            guard manifest.runtimeBundleIdentifier == nil else {
+                throw NativExtensionManifestError.unexpectedRuntimeBundleIdentifier
+            }
+        case .builtIn:
+            break
         }
         guard let extensionVersion = NativSemanticVersion(manifest.version) else {
             throw NativExtensionManifestError.invalidVersion(manifest.version)
