@@ -268,3 +268,123 @@ final class NativExtensionStateStoreTests: XCTestCase {
         )
     }
 }
+
+final class NativDeclarativeManifestTests: XCTestCase {
+    /// The vocabulary the marketplace validates against, kept here verbatim.
+    /// `NativExtensionPermission` is a raw-value enum with no unknown-case
+    /// fallback, so a permission the catalog allows but Nativ does not know
+    /// fails the whole manifest decode and the package cannot even be listed.
+    /// Mirror of `PERMISSIONS` in Marvis-Labs/nativ-extensions scripts/validate.py.
+    private let catalogPermissions: Set<String> = [
+        "accessibility.readSelection",
+        "accessibility.insertText",
+        "clipboard.read",
+        "clipboard.write",
+        "screen.capture",
+        "file.save",
+        "microphone",
+        "audio.systemCapture",
+        "overlay",
+        "notifications",
+        "storage.namespaced",
+        "models.language",
+        "models.vision",
+        "models.imageGeneration",
+        "models.imageEditing",
+        "models.speechToText",
+        "models.textToSpeech",
+        "models.embedding",
+    ]
+
+    private func manifestJSON(
+        runtime: String = "declarative",
+        permissions: [String] = ["accessibility.readSelection", "models.language"],
+        extra: [String: Any] = ["workflow": "Workflow.json"]
+    ) throws -> Data {
+        var object: [String: Any] = [
+            "schemaVersion": 1,
+            "id": "com.example.rewrite",
+            "version": "1.0.0",
+            "minimumNativVersion": "0.1.0",
+            "displayName": "Rewrite",
+            "summary": "Rewrites the selection.",
+            "developer": "Example",
+            "systemImage": "wand.and.sparkles",
+            "included": false,
+            "runtime": runtime,
+            "permissions": permissions,
+        ]
+        object.merge(extra) { _, new in new }
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    func testEveryCatalogPermissionIsKnownToNativ() {
+        let known = Set(NativExtensionPermission.allCases.map(\.rawValue))
+        XCTAssertEqual(
+            catalogPermissions.subtracting(known),
+            [],
+            "The marketplace allows permissions Nativ cannot decode"
+        )
+        XCTAssertEqual(
+            known.subtracting(catalogPermissions),
+            [],
+            "Nativ knows permissions the marketplace will not accept"
+        )
+    }
+
+    func testDeclarativeManifestDecodesWithTheFullVocabulary() throws {
+        let data = try manifestJSON(permissions: catalogPermissions.sorted())
+        let manifest = try JSONDecoder().decode(NativExtensionManifest.self, from: data)
+
+        XCTAssertEqual(manifest.runtime, .declarative)
+        XCTAssertEqual(manifest.workflow, NativExtensionManifest.workflowDocumentName)
+        XCTAssertEqual(Set(manifest.permissions.map(\.rawValue)), catalogPermissions)
+        XCTAssertNoThrow(
+            try NativExtensionManifestValidator.validate(manifest, hostVersion: "1.0.0")
+        )
+    }
+
+    func testDeclarativeManifestWithoutAWorkflowIsRejected() throws {
+        let data = try manifestJSON(extra: [:])
+        let manifest = try JSONDecoder().decode(NativExtensionManifest.self, from: data)
+
+        XCTAssertThrowsError(
+            try NativExtensionManifestValidator.validate(manifest, hostVersion: "1.0.0")
+        ) { error in
+            XCTAssertEqual(error as? NativExtensionManifestError, .missingWorkflow)
+        }
+    }
+
+    func testDeclarativeManifestCannotClaimAnOutOfProcessRuntime() throws {
+        let data = try manifestJSON(
+            extra: [
+                "workflow": "Workflow.json",
+                "runtimeBundleIdentifier": "com.example.rewrite.runtime",
+            ]
+        )
+        let manifest = try JSONDecoder().decode(NativExtensionManifest.self, from: data)
+
+        XCTAssertThrowsError(
+            try NativExtensionManifestValidator.validate(manifest, hostVersion: "1.0.0")
+        ) { error in
+            XCTAssertEqual(
+                error as? NativExtensionManifestError,
+                .unexpectedRuntimeBundleIdentifier
+            )
+        }
+    }
+
+    func testExtensionFoundationManifestIsUnaffected() throws {
+        let data = try manifestJSON(
+            runtime: "extensionFoundation",
+            permissions: ["microphone"],
+            extra: ["runtimeBundleIdentifier": "com.example.rewrite.runtime"]
+        )
+        let manifest = try JSONDecoder().decode(NativExtensionManifest.self, from: data)
+
+        XCTAssertNil(manifest.workflow)
+        XCTAssertNoThrow(
+            try NativExtensionManifestValidator.validate(manifest, hostVersion: "1.0.0")
+        )
+    }
+}
