@@ -74,8 +74,7 @@ final class ChatViewModelTests: XCTestCase {
 
     func testGeneratedChatTitlesUseTypographicEllipsis() {
         let title = ChatSession.defaultTitle(
-            for: [ChatTranscriptMessage(role: .user, content: String(repeating: "a", count: 80))],
-            createdAt: .now
+            for: [ChatTranscriptMessage(role: .user, content: String(repeating: "a", count: 80))]
         )
 
         XCTAssertEqual(title.count, 56)

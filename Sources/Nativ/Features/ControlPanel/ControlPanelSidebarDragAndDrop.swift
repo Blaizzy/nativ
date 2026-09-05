@@ -83,7 +83,7 @@ extension ControlPanelView {
         isPinnedRow: Bool
     ) -> some View {
         if let payload = recent.dragPayload, !isSelectingRecents {
-            recentSessionRow(recent)
+            recentSessionRow(recent, alignsContentWithSectionHeader: true)
                 .onDrag {
                     NSItemProvider(object: payload as NSString)
                 } preview: {
@@ -109,7 +109,7 @@ extension ControlPanelView {
                         }
                     ))
         } else {
-            recentSessionRow(recent)
+            recentSessionRow(recent, alignsContentWithSectionHeader: true)
         }
     }
 
