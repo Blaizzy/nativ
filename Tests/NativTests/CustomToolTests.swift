@@ -128,6 +128,34 @@ final class CustomToolTests: XCTestCase {
         )
     }
 
+    func testCancellingScriptExecutionStopsTheProcess() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NativScriptCancellation-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = directory.appendingPathComponent("started")
+        let tool = try CustomTool.make(
+            name: "Cancellation Test", summary: "Cancellation fixture", kind: .script,
+            script: "print ready > '\(marker.path)'\nwhile true; do :; done",
+            scriptLanguage: .shell, parametersJSON: CustomTool.defaultParametersJSON
+        )
+        let task = Task { try await CustomToolExecutor.execute(tool, argumentsJSON: "{}") }
+        for _ in 0..<1_000 {
+            if FileManager.default.fileExists(atPath: marker.path) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        let started = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
     func testShellScriptIsCheckedAndExecuted() async throws {
         let tool = try CustomTool.make(
             name: "Echo",

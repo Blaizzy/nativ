@@ -385,13 +385,13 @@ struct ChatComposer: View {
         ChatComposerActionPanel(
             canPasteImage: viewModel.canPasteImage,
             showsGlobalTools: true,
-            isWebSearchEnabled: globalToolIsEnabled(
+            webSearchExposureMode: globalToolExposureMode(
                 ChatWebSearchToolRegistry.toolName,
                 isAvailable: isWebSearchAvailable
             ),
             isWebSearchAvailable: isWebSearchAvailable,
             webSearchProviderLabel: webSearchProviderLabel,
-            isWebReadEnabled: globalToolIsEnabled(
+            webReadExposureMode: globalToolExposureMode(
                 ChatWebReadToolRegistry.toolName,
                 isAvailable: isWebReadAvailable
             ),
@@ -426,8 +426,11 @@ struct ChatComposer: View {
         }
     }
 
-    private func globalToolIsEnabled(_ toolName: String, isAvailable: Bool) -> Bool {
-        isAvailable && model.settings.isToolEnabled(toolName)
+    private func globalToolExposureMode(
+        _ toolName: String,
+        isAvailable: Bool
+    ) -> ToolExposureMode {
+        isAvailable ? model.settings.toolExposureMode(for: toolName) : .off
     }
 
     private func toggleGlobalBrowsingTool(
@@ -442,10 +445,8 @@ struct ChatComposer: View {
             return
         }
 
-        model.settings.setToolEnabled(
-            !model.settings.isToolEnabled(toolName),
-            toolName: toolName
-        )
+        let mode = model.settings.toolExposureMode(for: toolName)
+        model.settings.setToolExposureMode(mode.next, toolName: toolName)
         showsAddPanel = false
     }
 
@@ -1985,10 +1986,10 @@ struct ChatComposerAddButton: View {
 struct ChatComposerActionPanel: View {
     let canPasteImage: Bool
     var showsGlobalTools = false
-    var isWebSearchEnabled = false
+    var webSearchExposureMode: ToolExposureMode = .off
     var isWebSearchAvailable = false
     var webSearchProviderLabel: String?
-    var isWebReadEnabled = false
+    var webReadExposureMode: ToolExposureMode = .off
     var isWebReadAvailable = false
     var webReadProviderLabel: String?
     let onAttachImages: () -> Void
@@ -2033,10 +2034,11 @@ struct ChatComposerActionPanel: View {
                             title: "Web Search",
                             detail: capabilityDetail(
                                 provider: webSearchProviderLabel,
+                                mode: webSearchExposureMode,
                                 isAvailable: isWebSearchAvailable
                             ),
                             systemName: "globe",
-                            isSelected: isWebSearchEnabled,
+                            exposureMode: isWebSearchAvailable ? webSearchExposureMode : nil,
                             showsDisclosure: !isWebSearchAvailable,
                             action: onToggleWebSearch
                         )
@@ -2045,10 +2047,11 @@ struct ChatComposerActionPanel: View {
                             title: "Web Read",
                             detail: capabilityDetail(
                                 provider: webReadProviderLabel,
+                                mode: webReadExposureMode,
                                 isAvailable: isWebReadAvailable
                             ),
                             systemName: "doc.text.magnifyingglass",
-                            isSelected: isWebReadEnabled,
+                            exposureMode: isWebReadAvailable ? webReadExposureMode : nil,
                             showsDisclosure: !isWebReadAvailable,
                             action: onToggleWebRead
                         )
@@ -2084,8 +2087,12 @@ struct ChatComposerActionPanel: View {
         .frame(maxHeight: 500)
     }
 
-    private func capabilityDetail(provider: String?, isAvailable: Bool) -> String {
-        isAvailable ? (provider ?? "Ready") : "Needs setup"
+    private func capabilityDetail(
+        provider: String?,
+        mode: ToolExposureMode,
+        isAvailable: Bool
+    ) -> String {
+        isAvailable ? "\(provider ?? "Ready") · \(mode.title)" : "Needs setup"
     }
 
     private func section<Content: View>(
@@ -2109,7 +2116,7 @@ private struct ChatComposerActionRow: View {
     let title: String
     let detail: String
     let systemName: String
-    var isSelected = false
+    var exposureMode: ToolExposureMode? = nil
     var showsDisclosure = false
     let action: () -> Void
 
@@ -2136,10 +2143,10 @@ private struct ChatComposerActionRow: View {
 
                 Spacer(minLength: 12)
 
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
+                if let exposureMode {
+                    Image(systemName: exposureMode.systemImage)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.green)
+                        .foregroundStyle(exposureMode.tint)
                         .frame(width: 18, height: 18)
                 } else if showsDisclosure {
                     Image(systemName: "chevron.right")
@@ -2158,15 +2165,15 @@ private struct ChatComposerActionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityValue(isSelected ? "Enabled globally" : "")
+        .accessibilityAddTraits(exposureMode == .on ? .isSelected : [])
+        .accessibilityValue(exposureMode?.availabilityText ?? "")
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isSelected)
+        .animation(.easeOut(duration: 0.12), value: exposureMode)
     }
 
     private var rowBackground: Color {
-        if isSelected {
-            return Color.green.opacity(isHovering ? 0.16 : 0.10)
+        if let exposureMode {
+            return exposureMode.tint.opacity(isHovering ? 0.16 : 0.10)
         }
         return isHovering ? Color.primary.opacity(0.07) : .clear
     }

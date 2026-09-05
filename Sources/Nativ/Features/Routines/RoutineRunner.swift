@@ -215,12 +215,16 @@ final class RoutineRunner {
 
         while true {
             try Task.checkCancellation()
+            let toolRequest = model.tools.prepareRequest(
+                allowing: capabilities.tools.map(\.definition),
+                mcpHost: mcpHost
+            )
             let advertisesTools =
-                !capabilities.tools.isEmpty
+                !toolRequest.definitions.isEmpty
                 && ChatToolRoundGate.advertisesTools(atRound: toolRound)
             let toolDefinitions =
                 advertisesTools
-                ? capabilities.tools.map(\.definition)
+                ? toolRequest.definitions
                 : nil
             let request = MLXChatCompletionRequest(
                 model: routine.modelID,
@@ -287,7 +291,7 @@ final class RoutineRunner {
                 try Task.checkCancellation()
                 let result = try await executeTool(
                     call,
-                    capabilities: capabilities,
+                    request: toolRequest,
                     settings: settings,
                     baseURL: baseURL,
                     fileReadTracker: fileReadTracker,
@@ -318,7 +322,7 @@ final class RoutineRunner {
 
     private func executeTool(
         _ call: MLXChatToolCall,
-        capabilities: ResolvedCapabilities,
+        request: ChatToolRequest,
         settings: NativSettings,
         baseURL: URL,
         fileReadTracker: ChatReadFileTracker,
@@ -327,48 +331,20 @@ final class RoutineRunner {
     ) async throws -> ScheduledToolResult {
         do {
             try Task.checkCancellation()
-            guard let name = call.function?.name,
-                let tool = capabilities.tool(named: name)
-            else {
-                throw ScheduledToolExecutionError.notAllowed(call.function?.name ?? "unknown")
-            }
-
-            let outcome: ChatToolExecutionOutcome
-            switch tool.provider {
-            case .custom(let id):
-                guard let customTool = settings.customTools.first(where: { $0.id == id }) else {
-                    throw ScheduledToolExecutionError.unavailable(name)
-                }
-                let content = try await CustomToolExecutor.execute(
-                    customTool,
-                    argumentsJSON: call.function?.arguments
-                )
-                outcome = ChatToolExecutionOutcome(content: content, attachments: [])
-            case .mcp:
-                guard mcpHost.handlesTool(named: name) else {
-                    throw ScheduledToolExecutionError.unavailable(name)
-                }
-                let content = try await mcpHost.callTool(
-                    named: name,
-                    argumentsJSON: call.function?.arguments
-                )
-                outcome = ChatToolExecutionOutcome(content: content, attachments: [])
-            case .builtIn:
-                let context = ChatToolExecutionContext(
-                    imageGenerationModelID: settings.imageGenerationModelID,
-                    baseURL: baseURL,
-                    apiKey: settings.serverAPIKey,
-                    imageReferences: [],
-                    modelSearchPath: settings.expandedModelSearchPath,
-                    additionalModelSearchPaths: settings.additionalModelSearchPaths,
-                    huggingFaceToken: model.effectiveHuggingFaceToken,
-                    fileReadRootPath: settings.fileReadRootPath,
-                    fileReadTracker: fileReadTracker,
-                    fileSearchTracker: fileSearchTracker,
-                    fileOperationRunID: fileOperationRunID
-                )
-                outcome = try await ChatToolDispatcher.execute(call: call, context: context)
-            }
+            let context = ChatToolExecutionContext(
+                imageGenerationModelID: settings.imageGenerationModelID,
+                baseURL: baseURL, apiKey: settings.serverAPIKey, imageReferences: [],
+                modelSearchPath: settings.expandedModelSearchPath,
+                additionalModelSearchPaths: settings.additionalModelSearchPaths,
+                huggingFaceToken: model.effectiveHuggingFaceToken,
+                fileReadTracker: fileReadTracker, fileSearchTracker: fileSearchTracker,
+                fileOperationRunID: fileOperationRunID
+            )
+            let outcome = try await model.tools.execute(
+                call: call, request: request, context: context, mcpHost: mcpHost,
+                // The saved routine explicitly authorizes its restricted capability set.
+                requestApproval: { true }
+            )
             return ScheduledToolResult(
                 content: outcome.content,
                 attachments: outcome.attachments,

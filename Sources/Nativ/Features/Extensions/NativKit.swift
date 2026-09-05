@@ -420,16 +420,41 @@ enum NativKitActivation {
             switch component {
             case .mcpServer(.catalog(let id)):
                 guard let entry = mcpCatalog.entry(id: id) else { continue }
+                let existingServer = mcpCatalog.configuredServer(
+                    for: entry,
+                    in: settings.mcpServers
+                )
+                let existingMode = existingServer.map {
+                    settings.mcpServerExposureMode(for: $0)
+                }
                 mcpCatalog.setEnabled(true, for: entry, in: &settings.mcpServers)
+                if existingMode == nil || existingMode == .off,
+                    let server = mcpCatalog.configuredServer(for: entry, in: settings.mcpServers)
+                {
+                    settings.setMCPServerExposureMode(.automatic, serverID: server.id)
+                }
             case .mcpServer(.configured(let id)):
-                if let index = settings.mcpServers.firstIndex(where: { $0.id == id }) {
-                    settings.mcpServers[index].isEnabled = true
+                if let server = settings.mcpServers.first(where: { $0.id == id }),
+                    settings.mcpServerExposureMode(for: server) == .off
+                {
+                    settings.setMCPServerExposureMode(.automatic, serverID: id)
                 }
             case .nativeTool(let name):
-                settings.setToolEnabled(true, toolName: name)
+                if settings.toolExposureMode(for: name) == .off {
+                    settings.setToolExposureMode(
+                        NativSettings.defaultToolExposureMode(for: name),
+                        toolName: name
+                    )
+                }
             case .customTool(let id):
                 guard let tool = settings.customTools.first(where: { $0.id == id }) else { continue }
-                settings.setToolEnabled(true, toolName: tool.toolName)
+                if settings.toolExposureMode(for: tool.toolName, default: .automatic) == .off {
+                    settings.setToolExposureMode(
+                        .automatic,
+                        toolName: tool.toolName,
+                        default: .automatic
+                    )
+                }
             case .skill(let id):
                 if let index = settings.skills.firstIndex(where: { $0.id == id }) {
                     settings.skills[index].isEnabled = true

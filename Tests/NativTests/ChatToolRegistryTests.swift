@@ -54,7 +54,8 @@ private final class FakeModelSwitchingSurface: ChatModelSwitchingSurface {
 
 private func makeContext(
     imageModelID: String? = nil,
-    modelSearchPath: String = ""
+    modelSearchPath: String = "",
+    discoverableTools: [ChatToolDiscoveryCandidate] = []
 ) -> ChatToolExecutionContext {
     ChatToolExecutionContext(
         imageGenerationModelID: imageModelID,
@@ -65,7 +66,8 @@ private func makeContext(
         additionalModelSearchPaths: [],
         analyticsDatabaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathComponent("Analytics.sqlite3")
+            .appendingPathComponent("Analytics.sqlite3"),
+        discoverableTools: discoverableTools
     )
 }
 
@@ -74,6 +76,238 @@ private func makeCall(name: String, arguments: String = "{}") -> MLXChatToolCall
 }
 
 final class ChatToolRegistryTests: XCTestCase {
+    func testToolExposurePolicyKeepsAutoAndOffToolsOutOfInitialPrompt() {
+        let automatic = ChatToolExposureCandidate(
+            definition: ChatSystemMonitorToolRegistry.definitions()[0],
+            exposureMode: .automatic
+        )
+        let on = ChatToolExposureCandidate(
+            definition: ChatTerminalToolRegistry.definition,
+            exposureMode: .on
+        )
+        let off = ChatToolExposureCandidate(
+            definition: ChatImageToolRegistry.definitions(canEdit: false)[0],
+            exposureMode: .off
+        )
+        let discovery = ChatToolExposureCandidate(
+            definition: ChatToolDiscoveryRegistry.definition,
+            exposureMode: .automatic
+        )
+
+        let initialNames = ChatToolExposurePolicy.advertisedDefinitions(
+            from: [automatic, on, off, discovery],
+            activatedToolNames: []
+        ).map(\.function.name)
+        let activatedNames = ChatToolExposurePolicy.advertisedDefinitions(
+            from: [automatic, on, off, discovery],
+            activatedToolNames: [
+                automatic.definition.function.name,
+                off.definition.function.name,
+            ]
+        ).map(\.function.name)
+
+        XCTAssertEqual(initialNames, [on.definition.function.name, ChatToolDiscoveryRegistry.toolName])
+        XCTAssertTrue(activatedNames.contains(automatic.definition.function.name))
+        XCTAssertTrue(activatedNames.contains(on.definition.function.name))
+        XCTAssertFalse(activatedNames.contains(off.definition.function.name))
+        XCTAssertEqual(activatedNames.last, ChatToolDiscoveryRegistry.toolName)
+    }
+
+    func testToolSearchOffMakesAutoToolsUnreachable() {
+        let candidates = [
+            ChatToolExposureCandidate(
+                definition: ChatSystemMonitorToolRegistry.definitions()[0],
+                exposureMode: .automatic
+            ),
+            ChatToolExposureCandidate(
+                definition: ChatToolDiscoveryRegistry.definition,
+                exposureMode: .off
+            ),
+        ]
+
+        XCTAssertTrue(
+            ChatToolExposurePolicy.advertisedDefinitions(
+                from: candidates,
+                activatedToolNames: []
+            ).isEmpty
+        )
+    }
+
+    func testToolSearchOnIsAdvertisedWithoutOtherAutoTools() {
+        let candidates = [
+            ChatToolExposureCandidate(
+                definition: ChatToolDiscoveryRegistry.definition,
+                exposureMode: .on
+            )
+        ]
+
+        XCTAssertEqual(
+            ChatToolExposurePolicy.advertisedDefinitions(
+                from: candidates,
+                activatedToolNames: []
+            ).map(\.function.name),
+            [ChatToolDiscoveryRegistry.toolName]
+        )
+    }
+
+    func testToolDiscoveryFindsRelevantAutoTools() {
+        let candidates = [
+            ChatToolDiscoveryCandidate(
+                name: "mcp__git__log",
+                title: "Git log",
+                description: "Read repository commit history",
+                source: "Git"
+            ),
+            ChatToolDiscoveryCandidate(
+                name: "generate_image",
+                title: "Generate Image",
+                description: "Create an image from a prompt",
+                source: "Built-in"
+            ),
+        ]
+
+        let matches = ChatToolDiscoveryRegistry.search(
+            "repository history",
+            candidates: candidates
+        )
+
+        XCTAssertEqual(matches.map(\.name), ["mcp__git__log"])
+    }
+
+    func testDiscoveryRejectsWeakDescriptionOnlyMatches() {
+        let image = ChatImageToolRegistry.definitions(canEdit: false)[0]
+        let candidate = ChatToolDiscoveryCandidate(
+            name: image.function.name, title: "Generate Image", description: image.function.description,
+            source: "Built-in", parameters: image.function.parameters
+        )
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("create HTML file with game code", candidates: [candidate]).isEmpty)
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("create invoice", candidates: [candidate]).isEmpty)
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("generate image of a cat", candidates: [candidate]), [candidate])
+    }
+
+    func testDiscoveryFindsFileCreationUsingActualToolDefinitions() {
+        let candidates = ChatToolRegistry.descriptors(canEditImage: false).map {
+            ChatToolDiscoveryCandidate(
+                name: $0.definition.function.name,
+                title: $0.definition.function.name.replacingOccurrences(of: "_", with: " "),
+                description: $0.definition.function.description, source: "Built-in",
+                parameters: $0.definition.function.parameters
+            )
+        }
+        for query in ["create HTML file with game code", "file creation HTML file"] {
+            let matches = ChatToolDiscoveryRegistry.search(query, candidates: candidates)
+            XCTAssertEqual(matches.first?.name, "write_file", query)
+            XCTAssertFalse(matches.contains { $0.name == "generate_image" }, query)
+        }
+    }
+
+    func testToolDiscoveryBoundsMatchesAndReturnedDescriptions() async throws {
+        let candidates = (0 ..< 5).map { index in
+            ChatToolDiscoveryCandidate(
+                name: "mcp__example__search_\(index)",
+                title: "Example search \(index)",
+                description: "Search " + String(repeating: "x", count: 400),
+                source: "Example"
+            )
+        }
+
+        let matches = ChatToolDiscoveryRegistry.search("search", candidates: candidates)
+        let outcome = try await ChatToolDispatcher.execute(
+            call: makeCall(
+                name: ChatToolDiscoveryRegistry.toolName,
+                arguments: #"{"query":"search"}"#
+            ),
+            context: makeContext(discoverableTools: candidates)
+        )
+
+        XCTAssertEqual(matches.count, ChatToolDiscoveryRegistry.maximumResults)
+        XCTAssertEqual(
+            ChatToolDiscoveryRegistry.resultDescription(candidates[0].description).count,
+            ChatToolDiscoveryRegistry.maximumResultDescriptionCharacters + 1
+        )
+        XCTAssertFalse(outcome.content.contains(String(repeating: "x", count: 241)))
+    }
+
+    func testToolDiscoveryCanResolveMatchesBeforeDispatchingAParallelBatch() throws {
+        let candidate = ChatToolDiscoveryCandidate(
+            name: "mcp__git__status",
+            title: "Git status",
+            description: "Inspect repository changes",
+            source: "Git"
+        )
+
+        let matches = try ChatToolDiscoveryRegistry.matches(
+            argumentsJSON: #"{"query":"repository changes"}"#,
+            candidates: [candidate]
+        )
+
+        XCTAssertEqual(matches.map(\.name), [candidate.name])
+    }
+
+    func testToolDiscoveryActivatesMatchedTools() async throws {
+        let candidate = ChatToolDiscoveryCandidate(
+            name: "mcp__sqlite__query",
+            title: "Query SQLite",
+            description: "Run a read-only SQL query",
+            source: "SQLite"
+        )
+        let outcome = try await ChatToolDispatcher.execute(
+            call: makeCall(
+                name: ChatToolDiscoveryRegistry.toolName,
+                arguments: #"{"query":"query sqlite"}"#
+            ),
+            context: makeContext(discoverableTools: [candidate])
+        )
+
+        XCTAssertEqual(outcome.activatedToolNames, Set([candidate.name]))
+        XCTAssertTrue(outcome.content.contains(candidate.name))
+    }
+
+    func testToolDiscoveryRejectsEmptyQueries() async {
+        do {
+            _ = try await ChatToolDispatcher.execute(
+                call: makeCall(
+                    name: ChatToolDiscoveryRegistry.toolName,
+                    arguments: #"{"query":"  "}"#
+                ),
+                context: makeContext()
+            )
+            XCTFail("Expected an invalid-arguments error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "tool_search requires a non-empty query.")
+        }
+    }
+
+    func testDiscoverySearchesParameterNamesAndDescriptions() {
+        let candidate = ChatToolDiscoveryCandidate(
+            name: "mcp__storage__lookup", title: "Lookup", description: "Find an item", source: "Storage",
+            parameters: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "postalCode": .object([
+                        "type": .string("string"), "description": .string("Delivery destination")
+                    ])
+                ])
+            ])
+        )
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("postal code", candidates: [candidate]), [candidate])
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("delivery", candidates: [candidate]), [candidate])
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("string", candidates: [candidate]).isEmpty)
+    }
+
+    func testDiscoveryPrefersExactNamesAndAvoidsIncidentalSubstringMatches() {
+        let exact = ChatToolDiscoveryCandidate(
+            name: "git_log", title: "Git log", description: "Commit history", source: "Git"
+        )
+        let incidental = ChatToolDiscoveryCandidate(
+            name: "catalog", title: "Catalog", description: "Digital catalog", source: "Library"
+        )
+        XCTAssertEqual(ChatToolDiscoveryRegistry.search("git log", candidates: [incidental, exact]), [exact])
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("git", candidates: [incidental]).isEmpty)
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("unknown capability", candidates: [exact]).isEmpty)
+        XCTAssertTrue(ChatToolDiscoveryRegistry.search("git", candidates: [exact], limit: 0).isEmpty)
+    }
+
     func testBuiltInToolsUseThePresentationOrder() {
         let names = ChatToolRegistry.definitions(canEditImage: false)
             .map(\.function.name)
@@ -974,6 +1208,13 @@ final class ChatToolPresentationTests: XCTestCase {
 
     func testTitlePinnedForEveryToolAndStatus() {
         let expected: [String: [ChatTranscriptMessage.ToolStatus?: String]] = [
+            ChatToolDiscoveryRegistry.toolName: [
+                nil: "Tool search", .preparing: "Finding available tools…",
+                .running: "Finding available tools…", .succeeded: "Found available tools",
+                .failed: "Tool search", .cancelled: "Tool search",
+                .awaitingImageModelSelection: "Tool search",
+                .awaitingConsent: "Tool search", .declined: "Tool search",
+            ],
             "generate_image": [
                 nil: "Image tool", .preparing: "Checking image model…",
                 .running: "Generating image…", .succeeded: "Generated image",
@@ -1079,6 +1320,7 @@ final class ChatToolPresentationTests: XCTestCase {
 
     func testSymbolNamePinnedForEveryToolAndStatus() {
         let toolNames = [
+            ChatToolDiscoveryRegistry.toolName,
             "generate_image", "edit_image",
             ChatSystemMonitorToolRegistry.toolName, ChatModelLibraryToolRegistry.toolName,
             ChatServerStatsToolRegistry.toolName, ChatSwitchModelToolRegistry.toolName,
@@ -1089,6 +1331,7 @@ final class ChatToolPresentationTests: XCTestCase {
             "some_unknown_tool",
         ]
         let successLikeSymbol: [String: String] = [
+            ChatToolDiscoveryRegistry.toolName: "magnifyingglass",
             "generate_image": "photo",
             "edit_image": "photo",
             ChatSystemMonitorToolRegistry.toolName: "cpu",

@@ -373,7 +373,7 @@ private struct KitDetailView: View {
 
     private func caption(for section: KitComponentSection) -> String? {
         switch section {
-        case .mcp: "All tools from these servers become available."
+        case .mcp: "These servers connect in Auto mode so agents can discover their tools."
         case .tools: "Built-in and custom tools included directly."
         case .skills: "Guidance added to the model when tools are available."
         case .extensions: nil
@@ -393,15 +393,25 @@ private struct KitDetailView: View {
             guard let entry = MCPServerCatalog.bundled.entry(id: id) else { return }
             var servers = model.settings.mcpServers
             MCPServerCatalog.bundled.setEnabled(enabled, for: entry, in: &servers)
-            model.settings.mcpServers = servers
+            var settings = model.settings
+            settings.mcpServers = servers
+            if let server = MCPServerCatalog.bundled.configuredServer(for: entry, in: servers) {
+                settings.setMCPServerExposureMode(enabled ? .automatic : .off, serverID: server.id)
+            }
+            model.settings = settings
         case .mcpServer(.configured(let id)):
-            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else { return }
-            model.settings.mcpServers[index].isEnabled = enabled
+            model.settings.setMCPServerExposureMode(enabled ? .automatic : .off, serverID: id)
         case .nativeTool(let name):
-            model.settings.setToolEnabled(enabled, toolName: name)
+            model.settings.setToolExposureMode(
+                enabled ? NativSettings.defaultToolExposureMode(for: name) : .off,
+                toolName: name
+            )
         case .customTool(let id):
             guard let tool = model.settings.customTools.first(where: { $0.id == id }) else { return }
-            model.settings.setToolEnabled(enabled, toolName: tool.toolName)
+            model.settings.setToolExposureMode(
+                enabled ? .automatic : .off,
+                toolName: tool.toolName
+            )
         case .skill(let id):
             if let index = model.settings.skills.firstIndex(where: { $0.id == id }) {
                 model.settings.skills[index].isEnabled = enabled

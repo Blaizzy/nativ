@@ -54,7 +54,7 @@ struct ChatCapabilitiesSheet: View {
                 id: "custom-tool-\(tool.id.uuidString)",
                 target: .customTool(tool.toolName),
                 title: tool.name,
-                detail: "Tool · Custom",
+                detail: "Custom tool",
                 kind: .tool,
                 systemImage: tool.kind == .script
                     ? "terminal"
@@ -88,7 +88,7 @@ struct ChatCapabilitiesSheet: View {
                     id: "mcp-\(server.id.uuidString)",
                     target: .mcpServer(server.id),
                     title: server.name.isEmpty ? "Untitled server" : server.name,
-                    detail: "MCP connection",
+                    detail: "All tools from this MCP server",
                     kind: .connection,
                     systemImage: entry?.symbol ?? "server.rack",
                     isAvailable: hasRequiredEnvironment,
@@ -106,7 +106,19 @@ struct ChatCapabilitiesSheet: View {
 
     private var nativeToolItems: [GlobalChatCapabilityItem] {
         var seenConfigurations = Set<ChatNativeToolConfiguration>()
-        return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+        let discovery = GlobalChatCapabilityItem(
+            id: "native-tool-\(ChatToolDiscoveryRegistry.toolName)",
+            target: .nativeTools([ChatToolDiscoveryRegistry.toolName]),
+            title: "Tool Search",
+            detail: "Find Auto tools without adding every tool to each prompt.",
+            kind: .tool,
+            systemImage: "magnifyingglass",
+            isAvailable: true,
+            setupSection: nil
+        )
+        let tools: [GlobalChatCapabilityItem] = ChatToolRegistry.descriptors(
+            canEditImage: false
+        ).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
             let configuration = descriptor.configuration
             if let configuration,
@@ -115,34 +127,37 @@ struct ChatCapabilitiesSheet: View {
             {
                 return nil
             }
-            let toolNames = configuration?.toolNames ?? [toolName]
+            let toolNames = descriptor.exposureToolNames
             return GlobalChatCapabilityItem(
                 id: "native-tool-\(toolName)",
                 target: .nativeTools(toolNames),
                 title: configuration?.displayName ?? humanized(toolName),
-                detail: "Tool · Built-in",
+                detail: "Built-in tool",
                 kind: .tool,
                 systemImage: configuration?.systemImage ?? "wrench.and.screwdriver",
                 isAvailable: configuration?.isConfigured ?? true,
                 setupSection: configuration?.isConfigured == false ? .tools : nil
             )
         }
+        return [discovery] + tools
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Directory")
+                Text("Capabilities")
                     .nativTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
-            Text("These settings apply to every chat.")
+            Text("Choose what agents can use and what stays out of regular prompts.")
                 .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
-            TextField("Search directory", text: $query)
+            ToolExposureModeExplanation()
+
+            TextField("Search capabilities", text: $query)
                 .textFieldStyle(.roundedBorder)
 
             ScrollView {
@@ -167,7 +182,7 @@ struct ChatCapabilitiesSheet: View {
             .scrollIndicators(.hidden)
         }
         .padding(20)
-        .frame(width: 500, height: 540)
+        .frame(width: 620, height: 580)
     }
 
     @ViewBuilder
@@ -191,7 +206,7 @@ struct ChatCapabilitiesSheet: View {
 
     @ViewBuilder
     private func capabilityRow(_ item: GlobalChatCapabilityItem) -> some View {
-        if item.isAvailable {
+        if item.isAvailable, item.kind == .skill {
             Button {
                 toggle(item)
             } label: {
@@ -232,7 +247,13 @@ struct ChatCapabilitiesSheet: View {
 
             Spacer(minLength: 20)
 
-            if isEnabled(item) {
+            if let mode = exposureModeBinding(for: item) {
+                ToolExposureModeControl(
+                    mode: mode,
+                    title: item.title,
+                    turnOffWarning: toolSearchTurnOffWarning(for: item)
+                )
+            } else if isEnabled(item) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.green)
@@ -259,28 +280,72 @@ struct ChatCapabilitiesSheet: View {
         }
     }
 
-    private func toggle(_ item: GlobalChatCapabilityItem) {
+    private func toolSearchTurnOffWarning(
+        for item: GlobalChatCapabilityItem
+    ) -> String? {
+        guard case .nativeTools(let toolNames) = item.target,
+            toolNames.contains(ChatToolDiscoveryRegistry.toolName)
+        else { return nil }
+        return ToolExposureModeCopy.toolSearchTurnOffWarning
+    }
+
+    private func exposureModeBinding(
+        for item: GlobalChatCapabilityItem
+    ) -> Binding<ToolExposureMode>? {
+        guard item.isAvailable else { return nil }
         switch item.target {
         case .nativeTools(let toolNames):
-            let enabled = !toolNames.allSatisfy(model.settings.isToolEnabled)
-            for toolName in toolNames {
-                model.settings.setToolEnabled(enabled, toolName: toolName)
-            }
-        case .customTool(let toolName):
-            model.settings.setToolEnabled(
-                !model.settings.isToolEnabled(toolName),
-                toolName: toolName
+            return Binding(
+                get: {
+                    let modes = Set(toolNames.map {
+                        model.settings.toolExposureMode(for: $0)
+                    })
+                    return modes.count == 1 ? modes.first ?? .automatic : .automatic
+                },
+                set: { mode in
+                    model.settings.setToolExposureMode(mode, toolNames: toolNames)
+                }
             )
+        case .customTool(let toolName):
+            return Binding(
+                get: {
+                    model.settings.toolExposureMode(
+                        for: toolName,
+                        default: .automatic
+                    )
+                },
+                set: { mode in
+                    model.settings.setToolExposureMode(mode, toolName: toolName)
+                }
+            )
+        case .mcpServer(let id):
+            guard model.settings.mcpServers.contains(where: { $0.id == id }) else {
+                return nil
+            }
+            return Binding(
+                get: {
+                    guard let server = model.settings.mcpServers.first(where: { $0.id == id })
+                    else { return .off }
+                    return model.settings.mcpServerExposureMode(for: server)
+                },
+                set: { mode in
+                    model.settings.setMCPServerExposureMode(mode, serverID: id)
+                }
+            )
+        case .skill:
+            return nil
+        }
+    }
+
+    private func toggle(_ item: GlobalChatCapabilityItem) {
+        switch item.target {
         case .skill(let id):
             guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else {
                 return
             }
             model.settings.skills[index].isEnabled.toggle()
-        case .mcpServer(let id):
-            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else {
-                return
-            }
-            model.settings.mcpServers[index].isEnabled.toggle()
+        case .nativeTools, .customTool, .mcpServer:
+            break
         }
     }
 
@@ -315,7 +380,7 @@ struct ChatKitsPickerSheet: View {
                 NativHoverCloseButton { dismiss() }
             }
 
-            Text("Enable a ready-made set of capabilities for every chat.")
+            Text("Make a ready-made set of capabilities discoverable in every chat.")
                 .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
