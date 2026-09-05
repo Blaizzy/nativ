@@ -314,6 +314,7 @@ extension ControlPanelView {
     }
 
     func createChatSession(projectID: UUID? = nil) {
+        sidebarRenameCommitRequests.send()
         chat.createSession(projectID: projectID)
         showChatWorkspace()
 

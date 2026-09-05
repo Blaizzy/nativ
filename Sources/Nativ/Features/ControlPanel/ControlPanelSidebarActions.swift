@@ -54,6 +54,7 @@ extension ControlPanelView {
             onCreateFolderForSession: {
                 createFolderForRecent(recent)
             },
+            renameCommitRequests: sidebarRenameCommitRequests,
             alignsContentWithSectionHeader: alignsContentWithSectionHeader
         )
     }
@@ -98,6 +99,7 @@ extension ControlPanelView {
             folders: [],
             onMoveToFolder: { _ in },
             onCreateFolderForSession: {},
+            renameCommitRequests: sidebarRenameCommitRequests,
             allowsFolderOrganization: false,
             alignsContentWithSectionHeader: true
         )

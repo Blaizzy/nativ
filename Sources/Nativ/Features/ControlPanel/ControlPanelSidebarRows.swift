@@ -26,6 +26,7 @@ struct ControlPanelRecentSessionRow: View {
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
+    let renameCommitRequests: PassthroughSubject<Void, Never>
     var allowsFolderOrganization = true
     var alignsContentWithSectionHeader = false
     @State private var isHovering = false
@@ -50,6 +51,7 @@ struct ControlPanelRecentSessionRow: View {
                         }
                         .onExitCommand {
                             isRenaming = false
+                            renameFieldFocused = false
                         }
                         // Clicking away ends the rename (commit) instead of
                         // leaving a stuck field/caret that swallows clicks.
@@ -145,6 +147,9 @@ struct ControlPanelRecentSessionRow: View {
         .padding(.vertical, 1)
         .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
         .onHover { isHovering = $0 }
+        .onReceive(renameCommitRequests) { _ in
+            commitRename()
+        }
         .contextMenu {
             rowMenuContents
         }
@@ -247,15 +252,20 @@ struct ControlPanelRecentSessionRow: View {
     }
 
     private func beginRename() {
+        guard !isRenaming else { return }
+        renameCommitRequests.send()
         renameDraft = recent.title
         isRenaming = true
         DispatchQueue.main.async {
+            guard isRenaming else { return }
             renameFieldFocused = true
         }
     }
 
     private func commitRename() {
+        guard isRenaming else { return }
         isRenaming = false
+        renameFieldFocused = false
         onRename(renameDraft)
     }
 }
