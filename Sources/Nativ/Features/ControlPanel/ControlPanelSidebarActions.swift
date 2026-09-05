@@ -7,7 +7,10 @@ import UniformTypeIdentifiers
 
 extension ControlPanelView {
     @ViewBuilder
-    func recentSessionRow(_ recent: ControlPanelRecentSession) -> some View {
+    func recentSessionRow(
+        _ recent: ControlPanelRecentSession,
+        alignsContentWithSectionHeader: Bool = false
+    ) -> some View {
         ControlPanelRecentSessionRow(
             recent: recent,
             isSelected: sidebarSelection == recent.selection,
@@ -50,7 +53,8 @@ extension ControlPanelView {
             },
             onCreateFolderForSession: {
                 createFolderForRecent(recent)
-            }
+            },
+            alignsContentWithSectionHeader: alignsContentWithSectionHeader
         )
     }
 
@@ -94,9 +98,10 @@ extension ControlPanelView {
             folders: [],
             onMoveToFolder: { _ in },
             onCreateFolderForSession: {},
-            allowsFolderOrganization: false
+            allowsFolderOrganization: false,
+            alignsContentWithSectionHeader: true
         )
-        .padding(.leading, 19)
+        .padding(.leading, 8)
         .padding(.trailing, 8)
     }
 

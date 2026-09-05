@@ -6,15 +6,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    func createRecentSession() {
-        if selectedTab == .chat, chatWorkspaceMode == .images {
-            imageGeneration.beginNewDraft()
-            showImageWorkspace()
-        } else {
-            createChatSession(projectID: activeProjectContextID)
-        }
-    }
-
     func handleNewChatRequest() {
         guard navigation.consumeNewChatRequest() else {
             return
@@ -104,6 +95,7 @@ extension ControlPanelView {
             }
             showChatWorkspace()
             applySidebarSelection(.chat(sessionID))
+            revealSidebarSection(\.sidebarSessionsCollapsed)
         } catch {
             chatImportAlert = .failed(error.localizedDescription)
             return
@@ -315,26 +307,6 @@ extension ControlPanelView {
         }
     }
 
-    var newRecentHelp: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "Start a new image draft"
-            : activeProjectContextID.flatMap { projects.project(withID: $0)?.name }
-                .map { "Create a new chat in \($0)" }
-                ?? "Create a new chat"
-    }
-
-    var newRecentTitle: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "New image"
-            : "New chat"
-    }
-
-    var newRecentSystemImage: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "photo.badge.plus"
-            : "square.and.pencil"
-    }
-
     var activeProjectContextID: UUID? {
         selectedTab == .chat && chatWorkspaceMode == .chat
             ? chat.currentProjectID
@@ -344,6 +316,19 @@ extension ControlPanelView {
     func createChatSession(projectID: UUID? = nil) {
         chat.createSession(projectID: projectID)
         showChatWorkspace()
+
+        if let projectID, let project = projects.project(withID: projectID) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.settings.sidebarProjectsCollapsed = false
+                if project.isCollapsed {
+                    projects.setCollapsed(projectID, collapsed: false)
+                }
+            }
+        } else if projectID == nil {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.settings.sidebarSessionsCollapsed = false
+            }
+        }
     }
 
     func createProject() {

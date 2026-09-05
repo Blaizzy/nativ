@@ -11,6 +11,8 @@ struct ChatPersistenceFailure: Equatable, Sendable {
 }
 
 struct ChatSession: Identifiable, Equatable, Codable {
+    static let newChatTitle = "New chat"
+
     var id: UUID
     var title: String
     var customTitle: String?
@@ -50,7 +52,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
         if scheduledTaskID != nil, !title.isEmpty {
             return title
         }
-        return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
+        return Self.defaultTitle(for: messages, fallback: title)
     }
 
     static func recencySort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
@@ -69,7 +71,6 @@ struct ChatSession: Identifiable, Equatable, Codable {
 
     static func defaultTitle(
         for messages: [ChatTranscriptMessage],
-        createdAt: Date,
         fallback: String? = nil
     ) -> String {
         if let firstUserMessage = messages.first(where: { $0.role == .user }) {
@@ -90,7 +91,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
             return trimmedFallback
         }
 
-        return timestampTitle(for: createdAt)
+        return newChatTitle
     }
 
     private static func title(fromUserContent content: String) -> String? {
