@@ -180,6 +180,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let isPrivate: Bool
     let isGated: Bool
     let safetensors: HuggingFaceSafetensors?
+    let supportConfiguration: HuggingFaceModelSupportConfiguration?
+    let support: HuggingFaceModelSupport
     // These values are used by every visible row. Resolve them once while the
     // response is decoded instead of repeating string parsing, provider lookup,
     // and memory estimation during every SwiftUI body pass while scrolling.
@@ -204,6 +206,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case modelConfiguration = "config"
     }
 
+    private static let supportClassifier = try? HuggingFaceModelSupportClassifier(
+        registry: Nativ.modelTypeRegistry()
+    )
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -217,6 +223,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         safetensors = try container.decodeIfPresent(HuggingFaceSafetensors.self, forKey: .safetensors)
+        supportConfiguration = try? container.decode(
+            HuggingFaceModelSupportConfiguration.self,
+            forKey: .modelConfiguration
+        )
         let modelConfiguration = try? container.decode(
             DrafterModelConfiguration.self,
             forKey: .modelConfiguration
@@ -230,7 +240,16 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             isGated = false
         }
 
-        provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
+        support = Self.supportClassifier?.classify(
+            configuration: supportConfiguration,
+            pipelineTag: pipelineTag,
+            tags: tags
+        ) ?? .unknown
+        provider = LocalModelProviderResolver.resolve(
+            repoID: id,
+            modelType: supportConfiguration?.modelType,
+            architectures: supportConfiguration?.architectures ?? []
+        )
         sizeBytes = safetensors?.sizeBytes
         drafterKind =
             MLXDrafterModelResolver.shared.metadata(
