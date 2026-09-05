@@ -149,8 +149,7 @@ public enum NativExtensionWorkflowValidator {
         produced: Set<String>
     ) throws {
         for value in step.inputs.values {
-            guard case .text(let text) = value else { continue }
-            for reference in NativWorkflowReference.references(in: text) {
+            for reference in value.references {
                 guard reference.step != "storage" else { continue }
                 guard produced.contains(reference.step), reference.step != step.id else {
                     throw NativExtensionWorkflowError.unresolvedReference(

@@ -131,6 +131,24 @@ final class NativExtensionWorkflowTests: XCTestCase {
         )
     }
 
+    func testReferenceNestedInsideStructuredInputIsRejected() {
+        expect(
+            .unresolvedReference(step: "selection", reference: "later.text"),
+            workflow(steps: [
+                .init(
+                    id: "selection",
+                    type: "text.readSelection",
+                    inputs: [
+                        "metadata": .object([
+                            "items": .list([.text("{{later.text}}")])
+                        ])
+                    ]
+                )
+            ]),
+            manifest()
+        )
+    }
+
     func testTriggerForAnUndeclaredCommandIsRejected() {
         expect(
             .undeclaredCommand(trigger: "improve", commandID: "com.example.rewrite.improve"),
@@ -236,6 +254,15 @@ final class NativExtensionWorkflowTests: XCTestCase {
             try JSONEncoder().encode(NativWorkflowValue.data(Data([0x1]), uti: "public.png"))
         )
         XCTAssertNoThrow(try JSONEncoder().encode(NativWorkflowValue.text("fine")))
+    }
+
+    func testStructuredValuesRoundTrip() throws {
+        let value = NativWorkflowValue.object([
+            "items": .list([.text("one"), .number(2), .boolean(true)])
+        ])
+
+        let encoded = try JSONEncoder().encode(value)
+        XCTAssertEqual(try JSONDecoder().decode(NativWorkflowValue.self, from: encoded), value)
     }
 
     func testEveryOperationDeclaresItsPermission() {

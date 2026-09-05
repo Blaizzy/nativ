@@ -12,6 +12,7 @@ public enum NativWorkflowValue: Hashable, Sendable {
     case boolean(Bool)
     case data(Data, uti: String)
     case list([NativWorkflowValue])
+    case object([String: NativWorkflowValue])
     case none
 
     public var text: String? {
@@ -33,6 +34,8 @@ extension NativWorkflowValue: Codable {
             self = .number(value)
         } else if let value = try? container.decode([NativWorkflowValue].self) {
             self = .list(value)
+        } else if let value = try? container.decode([String: NativWorkflowValue].self) {
+            self = .object(value)
         } else {
             throw DecodingError.dataCorruptedError(
                 in: container,
@@ -48,12 +51,28 @@ extension NativWorkflowValue: Codable {
         case .number(let value): try container.encode(value)
         case .boolean(let value): try container.encode(value)
         case .list(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
         case .none: try container.encodeNil()
         case .data:
             throw EncodingError.invalidValue(
                 self,
                 .init(codingPath: container.codingPath, debugDescription: "Binary values are produced at run time and cannot be written to a workflow")
             )
+        }
+    }
+}
+
+extension NativWorkflowValue {
+    var references: [NativWorkflowReference] {
+        switch self {
+        case .text(let value):
+            NativWorkflowReference.references(in: value)
+        case .list(let values):
+            values.flatMap(\.references)
+        case .object(let values):
+            values.values.flatMap(\.references)
+        case .number, .boolean, .data, .none:
+            []
         }
     }
 }
