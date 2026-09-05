@@ -1277,6 +1277,8 @@ private struct ChatAgentStepCell: View {
                     onConfirm(message.id)
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("Confirm (⌘Return)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
