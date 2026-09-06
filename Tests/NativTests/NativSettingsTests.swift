@@ -701,6 +701,19 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.disabledToolNames, ["terminal"])
     }
 
+    func testTerminalAutoApprovalDefaultsToDisabledAndRoundTrips() throws {
+        XCTAssertFalse(NativSettings().terminalAutoApprovalEnabled)
+
+        var settings = NativSettings()
+        settings.terminalAutoApprovalEnabled = true
+        let decoded = try JSONDecoder().decode(
+            NativSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertTrue(decoded.terminalAutoApprovalEnabled)
+    }
+
     func testRememberProfileCapturesCurrentModelSettings() throws {
         var settings = NativSettings()
         settings.thinkingEnabled = true

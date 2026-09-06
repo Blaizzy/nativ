@@ -427,6 +427,7 @@ struct NativSettings: Codable, Equatable {
     var fileReadRootPath: String?
     var fileWriteRootPath: String?
     var projectToolsEnabled: Bool
+    var terminalAutoApprovalEnabled: Bool
     var skills: [NativSkill]
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
@@ -484,6 +485,7 @@ struct NativSettings: Codable, Equatable {
         fileReadRootPath: String? = nil,
         fileWriteRootPath: String? = nil,
         projectToolsEnabled: Bool = true,
+        terminalAutoApprovalEnabled: Bool = false,
         skills: [NativSkill] = [],
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
@@ -540,6 +542,7 @@ struct NativSettings: Codable, Equatable {
         self.fileReadRootPath = fileReadRootPath
         self.fileWriteRootPath = fileWriteRootPath
         self.projectToolsEnabled = projectToolsEnabled
+        self.terminalAutoApprovalEnabled = terminalAutoApprovalEnabled
         self.skills = skills
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
@@ -598,6 +601,7 @@ struct NativSettings: Codable, Equatable {
         case fileReadRootPath
         case fileWriteRootPath
         case projectToolsEnabled
+        case terminalAutoApprovalEnabled
         case skills
         case imageGenerationModelID
         case textToSpeechModelID
@@ -684,6 +688,9 @@ struct NativSettings: Codable, Equatable {
         projectToolsEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .projectToolsEnabled)
             ?? defaults.projectToolsEnabled
+        terminalAutoApprovalEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .terminalAutoApprovalEnabled)
+            ?? defaults.terminalAutoApprovalEnabled
         skills =
             try container.decodeIfPresent([NativSkill].self, forKey: .skills) ?? defaults.skills
         imageGenerationModelID =
@@ -815,6 +822,7 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
         try container.encodeIfPresent(fileWriteRootPath, forKey: .fileWriteRootPath)
         try container.encode(projectToolsEnabled, forKey: .projectToolsEnabled)
+        try container.encode(terminalAutoApprovalEnabled, forKey: .terminalAutoApprovalEnabled)
         try container.encode(skills, forKey: .skills)
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)

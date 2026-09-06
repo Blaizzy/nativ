@@ -1640,8 +1640,9 @@ final class ChatViewModel: ObservableObject {
                     } ?? false)
                     && toolCall.function?.name == ChatTerminalToolRegistry.toolName
                 if isNativeTerminal {
+                    let terminalRequest: ChatTerminalToolRequest
                     do {
-                        try ChatTerminalToolExecutor().preflight(
+                        terminalRequest = try ChatTerminalToolExecutor().preflight(
                             call: toolCall,
                             defaultWorkingDirectory: queuedRequest.toolScope
                                 .terminalWorkingDirectory
@@ -1657,37 +1658,17 @@ final class ChatViewModel: ObservableObject {
                         continue
                     }
 
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID)
-                    switch ChatToolConsentRouter.outcome(
-                        approved: approved,
-                        isCancelled: Task.isCancelled
-                    ) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: ChatTerminalToolExecutor().declinedPayload(),
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
+                    // Auto-approval only ever skips the prompt for commands the
+                    // safety policy found nothing to warn about; anything on the
+                    // warn list (sudo, recursive rm, destructive git ops, etc.)
+                    // still requires an explicit click, and hard-blocked commands
+                    // already failed in preflight above regardless of this setting.
+                    let canAutoApprove =
+                        queuedRequest.settings.terminalAutoApprovalEnabled
+                        && TerminalCommandSafetyPolicy.assess(command: terminalRequest.command)
+                            .warnings.isEmpty
+
+                    if canAutoApprove {
                         terminalApprovalGranted = true
                         updateToolMessage(
                             toolMessageID,
@@ -1696,6 +1677,47 @@ final class ChatViewModel: ObservableObject {
                             content: "",
                             attachments: []
                         )
+                    } else {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .awaitingConsent,
+                            content: "",
+                            attachments: []
+                        )
+                        let approved = await awaitToolConsent(for: toolMessageID)
+                        switch ChatToolConsentRouter.outcome(
+                            approved: approved,
+                            isCancelled: Task.isCancelled
+                        ) {
+                        case .cancelled:
+                            cancelToolMessages(
+                                currentID: toolMessageID,
+                                currentCall: toolCall,
+                                remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                                after: insertionAnchor,
+                                in: queuedRequest.sessionID
+                            )
+                            throw CancellationError()
+                        case .declined:
+                            updateToolMessage(
+                                toolMessageID,
+                                in: queuedRequest.sessionID,
+                                status: .declined,
+                                content: ChatTerminalToolExecutor().declinedPayload(),
+                                attachments: []
+                            )
+                            continue
+                        case .approved:
+                            terminalApprovalGranted = true
+                            updateToolMessage(
+                                toolMessageID,
+                                in: queuedRequest.sessionID,
+                                status: .running,
+                                content: "",
+                                attachments: []
+                            )
+                        }
                     }
                 }
 
