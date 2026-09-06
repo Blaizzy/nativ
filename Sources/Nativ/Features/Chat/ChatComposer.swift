@@ -42,6 +42,14 @@ private enum ChatContextWindowFormatting {
     static func tokenCount(_ value: Int) -> String {
         tokenCountFormatter.string(from: NSNumber(value: value)) ?? String(value)
     }
+
+    static func compactTokenCount(_ value: Int) -> String {
+        guard value >= 1_000 else { return tokenCount(value) }
+        let thousands = (Double(value) / 1_000).formatted(
+            .number.precision(.fractionLength(0...1))
+        )
+        return "\(thousands)k"
+    }
 }
 
 private struct ChatContextWindowRing: View, Equatable {
@@ -70,10 +78,14 @@ private struct ChatContextWindowRing: View, Equatable {
         .onHover { showsDetails = $0 }
         .background {
             NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6) {
-                Text(verbatim: "Context window: \(remainingPercentageText) remaining")
-                    .monospacedDigit()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: "Context window: \(remainingPercentageText) remaining")
+                    Text(verbatim: "\(tokenUsageText) tokens used")
+                        .foregroundStyle(.secondary)
+                }
+                .monospacedDigit()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -83,6 +95,11 @@ private struct ChatContextWindowRing: View, Equatable {
 
     private var remainingPercentageText: String {
         ChatContextWindowFormatting.percentage(1 - usage.usedFraction)
+    }
+
+    private var tokenUsageText: String {
+        "\(ChatContextWindowFormatting.compactTokenCount(usage.usedTokens))/"
+            + ChatContextWindowFormatting.compactTokenCount(usage.capacityTokens)
     }
 
     private var accessibilityValue: String {
