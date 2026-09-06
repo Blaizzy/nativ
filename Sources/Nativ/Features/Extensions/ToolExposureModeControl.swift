@@ -34,7 +34,7 @@ struct ToolExposureModeControl: View {
                 }
             }
         }
-        .help(mode.availabilityText)
+        .help(mode.hoverExplanation)
         .accessibilityLabel("Agent access for \(title)")
         .accessibilityValue(mode.availabilityText)
         .accessibilityHint(
@@ -88,6 +88,14 @@ extension ToolExposureMode {
         case .off: "Unavailable to chat"
         case .automatic: "Discoverable"
         case .on: "Available to chat"
+        }
+    }
+
+    var hoverExplanation: String {
+        switch self {
+        case .off: "Unexposed anywhere."
+        case .automatic: "Discoverable when the model calls tool_search."
+        case .on: "Exposed to the model every time."
         }
     }
 
