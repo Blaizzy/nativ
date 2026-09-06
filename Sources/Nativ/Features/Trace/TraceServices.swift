@@ -1,0 +1,61 @@
+import Foundation
+import NativTrace
+import os
+
+/// Composition root for tracing.
+///
+/// Owns the one store and the one recorder for the process, and hands out the
+/// producer that feature code talks to. Kept out of `NativTrace` so the
+/// framework has no opinion about app lifetime, and kept to one instance so two
+/// writers can never open the same database and interleave sequence numbers.
+///
+/// If the store cannot be opened, `producer` stays nil and every call site
+/// no-ops. A trace that fails to record must never be able to break a chat.
+@MainActor
+final class TraceServices {
+    static let shared = TraceServices()
+
+    private let logger = Logger(subsystem: "dev.local.Nativ", category: "trace")
+    private var store: TraceStore?
+    private var recorder: TraceRecorder?
+    private(set) var producer: ChatTraceProducer?
+    private var hasPruned = false
+
+    private init() {}
+
+    /// Idempotent. Safe to call from every view that wants a producer.
+    @discardableResult
+    func start(retention: TraceRetentionWindow = .default) -> ChatTraceProducer? {
+        if let producer { return producer }
+
+        do {
+            let store = try TraceStore()
+            let recorder = TraceRecorder(store: store)
+            let producer = ChatTraceProducer(recorder: recorder)
+            self.store = store
+            self.recorder = recorder
+            self.producer = producer
+
+            if !hasPruned {
+                hasPruned = true
+                producer.prune(retaining: retention)
+            }
+            return producer
+        } catch {
+            logger.error("trace store unavailable; recording disabled")
+            return nil
+        }
+    }
+
+    /// Read side for the dashboard and the chat inspector.
+    func readableStore() -> TraceStore? {
+        start()
+        return store
+    }
+
+    func stop() {
+        producer = nil
+        recorder = nil
+        store = nil
+    }
+}
