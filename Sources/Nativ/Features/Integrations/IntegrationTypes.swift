@@ -175,9 +175,9 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .buzz:
             [
                 "Start Nativ’s server and load a model from the Models page.",
-                "Install Buzz from github.com/block/buzz, then set the variables below where its agent runs.",
-                "Set BUZZ_AGENT_PROVIDER to \u{201C}openai\u{201D}, OPENAI_COMPAT_BASE_URL to the Base URL above, and OPENAI_COMPAT_API_KEY to the API key above.",
-                "Set OPENAI_COMPAT_MODEL to your model ID, then start Buzz \u{2014} its agent will use your local model."
+                "Install Buzz from github.com/block/buzz, add an agent, then open Edit Agent for it.",
+                "Set LLM provider to \u{201C}OpenAI-compatible\u{201D} (not \u{201C}OpenAI\u{201D}), then enter the API key above as the OpenAI-compatible Runtime API Key.",
+                "Set the Base URL under Advanced, choose your model from the Model dropdown, then message the agent in a room to use it."
             ]
         default:
             []
@@ -190,7 +190,7 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .cline: "Cline runs inside VS Code and compatible editors."
         case .cursor: "Only Cursor’s chat/AI panel honors a custom OpenAI endpoint \u{2014} Tab and inline edits stay on Cursor’s own models."
         case .jetbrains: "Requires the AI Assistant plugin (recent JetBrains IDE versions)."
-        case .buzz: "These variables configure Buzz’s agent runtime; set them where Buzz runs its agent."
+        case .buzz: "Buzz’s agent only acts on tool calls, so pick a model with reliable tool-calling \u{2014} a small/XS model may reply in plain text instead, which the agent can’t act on."
         default: nil
         }
     }
