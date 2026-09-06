@@ -16,14 +16,13 @@ final class TraceExposureTests: XCTestCase {
             )
         ])
 
-        let exposure = TraceExposureResolver.resolve(
+        let exposure = TraceExposureIndex(items: items).resolve(
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .user, messageID: "m1",
                     contentHash: TraceHash.content(body), byteCount: body.utf8.count
                 )
-            ]),
-            in: items
+            ])
         )
 
         let message = try XCTUnwrap(exposure.messages.first)
@@ -40,14 +39,13 @@ final class TraceExposureTests: XCTestCase {
             )
         ])
 
-        let exposure = TraceExposureResolver.resolve(
+        let exposure = TraceExposureIndex(items: items).resolve(
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .user, messageID: "m1",
                     contentHash: TraceHash.content("original text"), byteCount: 13
                 )
-            ]),
-            in: items
+            ])
         )
 
         let message = try XCTUnwrap(exposure.messages.first)
@@ -56,11 +54,10 @@ final class TraceExposureTests: XCTestCase {
     }
 
     func testUnresolvableMessageIsReportedRatherThanInvented() {
-        let exposure = TraceExposureResolver.resolve(
+        let exposure = TraceExposureIndex(items: []).resolve(
             RequestComposedPayload(messages: [
                 TraceMessageRef(role: .user, messageID: "gone", contentHash: "abc", byteCount: 3)
-            ]),
-            in: []
+            ])
         )
 
         XCTAssertTrue(exposure.messages.first?.isMissing == true)
@@ -69,15 +66,14 @@ final class TraceExposureTests: XCTestCase {
 
     func testInlinedBodyIsUsedWhenTheTraceCannotSupplyOne() throws {
         let body = "imported from elsewhere"
-        let exposure = TraceExposureResolver.resolve(
+        let exposure = TraceExposureIndex(items: []).resolve(
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .user, messageID: "m1",
                     contentHash: TraceHash.content(body), byteCount: body.utf8.count,
                     inlineBody: body
                 )
-            ]),
-            in: []
+            ])
         )
 
         XCTAssertEqual(exposure.messages.first?.text, body)
@@ -97,14 +93,13 @@ final class TraceExposureTests: XCTestCase {
             ),
         ])
 
-        let exposure = TraceExposureResolver.resolve(
+        let exposure = TraceExposureIndex(items: items).resolve(
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .tool, messageID: "c1",
                     contentHash: TraceHash.content(output), byteCount: output.utf8.count
                 )
-            ]),
-            in: items
+            ])
         )
 
         XCTAssertEqual(exposure.messages.first?.text, output)

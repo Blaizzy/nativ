@@ -42,9 +42,9 @@ final class ChatViewModel: ObservableObject {
     weak var mcpHost: MCPHostManager?
     /// Set by the app when trace recording is on; nil disables it entirely.
     var traceProducer: ChatTraceProducer?
-    /// Scope of the model call in flight, so the tool funnels below can attach
-    /// their events to it without threading identifiers through 21 call sites.
-    private var activeTraceCall: (turnID: UUID, requestID: UUID)?
+    /// The model call in flight, so the tool funnels below can attach their
+    /// events to it without threading identifiers through 21 call sites.
+    private var activeTraceCall: ChatTraceCall?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
 
     private struct QueuedChatRequest {
@@ -1474,20 +1474,17 @@ final class ChatViewModel: ObservableObject {
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
-        let turnID = queuedRequest.id
+        let turn = ChatTraceTurn(sessionID: queuedRequest.sessionID, turnID: queuedRequest.id)
         traceProducer?.turnStarted(
-            sessionID: queuedRequest.sessionID,
-            turnID: turnID,
+            turn,
             messageID: queuedRequest.userMessageID,
             text: message(queuedRequest.userMessageID, in: queuedRequest.sessionID)?.content ?? "",
-            attachmentSummaries: [],
             modelID: queuedRequest.settings.languageModelID
         )
         defer {
             activeTraceCall = nil
             traceProducer?.turnEnded(
-                sessionID: queuedRequest.sessionID,
-                turnID: turnID,
+                turn,
                 status: Task.isCancelled ? "cancelled" : "completed",
                 roundCount: toolRounds + 1
             )
@@ -1548,16 +1545,14 @@ final class ChatViewModel: ObservableObject {
                 throw NativChatError.invalidResponse
             }
             let request = composed.request
-            let requestID = UUID()
-            activeTraceCall = (turnID: turnID, requestID: requestID)
-            traceProducer?.requestComposed(
-                composed.exposure,
-                sessionID: queuedRequest.sessionID,
-                turnID: turnID,
-                requestID: requestID,
+            let call = ChatTraceCall(
+                turn: turn,
+                requestID: UUID(),
                 round: toolRounds,
                 modelID: activeSettings.languageModelID
             )
+            activeTraceCall = call
+            traceProducer?.requestComposed(composed.exposure, in: call)
 
             let streamingMessageID = assistantMessageID
             let streamingSessionID = queuedRequest.sessionID
@@ -1571,9 +1566,7 @@ final class ChatViewModel: ObservableObject {
                 self?.traceProducer?.delta(
                     content: event.content,
                     reasoning: event.reasoningContent,
-                    sessionID: streamingSessionID,
-                    turnID: turnID,
-                    requestID: requestID
+                    in: call
                 )
             }
             let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
@@ -1590,9 +1583,7 @@ final class ChatViewModel: ObservableObject {
                 traceProducer?.responseFailed(
                     message: String(describing: error),
                     isCancellation: error is CancellationError,
-                    sessionID: queuedRequest.sessionID,
-                    turnID: turnID,
-                    requestID: requestID
+                    in: call
                 )
                 throw error
             }
@@ -1605,10 +1596,7 @@ final class ChatViewModel: ObservableObject {
                     completionTokens: completion.usage?.completionTokens
                 ),
                 finishReason: completion.finishReason,
-                sessionID: queuedRequest.sessionID,
-                turnID: turnID,
-                requestID: requestID,
-                modelID: activeSettings.languageModelID
+                in: call
             )
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
@@ -2353,14 +2341,12 @@ final class ChatViewModel: ObservableObject {
         in sessionID: UUID,
         status: ChatTranscriptMessage.ToolStatus = .running
     ) -> Bool {
-        if let name = call.function?.name, let active = activeTraceCall {
+        if let name = call.function?.name, let traceCall = activeTraceCall {
             traceProducer?.toolCall(
                 callID: call.id ?? id.uuidString,
                 name: name,
                 argumentsJSON: call.function?.arguments,
-                sessionID: sessionID,
-                turnID: active.turnID,
-                requestID: active.requestID
+                in: traceCall
             )
         }
         return insertMessage(
@@ -2379,32 +2365,43 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
-    /// Writes a tool's outcome once it reaches a state that will not change.
-    /// Intermediate statuses are skipped so a trace holds one row per call.
+    /// Writes what a tool call did, once it reaches a state that will not
+    /// change again.
+    ///
+    /// A denial is recorded as a consent decision rather than a failed result:
+    /// the tool never ran, and a trace that says it failed would read as a bug
+    /// in the tool instead of a choice the user made. The switch is exhaustive
+    /// on purpose — a new status has to be classified here rather than falling
+    /// through a `default` and going unrecorded.
     private func recordToolOutcome(
         _ id: UUID,
         in sessionID: UUID,
         status: ChatTranscriptMessage.ToolStatus,
         content: String
     ) {
-        guard let active = activeTraceCall,
-            let message = message(id, in: sessionID),
-            let callID = message.toolCallID ?? Optional(id.uuidString)
-        else { return }
+        guard let traceCall = activeTraceCall, let message = message(id, in: sessionID) else {
+            return
+        }
+        let callID = message.toolCallID ?? id.uuidString
 
         switch status {
-        case .succeeded, .failed, .declined, .cancelled:
+        case .awaitingConsent:
+            traceProducer?.toolConsent(
+                callID: callID, name: message.toolName, decision: "requested", in: traceCall
+            )
+        case .declined:
+            traceProducer?.toolConsent(
+                callID: callID, name: message.toolName, decision: "denied", in: traceCall
+            )
+        case .succeeded, .failed, .cancelled:
             traceProducer?.toolResult(
                 callID: callID,
                 name: message.toolName,
                 output: content,
                 isError: status != .succeeded,
-                durationMilliseconds: nil,
-                sessionID: sessionID,
-                turnID: active.turnID,
-                requestID: active.requestID
+                in: traceCall
             )
-        default:
+        case .preparing, .awaitingImageModelSelection, .running:
             break
         }
     }

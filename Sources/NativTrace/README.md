@@ -13,34 +13,36 @@ treated as authoritative.
 These are the properties the rest of the design depends on. Breaking one is a
 format break, not a refactor.
 
-1. **`trace_events` is the source of truth and is append-only.** No code in this
-   framework may `UPDATE` a row. The only deletion is retention dropping a whole
-   trace. If a fact is worth showing, it is worth writing as an event.
+1. **`trace_events` is the source of truth and is append-only.** No code here
+   may `UPDATE` a row. The only deletion is retention dropping a whole trace —
+   never part of one, because half a conversation cannot be folded into
+   anything trustworthy.
 
-2. **Derived tables are rebuildable and say so.** `trace_index` exists to make
-   listing fast. `TraceStore.rebuildIndex()` must always be able to reconstruct
-   it from `trace_events` alone. Never read a fact from the index that is not
-   also derivable from the events.
+2. **Derived tables are rebuildable and say so.** `trace_index` and
+   `trace_models` exist to make listing fast. `TraceStore.rebuildIndex()` must
+   always reconstruct them from `trace_events` alone. Never read a fact from
+   them that is not derivable from the events.
 
 3. **Readers tolerate what they do not understand.** `TraceEventKind` and the
    `*Origin` types are open string-backed types, not closed enums, and payloads
-   are `TraceJSON` rather than fixed Swift structs. A trace written by a newer
-   build decodes here: unknown kinds render opaquely, unknown payload fields
-   survive read, re-encode, and export. A `TracePayloadView` returning `nil`
-   means "not mine", never "crash".
+   are `TraceJSON` rather than fixed structs. A trace written by a newer build
+   decodes here: unknown kinds render opaquely, unknown fields survive read,
+   re-encode, and export. A `TracePayloadView` returning `nil` means "not mine",
+   never "crash". A payload that cannot be decoded at all still yields its
+   event, carrying `TraceStore.unreadablePayloadKey`.
 
-4. **Compression is storage, not format.** `payload_encoding` is an
-   implementation detail of the database. An exported trace is always plain
-   JSON. A future codec can be added without invalidating anything already
-   exported.
+4. **Compression is storage, not format.** `payload_encoding` is a detail of the
+   database. An exported trace is always plain JSON, so a future codec can be
+   added without invalidating anything already exported.
 
 5. **Migrations are append-only and named.** Once a migration name has shipped
    it is never renamed, reordered, or edited — databases in the field record it
-   as applied and will skip it forever. Add a new one instead.
+   as applied and will skip it forever.
 
-6. **The core imports Foundation and SQLite3, nothing else.** No SwiftUI, no
-   AppKit, no app types. That is what lets a test harness, a CLI, or a separate
-   viewer read traces without linking the app.
+6. **The core imports Foundation, SQLite3, Compression, and CryptoKit.** No
+   SwiftUI, no AppKit, no app types. That is what lets a test harness, a CLI, or
+   a separate viewer read traces without linking the app, and it is why the
+   suite runs without building Nativ.
 
 7. **Provenance is recorded at composition time, never parsed back out.** Nativ
    assembles the system prompt itself, so `PromptSection` carries a real origin
@@ -49,29 +51,51 @@ format break, not a refactor.
 
 8. **Bodies are referenced, not repeated.** A tool loop re-sends the whole
    conversation every round; storing it each time makes a turn quadratic in its
-   own length. `TraceMessageRef` names the message and hashes its content, and
-   the reader resolves it against events already in the trace. `contentHash`
-   is what lets the reader prove it resolved the right body after an edit or a
-   branch.
+   own length. `TraceMessageRef` names the message and hashes its content;
+   `TraceExposureIndex` resolves it against events already in the trace, and
+   `contentHash` is what lets a reader prove it resolved the right body after an
+   edit or a branch.
+
+9. **Sequence allocation and the append that consumes it are one call.**
+   `TraceStore.record` does both. An API that hands out a sequence number and
+   trusts the caller to use it invites two writers to interleave, and the gap is
+   silent.
+
+10. **Order survives all the way to disk.** Producers serialise their own writes
+    and `TraceRecorder` awaits the store rather than spawning a task per event.
+    Detached tasks reach an actor in scheduler order, which is how a tool result
+    ends up recorded before the call it answers.
 
 ## Layout
 
 ```
-Model/     the format: events, kinds, payloads, exposure types
-Store/     SQLite persistence, schema, migrations, retention
-Transcript/ the fold: events → items → display blocks
-Capture/   producers that turn app activity into events
+Model/       the format: events, kinds, payloads, exposure types
+Store/       SQLite persistence, schema, migrations, index, retention
+Transcript/  the fold: events → items → display blocks
+Capture/     the writer producers talk to
 ```
 
-## Files
+Three stages turn a log into something renderable, and each is separable:
 
-- `Model/TraceJSON.swift` — lossless JSON value; canonical form is what gets
-  hashed and stored.
-- `Model/TraceEvent.swift` — the envelope, plus `TracePayloadView` for typed
-  reads.
-- `Model/TraceEventKind.swift` — the event taxonomy. Values are on-disk format;
-  never rename or reuse one.
-- `Model/TraceExposure.swift` — `PromptSection`, `ToolDescriptor`,
-  `SamplingParameters`.
-- `Store/TraceStore.swift` — the actor that owns the database.
-- `Store/TraceSchema.swift` — base schema and the migration list.
+```
+TraceEvent[]          raw, persisted, append-only
+  ↓ TraceReducer      semantic: message | exposure | tool | lifecycle | unknown
+TraceItem[]
+  ↓ TraceGrouping     presentation: turns, boundaries, collapsed tool runs
+TraceDisplayBlock[]
+```
+
+`TraceGrouping` makes display choices only. Every input item must appear in
+exactly one output block — a grouping rule can never lose a row, and there is a
+test that says so.
+
+## Conventions
+
+- One file per concept; split before a file reaches ~400 lines. `TraceStore`
+  delegates index maintenance to `TraceIndex` and pruning to
+  `TraceRetentionSweep` for that reason, not because either is reused elsewhere.
+- SQL runs through `SQLiteConnection.withStatement`, which resets the statement
+  on entry and exit and refuses re-entrant use. Statements are cached, so the
+  append path does not re-prepare its insert per event.
+- Parameters bind in order via `bind(_:)` rather than by index, so adding a
+  column cannot silently shift a value into the wrong placeholder.

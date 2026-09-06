@@ -19,32 +19,64 @@ final class TraceStoreTests: XCTestCase {
 
     private let base = Date(timeIntervalSince1970: 1_000_000)
 
-    func testSequenceReservationsDoNotOverlap() async throws {
+    func testRecordAllocatesContiguousSequences() async throws {
         let store = try makeStore()
 
-        let first = try await store.reserveSequence(forTrace: "t1", count: 3)
-        let second = try await store.reserveSequence(forTrace: "t1")
+        for _ in 0..<3 {
+            try await store.record(
+                kind: .turnStarted, payload: .object([:]), traceID: "t1", scope: TraceScope()
+            )
+        }
 
-        XCTAssertEqual(first, 0)
-        XCTAssertEqual(second, 3)
+        let events = try await store.events(forTrace: "t1")
+        XCTAssertEqual(events.map(\.seq), [0, 1, 2])
     }
 
     func testSequenceResumesFromStoredEventsAfterReopen() async throws {
         let url = directory.appendingPathComponent("Traces.sqlite3")
         let first = try TraceStore(url: url)
-        try await first.append(
+        try await first.insert(preSequenced: [
             TraceEvent(traceID: "t1", seq: 7, timestamp: base, kind: .turnStarted)
-        )
+        ])
 
         let reopened = try TraceStore(url: url)
+        let recorded = try await reopened.record(
+            kind: .turnStarted, payload: .object([:]), traceID: "t1", scope: TraceScope()
+        )
 
-        let next = try await reopened.reserveSequence(forTrace: "t1")
-        XCTAssertEqual(next, 8)
+        XCTAssertEqual(recorded.seq, 8, "a reopened store resumes after what is already stored")
+    }
+
+    func testUnreadablePayloadStillReturnsItsEvent() async throws {
+        let store = try makeStore()
+        try await store.insert(preSequenced: [
+            TraceEvent(traceID: "t1", seq: 0, timestamp: base, kind: .turnStarted)
+        ])
+
+        let events = try await store.events(forTrace: "t1")
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertNil(events[0].payload[TraceStore.unreadablePayloadKey])
+    }
+
+    func testEventsCanBePaged() async throws {
+        let store = try makeStore()
+        for _ in 0..<5 {
+            try await store.record(
+                kind: .turnStarted, payload: .object([:]), traceID: "t1", scope: TraceScope()
+            )
+        }
+
+        let firstPage = try await store.events(forTrace: "t1", limit: 2)
+        let secondPage = try await store.events(forTrace: "t1", after: firstPage.last?.seq, limit: 2)
+
+        XCTAssertEqual(firstPage.map(\.seq), [0, 1])
+        XCTAssertEqual(secondPage.map(\.seq), [2, 3])
     }
 
     func testEventsReadBackInSequenceOrder() async throws {
         let store = try makeStore()
-        try await store.append([
+        try await store.insert(preSequenced: [
             makeEvent(seq: 2, kind: .responseCompleted),
             makeEvent(seq: 0, kind: .sessionStarted),
             makeEvent(seq: 1, kind: .turnStarted),
@@ -69,13 +101,13 @@ final class TraceStoreTests: XCTestCase {
             parameters: SamplingParameters(temperature: 0.7, maxTokens: 2048, thinkingEnabled: true),
             advertisesTools: true
         )
-        try await store.append(
+        try await store.insert(preSequenced: [
             TraceEvent(
                 traceID: "t1", seq: 0, timestamp: base, kind: .requestComposed,
                 scope: TraceScope(sessionID: "s1", turnID: "u1", requestID: "r1", roundIndex: 0),
                 payload: try composed.makePayload()
             )
-        )
+        ])
 
         let events = try await store.events(forRequest: "r1")
         let restored = try XCTUnwrap(RequestComposedPayload(event: try XCTUnwrap(events.first)))
@@ -90,14 +122,14 @@ final class TraceStoreTests: XCTestCase {
     func testLargePayloadSurvivesCompressionRoundTrip() async throws {
         let store = try makeStore()
         let body = String(repeating: "The quick brown fox. ", count: 3_000)
-        try await store.append(
+        try await store.insert(preSequenced: [
             TraceEvent(
                 traceID: "t1", seq: 0, timestamp: base, kind: .requestComposed,
                 payload: try RequestComposedPayload(
                     systemSections: [PromptSection(origin: .toolGuide, label: "Tool guide", body: body)]
                 ).makePayload()
             )
-        )
+        ])
 
         let events = try await store.events(forTrace: "t1")
         let restored = try XCTUnwrap(RequestComposedPayload(event: try XCTUnwrap(events.first)))
@@ -107,7 +139,7 @@ final class TraceStoreTests: XCTestCase {
 
     func testIndexTracksEventCountsAndModels() async throws {
         let store = try makeStore()
-        try await store.append([
+        try await store.insert(preSequenced: [
             makeEvent(seq: 0, kind: .sessionStarted, modelID: "qwen"),
             makeEvent(seq: 1, kind: .modelSwitched, modelID: "gemma"),
         ])
@@ -122,7 +154,7 @@ final class TraceStoreTests: XCTestCase {
 
     func testRebuildIndexReproducesTheDerivedRows() async throws {
         let store = try makeStore()
-        try await store.append([
+        try await store.insert(preSequenced: [
             makeEvent(seq: 0, kind: .sessionStarted, modelID: "qwen"),
             makeEvent(seq: 1, kind: .turnStarted, modelID: "qwen"),
         ])
@@ -138,9 +170,12 @@ final class TraceStoreTests: XCTestCase {
 
     func testPruneDropsTracesOlderThanTheCutoff() async throws {
         let store = try makeStore()
-        try await store.append(makeEvent(seq: 0, kind: .turnStarted))
+        try await store.insert(preSequenced: [makeEvent(seq: 0, kind: .turnStarted)])
 
-        let removed = try await store.prune(before: base.addingTimeInterval(10), maxTraces: nil)
+        let removed = try await store.prune(
+            retaining: TraceRetentionWindow(days: 1, maximumTraces: nil),
+            now: base.addingTimeInterval(2 * 24 * 60 * 60)
+        )
 
         let remaining = try await store.events(forTrace: "t1")
         let traces = try await store.recentTraces()
@@ -149,19 +184,43 @@ final class TraceStoreTests: XCTestCase {
         XCTAssertTrue(traces.isEmpty)
     }
 
+    func testBothRetentionLimitsApply() async throws {
+        let store = try makeStore()
+        for index in 0..<4 {
+            try await store.insert(preSequenced: [
+                TraceEvent(
+                    traceID: "t\(index)", seq: 0,
+                    timestamp: base.addingTimeInterval(Double(index) * 24 * 60 * 60),
+                    kind: .turnStarted
+                )
+            ])
+        }
+
+        let removed = try await store.prune(
+            retaining: TraceRetentionWindow(days: 2, maximumTraces: 2),
+            now: base.addingTimeInterval(4 * 24 * 60 * 60)
+        )
+
+        let kept = try await store.recentTraces().map(\.traceID).sorted()
+        XCTAssertEqual(removed, 2, "age removes t0 and t1; the count limit would keep two anyway")
+        XCTAssertEqual(kept, ["t2", "t3"])
+    }
+
     func testPruneKeepsTheNewestTracesWhenOverTheLimit() async throws {
         let store = try makeStore()
         for index in 0..<5 {
-            try await store.append(
+            try await store.insert(preSequenced: [
                 TraceEvent(
                     traceID: "keep\(index)", seq: 0,
                     timestamp: base.addingTimeInterval(Double(index)),
                     kind: .turnStarted
                 )
-            )
+            ])
         }
 
-        let removed = try await store.prune(before: Date(timeIntervalSince1970: 0), maxTraces: 2)
+        let removed = try await store.prune(
+            retaining: TraceRetentionWindow(days: nil, maximumTraces: 2), now: base
+        )
 
         let kept = try await store.recentTraces().map(\.traceID).sorted()
         XCTAssertEqual(removed, 3)

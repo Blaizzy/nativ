@@ -65,7 +65,7 @@ enum TracePayloadCodec {
                 guard let destinationBase = destination.bindMemory(to: UInt8.self).baseAddress,
                       let sourceBase = source.bindMemory(to: UInt8.self).baseAddress
                 else { return 0 }
-                return compression_encode_buffer_or_decode(
+                return runCompression(
                     operation: operation,
                     destination: destinationBase,
                     destinationCapacity: capacity,
@@ -79,7 +79,9 @@ enum TracePayloadCodec {
         return output
     }
 
-    private static func compression_encode_buffer_or_decode(
+    /// Thin shim over the two C entry points, which take identical arguments
+    /// but are separate functions.
+    private static func runCompression(
         operation: compression_stream_operation,
         destination: UnsafeMutablePointer<UInt8>,
         destinationCapacity: Int,

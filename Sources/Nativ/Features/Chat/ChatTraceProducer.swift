@@ -1,131 +1,69 @@
 import Foundation
 import NativTrace
 
-/// Turns chat activity into trace events.
+/// Translates chat activity into trace events.
 ///
-/// Recording must never slow a chat down and must never reorder it. Callers
-/// hand work over synchronously and return immediately; a single consumer task
-/// drains the queue in order.
-///
-/// Firing a detached `Task` per event would satisfy the first requirement and
-/// break the second — independent tasks reach an actor in whatever order the
-/// scheduler picks, so a tool result could be written before the call it
-/// answers. One stream with one consumer is what keeps sequence numbers
-/// matching what actually happened.
+/// A thin typed adapter: every method turns app values into a payload and hands
+/// it to `TraceEventQueue`, which owns the "never block, never reorder"
+/// guarantee. Keeping the queue in the framework means this type has no
+/// concurrency logic of its own to get wrong.
 @MainActor
 final class ChatTraceProducer {
-    private enum Job {
-        case record(kind: TraceEventKind, payload: TraceJSON, traceID: String, scope: TraceScope)
-        case delta(content: String?, reasoning: String?, traceID: String, scope: TraceScope)
-        case discardPartial(traceID: String, scope: TraceScope)
-        case prune(TraceRetentionWindow)
-    }
-
-    private let continuation: AsyncStream<Job>.Continuation
-    private let pump: Task<Void, Never>
-    private var traceIDBySession: [UUID: String] = [:]
+    private let queue: TraceEventQueue
 
     init(recorder: TraceRecorder) {
-        let (stream, continuation) = AsyncStream<Job>.makeStream(bufferingPolicy: .unbounded)
-        self.continuation = continuation
-        pump = Task {
-            for await job in stream {
-                switch job {
-                case .record(let kind, let payload, let traceID, let scope):
-                    await recorder.record(kind: kind, json: payload, traceID: traceID, scope: scope)
-                case .delta(let content, let reasoning, let traceID, let scope):
-                    await recorder.appendDelta(
-                        content: content, reasoning: reasoning, traceID: traceID, scope: scope
-                    )
-                case .discardPartial(let traceID, let scope):
-                    await recorder.discardPartial(traceID: traceID, scope: scope)
-                case .prune(let window):
-                    await recorder.prune(retaining: window)
-                }
-            }
-        }
-    }
-
-    deinit {
-        continuation.finish()
-        pump.cancel()
-    }
-
-    /// One trace per chat session, stable for the lifetime of the process.
-    func traceID(for sessionID: UUID) -> String {
-        if let existing = traceIDBySession[sessionID] { return existing }
-        let traceID = sessionID.uuidString
-        traceIDBySession[sessionID] = traceID
-        return traceID
+        queue = TraceEventQueue(recorder: recorder)
     }
 
     // MARK: - Session and turn
 
     func sessionStarted(sessionID: UUID, title: String?, modelID: String?) {
-        enqueue(
+        queue.record(
             SessionStartedPayload(title: title, modelID: modelID),
-            sessionID: sessionID,
+            traceID: Self.traceID(for: sessionID),
             scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
         )
     }
 
     func turnStarted(
-        sessionID: UUID,
-        turnID: UUID,
+        _ turn: ChatTraceTurn,
         messageID: UUID,
         text: String,
-        attachmentSummaries: [String],
+        attachmentSummaries: [String] = [],
         modelID: String?
     ) {
-        enqueue(
+        record(
             TurnStartedPayload(
                 messageID: messageID.uuidString,
                 text: text,
                 attachmentSummaries: attachmentSummaries.isEmpty ? nil : attachmentSummaries
             ),
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID, modelID: modelID)
+            turn: turn,
+            modelID: modelID
         )
     }
 
-    func turnEnded(sessionID: UUID, turnID: UUID, status: String, roundCount: Int) {
-        enqueue(
-            TurnEndedPayload(status: status, roundCount: roundCount),
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID)
-        )
+    func turnEnded(_ turn: ChatTraceTurn, status: String, roundCount: Int) {
+        record(TurnEndedPayload(status: status, roundCount: roundCount), turn: turn)
+    }
+
+    func modelSwitched(_ turn: ChatTraceTurn, from: String?, to: String) {
+        record(ModelSwitchedPayload(from: from, to: to), turn: turn, modelID: to)
     }
 
     // MARK: - Calls
 
-    func requestComposed(
-        _ exposure: RequestComposedPayload,
-        sessionID: UUID,
-        turnID: UUID,
-        requestID: UUID,
-        round: Int,
-        modelID: String?
-    ) {
-        enqueue(
-            exposure,
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID, requestID: requestID, round: round, modelID: modelID)
-        )
+    func requestComposed(_ exposure: RequestComposedPayload, in call: ChatTraceCall) {
+        record(exposure, call: call)
     }
 
-    func delta(
-        content: String?,
-        reasoning: String?,
-        sessionID: UUID,
-        turnID: UUID,
-        requestID: UUID
-    ) {
-        continuation.yield(.delta(
+    func delta(content: String?, reasoning: String?, in call: ChatTraceCall) {
+        queue.delta(
             content: content,
             reasoning: reasoning,
-            traceID: traceID(for: sessionID),
-            scope: scope(sessionID, turnID: turnID, requestID: requestID)
-        ))
+            traceID: Self.traceID(for: call.sessionID),
+            scope: call.scope()
+        )
     }
 
     func responseCompleted(
@@ -134,14 +72,10 @@ final class ChatTraceProducer {
         reasoning: String?,
         usage: TraceUsage?,
         finishReason: String?,
-        sessionID: UUID,
-        turnID: UUID,
-        requestID: UUID,
-        modelID: String?
+        in call: ChatTraceCall
     ) {
-        let scope = scope(sessionID, turnID: turnID, requestID: requestID, modelID: modelID)
-        continuation.yield(.discardPartial(traceID: traceID(for: sessionID), scope: scope))
-        enqueue(
+        queue.discardPartial(traceID: Self.traceID(for: call.sessionID), scope: call.scope())
+        record(
             ResponseCompletedPayload(
                 messageID: messageID.uuidString,
                 content: content,
@@ -149,43 +83,24 @@ final class ChatTraceProducer {
                 usage: usage,
                 finishReason: finishReason
             ),
-            sessionID: sessionID,
-            scope: scope
+            call: call
         )
     }
 
-    func responseFailed(
-        message: String,
-        isCancellation: Bool,
-        sessionID: UUID,
-        turnID: UUID,
-        requestID: UUID
-    ) {
-        enqueue(
-            ResponseFailedPayload(message: message, isCancellation: isCancellation),
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID, requestID: requestID)
-        )
+    func responseFailed(message: String, isCancellation: Bool, in call: ChatTraceCall) {
+        record(ResponseFailedPayload(message: message, isCancellation: isCancellation), call: call)
     }
 
     // MARK: - Tools
 
-    func toolCall(
-        callID: String,
-        name: String,
-        argumentsJSON: String?,
-        sessionID: UUID,
-        turnID: UUID,
-        requestID: UUID
-    ) {
-        enqueue(
+    func toolCall(callID: String, name: String, argumentsJSON: String?, in call: ChatTraceCall) {
+        record(
             ToolCallPayload(
                 callID: callID,
                 name: name,
                 arguments: argumentsJSON.flatMap { try? TraceJSON.decode($0) }
             ),
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID, requestID: requestID)
+            call: call
         )
     }
 
@@ -194,67 +109,54 @@ final class ChatTraceProducer {
         name: String?,
         output: String,
         isError: Bool,
-        durationMilliseconds: Int?,
-        sessionID: UUID,
-        turnID: UUID,
-        requestID: UUID
+        in call: ChatTraceCall
     ) {
-        enqueue(
-            ToolResultPayload(
-                callID: callID,
-                name: name,
-                output: output,
-                isError: isError,
-                durationMilliseconds: durationMilliseconds
-            ),
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID, requestID: requestID)
+        record(
+            ToolResultPayload(callID: callID, name: name, output: output, isError: isError),
+            call: call
         )
     }
 
-    func modelSwitched(from: String?, to: String, sessionID: UUID, turnID: UUID?) {
-        enqueue(
-            ModelSwitchedPayload(from: from, to: to),
-            sessionID: sessionID,
-            scope: scope(sessionID, turnID: turnID, modelID: to)
-        )
+    func toolConsent(callID: String, name: String?, decision: String, in call: ChatTraceCall) {
+        record(ToolConsentPayload(callID: callID, name: name, decision: decision), call: call)
     }
 
-    // MARK: - Retention
+    // MARK: - Maintenance
 
     func prune(retaining window: TraceRetentionWindow) {
-        continuation.yield(.prune(window))
+        queue.prune(retaining: window)
+    }
+
+    /// Waits for queued events to reach the store. For shutdown, not for the
+    /// recording path.
+    func drain() async {
+        await queue.drain()
     }
 
     // MARK: - Internals
 
-    private func enqueue<Payload: TracePayloadView & Encodable>(
-        _ payload: Payload,
-        sessionID: UUID,
-        scope: TraceScope
-    ) {
-        guard let json = try? TraceJSON(encoding: payload) else { return }
-        continuation.yield(.record(
-            kind: Payload.kind,
-            payload: json,
-            traceID: traceID(for: sessionID),
-            scope: scope
-        ))
+    /// One trace per chat session. Derived rather than allocated so a session
+    /// reopened in a later launch keeps appending to the trace it already has.
+    private static func traceID(for sessionID: UUID) -> String {
+        sessionID.uuidString
     }
 
-    private func scope(
-        _ sessionID: UUID,
-        turnID: UUID? = nil,
-        requestID: UUID? = nil,
-        round: Int? = nil,
+    private func record<Payload: TracePayloadView & Encodable>(
+        _ payload: Payload,
+        call: ChatTraceCall
+    ) {
+        queue.record(payload, traceID: Self.traceID(for: call.sessionID), scope: call.scope())
+    }
+
+    private func record<Payload: TracePayloadView & Encodable>(
+        _ payload: Payload,
+        turn: ChatTraceTurn,
         modelID: String? = nil
-    ) -> TraceScope {
-        TraceScope(
-            sessionID: sessionID.uuidString,
-            turnID: turnID?.uuidString,
-            requestID: requestID?.uuidString,
-            roundIndex: round,
-            modelID: modelID
+    ) {
+        queue.record(
+            payload,
+            traceID: Self.traceID(for: turn.sessionID),
+            scope: turn.scope(modelID: modelID)
         )
     }
 }

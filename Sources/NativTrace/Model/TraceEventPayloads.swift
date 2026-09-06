@@ -227,3 +227,31 @@ public struct ModelSwitchedPayload: TracePayloadView, Codable, Hashable {
         self.to = to
     }
 }
+
+public struct TraceUsage: Sendable, Hashable, Codable {
+    public var promptTokens: Int?
+    public var completionTokens: Int?
+    public var generatedTokens: Int?
+    public var timeToFirstTokenMilliseconds: Int?
+    public var elapsedMilliseconds: Int?
+    public var decodeTokensPerSecond: Double?
+    public var peakMemoryBytes: Int64?
+
+    public init(
+        promptTokens: Int? = nil,
+        completionTokens: Int? = nil,
+        generatedTokens: Int? = nil,
+        timeToFirstTokenMilliseconds: Int? = nil,
+        elapsedMilliseconds: Int? = nil,
+        decodeTokensPerSecond: Double? = nil,
+        peakMemoryBytes: Int64? = nil
+    ) {
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.generatedTokens = generatedTokens
+        self.timeToFirstTokenMilliseconds = timeToFirstTokenMilliseconds
+        self.elapsedMilliseconds = elapsedMilliseconds
+        self.decodeTokensPerSecond = decodeTokensPerSecond
+        self.peakMemoryBytes = peakMemoryBytes
+    }
+}

@@ -58,12 +58,20 @@ enum TraceSchema {
             started_at    REAL    NOT NULL,
             last_event_at REAL    NOT NULL,
             event_count   INTEGER NOT NULL,
-            last_seq      INTEGER NOT NULL,
-            models        TEXT    NOT NULL
+            last_seq      INTEGER NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_trace_index_last_event
             ON trace_index (last_event_at DESC);
+
+        -- Models seen in a trace. A child table rather than a column so
+        -- recording one is an INSERT OR IGNORE instead of a read, a union, and
+        -- a write back on every append.
+        CREATE TABLE IF NOT EXISTS trace_models (
+            trace_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            PRIMARY KEY (trace_id, model_id)
+        );
 
         CREATE TABLE IF NOT EXISTS trace_meta (
             key   TEXT PRIMARY KEY,
@@ -85,21 +93,22 @@ enum TraceSchema {
     }
 
     private static func runMigrations(on connection: SQLiteConnection) throws {
-        var applied: Set<String> = []
-        let statement = try connection.prepare("SELECT name FROM trace_migrations;")
-        while try statement.step() {
-            if let name = statement.string(at: 0) { applied.insert(name) }
-        }
+        let applied = Set(
+            try connection.withStatement("SELECT name FROM trace_migrations;") { statement in
+                try statement.rows { $0.string(0) }.compactMap { $0 }
+            }
+        )
 
         for migration in migrations where !applied.contains(migration.name) {
             try connection.transaction {
                 try migration.apply(connection)
-                let record = try connection.prepare(
+                try connection.withStatement(
                     "INSERT OR IGNORE INTO trace_migrations (name, applied_at) VALUES (?, ?);"
-                )
-                record.bind(migration.name, at: 1)
-                record.bind(Date().timeIntervalSince1970, at: 2)
-                try record.run()
+                ) { statement in
+                    statement.bind(migration.name)
+                    statement.bind(Date())
+                    try statement.run()
+                }
             }
         }
     }

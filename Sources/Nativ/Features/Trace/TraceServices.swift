@@ -16,12 +16,17 @@ final class TraceServices {
     static let shared = TraceServices()
 
     private let logger = Logger(subsystem: "dev.local.Nativ", category: "trace")
+    private let makeStore: () throws -> TraceStore
     private var store: TraceStore?
     private var recorder: TraceRecorder?
     private(set) var producer: ChatTraceProducer?
     private var hasPruned = false
 
-    private init() {}
+    /// The store factory is injectable so a test can point at a temporary file
+    /// instead of the user's real trace history.
+    init(makeStore: @escaping () throws -> TraceStore = { try TraceStore() }) {
+        self.makeStore = makeStore
+    }
 
     /// Idempotent. Safe to call from every view that wants a producer.
     @discardableResult
@@ -29,7 +34,7 @@ final class TraceServices {
         if let producer { return producer }
 
         do {
-            let store = try TraceStore()
+            let store = try makeStore()
             let recorder = TraceRecorder(store: store)
             let producer = ChatTraceProducer(recorder: recorder)
             self.store = store
