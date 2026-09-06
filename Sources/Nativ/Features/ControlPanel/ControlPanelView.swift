@@ -41,7 +41,7 @@ struct ControlPanelView: View {
     @State var isModelConfigurationVisible = false
     @State var selectedDevSection: DevHubView.Section = .integrations
     @State var isProjectsHeaderHovering = false
-    @State var isSessionsHeaderHovering = false
+    @State var isFoldersHeaderHovering = false
     @State var sidebarRenameCommitRequests = PassthroughSubject<Void, Never>()
     @State var isSelectingRecents = false
     @State var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []

@@ -426,9 +426,10 @@ struct ControlPanelFolderHeaderView: View {
                 .buttonStyle(.plain)
             }
 
-            Image(systemName: "folder")
+            Image(systemName: folder.isPinned ? "pin.fill" : "folder")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(folder.isPinned ? Color.blue : Color.secondary)
+                .accessibilityLabel(folder.isPinned ? "Pinned folder" : "Folder")
 
             if isRenaming {
                 TextField("Name", text: $renameDraft)
@@ -516,13 +517,14 @@ struct ControlPanelFolderHeaderView: View {
 
 struct SidebarRowSelectionStyle: ViewModifier {
     let isSelected: Bool
+    var isNavigation = false
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
         content
             .nativTextStyle(.sidebarItem)
             .padding(.horizontal, 7)
-            .padding(.vertical, 6)
+            .padding(.vertical, isNavigation ? 8 : 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(backgroundColor)
@@ -530,7 +532,7 @@ struct SidebarRowSelectionStyle: ViewModifier {
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(
-                        isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                        isSelected && !isNavigation ? Color.accentColor.opacity(0.12) : Color.clear,
                         lineWidth: 0.5
                     )
             )
@@ -541,17 +543,17 @@ struct SidebarRowSelectionStyle: ViewModifier {
 
     private var backgroundColor: Color {
         if isSelected {
-            return Color.accentColor.opacity(0.18)
+            return isNavigation ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.18)
         }
         if isHovering {
-            return Color.accentColor.opacity(0.08)
+            return isNavigation ? Color.primary.opacity(0.05) : Color.accentColor.opacity(0.08)
         }
         return Color.clear
     }
 }
 
 extension View {
-    func sidebarRowSelectionStyle(isSelected: Bool) -> some View {
-        modifier(SidebarRowSelectionStyle(isSelected: isSelected))
+    func sidebarRowSelectionStyle(isSelected: Bool, isNavigation: Bool = false) -> some View {
+        modifier(SidebarRowSelectionStyle(isSelected: isSelected, isNavigation: isNavigation))
     }
 }
