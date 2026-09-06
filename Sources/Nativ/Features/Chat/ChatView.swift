@@ -62,7 +62,9 @@ struct ChatView: View {
         }
         .onAppear {
             chat.mcpHost = mcpHost
-            chat.traceProducer = TraceServices.shared.start()
+            chat.traceProducer = model.settings.traceRecordingEnabled
+                ? TraceServices.shared.start(retention: model.settings.traceRetentionWindow)
+                : nil
             mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
         }

@@ -58,6 +58,19 @@ extension TraceEventKind {
     public static let modelSwitched = TraceEventKind(rawValue: "model_switched")
 }
 
+extension TraceEventKind {
+    /// Kinds that end a call's output without carrying it.
+    ///
+    /// `responseCompleted` is absent on purpose: it carries the authoritative
+    /// text, so the accumulated stream is discarded rather than written. Tool
+    /// events are absent too — a tool call happens *within* a call, and sealing
+    /// on one would store the partial text and then store it again with the
+    /// completion.
+    public var sealsStreamedOutput: Bool {
+        self == .responseFailed || self == .turnEnded
+    }
+}
+
 extension TraceEventKind: CustomStringConvertible {
     public var description: String { rawValue }
 }

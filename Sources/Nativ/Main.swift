@@ -34,6 +34,16 @@ enum Main {
             }
         }
 
+        if CommandLine.arguments.contains("--trace-smoke-test") {
+            // dispatchMain rather than a semaphore: the pipeline runs on the
+            // main actor, so blocking this thread to wait for it deadlocks.
+            Task { @MainActor in
+                let passed = await runTraceSmokeTest()
+                exit(passed ? EXIT_SUCCESS : EXIT_FAILURE)
+            }
+            dispatchMain()
+        }
+
         if CommandLine.arguments.contains("--lifecycle-smoke-test") {
             let server = NativProcessController()
             server.onOutput = { text in

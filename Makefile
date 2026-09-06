@@ -1,5 +1,5 @@
 .PHONY: build verify clean
-.PHONY: xcode-generate xcode-build xcode-sign xcode-run xcode-smoke xcode-lifecycle-smoke
+.PHONY: xcode-generate xcode-build xcode-sign xcode-run xcode-smoke xcode-lifecycle-smoke xcode-trace-smoke
 
 XCODE_DERIVED_DATA ?= build/NativDevelopmentDerivedData
 # Build-product name; must match NATIV_PRODUCT_NAME in the xcconfig chain.
@@ -38,3 +38,6 @@ xcode-smoke: xcode-build
 
 xcode-lifecycle-smoke: xcode-build
 	$(NATIV_APP)/Contents/MacOS/$(NATIV_PRODUCT_NAME) --lifecycle-smoke-test
+
+xcode-trace-smoke: xcode-build
+	$(NATIV_APP)/Contents/MacOS/$(NATIV_PRODUCT_NAME) --trace-smoke-test

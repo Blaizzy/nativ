@@ -181,6 +181,17 @@ public enum MLXChatMessageContent: Codable, Equatable, Sendable {
     case text(String)
     case parts([MLXChatContentPart])
 
+    /// The textual content, with non-text parts dropped. Used where a caller
+    /// needs something to hash or display and cannot act on an image part.
+    public var plainText: String {
+        switch self {
+        case .text(let text):
+            text
+        case .parts(let parts):
+            parts.compactMap(\.text).joined(separator: "\n")
+        }
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let text = try? container.decode(String.self) {

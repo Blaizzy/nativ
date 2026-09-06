@@ -60,7 +60,9 @@ public actor TraceRecorder {
         traceID: String,
         scope: TraceScope
     ) async {
-        await flushPartial(for: TraceCallKey(traceID: traceID, scope: scope), because: kind)
+        if kind.sealsStreamedOutput {
+            await flushPartial(for: TraceCallKey(traceID: traceID, scope: scope))
+        }
         await write(kind: kind, json: json, traceID: traceID, scope: scope)
     }
 
@@ -99,7 +101,7 @@ public actor TraceRecorder {
     /// Seals every open call. Call when a session closes or the app is quitting.
     public func flushAll() async {
         for key in partials.keys {
-            await flushPartial(for: key, because: .responseFailed)
+            await flushPartial(for: key)
         }
     }
 
@@ -138,9 +140,8 @@ public actor TraceRecorder {
         }
     }
 
-    private func flushPartial(for key: TraceCallKey, because reason: TraceEventKind) async {
-        guard reason != .responseDelta,
-              let partial = partials.removeValue(forKey: key),
+    private func flushPartial(for key: TraceCallKey) async {
+        guard let partial = partials.removeValue(forKey: key),
               !partial.isEmpty,
               let json = encode(ResponseDeltaPayload(
                   content: partial.content.isEmpty ? nil : partial.content,

@@ -147,6 +147,7 @@
 		487C0D234A1B2F700F3BB5DA /* DocumentTextExtractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06D5CBFB467AADEE51EE098E /* DocumentTextExtractionTests.swift */; };
 		4882FE7E8C689152D428AB2E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 0D3574097911A448F62ED273 /* Sparkle */; };
 		488BBCB7C0182ABB1FBADAD1 /* NativServerKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; };
+		49424FEF1653B025EEC630A3 /* TraceSmokeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DFCD61898E694E98A1761C /* TraceSmokeTest.swift */; };
 		4944DC4357DA195C1E8D8B75 /* DocumentTextExtraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D6BDF659A46F028B6203144 /* DocumentTextExtraction.swift */; };
 		4964A59D648C316D3EF1419B /* TraceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E395DD913BFF3EB3BDB7F5BA /* TraceStoreTests.swift */; };
 		49D9B119A4F90BBE66343B5B /* WebBrowsingProviderClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E0214BE1D88EB4CDB66836 /* WebBrowsingProviderClient.swift */; };
@@ -578,6 +579,7 @@
 		1098AB6C9B808EE926569F58 /* TraceJSONTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceJSONTests.swift; sourceTree = "<group>"; };
 		11A8CF85D011DFEEC8F1CD3F /* TraceExposure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceExposure.swift; sourceTree = "<group>"; };
 		1279F60B3A912CD12298628D /* TraceEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceEvent.swift; sourceTree = "<group>"; };
+		13DFCD61898E694E98A1761C /* TraceSmokeTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceSmokeTest.swift; sourceTree = "<group>"; };
 		141A3E7402D8AE90971C374B /* ModelPrimaryTaskResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolver.swift; sourceTree = "<group>"; };
 		1450610DDB81712B1F7F02B6 /* NativApplicationCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativApplicationCommands.swift; sourceTree = "<group>"; };
 		14F98763452E5A3BED006155 /* ChatFileWriteTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFileWriteTools.swift; sourceTree = "<group>"; };
@@ -1454,6 +1456,7 @@
 			isa = PBXGroup;
 			children = (
 				5D0FEBB33DD92F8ABDAE9F06 /* TraceServices.swift */,
+				13DFCD61898E694E98A1761C /* TraceSmokeTest.swift */,
 			);
 			path = Trace;
 			sourceTree = "<group>";
@@ -2179,6 +2182,7 @@
 				8E717C7364F8B9DA2BDF0E20 /* TextShimmerWave.swift in Sources */,
 				A1695BB51B153E19F4F73DE0 /* ToolsSectionView.swift in Sources */,
 				7F02F356E194467A4C81A596 /* TraceServices.swift in Sources */,
+				49424FEF1653B025EEC630A3 /* TraceSmokeTest.swift in Sources */,
 				4CB31A9AACD344FA2CD1B6FD /* VoiceAnimationPreferences.swift in Sources */,
 				B71FD641DAB1197C15F4D9B7 /* VoiceAudioRecorder.swift in Sources */,
 				088297CDFEFECD2787806AD7 /* VoiceCaptureCoordinator.swift in Sources */,

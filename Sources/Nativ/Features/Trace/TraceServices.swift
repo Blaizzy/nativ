@@ -64,3 +64,15 @@ final class TraceServices {
         store = nil
     }
 }
+
+extension NativSettings {
+    /// Retention derived from settings. Recording off means keep nothing, so
+    /// turning it off also clears what is already on disk on the next sweep.
+    var traceRetentionWindow: TraceRetentionWindow {
+        guard traceRecordingEnabled else { return .none }
+        return TraceRetentionWindow(
+            days: traceRetentionDays == 0 ? nil : traceRetentionDays,
+            maximumTraces: traceMaximumTraces == 0 ? nil : traceMaximumTraces
+        )
+    }
+}
