@@ -230,19 +230,6 @@ struct SettingsView: View {
                     Toggle("", isOn: projectToolsEnabledBinding)
                         .labelsHidden()
                 }
-
-                Divider()
-                    .padding(.leading, 52)
-
-                settingsRow(
-                    title: "Auto-Run Terminal Commands",
-                    description:
-                        "Skip the confirmation prompt for terminal commands with no safety warnings. Commands the safety check flags, and destructive commands it blocks outright, still require a manual approval.",
-                    systemImage: "bolt.badge.checkmark"
-                ) {
-                    Toggle("", isOn: terminalAutoApprovalEnabledBinding)
-                        .labelsHidden()
-                }
             }
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -259,17 +246,6 @@ struct SettingsView: View {
             set: { isEnabled in
                 var settings = model.settings
                 settings.projectToolsEnabled = isEnabled
-                model.settings = settings.normalized()
-            }
-        )
-    }
-
-    private var terminalAutoApprovalEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { model.settings.terminalAutoApprovalEnabled },
-            set: { isEnabled in
-                var settings = model.settings
-                settings.terminalAutoApprovalEnabled = isEnabled
                 model.settings = settings.normalized()
             }
         )

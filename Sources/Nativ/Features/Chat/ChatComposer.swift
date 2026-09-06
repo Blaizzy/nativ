@@ -214,6 +214,7 @@ struct ChatComposer: View {
     @State private var showsKits = false
     @State private var showsCapabilities = false
     @State private var showsAddPanel = false
+    @State private var showsApprovalModePanel = false
     @State private var isWebSearchAvailable = false
     @State private var isWebReadAvailable = false
     @State private var webSearchProviderLabel: String?
@@ -327,6 +328,8 @@ struct ChatComposer: View {
                         onSelect: onSelectWorkspaceMode
                     )
 
+                    approvalModeButton
+
                     Spacer(minLength: 12)
 
                     if let contextWindowUsage {
@@ -378,6 +381,11 @@ struct ChatComposer: View {
             .background {
                 NativArrowlessPopoverPresenter(isPresented: $showsAddPanel) {
                     addPanel
+                }
+            }
+            .background {
+                NativArrowlessPopoverPresenter(isPresented: $showsApprovalModePanel) {
+                    approvalModePanel
                 }
             }
         }
@@ -464,6 +472,76 @@ struct ChatComposer: View {
             await Task.yield()
             action()
         }
+    }
+
+    private var approvalModeButton: some View {
+        Button {
+            showsApprovalModePanel.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(
+                    systemName: model.settings.terminalAutoApprovalEnabled
+                        ? "bolt.badge.checkmark" : "hand.raised"
+                )
+                .font(.system(size: 11, weight: .semibold))
+
+                Text(model.settings.terminalAutoApprovalEnabled ? "Auto" : "Manual")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(Color.secondary)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(
+                Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help("Choose how terminal commands are approved")
+        .accessibilityLabel(
+            "Terminal approval mode: \(model.settings.terminalAutoApprovalEnabled ? "Auto" : "Manual")"
+        )
+    }
+
+    private var approvalModePanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("How should terminal commands be approved?")
+                .nativTextStyle(.supportingEmphasized)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 1) {
+                ChatComposerActionRow(
+                    title: "Manual",
+                    detail: "Always ask before running",
+                    systemName: "hand.raised",
+                    isSelected: !model.settings.terminalAutoApprovalEnabled,
+                    action: { setTerminalAutoApproval(false) }
+                )
+
+                ChatComposerActionRow(
+                    title: "Auto",
+                    detail: "Skip prompts for safe commands",
+                    systemName: "bolt.badge.checkmark",
+                    isSelected: model.settings.terminalAutoApprovalEnabled,
+                    action: { setTerminalAutoApproval(true) }
+                )
+            }
+        }
+        .padding(10)
+        .frame(width: 260)
+    }
+
+    private func setTerminalAutoApproval(_ isEnabled: Bool) {
+        var settings = model.settings
+        settings.terminalAutoApprovalEnabled = isEnabled
+        model.settings = settings.normalized()
+        showsApprovalModePanel = false
     }
 
     private func globalToolIsEnabled(_ toolName: String, isAvailable: Bool) -> Bool {
