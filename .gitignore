@@ -10,3 +10,4 @@ __pycache__/
 .DS_Store
 AGENTS.md
 /Configuration/Signing.local.xcconfig
+/Nativ.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
