@@ -4,6 +4,8 @@ import SwiftUI
 struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     var gap: CGFloat = 8
+    var showsBorder: Bool = true
+    var isInteractive: Bool = true
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -19,6 +21,8 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             anchorView: anchorView,
             isPresented: $isPresented,
             gap: gap,
+            showsBorder: showsBorder,
+            isInteractive: isInteractive,
             content: content
         )
     }
@@ -39,6 +43,8 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             anchorView: NSView,
             isPresented: Binding<Bool>,
             gap: CGFloat,
+            showsBorder: Bool,
+            isInteractive: Bool,
             content: () -> Content
         ) {
             self.anchorView = anchorView
@@ -50,7 +56,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 return
             }
 
-            let surface = ArrowlessPopoverSurface(content: content())
+            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder)
             if let hostingView {
                 hostingView.rootView = surface
             } else {
@@ -59,6 +65,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 self.hostingView = hostingView
                 self.panel = panel
             }
+            panel?.ignoresMouseEvents = !isInteractive
             showPanel()
         }
 
@@ -87,7 +94,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             panel.isFloatingPanel = true
             panel.isOpaque = false
             panel.backgroundColor = .clear
-            panel.hasShadow = true
+            panel.hasShadow = false
             panel.hidesOnDeactivate = true
             panel.isReleasedWhenClosed = false
             panel.animationBehavior = .none
@@ -125,7 +132,11 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             }
             guard !wasVisible else { return }
             panel.alphaValue = 0
-            panel.makeKeyAndOrderFront(nil)
+            if panel.ignoresMouseEvents {
+                panel.orderFront(nil)
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 panel.animator().alphaValue = 1
@@ -140,15 +151,16 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             guard let panel else { return }
             let windowRect = anchorView.convert(anchorView.bounds, to: nil)
             let screenRect = parentWindow.convertToScreen(windowRect)
+            let shadowPadding = ArrowlessPopoverSurface<Content>.shadowPadding
             var origin = NSPoint(
                 x: screenRect.midX - (size.width / 2),
-                y: screenRect.maxY + gap
+                y: screenRect.maxY + gap - shadowPadding
             )
 
             if let visibleFrame = parentWindow.screen?.visibleFrame {
                 origin.x = min(
-                    max(origin.x, visibleFrame.minX + 8),
-                    visibleFrame.maxX - size.width - 8
+                    max(origin.x, visibleFrame.minX + 8 - shadowPadding),
+                    visibleFrame.maxX - size.width - 8 + shadowPadding
                 )
             }
             panel.setFrameOrigin(origin)
@@ -175,15 +187,30 @@ private final class ArrowlessPopoverPanel: NSPanel {
 }
 
 private struct ArrowlessPopoverSurface<Content: View>: View {
+    // Keep the SwiftUI shadow inside the transparent, shadowless panel.
+    static var shadowRadius: CGFloat { 8 }
+    static var shadowPadding: CGFloat { shadowRadius * 3 }
+
     let content: Content
+    let showsBorder: Bool
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
         content
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+            .clipShape(shape)
+            .padding(Self.shadowPadding)
+            .background {
+                shape
+                    .fill(Color(nsColor: .textBackgroundColor))
+                    .overlay {
+                        if showsBorder {
+                            shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.08), radius: Self.shadowRadius, x: 0, y: Self.shadowRadius / 3)
+                    .padding(Self.shadowPadding)
+                    .drawingGroup()
             }
     }
 }
