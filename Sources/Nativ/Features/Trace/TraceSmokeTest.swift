@@ -72,14 +72,21 @@ func runTraceSmokeTest() async -> Bool {
         await producer.drain()
 
         let events = try await store.events(forSession: sessionID.uuidString)
-        let items = TraceReducer.items(for: events)
-        blocks = TraceGrouping.blocks(for: items)
 
-        let index = TraceExposureIndex(items: items)
-        exposures = items.compactMap { item in
-            guard case .exposure(let payload) = item.body else { return nil }
-            return index.resolve(payload)
-        }
+        // Drive the view model the inspector actually uses, rather than
+        // re-implementing the fold here and testing a copy.
+        let inspector = TraceInspectorViewModel(store: store)
+        await inspector.loadSession(sessionID)
+        blocks = inspector.blocks
+        exposures = inspector.calls.compactMap { inspector.exposure(for: $0.id) }
+
+        check(inspector.loadFailure == nil, "the inspector loaded without error")
+        check(inspector.eventCount == events.count, "the inspector saw every event")
+        check(inspector.calls.count == 1, "the inspector listed one model call")
+        check(
+            inspector.selectedCallID == inspector.calls.last?.id,
+            "the newest call is selected by default"
+        )
 
         check(events.count == 7, "every emitted event reached the store (\(events.count))")
         check(events.map(\.seq) == Array(0..<Int64(events.count)), "sequence numbers are contiguous")

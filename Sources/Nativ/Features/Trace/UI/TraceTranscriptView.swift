@@ -1,0 +1,260 @@
+import NativTrace
+import SwiftUI
+
+/// Renders folded trace blocks in reading order.
+///
+/// Dispatches on `TraceItem.Body`, which is exhaustive — including the
+/// `.unknown` case, so an event written by a newer build still occupies a row
+/// rather than making the transcript quietly shorter than the trace.
+struct TraceTranscriptView: View {
+    @ObservedObject var model: TraceInspectorViewModel
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(model.blocks) { block in
+                        switch block {
+                        case .boundary(let boundary):
+                            TraceBoundaryRow(boundary: boundary)
+                        case .loose(let item):
+                            row(for: item)
+                        case .turn(let turn):
+                            turnView(turn)
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: model.selectedCallID) { _, id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func turnView(_ turn: TraceTurn) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let prompt = turn.prompt {
+                row(for: prompt)
+            }
+            ForEach(turn.segments) { segment in
+                switch segment {
+                case .item(let item):
+                    row(for: item)
+                case .toolRun(let run):
+                    TraceToolRunRow(run: run)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(for item: TraceItem) -> some View {
+        switch item.body {
+        case .message(let message):
+            TraceMessageRow(message: message, timestamp: item.timestamp)
+                .id(item.id)
+        case .exposure:
+            if let exposure = model.exposure(for: item.id) {
+                TraceExposureCard(
+                    exposure: exposure,
+                    diff: model.diff(for: item.id),
+                    round: item.scope.roundIndex,
+                    modelID: item.scope.modelID,
+                    isHighlighted: model.selectedCallID == item.id
+                )
+                .id(item.id)
+            }
+        case .wireRequest(let payload):
+            TraceWireRequestRow(payload: payload).id(item.id)
+        case .tool(let tool):
+            TraceToolRow(tool: tool).id(item.id)
+        case .lifecycle(let lifecycle):
+            TraceLifecycleRow(lifecycle: lifecycle, timestamp: item.timestamp).id(item.id)
+        case .unknown(let kind, let payload):
+            TraceUnknownRow(kind: kind, payload: payload).id(item.id)
+        }
+    }
+}
+
+struct TraceMessageRow: View {
+    let message: TraceMessageBody
+    let timestamp: Date
+
+    @State private var isThinkingExpanded = false
+
+    var body: some View {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            if let reasoning = message.reasoning, !reasoning.isEmpty {
+                thinking(reasoning)
+            }
+
+            HStack {
+                if message.role == .user { Spacer(minLength: 40) }
+                Text(message.text.isEmpty && message.isStreaming ? "…" : message.text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background {
+                        if message.role == .user {
+                            Capsule(style: .continuous)
+                                .stroke(TracePalette.stroke, lineWidth: 0.5)
+                        }
+                    }
+                if message.role != .user { Spacer(minLength: 40) }
+            }
+
+            HStack(spacing: 8) {
+                Text(timestamp.formatted(date: .omitted, time: .shortened))
+                if let usage = message.usage, let prompt = usage.promptTokens {
+                    Text("\(prompt) in · \(usage.completionTokens ?? 0) out")
+                }
+                if let reason = message.finishReason {
+                    Text(reason)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    private func thinking(_ reasoning: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeOut(duration: 0.14)) { isThinkingExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Thinking")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(isThinkingExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isThinkingExpanded {
+                Text(reasoning)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .nativPanelStyle(cornerRadius: .compact)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct TraceBoundaryRow: View {
+    let boundary: TraceBoundary
+
+    var body: some View {
+        HStack(spacing: 10) {
+            line
+            HStack(spacing: 6) {
+                Image(systemName: boundary.kind == .modelSwitched ? "arrow.triangle.swap" : "dot.radiowaves.left.and.right")
+                    .font(.caption)
+                Text(boundary.title)
+                    .font(.caption.weight(.medium))
+                if let detail = boundary.detail {
+                    Text(detail).font(.caption)
+                }
+                Text(boundary.timestamp.formatted(date: .abbreviated, time: .standard))
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+            line
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var line: some View {
+        Rectangle()
+            .fill(TracePalette.stroke)
+            .frame(height: 1)
+    }
+}
+
+struct TraceLifecycleRow: View {
+    let lifecycle: TraceLifecycleBody
+    let timestamp: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: lifecycle.kind == .failure ? "exclamationmark.triangle" : "flag")
+                .font(.caption)
+                .foregroundStyle(lifecycle.kind == .failure ? TracePalette.removed : .secondary)
+            Text(lifecycle.title).font(.callout)
+            if let detail = lifecycle.detail {
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Text(timestamp.formatted(date: .omitted, time: .shortened))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+struct TraceUnknownRow: View {
+    let kind: TraceEventKind
+    let payload: TraceJSON
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                TraceOriginChip(label: "unrecognised", tone: .warning)
+                Text(kind.rawValue).font(.callout.monospaced())
+            }
+            if let text = try? payload.canonicalString() {
+                Text(text)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .nativPanelStyle(cornerRadius: .compact)
+    }
+}
+
+struct TraceWireRequestRow: View {
+    let payload: RequestSentPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                TraceOriginChip(label: payload.client ?? "external", tone: .secondary)
+                if let endpoint = payload.endpoint {
+                    Text(endpoint).font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+            }
+            if let text = try? payload.body.canonicalString() {
+                Text(text)
+                    .font(.caption.monospaced())
+                    .lineLimit(12)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .nativPanelStyle(cornerRadius: .compact)
+    }
+}

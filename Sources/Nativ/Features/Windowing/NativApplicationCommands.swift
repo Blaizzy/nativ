@@ -40,6 +40,13 @@ struct NativApplicationCommands: Commands {
                 appDelegate.resetChatFontSize()
             }
             .keyboardShortcut("0", modifiers: .command)
+
+            Divider()
+
+            Button("Show Model Trace") {
+                NotificationCenter.default.post(name: .toggleTraceInspector, object: nil)
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
         }
 
         CommandGroup(replacing: .appSettings) {
