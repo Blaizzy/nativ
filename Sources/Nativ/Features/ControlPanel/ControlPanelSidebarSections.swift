@@ -335,9 +335,9 @@ extension ControlPanelView {
             trailing: {
                 Button(action: createProject) {
                     Image(systemName: "folder.badge.plus")
-                        .nativTextStyle(.rowTitle)
+                        .font(.system(size: 15, weight: .medium))
                         .frame(width: 24, height: 24)
-                        .foregroundStyle(Color.secondary.opacity(0.7))
+                        .foregroundStyle(Color.secondary)
                 }
                 .buttonStyle(.plain)
                 .help("New project")
@@ -362,9 +362,9 @@ extension ControlPanelView {
                     }
                 } label: {
                     Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .frame(width: 24, height: 24)
-                        .foregroundStyle(Color.secondary.opacity(0.7))
+                        .foregroundStyle(Color.secondary)
                 }
                 .buttonStyle(.plain)
                 .help("New folder")
@@ -383,6 +383,17 @@ extension ControlPanelView {
             onToggle: { model.settings.sidebarSessionsCollapsed.toggle() },
             trailing: {
                 HStack(spacing: 4) {
+                    Button(action: importChat) {
+                        Label("Import chat", systemImage: "square.and.arrow.down")
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 15, weight: .medium))
+                            // Optically align the tray symbol with the checklist.
+                            .offset(y: -1)
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .help("Import a chat archive")
+
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
                             enterSelectMode()
@@ -390,23 +401,21 @@ extension ControlPanelView {
                     } label: {
                         Label("Select Multiple", systemImage: "checklist")
                             .labelStyle(.iconOnly)
-                            .nativTextStyle(.rowTitle)
+                            .font(.system(size: 15, weight: .medium))
                             .frame(width: 24, height: 24)
                             .contentShape(.rect)
                     }
-                    .disabled(
-                        isSelectingRecents
-                            || (pinnedSessions.isEmpty
-                                && unpinnedSessions.isEmpty
-                                && sidebarState.recents.folders.isEmpty)
-                    )
+                    .disabled(isSelectingRecents)
                     .help("Select multiple")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.secondary.opacity(0.7))
+                .foregroundStyle(Color.secondary)
+                .opacity(isSessionsHeaderHovering ? 1 : 0)
+                .allowsHitTesting(isSessionsHeaderHovering)
             }
         )
         .contentShape(.rect)
+        .onHover { isSessionsHeaderHovering = $0 }
     }
 
     var allSidebarSectionsCollapsed: Bool {

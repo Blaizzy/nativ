@@ -224,6 +224,11 @@ extension ControlPanelView {
 
     var sidebarNavigation: some View {
         VStack(spacing: 2) {
+            sidebarChatAction("New chat", systemImage: "square.and.pencil") {
+                createChatSession()
+            }
+            .help("Start a new chat")
+
             ForEach(ControlPanelTab.allCases.filter { $0 != .chat }) { tab in
                 sidebarTabButton(tab)
 
@@ -233,18 +238,6 @@ extension ControlPanelView {
                     }
                 }
             }
-
-            Divider()
-                .padding(.horizontal, 7)
-                .padding(.vertical, 8)
-
-            sidebarChatAction("New chat", systemImage: "square.and.pencil") {
-                createChatSession()
-            }
-            .help("Start a new chat")
-
-            sidebarChatAction("Import chat", systemImage: "square.and.arrow.down", action: importChat)
-                .help("Import a chat archive")
         }
     }
 

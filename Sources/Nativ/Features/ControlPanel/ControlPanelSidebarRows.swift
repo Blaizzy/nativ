@@ -21,7 +21,6 @@ struct ControlPanelRecentSessionRow: View {
     let onExportFile: () -> Void
     let onRevealInFinder: () -> Void
     let onRename: (String) -> Void
-    let onNewChat: () -> Void
     let onTogglePin: () -> Void
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
@@ -174,15 +173,7 @@ struct ControlPanelRecentSessionRow: View {
 
     @ViewBuilder
     private var rowMenuContents: some View {
-        Button {
-            onNewChat()
-        } label: {
-            Label("New", systemImage: "square.and.pencil")
-        }
-
         if recent.isChat {
-            Divider()
-
             Button {
                 beginRename()
             } label: {
