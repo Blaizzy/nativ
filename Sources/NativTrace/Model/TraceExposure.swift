@@ -20,8 +20,6 @@ public struct PromptSectionOrigin: RawRepresentable, Hashable, Sendable, Codable
     public static let toolGuide = PromptSectionOrigin(rawValue: "tool_guide")
     /// An enabled skill's instructions.
     public static let skill = PromptSectionOrigin(rawValue: "skill")
-    /// Text extracted from an attached document.
-    public static let documentContext = PromptSectionOrigin(rawValue: "document_context")
     /// A system prompt recovered from the wire, whose composition is unknown.
     public static let opaque = PromptSectionOrigin(rawValue: "opaque")
 }
@@ -57,8 +55,6 @@ public struct ToolOrigin: RawRepresentable, Hashable, Sendable, Codable {
     public static let custom = ToolOrigin(rawValue: "custom")
     /// Provided by a connected MCP server; `originDetail` names the server.
     public static let mcp = ToolOrigin(rawValue: "mcp")
-    /// Contributed by an installed extension.
-    public static let extensionProvided = ToolOrigin(rawValue: "extension")
 }
 
 /// A tool as it was advertised to the model on one call.
@@ -158,7 +154,6 @@ public struct TraceMessageRef: Sendable, Hashable, Codable {
     /// Producer-assigned id of the message; resolvable within this trace.
     public var messageID: String
     public var contentHash: String
-    public var byteCount: Int
     /// Present only when the body cannot be resolved from the trace, such as
     /// history imported from outside Nativ.
     public var inlineBody: String?
@@ -167,13 +162,11 @@ public struct TraceMessageRef: Sendable, Hashable, Codable {
         role: TraceRole,
         messageID: String,
         contentHash: String,
-        byteCount: Int,
         inlineBody: String? = nil
     ) {
         self.role = role
         self.messageID = messageID
         self.contentHash = contentHash
-        self.byteCount = byteCount
         self.inlineBody = inlineBody
     }
 }

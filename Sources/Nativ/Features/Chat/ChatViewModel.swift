@@ -2190,7 +2190,6 @@ final class ChatViewModel: ObservableObject {
                     role: TraceRole(rawValue: apiMessage.role),
                     messageID: message.toolCallID ?? message.id.uuidString,
                     contentHash: TraceHash.content(sentBody),
-                    byteCount: sentBody.utf8.count,
                     // Document context is appended to the body on the way out,
                     // so the transcript no longer holds what was sent. Inline it
                     // rather than let the reader resolve to a shorter body and

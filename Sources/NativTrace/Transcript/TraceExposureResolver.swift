@@ -24,10 +24,6 @@ public struct ResolvedExposure: Sendable, Hashable {
     public let messages: [ResolvedMessage]
     public let omissions: [TraceOmission]
     public let advertisesTools: Bool
-
-    public var systemPromptText: String {
-        systemSections.map(\.body).joined(separator: "\n\n")
-    }
 }
 
 /// Resolves the message references in an exposure against the trace they came

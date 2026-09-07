@@ -31,11 +31,6 @@ public actor TraceRecorder {
 
     private var partials: [TraceCallKey: PartialResponse] = [:]
 
-    /// Number of events that failed to record, and the most recent reason.
-    /// Surfaced rather than silently swallowed so a broken trace is diagnosable.
-    public private(set) var failureCount = 0
-    public private(set) var lastFailure: String?
-
     public init(store: TraceStore, now: @escaping @Sendable () -> Date = Date.init) {
         self.store = store
         self.now = now
@@ -173,15 +168,15 @@ public actor TraceRecorder {
 
     /// Records that a producer could not encode a payload it meant to write.
     public func noteEncodeFailure(kind: TraceEventKind, message: String) {
-        failureCount += 1
-        lastFailure = "encoding \(kind.rawValue): \(message)"
-        logger.error("trace payload could not be encoded for \(kind.rawValue, privacy: .public)")
+        logger.error(
+            "trace payload could not be encoded for \(kind.rawValue, privacy: .public): \(message, privacy: .public)"
+        )
     }
 
     private func note(_ error: Error, while activity: String) {
-        failureCount += 1
-        lastFailure = "\(activity): \(error)"
-        logger.error("trace recording failed while \(activity, privacy: .public)")
+        logger.error(
+            "trace recording failed while \(activity, privacy: .public): \(String(describing: error), privacy: .public)"
+        )
     }
 }
 

@@ -124,25 +124,11 @@ extension TraceJSON {
         }
     }
 
-    public var boolValue: Bool? {
-        guard case .bool(let value) = self else { return nil }
-        return value
-    }
-
     public var arrayValue: [TraceJSON]? {
         guard case .array(let value) = self else { return nil }
         return value
     }
 
-    public var objectValue: [String: TraceJSON]? {
-        guard case .object(let value) = self else { return nil }
-        return value
-    }
-
-    public var isNull: Bool {
-        if case .null = self { return true }
-        return false
-    }
 }
 
 extension TraceJSON: ExpressibleByNilLiteral {

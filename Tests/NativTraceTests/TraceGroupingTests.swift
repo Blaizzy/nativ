@@ -47,12 +47,14 @@ final class TraceGroupingTests: XCTestCase {
 
         let blocks = TraceGrouping.blocks(for: TraceReducer.items(for: events))
 
-        guard blocks.count == 3, case .boundary(let boundary) = blocks[1] else {
+        guard blocks.count == 3, case .boundary(let item) = blocks[1],
+            case .lifecycle(let lifecycle) = item.body
+        else {
             return XCTFail("expected turn, boundary, turn — got \(blocks.count) blocks")
         }
-        XCTAssertEqual(boundary.kind, .modelSwitched)
-        XCTAssertEqual(boundary.title, "Switched to gemma")
-        XCTAssertEqual(boundary.detail, "from qwen")
+        XCTAssertEqual(lifecycle.kind, .modelSwitched)
+        XCTAssertEqual(lifecycle.title, "gemma")
+        XCTAssertEqual(lifecycle.detail, "qwen")
     }
 
     func testEveryToolRowSurvivesGrouping() throws {
@@ -103,8 +105,7 @@ final class TraceGroupingTests: XCTestCase {
     private func itemIDs(in blocks: [TraceDisplayBlock]) -> [String] {
         blocks.flatMap { block -> [String] in
             switch block {
-            case .boundary(let boundary): [boundary.id]
-            case .loose(let item): [item.id]
+            case .boundary(let item): [item.id]
             case .turn(let turn):
                 (turn.prompt.map { [$0.id] } ?? []) + turn.segments.map(\.id)
             }

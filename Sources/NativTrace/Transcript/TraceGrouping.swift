@@ -8,30 +8,17 @@ public struct TraceTurn: Sendable, Hashable, Identifiable {
     public let startedAt: Date
 }
 
-/// A divider between stretches of a trace that were not the same context.
-public struct TraceBoundary: Sendable, Hashable, Identifiable {
-    public enum Kind: String, Sendable, Hashable {
-        case sessionStarted
-        case modelSwitched
-    }
-
-    public let id: String
-    public let kind: Kind
-    public let title: String
-    public let detail: String?
-    public let timestamp: Date
-}
-
 public enum TraceDisplayBlock: Sendable, Hashable, Identifiable {
     case turn(TraceTurn)
-    case boundary(TraceBoundary)
-    case loose(TraceItem)
+    /// A lifecycle item that separates two stretches of a trace — a chat
+    /// starting, or one model taking over. Carried as the item itself rather
+    /// than copied into a parallel type.
+    case boundary(TraceItem)
 
     public var id: String {
         switch self {
         case .turn(let turn): "turn:\(turn.id)"
-        case .boundary(let boundary): "boundary:\(boundary.id)"
-        case .loose(let item): "loose:\(item.id)"
+        case .boundary(let item): "boundary:\(item.id)"
         }
     }
 }
@@ -63,9 +50,9 @@ public enum TraceGrouping {
         }
 
         for item in items {
-            if let boundary = boundary(for: item) {
+            if isBoundary(item) {
                 flushTurn()
-                blocks.append(.boundary(boundary))
+                blocks.append(.boundary(item))
                 continue
             }
 
@@ -89,23 +76,12 @@ public enum TraceGrouping {
         return blocks
     }
 
-    private static func boundary(for item: TraceItem) -> TraceBoundary? {
-        guard case .lifecycle(let lifecycle) = item.body else { return nil }
+    /// Only these two lifecycle kinds divide a trace; the rest belong to a turn.
+    private static func isBoundary(_ item: TraceItem) -> Bool {
+        guard case .lifecycle(let lifecycle) = item.body else { return false }
         switch lifecycle.kind {
-        case .sessionStarted:
-            return TraceBoundary(
-                id: item.id, kind: .sessionStarted, title: lifecycle.title,
-                detail: lifecycle.detail, timestamp: item.timestamp
-            )
-        case .modelSwitched:
-            return TraceBoundary(
-                id: item.id, kind: .modelSwitched,
-                title: "Switched to \(lifecycle.title)",
-                detail: lifecycle.detail.map { "from \($0)" },
-                timestamp: item.timestamp
-            )
-        case .turnEnded, .failure:
-            return nil
+        case .sessionStarted, .modelSwitched: return true
+        case .turnEnded, .failure: return false
         }
     }
 }

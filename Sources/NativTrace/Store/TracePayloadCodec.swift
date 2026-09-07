@@ -59,42 +59,21 @@ public enum TracePayloadCodec {
         operation: compression_stream_operation
     ) -> Data? {
         guard !input.isEmpty else { return Data() }
+        let apply = operation == COMPRESSION_STREAM_ENCODE
+            ? compression_encode_buffer
+            : compression_decode_buffer
+
         var output = Data(count: capacity)
         let written: Int = output.withUnsafeMutableBytes { destination in
             input.withUnsafeBytes { source in
                 guard let destinationBase = destination.bindMemory(to: UInt8.self).baseAddress,
                       let sourceBase = source.bindMemory(to: UInt8.self).baseAddress
                 else { return 0 }
-                return runCompression(
-                    operation: operation,
-                    destination: destinationBase,
-                    destinationCapacity: capacity,
-                    source: sourceBase,
-                    sourceCount: input.count
-                )
+                return apply(destinationBase, capacity, sourceBase, input.count, nil, COMPRESSION_ZLIB)
             }
         }
         guard written > 0 else { return nil }
         output.removeSubrange(written...)
         return output
-    }
-
-    /// Thin shim over the two C entry points, which take identical arguments
-    /// but are separate functions.
-    private static func runCompression(
-        operation: compression_stream_operation,
-        destination: UnsafeMutablePointer<UInt8>,
-        destinationCapacity: Int,
-        source: UnsafePointer<UInt8>,
-        sourceCount: Int
-    ) -> Int {
-        if operation == COMPRESSION_STREAM_ENCODE {
-            return compression_encode_buffer(
-                destination, destinationCapacity, source, sourceCount, nil, COMPRESSION_ZLIB
-            )
-        }
-        return compression_decode_buffer(
-            destination, destinationCapacity, source, sourceCount, nil, COMPRESSION_ZLIB
-        )
     }
 }

@@ -20,7 +20,7 @@ final class TraceExposureTests: XCTestCase {
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .user, messageID: "m1",
-                    contentHash: TraceHash.content(body), byteCount: body.utf8.count
+                    contentHash: TraceHash.content(body)
                 )
             ])
         )
@@ -43,7 +43,7 @@ final class TraceExposureTests: XCTestCase {
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .user, messageID: "m1",
-                    contentHash: TraceHash.content("original text"), byteCount: 13
+                    contentHash: TraceHash.content("original text")
                 )
             ])
         )
@@ -56,7 +56,7 @@ final class TraceExposureTests: XCTestCase {
     func testUnresolvableMessageIsReportedRatherThanInvented() {
         let exposure = TraceExposureIndex(items: []).resolve(
             RequestComposedPayload(messages: [
-                TraceMessageRef(role: .user, messageID: "gone", contentHash: "abc", byteCount: 3)
+                TraceMessageRef(role: .user, messageID: "gone", contentHash: "abc")
             ])
         )
 
@@ -70,7 +70,7 @@ final class TraceExposureTests: XCTestCase {
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .user, messageID: "m1",
-                    contentHash: TraceHash.content(body), byteCount: body.utf8.count,
+                    contentHash: TraceHash.content(body),
                     inlineBody: body
                 )
             ])
@@ -97,7 +97,7 @@ final class TraceExposureTests: XCTestCase {
             RequestComposedPayload(messages: [
                 TraceMessageRef(
                     role: .tool, messageID: "c1",
-                    contentHash: TraceHash.content(output), byteCount: output.utf8.count
+                    contentHash: TraceHash.content(output)
                 )
             ])
         )

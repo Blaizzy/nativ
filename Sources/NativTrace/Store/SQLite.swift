@@ -26,19 +26,20 @@ public enum SQLiteError: Error, CustomStringConvertible {
     }
 }
 
-/// Minimal SQLite wrapper owned by `NativTrace`.
+/// The app's SQLite wrapper.
 ///
-/// Deliberately not shared with the analytics store: that one reads a database
-/// Python writes, this one read-writes a database only Nativ writes. Coupling
-/// them would make either side's locking and migration choices the other's
-/// problem.
+/// Lives here because `NativTrace` has no dependencies, so both the trace store
+/// and the analytics reader can use it. It previously existed twice: this and a
+/// near-identical private copy in `NativAnalyticsStore`, differing only in one
+/// PRAGMA value.
 ///
-/// Not thread-safe on its own — `TraceStore` is an actor and is the only owner.
-final class SQLiteConnection {
+/// Not thread-safe on its own. `TraceStore` is an actor; other owners must
+/// serialise access themselves.
+public final class SQLiteConnection {
     private let handle: OpaquePointer
     private var cache: [String: SQLiteStatement] = [:]
 
-    init(url: URL, readOnly: Bool = false) throws {
+    public init(url: URL, readOnly: Bool = false) throws {
         if !readOnly {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
@@ -76,7 +77,7 @@ final class SQLiteConnection {
         sqlite3_errmsg(handle).map(String.init(cString:)) ?? "unknown SQLite error"
     }
 
-    func execute(_ sql: String) throws {
+    public func execute(_ sql: String) throws {
         guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
             throw SQLiteError.execute(errorMessage)
         }
@@ -89,7 +90,7 @@ final class SQLiteConnection {
     /// binding leaks into the next query. Statements are cached and reused, so
     /// the append path does not re-prepare its insert for every event.
     @discardableResult
-    func withStatement<Result>(
+    public func withStatement<Result>(
         _ sql: String,
         _ body: (SQLiteStatement) throws -> Result
     ) throws -> Result {
@@ -111,7 +112,7 @@ final class SQLiteConnection {
     /// Immediate rather than deferred so the writer takes its lock up front. A
     /// deferred transaction that upgrades mid-way can fail with `SQLITE_BUSY`
     /// after part of the work is already done.
-    func transaction<Result>(_ work: () throws -> Result) throws -> Result {
+    public func transaction<Result>(_ work: () throws -> Result) throws -> Result {
         try execute("BEGIN IMMEDIATE;")
         do {
             let result = try work()
@@ -121,6 +122,18 @@ final class SQLiteConnection {
             try? execute("ROLLBACK;")
             throw error
         }
+    }
+
+    /// Vends a cached, reset statement.
+    ///
+    /// `withStatement` is preferred — it resets on both entry and exit and
+    /// refuses re-entrant use. This exists for the analytics reader, whose
+    /// queries bind and step across several statements at once, and whose
+    /// callers must therefore finish with one before re-requesting the same SQL.
+    public func prepare(_ sql: String) throws -> SQLiteStatement {
+        let statement = try cached(sql)
+        statement.reset()
+        return statement
     }
 
     private func cached(_ sql: String) throws -> SQLiteStatement {
@@ -136,7 +149,7 @@ final class SQLiteConnection {
     }
 }
 
-final class SQLiteStatement {
+public final class SQLiteStatement {
     private let handle: OpaquePointer
     private unowned let connection: SQLiteConnection
     fileprivate var isInUse = false
@@ -145,6 +158,13 @@ final class SQLiteStatement {
     /// placeholders — a numbering mistake binds a value to the wrong column and
     /// still runs.
     private var nextParameter: Int32 = 1
+
+    /// Set by the labelled `bind(_:at:)` overloads so a caller that numbers its
+    /// own placeholders and a caller that relies on order can share one type.
+    private var bindingIndex: Int32 {
+        get { nextParameter }
+        set { nextParameter = newValue }
+    }
 
     init(handle: OpaquePointer, connection: SQLiteConnection) {
         self.handle = handle
@@ -155,7 +175,7 @@ final class SQLiteStatement {
         sqlite3_finalize(handle)
     }
 
-    func reset() {
+    public func reset() {
         sqlite3_reset(handle)
         sqlite3_clear_bindings(handle)
         nextParameter = 1
@@ -164,7 +184,7 @@ final class SQLiteStatement {
     // MARK: - Binding
 
     @discardableResult
-    func bind(_ value: String?) -> SQLiteStatement {
+    public func bind(_ value: String?) -> SQLiteStatement {
         defer { nextParameter += 1 }
         if let value {
             sqlite3_bind_text(handle, nextParameter, value, -1, sqliteTransient)
@@ -175,7 +195,7 @@ final class SQLiteStatement {
     }
 
     @discardableResult
-    func bind(_ value: Int64?) -> SQLiteStatement {
+    public func bind(_ value: Int64?) -> SQLiteStatement {
         defer { nextParameter += 1 }
         if let value {
             sqlite3_bind_int64(handle, nextParameter, value)
@@ -186,12 +206,12 @@ final class SQLiteStatement {
     }
 
     @discardableResult
-    func bind(_ value: Int?) -> SQLiteStatement {
+    public func bind(_ value: Int?) -> SQLiteStatement {
         bind(value.map(Int64.init))
     }
 
     @discardableResult
-    func bind(_ value: Double?) -> SQLiteStatement {
+    public func bind(_ value: Double?) -> SQLiteStatement {
         defer { nextParameter += 1 }
         if let value {
             sqlite3_bind_double(handle, nextParameter, value)
@@ -202,12 +222,12 @@ final class SQLiteStatement {
     }
 
     @discardableResult
-    func bind(_ value: Date) -> SQLiteStatement {
+    public func bind(_ value: Date) -> SQLiteStatement {
         bind(value.timeIntervalSince1970)
     }
 
     @discardableResult
-    func bind(_ value: Data) -> SQLiteStatement {
+    public func bind(_ value: Data) -> SQLiteStatement {
         defer { nextParameter += 1 }
         let index = nextParameter
         value.withUnsafeBytes { buffer in
@@ -216,11 +236,29 @@ final class SQLiteStatement {
         return self
     }
 
+    @discardableResult
+    public func bind(text value: String, at index: Int32) -> SQLiteStatement {
+        bindingIndex = index
+        return bind(value)
+    }
+
+    @discardableResult
+    public func bind(double value: Double, at index: Int32) -> SQLiteStatement {
+        bindingIndex = index
+        return bind(value)
+    }
+
+    @discardableResult
+    public func bind(int64 value: Int64, at index: Int32) -> SQLiteStatement {
+        bindingIndex = index
+        return bind(value)
+    }
+
     // MARK: - Stepping
 
     /// Advances the cursor. `true` means a row is available.
     @discardableResult
-    func step() throws -> Bool {
+    public func step() throws -> Bool {
         switch sqlite3_step(handle) {
         case SQLITE_ROW: true
         case SQLITE_DONE: false
@@ -228,12 +266,12 @@ final class SQLiteStatement {
         }
     }
 
-    func run() throws {
+    public func run() throws {
         _ = try step()
     }
 
     /// Steps to completion, collecting one value per row.
-    func rows<Row>(_ transform: (SQLiteStatement) -> Row) throws -> [Row] {
+    public func rows<Row>(_ transform: (SQLiteStatement) -> Row) throws -> [Row] {
         var rows: [Row] = []
         while try step() {
             rows.append(transform(self))
@@ -242,43 +280,49 @@ final class SQLiteStatement {
     }
 
     /// Steps once and reads a single value, or `nil` when there is no row.
-    func firstRow<Row>(_ transform: (SQLiteStatement) -> Row) throws -> Row? {
+    public func firstRow<Row>(_ transform: (SQLiteStatement) -> Row) throws -> Row? {
         try step() ? transform(self) : nil
     }
 
     // MARK: - Reading
 
-    func string(_ index: Int32) -> String? {
+    public func string(at index: Int32) -> String? { string(index) }
+    public func int64(at index: Int32) -> Int64 { int64(index) }
+    public func double(at index: Int32) -> Double { double(index) }
+    public func isNull(at index: Int32) -> Bool { isNull(index) }
+
+
+    public func string(_ index: Int32) -> String? {
         guard let raw = sqlite3_column_text(handle, index) else { return nil }
         return String(cString: raw)
     }
 
-    func int64(_ index: Int32) -> Int64 {
+    public func int64(_ index: Int32) -> Int64 {
         sqlite3_column_int64(handle, index)
     }
 
-    func int(_ index: Int32) -> Int {
+    public func int(_ index: Int32) -> Int {
         Int(sqlite3_column_int64(handle, index))
     }
 
-    func double(_ index: Int32) -> Double {
+    public func double(_ index: Int32) -> Double {
         sqlite3_column_double(handle, index)
     }
 
-    func date(_ index: Int32) -> Date {
+    public func date(_ index: Int32) -> Date {
         Date(timeIntervalSince1970: sqlite3_column_double(handle, index))
     }
 
-    func data(_ index: Int32) -> Data {
+    public func data(_ index: Int32) -> Data {
         guard let bytes = sqlite3_column_blob(handle, index) else { return Data() }
         return Data(bytes: bytes, count: Int(sqlite3_column_bytes(handle, index)))
     }
 
-    func isNull(_ index: Int32) -> Bool {
+    public func isNull(_ index: Int32) -> Bool {
         sqlite3_column_type(handle, index) == SQLITE_NULL
     }
 
-    func optionalInt(_ index: Int32) -> Int? {
+    public func optionalInt(_ index: Int32) -> Int? {
         isNull(index) ? nil : int(index)
     }
 }

@@ -50,8 +50,7 @@ func runTraceSmokeTest() async -> Bool {
                     TraceMessageRef(
                         role: .user,
                         messageID: userMessageID.uuidString,
-                        contentHash: TraceHash.content(prompt),
-                        byteCount: prompt.utf8.count
+                        contentHash: TraceHash.content(prompt)
                     )
                 ]
             ),
@@ -92,14 +91,12 @@ func runTraceSmokeTest() async -> Bool {
                     TraceMessageRef(
                         role: .user,
                         messageID: userMessageID.uuidString,
-                        contentHash: TraceHash.content(prompt),
-                        byteCount: prompt.utf8.count
+                        contentHash: TraceHash.content(prompt)
                     ),
                     TraceMessageRef(
                         role: .user,
                         messageID: followUpID.uuidString,
-                        contentHash: TraceHash.content(followUp),
-                        byteCount: followUp.utf8.count
+                        contentHash: TraceHash.content(followUp)
                     ),
                 ],
                 advertisesTools: false

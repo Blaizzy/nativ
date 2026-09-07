@@ -142,13 +142,48 @@ enum TraceIndex {
         }
     }
 
+    /// Traces that fall outside `window`, oldest activity first.
+    ///
+    /// Both limits apply: whichever removes more wins.
+    static func doomedTraceIDs(
+        _ window: TraceRetentionWindow,
+        now: Date,
+        on connection: SQLiteConnection
+    ) throws -> [String] {
+        var doomed: Set<String> = []
+
+        if window.days != nil {
+            try connection.withStatement(
+                "SELECT trace_id FROM trace_index WHERE last_event_at < ?;"
+            ) { statement in
+                statement.bind(window.cutoff(from: now))
+                doomed.formUnion(try statement.rows { $0.string(0) }.compactMap { $0 })
+            }
+        }
+
+        if let maximum = window.maximumTraces, maximum >= 0 {
+            try connection.withStatement(
+                """
+                SELECT trace_id FROM trace_index
+                ORDER BY last_event_at DESC
+                LIMIT -1 OFFSET ?;
+                """
+            ) { statement in
+                statement.bind(Int64(maximum))
+                doomed.formUnion(try statement.rows { $0.string(0) }.compactMap { $0 })
+            }
+        }
+
+        return doomed.sorted()
+    }
+
+    /// Removes traces from all three tables. Never trims part of a trace: half
+    /// a conversation reads as a bug and cannot be folded into anything
+    /// trustworthy.
     static func remove(traceIDs: [String], on connection: SQLiteConnection) throws {
         for traceID in traceIDs {
-            for sql in [
-                "DELETE FROM trace_events WHERE trace_id = ?;",
-                "DELETE FROM trace_models WHERE trace_id = ?;",
-            ] {
-                try connection.withStatement(sql) { statement in
+            for table in ["trace_events", "trace_models", "trace_index"] {
+                try connection.withStatement("DELETE FROM \(table) WHERE trace_id = ?;") { statement in
                     statement.bind(traceID)
                     try statement.run()
                 }

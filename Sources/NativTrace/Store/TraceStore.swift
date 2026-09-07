@@ -167,11 +167,10 @@ public actor TraceStore {
     @discardableResult
     public func prune(retaining window: TraceRetentionWindow, now: Date = Date()) throws -> Int {
         try connection.transaction {
-            let doomed = try TraceRetentionSweep.doomedTraceIDs(window, now: now, on: connection)
+            let doomed = try TraceIndex.doomedTraceIDs(window, now: now, on: connection)
             guard !doomed.isEmpty else { return 0 }
 
             try TraceIndex.remove(traceIDs: doomed, on: connection)
-            try TraceRetentionSweep.removeIndexRows(for: doomed, on: connection)
             for traceID in doomed {
                 nextSequenceByTrace.removeValue(forKey: traceID)
             }

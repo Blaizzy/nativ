@@ -55,9 +55,8 @@ final class TraceInspectorViewModel: ObservableObject {
 
     /// Request whose call should be selected once loading finishes.
     private var pendingCallSelection: String?
-    private var labelsByItemID: [String: String] = [:]
+    private var callsByItemID: [String: TraceCallSummary] = [:]
     private var exposuresByItemID: [String: ResolvedExposure] = [:]
-    private var diffsByItemID: [String: TraceExposureDiff] = [:]
     private let injectedStore: TraceStore?
 
     /// The store is injectable so the smoke test drives this exact type rather
@@ -119,13 +118,13 @@ final class TraceInspectorViewModel: ObservableObject {
     }
 
     func diff(for itemID: String) -> TraceExposureDiff {
-        diffsByItemID[itemID] ?? .none
+        callsByItemID[itemID]?.diff ?? .none
     }
 
     /// Label for an exposure row, numbered within its trace rather than by the
     /// per-turn round index.
     func callLabel(for itemID: String) -> String {
-        labelsByItemID[itemID] ?? "Model call"
+        callsByItemID[itemID]?.title ?? "Model call"
     }
 
     private func load(
@@ -149,8 +148,7 @@ final class TraceInspectorViewModel: ObservableObject {
 
     private func apply(_ traces: [(TraceSummary, [TraceEvent])]) {
         var exposures: [String: ResolvedExposure] = [:]
-        var diffs: [String: TraceExposureDiff] = [:]
-        var labels: [String: String] = [:]
+        var callsByItem: [String: TraceCallSummary] = [:]
 
         let foldedItems = traces.map { TraceReducer.items(for: $0.1) }
 
@@ -176,7 +174,6 @@ final class TraceInspectorViewModel: ObservableObject {
                 let diff = TraceExposureDiff.between(previous, and: payload)
                 if firstExposure == nil { firstExposure = payload }
                 exposures[item.id] = index.resolve(payload)
-                diffs[item.id] = diff
                 callIndex += 1
                 calls.append(
                     TraceCallSummary(
@@ -191,7 +188,7 @@ final class TraceInspectorViewModel: ObservableObject {
                         index: callIndex
                     )
                 )
-                labels[item.id] = calls[calls.count - 1].title
+                callsByItem[item.id] = calls[calls.count - 1]
                 previous = payload
             }
 
@@ -221,8 +218,7 @@ final class TraceInspectorViewModel: ObservableObject {
         }
 
         exposuresByItemID = exposures
-        diffsByItemID = diffs
-        labelsByItemID = labels
+        callsByItemID = callsByItem
         instances = folded
 
         if selectedInstanceID == nil || !folded.contains(where: { $0.id == selectedInstanceID }) {

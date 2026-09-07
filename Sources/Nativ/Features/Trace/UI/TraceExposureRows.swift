@@ -121,7 +121,6 @@ struct TraceSectionRow: View {
         case .project: "project"
         case .toolGuide: "tool guide"
         case .skill: "skill"
-        case .documentContext: "document"
         case .opaque: "wire"
         default: section.origin.rawValue
         }
@@ -183,7 +182,6 @@ struct TraceToolDescriptorRow: View {
         case .builtIn: "built in"
         case .custom: "custom"
         case .mcp: tool.originDetail.map { "mcp · \($0)" } ?? "mcp"
-        case .extensionProvided: tool.originDetail.map { "extension · \($0)" } ?? "extension"
         default: tool.origin.rawValue
         }
     }

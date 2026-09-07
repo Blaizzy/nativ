@@ -14,13 +14,11 @@ import Foundation
 /// it — chat today, the local server later — and because the ordering guarantee
 /// is worth a test that does not require building the app.
 public final class TraceEventQueue: Sendable {
+    /// Either work to run against the recorder, or a barrier to resume once
+    /// everything ahead of it has run. Carrying a closure rather than a case
+    /// per method keeps one signature per operation instead of three.
     private enum Job: Sendable {
-        case record(kind: TraceEventKind, payload: TraceJSON, traceID: String, scope: TraceScope)
-        case delta(content: String?, reasoning: String?, traceID: String, scope: TraceScope)
-        case discardPartial(traceID: String, scope: TraceScope)
-        case prune(TraceRetentionWindow)
-        case flushAll
-        case encodeFailure(kind: TraceEventKind, message: String)
+        case run(@Sendable (TraceRecorder) async -> Void)
         case barrier(CheckedContinuation<Void, Never>)
     }
 
@@ -33,22 +31,8 @@ public final class TraceEventQueue: Sendable {
         pump = Task {
             for await job in stream {
                 switch job {
-                case .record(let kind, let payload, let traceID, let scope):
-                    await recorder.record(kind: kind, json: payload, traceID: traceID, scope: scope)
-                case .delta(let content, let reasoning, let traceID, let scope):
-                    await recorder.appendDelta(
-                        content: content, reasoning: reasoning, traceID: traceID, scope: scope
-                    )
-                case .discardPartial(let traceID, let scope):
-                    await recorder.discardPartial(traceID: traceID, scope: scope)
-                case .prune(let window):
-                    await recorder.prune(retaining: window)
-                case .flushAll:
-                    await recorder.flushAll()
-                case .encodeFailure(let kind, let message):
-                    await recorder.noteEncodeFailure(kind: kind, message: message)
-                case .barrier(let continuation):
-                    continuation.resume()
+                case .run(let work): await work(recorder)
+                case .barrier(let continuation): continuation.resume()
                 }
             }
         }
@@ -64,7 +48,9 @@ public final class TraceEventQueue: Sendable {
         traceID: String,
         scope: TraceScope
     ) {
-        continuation.yield(.record(kind: kind, payload: payload, traceID: traceID, scope: scope))
+        continuation.yield(.run {
+            await $0.record(kind: kind, json: payload, traceID: traceID, scope: scope)
+        })
     }
 
     public func record<Payload: TracePayloadView & Encodable>(
@@ -79,7 +65,10 @@ public final class TraceEventQueue: Sendable {
             // Counted rather than discarded: a payload that cannot be encoded
             // is a missing row, and a silently shorter trace is the failure this
             // design is meant to make impossible.
-            continuation.yield(.encodeFailure(kind: Payload.kind, message: String(describing: error)))
+            let message = String(describing: error)
+            continuation.yield(.run {
+                await $0.noteEncodeFailure(kind: Payload.kind, message: message)
+            })
         }
     }
 
@@ -89,23 +78,25 @@ public final class TraceEventQueue: Sendable {
         traceID: String,
         scope: TraceScope
     ) {
-        continuation.yield(.delta(
-            content: content, reasoning: reasoning, traceID: traceID, scope: scope
-        ))
+        continuation.yield(.run {
+            await $0.appendDelta(
+                content: content, reasoning: reasoning, traceID: traceID, scope: scope
+            )
+        })
     }
 
     public func discardPartial(traceID: String, scope: TraceScope) {
-        continuation.yield(.discardPartial(traceID: traceID, scope: scope))
+        continuation.yield(.run { await $0.discardPartial(traceID: traceID, scope: scope) })
     }
 
     public func prune(retaining window: TraceRetentionWindow) {
-        continuation.yield(.prune(window))
+        continuation.yield(.run { await $0.prune(retaining: window) })
     }
 
     /// Seals every call still streaming. For shutdown, where the accumulated
     /// output is the only record of a call that will never complete.
     public func flushAll() {
-        continuation.yield(.flushAll)
+        continuation.yield(.run { await $0.flushAll() })
     }
 
     /// Waits until everything queued so far has reached the recorder.

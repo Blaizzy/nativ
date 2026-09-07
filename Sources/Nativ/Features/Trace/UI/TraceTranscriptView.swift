@@ -22,10 +22,8 @@ struct TraceTranscriptView: View {
 
                     ForEach(model.blocks) { block in
                         switch block {
-                        case .boundary(let boundary):
-                            TraceBoundaryRow(boundary: boundary)
-                        case .loose(let item):
-                            row(for: item)
+                        case .boundary(let item):
+                            TraceBoundaryRow(item: item)
                         case .turn(let turn):
                             turnView(turn)
                         }
@@ -242,7 +240,12 @@ struct TraceInheritedContextRow: View {
 }
 
 struct TraceBoundaryRow: View {
-    let boundary: TraceBoundary
+    let item: TraceItem
+
+    private var lifecycle: TraceLifecycleBody? {
+        guard case .lifecycle(let body) = item.body else { return nil }
+        return body
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -255,37 +258,41 @@ struct TraceBoundaryRow: View {
 
     /// Every text here is single-line on purpose. The rules either side are
     /// flexible, so without a line limit they compress the label until it wraps
-    /// one character per line — which is what this panel did at its default
-    /// width. A long model id truncates in the middle instead of pushing the
-    /// rules off the row.
+    /// one character per line. A long model id truncates in the middle instead
+    /// of pushing the rules off the row.
+    @ViewBuilder
     private var label: some View {
-        HStack(spacing: 6) {
-            Image(
-                systemName: boundary.kind == .modelSwitched
-                    ? "arrow.triangle.swap"
-                    : "dot.radiowaves.left.and.right"
-            )
-            .font(.caption)
+        if let lifecycle {
+            HStack(spacing: 6) {
+                Image(
+                    systemName: lifecycle.kind == .modelSwitched
+                        ? "arrow.triangle.swap"
+                        : "dot.radiowaves.left.and.right"
+                )
+                .font(.caption)
 
-            Text(boundary.title)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                Text(lifecycle.kind == .modelSwitched
+                    ? "Switched to \(lifecycle.title)"
+                    : lifecycle.title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
 
-            if let detail = boundary.detail {
-                Text(detail)
+                if let detail = lifecycle.detail {
+                    Text(lifecycle.kind == .modelSwitched ? "from \(detail)" : detail)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Text(item.timestamp.formatted(date: .omitted, time: .shortened))
                     .font(.caption)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-
-            Text(boundary.timestamp.formatted(date: .omitted, time: .shortened))
-                .font(.caption)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(.secondary)
+            .layoutPriority(1)
         }
-        .foregroundStyle(.secondary)
-        .layoutPriority(1)
     }
 
     private var line: some View {
