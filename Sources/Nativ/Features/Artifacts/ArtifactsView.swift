@@ -89,8 +89,7 @@ struct ArtifactsView: View {
     @State private var sort: ArtifactSort = .newest
     @State private var layout: ArtifactLayout = .grid
     @State private var previewID: Artifact.ID?
-    @State private var isSelecting = false
-    @State private var selection: Set<Artifact.ID> = []
+    @State private var artifactSelection = NativBulkSelection<Artifact.ID>()
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var inspectorArtifact: Artifact?
@@ -165,6 +164,10 @@ struct ArtifactsView: View {
         }
         let lowered = query.lowercased()
         return result.filter { $0.searchText.contains(lowered) }.sorted(by: sort.comparator)
+    }
+
+    private var visibleArtifactIDs: Set<Artifact.ID> {
+        Set(filtered.map(\.id))
     }
 
     private var groups: [ArtifactGroup] {
@@ -465,7 +468,7 @@ struct ArtifactsView: View {
             semanticBanner
             filterBar
             Divider()
-            if isSelecting {
+            if artifactSelection.isActive {
                 selectionBar
             }
             contentView
@@ -490,6 +493,9 @@ struct ArtifactsView: View {
         .onChange(of: searchIndex.indexedCount) { _, _ in
             scheduleSemanticSearch()
         }
+        .onChange(of: visibleArtifactIDs) { _, visibleIDs in
+            artifactSelection.retain(visibleIDs)
+        }
         .overlay {
             if previewID != nil {
                 ArtifactPreview(
@@ -507,10 +513,10 @@ struct ArtifactsView: View {
         .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
                 let deletedIDs = store.delete(pendingDelete)
-                selection.subtract(deletedIDs)
+                artifactSelection.remove(deletedIDs)
                 pendingDelete = []
-                if selection.isEmpty {
-                    isSelecting = false
+                if artifactSelection.isEmpty {
+                    artifactSelection.finish()
                 }
             }
             .keyboardShortcut(.defaultAction)
@@ -658,16 +664,16 @@ struct ArtifactsView: View {
                 ArtifactTile(
                     artifact: artifact,
                     store: store,
-                    isSelecting: isSelecting,
-                    isSelected: selection.contains(artifact.id),
+                    isSelecting: artifactSelection.isActive,
+                    isSelected: artifactSelection.contains(artifact.id),
                     isFavorite: store.isFavorite(artifact),
                     onInspect: { inspectorArtifact = artifact },
                     onToggleFavorite: { store.toggleFavorite(artifact) }
                 )
                 .onTapGesture { activate(artifact) }
-                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
+                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !artifactSelection.isActive))
                 .overlay {
-                    if isSelecting {
+                    if artifactSelection.isActive {
                         SelectionDrag(
                             onToggle: { activate(artifact) },
                             fileURLs: { selectedFileURLs(including: artifact) }
@@ -675,7 +681,7 @@ struct ArtifactsView: View {
                     }
                 }
                 .overlay {
-                    if cursorID == artifact.id, !isSelecting {
+                    if cursorID == artifact.id, !artifactSelection.isActive {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.accentColor.opacity(0.9), lineWidth: 2.5)
                     }
@@ -691,11 +697,11 @@ struct ArtifactsView: View {
                 ArtifactRow(
                     artifact: artifact,
                     store: store,
-                    isSelecting: isSelecting,
-                    isSelected: selection.contains(artifact.id)
+                    isSelecting: artifactSelection.isActive,
+                    isSelected: artifactSelection.contains(artifact.id)
                 )
                 .onTapGesture { activate(artifact) }
-                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
+                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !artifactSelection.isActive))
                 .contextMenu { menu(for: artifact) }
                 Divider()
             }
@@ -735,50 +741,37 @@ struct ArtifactsView: View {
     }
 
     private var selectionBar: some View {
-        HStack(spacing: 10) {
-            Text("\(selection.count) selected")
-                .nativTextStyle(.supportingEmphasized)
-                .foregroundStyle(.secondary)
-
-            Button(selection.count == filtered.count ? "Deselect All" : "Select All") {
-                if selection.count == filtered.count {
-                    selection.removeAll()
-                } else {
-                    selection = Set(filtered.map(\.id))
-                }
+        let artifacts = selectedArtifacts
+        return NativBulkSelectionToolbar(
+            selectedCount: artifacts.count,
+            allSelected: artifactSelection.includesAll(visibleArtifactIDs),
+            isSelectAllEnabled: !visibleArtifactIDs.isEmpty,
+            onToggleAll: {
+                artifactSelection.toggleAll(visibleArtifactIDs)
+            },
+            onDelete: {
+                pendingDelete = artifacts
+                isConfirmingDelete = true
             }
-            .nativTextStyle(.supporting)
-
-            Spacer(minLength: 0)
-
+        ) {
             Button {
-                ArtifactShare.present(urls: selectedArtifacts.map { store.fileURL(for: $0) })
+                ArtifactShare.present(urls: artifacts.map { store.fileURL(for: $0) })
             } label: {
                 Image(systemName: "square.and.arrow.up")
             }
             .help("Share")
-            .disabled(selection.isEmpty)
+            .disabled(artifacts.isEmpty)
 
             Button {
-                store.exportToDirectory(selectedArtifacts)
+                store.exportToDirectory(artifacts)
             } label: {
                 Image(systemName: "square.and.arrow.down")
             }
             .help("Export")
-            .disabled(selection.isEmpty)
-
-            Button(role: .destructive) {
-                pendingDelete = selectedArtifacts
-                isConfirmingDelete = true
-            } label: {
-                Image(systemName: "trash")
-            }
-            .help("Delete")
-            .disabled(selection.isEmpty)
+            .disabled(artifacts.isEmpty)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var filterBar: some View {
@@ -805,11 +798,8 @@ struct ArtifactsView: View {
 
                 Spacer(minLength: 16)
 
-                Button(isSelecting ? "Done" : "Select") {
-                    isSelecting.toggle()
-                    if !isSelecting {
-                        selection.removeAll()
-                    }
+                Button(artifactSelection.isActive ? "Done" : "Select") {
+                    artifactSelection.toggleMode()
                 }
 
                 Menu {
@@ -992,8 +982,10 @@ struct ArtifactsView: View {
     }
 
     private func selectedFileURLs(including artifact: Artifact) -> [URL] {
-        let ids = selection.contains(artifact.id) && !selection.isEmpty ? selection : [artifact.id]
-        return store.artifacts
+        let ids = artifactSelection.contains(artifact.id) && !artifactSelection.isEmpty
+            ? artifactSelection.ids
+            : [artifact.id]
+        return filtered
             .filter { ids.contains($0.id) }
             .map { store.fileURL(for: $0) }
     }
@@ -1005,8 +997,7 @@ struct ArtifactsView: View {
         let index = cursorID.flatMap { id in items.firstIndex { $0.id == id } }
 
         if press.modifiers.contains(.command), press.characters.lowercased() == "a" {
-            isSelecting = true
-            selection = Set(items.map(\.id))
+            artifactSelection.selectAll(Set(items.map(\.id)))
             return .handled
         }
 
@@ -1073,16 +1064,12 @@ struct ArtifactsView: View {
     }
 
     private var selectedArtifacts: [Artifact] {
-        store.artifacts.filter { selection.contains($0.id) }
+        filtered.filter { artifactSelection.contains($0.id) }
     }
 
     private func activate(_ artifact: Artifact) {
-        if isSelecting {
-            if selection.contains(artifact.id) {
-                selection.remove(artifact.id)
-            } else {
-                selection.insert(artifact.id)
-            }
+        if artifactSelection.isActive {
+            artifactSelection.toggle(artifact.id)
         } else {
             previewID = artifact.id
         }

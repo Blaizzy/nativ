@@ -25,6 +25,18 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
         XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
+    func testGraniteSpeech5CTCIsSpeechToText() {
+        let task = resolve(
+            model: "ibm-granite/granite-speech-5.0-470m-turboctc",
+            modelType: "granite_speech5_ctc",
+            architecture: "GraniteSpeech5ForCTC"
+        )
+
+        XCTAssertEqual(task, .speechToText)
+        XCTAssertFalse(task.isLanguageCapable)
+        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
+    }
+
     func testQwenTTSIsNotLanguageModel() {
         let task = resolve(
             model: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",

@@ -4,7 +4,12 @@ struct NimbleBrowsingProvider: WebBrowsingProviderClient {
     let provider = WebSearchProvider.nimble
     let transport: WebBrowsingTransport
 
-    func search(apiKey: String, query: String, limit: Int) async throws -> [WebSearchResult] {
+    func search(
+        access: WebSearchProviderAccess,
+        query: String,
+        limit: Int
+    ) async throws -> [WebSearchResult] {
+        let apiKey = try access.apiKey(for: provider)
         let request = try transport.postRequest(
             url: "https://sdk.nimbleway.com/v2/search",
             provider: provider,

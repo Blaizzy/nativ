@@ -32,6 +32,28 @@ final class WindowCommandRoutingTests: XCTestCase {
         XCTAssertTrue(navigation.consumeCollapseAllSectionsRequest())
     }
 
+    func testOpensDiscoveryForAnExactModel() {
+        let navigation = ControlPanelNavigation()
+        let repoID = "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+
+        navigation.openModelDiscovery(repoID: repoID)
+
+        XCTAssertEqual(navigation.requestedTab, .models)
+        XCTAssertEqual(navigation.modelDiscoveryRepositoryID, repoID)
+        XCTAssertEqual(navigation.modelDiscoveryRequest, 1)
+    }
+
+    func testOpensDrafterDiscoveryForTargetModel() {
+        let navigation = ControlPanelNavigation()
+        let targetID = "mlx-community/Qwen3.8-27B-4bit"
+
+        navigation.openDrafterModelDiscovery(for: targetID)
+
+        XCTAssertEqual(navigation.requestedTab, .models)
+        XCTAssertEqual(navigation.drafterModelDiscoveryTargetID, targetID)
+        XCTAssertEqual(navigation.drafterModelDiscoveryRequest, 1)
+    }
+
     func testActivateDoesNotChangeNavigation() {
         let navigation = ControlPanelNavigation()
 

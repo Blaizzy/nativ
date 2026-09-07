@@ -4,7 +4,12 @@ struct BraveBrowsingProvider: WebBrowsingProviderClient {
     let provider = WebSearchProvider.brave
     let transport: WebBrowsingTransport
 
-    func search(apiKey: String, query: String, limit: Int) async throws -> [WebSearchResult] {
+    func search(
+        access: WebSearchProviderAccess,
+        query: String,
+        limit: Int
+    ) async throws -> [WebSearchResult] {
+        let apiKey = try access.apiKey(for: provider)
         guard var components = URLComponents(string: "https://api.search.brave.com/res/v1/web/search") else {
             throw WebBrowsingError.invalidResponse(provider)
         }

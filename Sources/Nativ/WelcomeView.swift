@@ -790,6 +790,7 @@ private struct WelcomeView: View {
             repoID: hubModel.id,
             sizeBytes: hubModel.sizeBytes,
             cachePath: model.settings.modelSearchPath,
+            volumeIdentifier: model.settings.externalModelCache?.volumeIdentifier,
             token: model.effectiveHuggingFaceToken
         ) {
             modelLibrary.scan(searchPaths: model.settings.localModelSearchPaths)

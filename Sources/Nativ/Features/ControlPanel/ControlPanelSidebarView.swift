@@ -35,32 +35,24 @@ extension ControlPanelView {
 
             sidebarNavigation
                 .padding(.horizontal, 10)
-                .padding(.bottom, 5)
-
-            if isSelectingRecents {
-                bulkSelectionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-            } else {
-                sidebarActionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-            }
+                .padding(.bottom, 16)
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if showsPinnedSection {
-                        pinnedSection
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    if !pinnedSessions.isEmpty {
+                        pinnedChats
+                            .padding(.bottom, 8)
                     }
-                    if showsFoldersSection {
-                        foldersSection
-                    }
+                    projectsSection
+                    foldersSection
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
+                // Animate the shared layout so sibling sections move with the fading rows.
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarProjectsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarSessionsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: isSelectingRecents)
             }
             .frame(maxHeight: .infinity)
 
@@ -136,6 +128,42 @@ extension ControlPanelView {
         } message: {
             Text(bulkDeleteDescription)
         }
+        .alert(
+            "Remove project?",
+            isPresented: Binding(
+                get: { pendingDeleteProject != nil },
+                set: { if !$0 { pendingDeleteProject = nil } }
+            ),
+            presenting: pendingDeleteProject
+        ) { project in
+            Button("Keep Chats") {
+                removeProject(project, disposition: .keepChats)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Delete Chats", role: .destructive) {
+                removeProject(project, disposition: .deleteChats)
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteProject = nil
+            }
+        } message: { project in
+            Text(
+                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted."
+            )
+        }
+        .alert(
+            "Project Error",
+            isPresented: Binding(
+                get: { projectErrorMessage != nil },
+                set: { if !$0 { projectErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                projectErrorMessage = nil
+            }
+        } message: {
+            Text(projectErrorMessage ?? "The project could not be updated.")
+        }
     }
 
     var resizableSidebar: some View {
@@ -195,17 +223,36 @@ extension ControlPanelView {
     }
 
     var sidebarNavigation: some View {
-        VStack(spacing: 0) {
-            ForEach(ControlPanelTab.allCases) { tab in
+        VStack(spacing: 2) {
+            sidebarChatAction("New chat", systemImage: "square.and.pencil") {
+                createChatSession()
+            }
+            .help("Start a new chat")
+
+            ForEach(ControlPanelTab.allCases.filter { $0 != .chat }) { tab in
                 sidebarTabButton(tab)
 
-                if tab == .chat {
+                if tab == .models {
                     ForEach(contentState.extensionSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }
                 }
             }
         }
+    }
+
+    func sidebarChatAction(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(SidebarNavigationLabelStyle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .sidebarRowSelectionStyle(isSelected: false, isNavigation: true)
+        }
+        .buttonStyle(.plain)
     }
 
     func sidebarTabButton(_ tab: ControlPanelTab) -> some View {
@@ -216,15 +263,13 @@ extension ControlPanelView {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
                     .labelStyle(SidebarNavigationLabelStyle())
-                if tab == .extensions, !isExtensionsBadgeDismissed {
-                    Text("NEW")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.accentColor, in: Capsule())
-                }
                 Spacer(minLength: 0)
+                if tab == .extensions, !isExtensionsBadgeDismissed {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("New extensions available")
+                }
                 if tab == .models {
                     HStack(spacing: 6) {
                         if chromeState.isModelLoading,
@@ -241,7 +286,7 @@ extension ControlPanelView {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
-            .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+            .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection, isNavigation: true)
         }
         .buttonStyle(.plain)
         .padding(.vertical, 1)
@@ -258,7 +303,7 @@ extension ControlPanelView {
                 .labelStyle(SidebarNavigationLabelStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
-                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection, isNavigation: true)
         }
         .buttonStyle(.plain)
         .padding(.vertical, 1)

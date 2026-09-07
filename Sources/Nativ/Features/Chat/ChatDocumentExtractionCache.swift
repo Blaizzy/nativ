@@ -88,7 +88,7 @@ actor ChatDocumentExtractionCache {
             return document
         }
         guard let format = attachment.chatAttachmentKind.documentFormat,
-              let data = Data(base64Encoded: attachment.base64Data)
+              let data = attachment.imageData
         else {
             throw DocumentTextExtractionError.invalidDocument
         }

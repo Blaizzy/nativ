@@ -6,87 +6,49 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    var sidebarActionBar: some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    enterSelectMode()
-                }
-            } label: {
-                Image(systemName: "checklist")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(recentSessions.isEmpty && sidebarState.recents.folders.isEmpty)
-            .help("Select multiple")
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    createRecentSession()
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(
-                        isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(
-                selectedTab == .chat
-                    && chatWorkspaceMode == .images
-                    && sidebarState.isGeneratingImage
-            )
-            .help(newRecentHelp)
-            .onHover { isNewChatHovering = $0 }
-        }
-    }
-
     var bulkSelectionBar: some View {
-        HStack(spacing: 6) {
-            Text(bulkSelectionTitle)
-                .nativTextStyle(.supporting)
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 0)
-
-            Button {
-                bulkTogglePinSelected()
-            } label: {
-                Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
-                    .frame(width: 24, height: 22)
-            }
-            .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
-            .disabled(!hasSelectedPinnable)
-
-            Button {
-                bulkExportSelected()
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .frame(width: 24, height: 22)
-            }
-            .help("Export selected")
-            .disabled(!hasSelectedChats)
-
-            Button(role: .destructive) {
-                isConfirmingBulkDelete = true
-            } label: {
-                Image(systemName: "trash")
-                    .frame(width: 24, height: 22)
-            }
-            .help("Delete selected")
-            .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
-
-            Button("Done") {
-                withAnimation(.snappy(duration: 0.2)) {
-                    exitSelectMode()
+        VStack(spacing: 6) {
+            HStack {
+                Text(bulkSelectionTitle)
+                    .nativTextStyle(.supporting)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Done") {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        exitSelectMode()
+                    }
                 }
+                .nativTextStyle(.supportingEmphasized)
             }
-            .nativTextStyle(.supportingEmphasized)
+            HStack(spacing: 6) {
+                Button {
+                    bulkTogglePinSelected()
+                } label: {
+                    Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
+                        .frame(width: 24, height: 22)
+                }
+                .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
+                .disabled(!hasSelectedPinnable)
+
+                Button {
+                    bulkExportSelected()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .frame(width: 24, height: 22)
+                }
+                .help("Export selected")
+                .disabled(!hasSelectedChats)
+
+                Button(role: .destructive) {
+                    isConfirmingBulkDelete = true
+                } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 24, height: 22)
+                }
+                .help("Delete selected")
+                .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
+                Spacer(minLength: 0)
+            }
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

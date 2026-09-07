@@ -20,17 +20,22 @@ struct WebBrowsingRuntime {
 
     func isConfigured(_ capability: WebBrowsingCapability) -> Bool {
         guard let provider = preferences.provider(for: capability) else { return false }
-        return preferences.credentialIssue(for: provider) == nil
-            && (try? credentials.load(for: provider)) != nil
+        switch provider.metadata.configurationKind {
+        case .apiKey:
+            return preferences.credentialIssue(for: provider) == nil
+                && (try? credentials.load(for: provider)) != nil
+        case .instanceURL:
+            return preferences.endpoint(for: provider) != nil
+        }
     }
 
     func search(query: String, limit: Int) async throws -> [WebSearchResult] {
         let provider = preferences.searchProvider
-        let apiKey = try credential(for: provider)
+        let access = try searchAccess(for: provider)
         return try await execute(provider: provider) {
             try await searchService.search(
                 provider: provider,
-                apiKey: apiKey,
+                access: access,
                 query: query,
                 limit: limit
             )
@@ -65,6 +70,18 @@ struct WebBrowsingRuntime {
         }
     }
 
+    private func searchAccess(for provider: WebSearchProvider) throws -> WebSearchProviderAccess {
+        switch provider.metadata.configurationKind {
+        case .apiKey:
+            return .apiKey(try credential(for: provider))
+        case .instanceURL:
+            guard let endpoint = preferences.endpoint(for: provider) else {
+                throw WebBrowsingError.missingEndpoint(provider)
+            }
+            return .instance(endpoint)
+        }
+    }
+
     private func execute<Value>(
         provider: WebSearchProvider,
         operation: () async throws -> Value
@@ -75,7 +92,8 @@ struct WebBrowsingRuntime {
             notifyConfigurationChanged()
             return value
         } catch {
-            if let issue = (error as? WebBrowsingError)?.credentialIssue {
+            if provider.metadata.configurationKind == .apiKey,
+               let issue = (error as? WebBrowsingError)?.credentialIssue {
                 preferences.setCredentialIssue(issue, for: provider)
                 notifyConfigurationChanged()
             }

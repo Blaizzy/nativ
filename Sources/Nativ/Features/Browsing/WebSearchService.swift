@@ -37,9 +37,16 @@ struct WebSearchService: Sendable {
     }
 
     func validateCredential(provider: WebSearchProvider, apiKey: String) async throws {
+        try await validate(provider: provider, access: .apiKey(apiKey))
+    }
+
+    func validate(
+        provider: WebSearchProvider,
+        access: WebSearchProviderAccess
+    ) async throws {
         _ = try await search(
             provider: provider,
-            apiKey: apiKey,
+            access: access,
             query: "Nativ local AI",
             limit: 1
         )
@@ -51,11 +58,25 @@ struct WebSearchService: Sendable {
         query: String,
         limit: Int
     ) async throws -> [WebSearchResult] {
+        try await search(
+            provider: provider,
+            access: .apiKey(apiKey),
+            query: query,
+            limit: limit
+        )
+    }
+
+    func search(
+        provider: WebSearchProvider,
+        access: WebSearchProviderAccess,
+        query: String,
+        limit: Int
+    ) async throws -> [WebSearchResult] {
         guard let query = normalizedQuery(query) else {
             throw WebBrowsingError.invalidArguments
         }
         return try await providers.client(for: provider).search(
-            apiKey: apiKey,
+            access: access,
             query: query,
             limit: min(max(limit, 1), 10)
         )

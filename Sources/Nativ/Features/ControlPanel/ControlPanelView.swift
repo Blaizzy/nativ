@@ -16,6 +16,7 @@ struct ControlPanelView: View {
     let softwareUpdater: SoftwareUpdater
 
     let dependencies: ControlPanelDependencies
+    @ObservedObject var projects: ChatProjectStore
     @StateObject var chromeState: ControlPanelChromeState
     @StateObject var sidebarState: ChatSidebarState
     @StateObject var contentState: ControlPanelContentState
@@ -29,13 +30,20 @@ struct ControlPanelView: View {
     @State var speechModelDiscoveryRequest: Int
     @State var imageModelDiscoveryRequest: Int
     @State var imageModelDiscoveryCapability: LocalModelCapability
+    @State var modelDiscoveryRequest: Int
+    @State var modelDiscoveryRepositoryID: String?
+    @State var drafterModelDiscoveryRequest: Int
+    @State var drafterModelDiscoveryTargetID: String?
     @State var hoveredFooterControl: FooterControl?
     @State var isSidebarVisible = true
     @State var sidebarWidth = ControlPanelLayout.sidebarIdealWidth
     @State var sidebarDragStartWidth: CGFloat?
     @State var isModelConfigurationVisible = false
     @State var selectedDevSection: DevHubView.Section = .integrations
-    @State var isNewChatHovering = false
+    @State var isProjectsHeaderHovering = false
+    @State var isFoldersHeaderHovering = false
+    @State var isSessionsHeaderHovering = false
+    @State var sidebarRenameCommitRequests = PassthroughSubject<Void, Never>()
     @State var isSelectingRecents = false
     @State var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
     @State var selectedFolderIDs: Set<UUID> = []
@@ -46,7 +54,10 @@ struct ControlPanelView: View {
     @State var isFoldersDropTargeted = false
     @State var pendingDeleteRecent: ControlPanelRecentSession?
     @State var pendingDeleteFolder: ChatFolder?
+    @State var pendingDeleteProject: ChatProject?
+    @State var projectErrorMessage: String?
     @State var isConfirmingBulkDelete = false
+    @State var chatImportAlert: ChatImportAlert?
 
     var chat: ChatViewModel { dependencies.chat }
     var mcpHost: MCPHostManager { dependencies.mcpHost }
@@ -73,11 +84,13 @@ struct ControlPanelView: View {
         self.extensionManager = extensionManager
         self.softwareUpdater = softwareUpdater
         self.dependencies = dependencies
+        _projects = ObservedObject(wrappedValue: dependencies.projects)
         _chromeState = StateObject(wrappedValue: ControlPanelChromeState(model: model))
         _sidebarState = StateObject(
             wrappedValue: ChatSidebarState(
                 chat: dependencies.chat,
-                imageGeneration: dependencies.imageGeneration
+                imageGeneration: dependencies.imageGeneration,
+                projects: dependencies.projects
             )
         )
         _contentState = StateObject(
@@ -94,6 +107,16 @@ struct ControlPanelView: View {
         )
         _imageModelDiscoveryCapability = State(
             initialValue: navigation.imageModelDiscoveryCapability
+        )
+        _modelDiscoveryRequest = State(initialValue: navigation.modelDiscoveryRequest)
+        _modelDiscoveryRepositoryID = State(
+            initialValue: navigation.modelDiscoveryRepositoryID
+        )
+        _drafterModelDiscoveryRequest = State(
+            initialValue: navigation.drafterModelDiscoveryRequest
+        )
+        _drafterModelDiscoveryTargetID = State(
+            initialValue: navigation.drafterModelDiscoveryTargetID
         )
     }
 
@@ -161,6 +184,35 @@ struct ControlPanelView: View {
             ControlPanelWindowStateReader(isFullScreen: $isFullScreen)
                 .frame(width: 0, height: 0)
         }
+        .alert(
+            chatImportAlert?.title ?? "Import Chat",
+            isPresented: Binding(
+                get: { chatImportAlert != nil },
+                set: { if !$0 { chatImportAlert = nil } }
+            ),
+            presenting: chatImportAlert
+        ) { alert in
+            switch alert {
+            case .originalModel:
+                Button("OK", role: .cancel) {}
+            case let .switchModel(modelID):
+                Button("Switch Model") {
+                    model.switchLanguageModel(to: modelID)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Use Another Model", role: .cancel) {}
+            case let .modelMissing(modelID):
+                Button("Open Models") {
+                    navigation.openModelDiscovery(repoID: modelID)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Use Another Model", role: .cancel) {}
+            case .contextExceeded, .failed:
+                Button("OK", role: .cancel) {}
+            }
+        } message: { alert in
+            Text(alert.message)
+        }
         .onAppear {
             applySidebarSelection(
                 navigation.requestedTab.map(ControlPanelSidebarSelection.tab) ?? sidebarSelection)
@@ -208,10 +260,23 @@ struct ControlPanelView: View {
         .onReceive(navigation.$imageModelDiscoveryCapability) { capability in
             imageModelDiscoveryCapability = capability
         }
+        .onReceive(navigation.$modelDiscoveryRepositoryID) { repoID in
+            modelDiscoveryRepositoryID = repoID
+        }
+        .onReceive(navigation.$modelDiscoveryRequest) { request in
+            modelDiscoveryRequest = request
+        }
+        .onReceive(navigation.$drafterModelDiscoveryTargetID) { targetID in
+            drafterModelDiscoveryTargetID = targetID
+        }
+        .onReceive(navigation.$drafterModelDiscoveryRequest) { request in
+            drafterModelDiscoveryRequest = request
+        }
         .onReceive(
             NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
         ) { _ in
             launchAtLogin.refresh()
+            projects.refreshRootAvailability()
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -258,7 +323,9 @@ struct ControlPanelView: View {
         }
         .padding(
             .leading,
-            isFullScreen ? ControlPanelLayout.topControlsLeadingPaddingFullScreen : ControlPanelLayout.topControlsLeadingPadding
+            isFullScreen
+                ? ControlPanelLayout.topControlsLeadingPaddingFullScreen
+                : ControlPanelLayout.topControlsLeadingPadding
         )
         .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding)
         .padding(.top, ControlPanelLayout.topControlsTopPadding)

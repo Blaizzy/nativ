@@ -20,12 +20,26 @@ private struct ChatSessionBootstrap {
     let sessions: [ChatSession]
 }
 
+enum ChatStreamingRenderPolicy {
+    static let updatesPerSecond: Double = 20
+    static let flushInterval: Duration = .seconds(1 / updatesPerSecond)
+}
+
+@MainActor
+@Observable
+final class ChatTranscriptRevision {
+    private(set) var value = 0
+
+    func bump() {
+        value &+= 1
+    }
+}
+
 @MainActor
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
-    private static let streamFlushInterval: TimeInterval = 1.0 / 15.0
 
     private struct QueuedChatRequest {
         let id: UUID
@@ -33,6 +47,7 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let toolScope: ChatToolScope
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
         let languageModelSupportsVision: Bool
@@ -45,6 +60,7 @@ final class ChatViewModel: ObservableObject {
 
     private struct ImageModelPreparationContext {
         let modelSearchPath: String
+        let modelCacheVolumeIdentifier: String?
         let additionalModelSearchPaths: [String]
         let huggingFaceToken: String?
     }
@@ -57,6 +73,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var sessions: [ChatSessionSummary] = []
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
+    @Published private(set) var currentProjectID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = []
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = [] {
         didSet {
@@ -74,7 +91,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
-    @Published private(set) var scrollToken = 0
+    let transcriptRevision = ChatTranscriptRevision()
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
     @Published private(set) var imageModelSelectionRequests:
@@ -94,12 +111,8 @@ final class ChatViewModel: ObservableObject {
     private var storedSessions: [ChatSession] = []
     private var currentSession: ChatSession?
     private var liveDecodeRateRefreshDates: [UUID: Date] = [:]
-    private var pendingStreamContent: [UUID: String] = [:]
-    private var pendingStreamReasoning: [UUID: String] = [:]
-    private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
-    private var streamFlushDates: [UUID: Date] = [:]
-    private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
+    private let projectStore: ChatProjectStore
     private let toolConsentGate = ChatToolConsentGate()
     private let imageModelSelectionGate = ChatImageModelSelectionGate()
     private var imageModelPreparationTasks: [UUID: Task<Void, Never>] = [:]
@@ -113,11 +126,13 @@ final class ChatViewModel: ObservableObject {
     init(
         windowID: UUID = UUID(),
         persistedDataChanges: PersistedDataChangeHub = .init(),
-        inferenceActivity: InferenceActivityCoordinator = .init()
+        inferenceActivity: InferenceActivityCoordinator = .init(),
+        projectStore: ChatProjectStore = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
         self.inferenceActivity = inferenceActivity
+        self.projectStore = projectStore
         let documentExtractionCache = ChatDocumentExtractionCache()
         documentContextBuilder = ChatDocumentContextBuilder(
             extractionCache: documentExtractionCache
@@ -130,7 +145,7 @@ final class ChatViewModel: ObservableObject {
         applyCurrentSession(
             ChatSession(
                 id: UUID(),
-                title: ChatSession.timestampTitle(for: now),
+                title: ChatSession.newChatTitle,
                 createdAt: now,
                 updatedAt: now,
                 messages: []
@@ -191,18 +206,25 @@ final class ChatViewModel: ObservableObject {
     }
 
     var visibleMessages: [ChatTranscriptMessage] {
+        visibleUnqueuedMessages.filter {
+            !($0.role == .assistant
+                && $0.content.isEmpty
+                && $0.reasoningContent.isEmpty
+                && !$0.toolCalls.isEmpty)
+        }
+    }
+
+    var visibleTranscriptItems: [ChatTranscriptItem] {
+        ChatTranscriptPresentation.items(from: visibleUnqueuedMessages)
+    }
+
+    private var visibleUnqueuedMessages: [ChatTranscriptMessage] {
         let queuedMessageIDs = Set(
             requestQueue.lazy
                 .filter { $0.sessionID == self.currentSessionID }
                 .map(\.userMessageID)
         )
-        return messages.filter {
-            !queuedMessageIDs.contains($0.id)
-                && !($0.role == .assistant
-                    && $0.content.isEmpty
-                    && $0.reasoningContent.isEmpty
-                    && !$0.toolCalls.isEmpty)
-        }
+        return messages.filter { !queuedMessageIDs.contains($0.id) }
     }
 
     var currentSessionQueuedPrompts: [ChatQueuedPrompt] {
@@ -242,6 +264,19 @@ final class ChatViewModel: ObservableObject {
         messages.contains { message in
             message.imageAttachments.contains { $0.chatAttachmentKind == .image }
         }
+    }
+
+    var importedModelRepositoryID: String? {
+        currentSession?.importedModelRepositoryID
+    }
+
+    var importedPromptTokenCount: Int? {
+        messages.reversed().compactMap { message -> Int? in
+            guard message.role == .assistant else {
+                return nil
+            }
+            return message.responseMetrics?.totalTokens
+        }.first
     }
 
     func attachmentValidation(for attachmentID: UUID) -> ChatAttachmentValidation? {
@@ -344,8 +379,8 @@ final class ChatViewModel: ObservableObject {
         return nil
     }
 
-    func createSession() {
-        if canReuseCurrentEmptySession {
+    func createSession(projectID: UUID? = nil) {
+        if canReuseCurrentEmptySession(in: projectID) {
             if let currentSession {
                 applyCurrentSession(currentSession)
             }
@@ -355,20 +390,63 @@ final class ChatViewModel: ObservableObject {
         let createdAt = Date()
         let session = ChatSession(
             id: UUID(),
-            title: ChatSession.timestampTitle(for: createdAt),
+            title: ChatSession.newChatTitle,
             createdAt: createdAt,
             updatedAt: createdAt,
-            messages: []
+            messages: [],
+            projectID: projectID
         )
 
         persistCurrentSession(updateTimestamp: false)
         storedSessions.append(session)
-        pruneRedundantEmptySessions()
+        pruneRedundantEmptySessions(keeping: session.id)
         saveSession(session)
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
         applyCurrentSession(session)
+    }
+
+    func archive(
+        for sessionID: UUID,
+        selectedModelID: String?,
+        systemPrompt: String
+    ) -> ChatArchive? {
+        let session: ChatSession?
+        if sessionID == currentSessionID {
+            session = currentSessionSnapshot
+        } else {
+            session = storedSessions.first(where: { $0.id == sessionID })
+                ?? sessionStore.loadSession(id: sessionID)
+        }
+
+        guard let session,
+            let modelRepositoryID = session.importedModelRepositoryID
+                ?? session.messages.reversed().compactMap(\.modelID).first
+                ?? selectedModelID
+        else {
+            return nil
+        }
+
+        return ChatArchive(
+            chat: session,
+            modelRepositoryID: modelRepositoryID,
+            systemPrompt: session.importedSystemPrompt ?? systemPrompt
+        )
+    }
+
+    func importArchive(_ archive: ChatArchive) throws -> UUID? {
+        let session = try ChatArchiveCodec.importedSession(from: archive)
+        persistCurrentSession(updateTimestamp: false)
+        guard saveSession(session) else {
+            return nil
+        }
+        upsertStoredSession(session)
+        discardPromptEditing()
+        draft = ""
+        pendingImageAttachments.removeAll()
+        applyCurrentSession(session)
+        return session.id
     }
 
     func stageAttachment(_ attachment: ChatImageAttachment) {
@@ -382,11 +460,13 @@ final class ChatViewModel: ObservableObject {
         }
         if sessionID == currentSessionID {
             let previousMessages = messages
-            guard removeAttachment(
-                messageID: messageID,
-                attachmentID: attachmentID,
-                from: &messages
-            ) else {
+            guard
+                removeAttachment(
+                    messageID: messageID,
+                    attachmentID: attachmentID,
+                    from: &messages
+                )
+            else {
                 return false
             }
             guard persistCurrentSession(updateTimestamp: false) else {
@@ -402,11 +482,13 @@ final class ChatViewModel: ObservableObject {
         else {
             return false
         }
-        guard removeAttachment(
-            messageID: messageID,
-            attachmentID: attachmentID,
-            from: &session.messages
-        ) else {
+        guard
+            removeAttachment(
+                messageID: messageID,
+                attachmentID: attachmentID,
+                from: &session.messages
+            )
+        else {
             return false
         }
         guard saveSession(session) else {
@@ -656,9 +738,46 @@ final class ChatViewModel: ObservableObject {
         } else {
             currentSession = nil
             currentSessionID = nil
+            currentProjectID = nil
             messages = []
             refreshSessionList()
         }
+    }
+
+    @discardableResult
+    func removeProjectSessions(
+        projectID: UUID,
+        disposition: ChatProjectSessionRemovalDisposition
+    ) -> Bool {
+        let sessionIDs = Array(
+            storedSessions.lazy
+                .filter { $0.projectID == projectID }
+                .map(\.id))
+        guard sessionIDs.allSatisfy(canModifySession) else {
+            return false
+        }
+
+        switch disposition {
+        case .keepChats:
+            for index in storedSessions.indices where storedSessions[index].projectID == projectID {
+                storedSessions[index].projectID = nil
+                storedSessions[index].folderID = nil
+                guard saveSession(storedSessions[index]) else {
+                    return false
+                }
+                if currentSession?.id == storedSessions[index].id {
+                    currentSession = storedSessions[index]
+                    currentProjectID = nil
+                }
+            }
+            pruneRedundantEmptySessions()
+            refreshSessionList()
+        case .deleteChats:
+            for sessionID in sessionIDs {
+                deleteSession(sessionID)
+            }
+        }
+        return true
     }
 
     func handleScheduledTaskDeletion(
@@ -752,7 +871,10 @@ final class ChatViewModel: ObservableObject {
         languageModelSupportsTools: Bool,
         languageModelSupportsVision: Bool
     ) {
-        let settings = appModel.settings.normalized()
+        var settings = appModel.settings.normalized()
+        if let importedSystemPrompt = currentSession?.importedSystemPrompt {
+            settings.systemPrompt = importedSystemPrompt
+        }
         guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
             languageModelSupportsVision || !hasPendingImageAttachments,
             let modelID = settings.languageModelID,
@@ -767,26 +889,26 @@ final class ChatViewModel: ObservableObject {
 
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
-                let sourceSession = currentSessionSnapshot,
                 let revision = ChatPromptRevision.make(
                     messageID: promptEditContext.messageID,
                     content: prompt,
                     attachments: imageAttachments,
                     modelID: modelID,
-                    in: sourceSession.messages
+                    in: messages
                 )
             else {
                 return
             }
 
-            let branch = ChatConversationBranch.make(
-                from: sourceSession,
-                messages: revision.messages
-            )
-            activateBranch(branch, restoring: composerSnapshot)
+            let editedMessageID = promptEditContext.messageID
+            messages = revision.messages
+            draft = composerSnapshot?.draft ?? ""
+            pendingImageAttachments = composerSnapshot?.attachments ?? []
+            discardPromptEditing()
+            persistCurrentSession(updateTimestamp: true)
             enqueueGeneration(
-                for: promptEditContext.messageID,
-                in: branch.id,
+                for: editedMessageID,
+                in: currentSession.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
                 languageModelSupportsVision: languageModelSupportsVision,
@@ -836,6 +958,10 @@ final class ChatViewModel: ObservableObject {
                 userMessageID: userMessageID,
                 assistantMessageID: UUID(),
                 settings: settings,
+                toolScope: projectStore.toolScope(
+                    for: projectID(for: sessionID),
+                    settings: settings
+                ),
                 imageGenerationModelID: imageGenerationModelID(for: sessionID)
                     ?? settings.imageGenerationModelID,
                 languageModelSupportsTools: languageModelSupportsTools,
@@ -887,6 +1013,7 @@ final class ChatViewModel: ObservableObject {
                     repoID: selectedModel.modelID,
                     sizeBytes: selectedModel.downloadSizeBytes,
                     cachePath: preparationContext.modelSearchPath,
+                    volumeIdentifier: preparationContext.modelCacheVolumeIdentifier,
                     token: preparationContext.huggingFaceToken
                 )
                 try Task.checkCancellation()
@@ -1249,11 +1376,13 @@ final class ChatViewModel: ObservableObject {
             let resource = InferenceActivityCoordinator.Resource.chat(
                 queuedRequest.sessionID
             )
-            guard inferenceActivity.begin(
-                resource: resource,
-                windowID: windowID,
-                operationID: queuedRequest.id
-            ) else {
+            guard
+                inferenceActivity.begin(
+                    resource: resource,
+                    windowID: windowID,
+                    operationID: queuedRequest.id
+                )
+            else {
                 requestQueue.insert(queuedRequest, at: 0)
                 return
             }
@@ -1405,11 +1534,19 @@ final class ChatViewModel: ObservableObject {
                     in: streamingSessionID
                 )
             }
-            let completion = try await client.streamChat(
-                request,
-                onEvent: { event in
-                    await appendEvent(event)
-                })
+            let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
+            let completion: MLXChatCompletion
+            do {
+                completion = try await client.streamChat(
+                    request,
+                    onEvent: { event in
+                        await eventRelay.submit(event)
+                    })
+                await eventRelay.finish()
+            } catch {
+                await eventRelay.cancel()
+                throw error
+            }
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
                 assistantMessageID,
@@ -1496,14 +1633,19 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
-                let isNativeTerminal = customTool == nil
+                let isNativeTerminal =
+                    customTool == nil
                     && !(toolCall.function?.name.flatMap {
                         mcpHost?.handlesTool(named: $0)
                     } ?? false)
                     && toolCall.function?.name == ChatTerminalToolRegistry.toolName
                 if isNativeTerminal {
                     do {
-                        try ChatTerminalToolExecutor().preflight(call: toolCall)
+                        try ChatTerminalToolExecutor().preflight(
+                            call: toolCall,
+                            defaultWorkingDirectory: queuedRequest.toolScope
+                                .terminalWorkingDirectory
+                        )
                     } catch {
                         updateToolMessage(
                             toolMessageID,
@@ -1561,7 +1703,9 @@ final class ChatViewModel: ObservableObject {
                     !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false),
                     ChatFileWriteApprovalPolicy.requiresApproval(
                         call: toolCall,
-                        rootPath: queuedRequest.settings.fileWriteRootPath
+                        rootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileWriteRootPath
+                            : queuedRequest.settings.fileWriteRootPath
                     )
                 {
                     updateToolMessage(
@@ -1693,6 +1837,8 @@ final class ChatViewModel: ObservableObject {
                     )
                     let imageModelPreparationContext = ImageModelPreparationContext(
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        modelCacheVolumeIdentifier: queuedRequest.settings
+                            .externalModelCache?.volumeIdentifier,
                         additionalModelSearchPaths: queuedRequest.settings
                             .additionalModelSearchPaths,
                         huggingFaceToken: appModel?.effectiveHuggingFaceToken
@@ -1706,13 +1852,19 @@ final class ChatViewModel: ObservableObject {
                         additionalModelSearchPaths: queuedRequest.settings
                             .additionalModelSearchPaths,
                         huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
-                        fileReadRootPath: queuedRequest.settings.fileReadRootPath,
+                        fileReadRootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileReadRootPath
+                            : queuedRequest.settings.fileReadRootPath,
                         fileReadTracker: fileReadTracker,
                         fileSearchTracker: fileSearchTracker,
-                        fileWriteRootPath: queuedRequest.settings.fileWriteRootPath,
+                        fileWriteRootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileWriteRootPath
+                            : queuedRequest.settings.fileWriteRootPath,
                         fileWriteApprovalGranted: fileWriteApprovalGranted,
                         fileOperationRunID: fileOperationRunID,
                         terminalApprovalGranted: terminalApprovalGranted,
+                        terminalDefaultWorkingDirectory: queuedRequest.toolScope
+                            .terminalWorkingDirectory,
                         imageModelSelection: { [weak self] request in
                             guard let self else {
                                 throw CancellationError()
@@ -1963,7 +2115,13 @@ final class ChatViewModel: ObservableObject {
                 rootPath: settings.fileWriteRootPath
             )
             toolDefinitions.removeAll {
-                !settings.isToolEnabled($0.function.name)
+                let toolName = $0.function.name
+                if queuedRequest.toolScope.isProject,
+                    ChatToolScope.projectToolNames.contains(toolName)
+                {
+                    return !queuedRequest.toolScope.projectToolsAreAvailable
+                }
+                return !settings.isToolEnabled(toolName)
                     || ($0.function.name == ChatWebSearchToolRegistry.toolName
                         && !webSearchIsConfigured)
                     || ($0.function.name == ChatWebReadToolRegistry.toolName
@@ -1979,6 +2137,9 @@ final class ChatViewModel: ObservableObject {
         var systemParts: [String] = []
         if !settings.systemPrompt.isEmpty {
             systemParts.append(settings.systemPrompt)
+        }
+        if let projectPrompt = queuedRequest.toolScope.systemPrompt {
+            systemParts.append(projectPrompt)
         }
         // Inject the built-in tool-use skill when tools are available.
         if !toolDefinitions.isEmpty {
@@ -2238,6 +2399,13 @@ final class ChatViewModel: ObservableObject {
             .imageGenerationModelID
     }
 
+    private func projectID(for sessionID: UUID) -> UUID? {
+        if currentSessionID == sessionID {
+            return currentSession?.projectID
+        }
+        return storedSessions.first(where: { $0.id == sessionID })?.projectID
+    }
+
     private func beginImageExecution(
         _ toolMessageID: UUID,
         modelID: String,
@@ -2283,62 +2451,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
-        // Accumulate deltas into buffers and flush to the published message at a
-        // capped cadence. Applying every token synchronously starves the main
-        // run loop, which freezes the transcript, thinking bubble, and "Working"
-        // animation until an input event (issue #11).
-        if let reasoningContent = event.reasoningContent, !reasoningContent.isEmpty {
-            pendingStreamReasoning[id, default: ""] += reasoningContent
-        }
-        if let content = event.content, !content.isEmpty {
-            pendingStreamContent[id, default: ""] += content
-        }
-        if shouldRefreshLiveMetrics(event, for: id) {
-            pendingStreamMetrics[id] = event
-        }
-
-        guard hasPendingStreamUpdate(id) else {
-            return
-        }
-
-        let now = Date()
-        if let lastFlush = streamFlushDates[id],
-            now.timeIntervalSince(lastFlush) < Self.streamFlushInterval
-        {
-            scheduleStreamFlush(id, in: sessionID)
-            return
-        }
-        flushStream(id, in: sessionID)
-    }
-
-    private func hasPendingStreamUpdate(_ id: UUID) -> Bool {
-        pendingStreamContent[id]?.isEmpty == false
-            || pendingStreamReasoning[id]?.isEmpty == false
-            || pendingStreamMetrics[id] != nil
-    }
-
-    private func scheduleStreamFlush(_ id: UUID, in sessionID: UUID) {
-        guard streamFlushTasks[id] == nil else {
-            return
-        }
-        streamFlushTasks[id] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.streamFlushInterval * 1_000_000_000))
-            guard let self, !Task.isCancelled else {
-                return
-            }
-            self.streamFlushTasks[id] = nil
-            self.flushStream(id, in: sessionID)
-        }
-    }
-
-    private func flushStream(_ id: UUID, in sessionID: UUID) {
-        streamFlushTasks[id]?.cancel()
-        streamFlushTasks[id] = nil
-
-        let content = pendingStreamContent.removeValue(forKey: id) ?? ""
-        let reasoning = pendingStreamReasoning.removeValue(forKey: id) ?? ""
-        let metrics = pendingStreamMetrics.removeValue(forKey: id)
-        guard !content.isEmpty || !reasoning.isEmpty || metrics != nil else {
+        let content = event.content ?? ""
+        let reasoning = event.reasoningContent ?? ""
+        let refreshMetrics = shouldRefreshLiveMetrics(event, for: id)
+        guard !content.isEmpty || !reasoning.isEmpty || refreshMetrics else {
             return
         }
 
@@ -2352,31 +2468,21 @@ final class ChatViewModel: ObservableObject {
                 }
                 message.content.append(content)
             }
-            if let metrics {
+            if refreshMetrics {
                 message.responseMetrics = ChatResponseMetrics(
                     totalTokens: message.responseMetrics?.totalTokens,
-                    generatedTokens: metrics.generatedTokens
+                    generatedTokens: event.generatedTokens
                         ?? message.responseMetrics?.generatedTokens,
-                    decodeTokensPerSecond: metrics.decodeTokensPerSecond
+                    decodeTokensPerSecond: event.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB,
                     specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
                 )
             }
         }
-        streamFlushDates[id] = Date()
         if !content.isEmpty || !reasoning.isEmpty, currentSessionID == sessionID {
             bumpScroll()
         }
-    }
-
-    private func clearStreamBuffers(_ id: UUID) {
-        streamFlushTasks[id]?.cancel()
-        streamFlushTasks.removeValue(forKey: id)
-        pendingStreamContent.removeValue(forKey: id)
-        pendingStreamReasoning.removeValue(forKey: id)
-        pendingStreamMetrics.removeValue(forKey: id)
-        streamFlushDates.removeValue(forKey: id)
     }
 
     private func shouldRefreshLiveMetrics(
@@ -2412,8 +2518,6 @@ final class ChatViewModel: ObservableObject {
         toolCalls: [MLXChatToolCall] = [],
         isCancelled: Bool
     ) {
-        flushStream(id, in: sessionID)
-        clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         updateMessage(id, in: sessionID) { message in
             message.isStreaming = false
@@ -2446,7 +2550,6 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func failAssistantMessage(_ id: UUID, in sessionID: UUID, error: Error) {
-        clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         guard
             updateMessage(
@@ -2494,12 +2597,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func bumpScroll() {
-        scrollToken += 1
+        transcriptRevision.bump()
     }
 
     private func applyCurrentSession(_ session: ChatSession) {
         currentSession = session
         currentSessionID = session.id
+        currentProjectID = session.projectID
         messages =
             ChatSessionLoadPolicy.shouldNormalizeOnApply(
                 sessionID: session.id,
@@ -2575,7 +2679,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         session.messages = messages
-        session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
+        session.title = ChatSession.defaultTitle(for: messages)
         if updateTimestamp {
             session.updatedAt = Date()
         }
@@ -2625,8 +2729,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         storedSessions[index].title = ChatSession.defaultTitle(
-            for: storedSessions[index].messages,
-            createdAt: storedSessions[index].createdAt
+            for: storedSessions[index].messages
         )
         if updateTimestamp {
             storedSessions[index].updatedAt = Date()
@@ -2659,6 +2762,7 @@ final class ChatViewModel: ObservableObject {
                     applyCurrentSession(replacement)
                 } else {
                     currentSessionID = nil
+                    currentProjectID = nil
                     messages = []
                     self.currentSession = nil
                     createSession()
@@ -2729,21 +2833,27 @@ final class ChatViewModel: ObservableObject {
             .sorted(by: ChatSessionSummary.recencySort)
     }
 
-    private var canReuseCurrentEmptySession: Bool {
+    private func canReuseCurrentEmptySession(in projectID: UUID?) -> Bool {
         guard let currentSession else {
             return false
         }
 
-        return currentSession.messages.isEmpty
+        return currentSession.projectID == projectID
+            && messages.isEmpty
             && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pendingImageAttachments.isEmpty
     }
 
-    private func pruneRedundantEmptySessions() {
-        let sortedSessions = storedSessions.sorted(by: ChatSession.recencySort)
+    private func pruneRedundantEmptySessions(keeping sessionID: UUID? = nil) {
+        let selectedSessionID = sessionID ?? currentSessionID
+        let sortedSessions = storedSessions.sorted { lhs, rhs in
+            if lhs.id == selectedSessionID { return true }
+            if rhs.id == selectedSessionID { return false }
+            return ChatSession.recencySort(lhs, rhs)
+        }
         var seenIDs = Set<UUID>()
         var keptSessions: [ChatSession] = []
-        var keptEmptySession = false
+        var keptEmptyScopes = Set<UUID?>()
         var removedSessionIDs: [UUID] = []
 
         for session in sortedSessions {
@@ -2753,11 +2863,20 @@ final class ChatViewModel: ObservableObject {
             }
 
             if session.messages.isEmpty {
-                if keptEmptySession {
+                let routineStore = RoutineStore.shared
+                let isLinkedToRoutine = routineStore.routines.contains {
+                    $0.sourceSessionID == session.id
+                } || routineStore.runs.contains {
+                    $0.sessionID == session.id
+                }
+                if isLinkedToRoutine {
+                    keptSessions.append(session)
+                    continue
+                }
+                if !keptEmptyScopes.insert(session.projectID).inserted {
                     removedSessionIDs.append(session.id)
                     continue
                 }
-                keptEmptySession = true
             }
 
             keptSessions.append(session)

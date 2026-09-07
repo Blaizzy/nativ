@@ -6,20 +6,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    func createRecentSession() {
-        if selectedTab == .chat, chatWorkspaceMode == .images {
-            imageGeneration.beginNewDraft()
-            showImageWorkspace()
-        } else {
-            createChatSession()
-        }
-    }
-
     func handleNewChatRequest() {
         guard navigation.consumeNewChatRequest() else {
             return
         }
-        createChatSession()
+        createChatSession(projectID: activeProjectContextID)
     }
 
     func handleToggleSidebarRequest() {
@@ -55,17 +46,93 @@ extension ControlPanelView {
 
     func exportRecentConversation(_ recent: ControlPanelRecentSession) {
         guard case .chat(let sessionID) = recent.selection,
-            let text = chat.conversationText(for: sessionID)
+            let archive = chat.archive(
+                for: sessionID,
+                selectedModelID: model.settings.normalized().languageModelID,
+                systemPrompt: model.settings.systemPrompt
+            )
         else {
             return
         }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(recent.title).txt"
-        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = chatExportFileName(for: recent.title)
+        panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-        try? text.write(to: url, atomically: true, encoding: .utf8)
+        do {
+            try ChatArchiveCodec.encode(archive).write(to: url, options: .atomic)
+        } catch {
+            chatImportAlert = .failed("The chat could not be exported: \(error.localizedDescription)")
+        }
+    }
+
+    func importChat() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let archive = try ChatArchiveCodec.decode(Data(contentsOf: url))
+            Task {
+                await importChat(archive)
+            }
+        } catch {
+            chatImportAlert = .failed(error.localizedDescription)
+        }
+    }
+
+    func importChat(_ archive: ChatArchive) async {
+        do {
+            guard let sessionID = try chat.importArchive(archive) else {
+                chatImportAlert = .failed("Nativ could not save the imported chat.")
+                return
+            }
+            exitSelectMode()
+            showChatWorkspace()
+            applySidebarSelection(.chat(sessionID))
+            revealSidebarSection(\.sidebarSessionsCollapsed)
+        } catch {
+            chatImportAlert = .failed(error.localizedDescription)
+            return
+        }
+
+        do {
+            let models = try await LocalModelDiscovery.scan(
+                searchPaths: model.settings.localModelSearchPaths
+            )
+            guard let originalModel = models.first(where: {
+                $0.repoID == archive.modelRepositoryID
+            }) else {
+                chatImportAlert = .modelMissing(archive.modelRepositoryID)
+                return
+            }
+
+            let selectedModelID = model.settings.normalized().languageModelID
+            if selectedModelID != archive.modelRepositoryID {
+                chatImportAlert = .switchModel(archive.modelRepositoryID)
+            } else if let tokenCount = ChatArchiveCodec.promptTokenCount(in: archive),
+                      let contextWindow = originalModel.contextSize,
+                      tokenCount > contextWindow {
+                chatImportAlert = .contextExceeded(
+                    modelID: archive.modelRepositoryID,
+                    tokenCount: tokenCount,
+                    contextWindow: contextWindow
+                )
+            } else {
+                chatImportAlert = .originalModel(archive.modelRepositoryID)
+            }
+        } catch {
+            chatImportAlert = .failed(
+                "The chat was imported, but Nativ could not check the local model library: "
+                    + error.localizedDescription
+            )
+        }
     }
 
     func exportFolder(_ folder: ChatFolder) {
@@ -110,6 +177,15 @@ extension ControlPanelView {
         let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
         let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+
+    func chatExportFileName(for title: String) -> String {
+        var name = sanitizedFileName(title)
+        if name.lowercased().hasSuffix(".json") {
+            name.removeLast(5)
+        }
+        name = String(name.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(name.isEmpty ? "Chat" : name).json"
     }
 
     func revealRecentSession(_ recent: ControlPanelRecentSession) {
@@ -232,26 +308,91 @@ extension ControlPanelView {
         }
     }
 
-    var newRecentHelp: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "Start a new image draft"
-            : "Create a new chat"
+    var activeProjectContextID: UUID? {
+        selectedTab == .chat && chatWorkspaceMode == .chat
+            ? chat.currentProjectID
+            : nil
     }
 
-    var newRecentTitle: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "New image"
-            : "New chat"
+    func createChatSession(projectID: UUID? = nil) {
+        exitSelectMode()
+        sidebarRenameCommitRequests.send()
+        chat.createSession(projectID: projectID)
+        showChatWorkspace()
+
+        if let projectID, let project = projects.project(withID: projectID) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.settings.sidebarProjectsCollapsed = false
+                if project.isCollapsed {
+                    projects.setCollapsed(projectID, collapsed: false)
+                }
+            }
+        } else if projectID == nil {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.settings.sidebarSessionsCollapsed = false
+            }
+        }
     }
 
-    var newRecentSystemImage: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "photo.badge.plus"
-            : "square.and.pencil"
+    func createProject() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Create Project"
+        panel.message = "Choose a folder Nativ can read and write for this project."
+        guard panel.runModal() == .OK, let directoryURL = panel.url else {
+            return
+        }
+
+        do {
+            let project = try projects.createProject(directoryURL: directoryURL)
+            model.settings.sidebarProjectsCollapsed = false
+            createChatSession(projectID: project.id)
+        } catch {
+            projectErrorMessage = error.localizedDescription
+        }
     }
 
-    func createChatSession() {
-        chat.createSession()
+    func revealProject(_ project: ChatProject) {
+        NSWorkspace.shared.activateFileViewerSelecting([
+            URL(fileURLWithPath: project.rootPath, isDirectory: true)
+        ])
+    }
+
+    func locateProject(_ project: ChatProject) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = projects.isRootAvailable(for: project) ? "Choose" : "Locate"
+        panel.message = "Choose a readable and writable folder for “\(project.name)”."
+        panel.directoryURL = URL(fileURLWithPath: project.rootPath, isDirectory: true)
+        guard panel.runModal() == .OK, let directoryURL = panel.url else {
+            return
+        }
+
+        do {
+            try projects.replaceRoot(for: project.id, with: directoryURL)
+        } catch {
+            projectErrorMessage = error.localizedDescription
+        }
+    }
+
+    func removeProject(
+        _ project: ChatProject,
+        disposition: ChatProjectSessionRemovalDisposition
+    ) {
+        guard chat.removeProjectSessions(projectID: project.id, disposition: disposition) else {
+            pendingDeleteProject = nil
+            projectErrorMessage =
+                "One or more project chats are active in another window. Stop them and try again."
+            return
+        }
+        projects.removeProject(project.id)
+        pendingDeleteProject = nil
         showChatWorkspace()
     }
 
@@ -269,13 +410,13 @@ extension ControlPanelView {
     }
 
     func showChatWorkspace() {
-        if sidebarState.currentChatSessionID == nil {
+        if chat.currentSessionID == nil {
             chat.createSession()
         }
         chatWorkspaceMode = .chat
         selectedTab = .chat
         sidebarSelection =
-            sidebarState.currentChatSessionID.map(ControlPanelSidebarSelection.chat)
+            chat.currentSessionID.map(ControlPanelSidebarSelection.chat)
             ?? .tab(.chat)
     }
 

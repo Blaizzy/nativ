@@ -21,6 +21,11 @@ final class ChatFileWriteToolTests: XCTestCase {
     func testSchemasAreBoundedAndRequireWriteContent() throws {
         let write = try schema(ChatFileWriteToolRegistry.writeDefinition)
         XCTAssertEqual(write.function["name"] as? String, "write_file")
+        XCTAssertTrue(
+            (write.function["description"] as? String)?.contains(
+                "diff may be a truncated preview"
+            ) == true
+        )
         XCTAssertEqual(write.parameters["additionalProperties"] as? Bool, false)
         XCTAssertEqual(write.parameters["required"] as? [String], ["path", "content"])
 
@@ -43,11 +48,37 @@ final class ChatFileWriteToolTests: XCTestCase {
         XCTAssertEqual(first["ok"] as? Bool, true)
         XCTAssertEqual(first["verified"] as? Bool, true)
         XCTAssertEqual((first["sha256"] as? String)?.count, 64)
+        XCTAssertEqual(first["bytes_written"] as? Int, 4)
+        XCTAssertEqual(first["lines_written"] as? Int, 1)
+        XCTAssertEqual(first["diff_truncated"] as? Bool, false)
         XCTAssertEqual(first["files_modified"] as? [String], ["nested/notes.txt"])
         XCTAssertEqual(try read("nested/notes.txt"), "one\n")
 
         _ = try await executeWrite(path: "nested/notes.txt", content: "")
         XCTAssertEqual(try read("nested/notes.txt"), "")
+    }
+
+    func testWriteDiffPreviewUses100KCapAndReportsTruncation() async throws {
+        let contentBelowCap = String(repeating: "x", count: 75_000)
+        let belowCap = try await executeWrite(path: "below.txt", content: contentBelowCap)
+        XCTAssertEqual(belowCap["diff_truncated"] as? Bool, false)
+        XCTAssertTrue((belowCap["diff"] as? String)?.count ?? 0 > 50_000)
+
+        let contentAboveCap = String(repeating: "y", count: 110_000)
+        let aboveCap = try await executeWrite(path: "above.txt", content: contentAboveCap)
+        XCTAssertEqual(aboveCap["diff_truncated"] as? Bool, true)
+        XCTAssertEqual(aboveCap["bytes_written"] as? Int, contentAboveCap.utf8.count)
+        XCTAssertEqual(aboveCap["lines_written"] as? Int, 1)
+        XCTAssertTrue(
+            (aboveCap["_hint"] as? String)?.contains(
+                "Only the diff preview was truncated"
+            ) == true
+        )
+        let diff = try XCTUnwrap(aboveCap["diff"] as? String)
+        XCTAssertEqual(
+            diff.count,
+            FileUnifiedDiff.maximumCharacters + "\n... diff truncated".count
+        )
     }
 
     func testWriteRejectsEscapesBinaryDocumentsAndReadDumps() async {

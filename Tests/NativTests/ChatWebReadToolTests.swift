@@ -70,6 +70,8 @@ final class ChatWebReadToolTests: XCTestCase {
         XCTAssertFalse(WebSearchProvider.perplexity.supports(.read))
         XCTAssertTrue(WebSearchProvider.tavily.supports(.read))
         XCTAssertTrue(WebSearchProvider.parallel.supports(.read))
+        XCTAssertFalse(WebSearchProvider.searxng.supports(.read))
+        XCTAssertFalse(WebSearchProvider.pageReaders.contains(.searxng))
     }
 
     func testSearchOnlyProviderDoesNotAdvertiseReadWithoutAReader() throws {

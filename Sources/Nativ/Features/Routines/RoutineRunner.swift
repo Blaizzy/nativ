@@ -84,7 +84,8 @@ final class RoutineRunner {
                 guard case .kit(let id) = capability else { return nil }
                 return id
             },
-            settings: settings
+            settings: settings,
+            kitCatalog: model.kitLibrary.catalog
         )
         guard kitResolution.unavailableCapabilities.isEmpty else {
             finishUnavailableCapabilities(
@@ -514,7 +515,7 @@ final class RoutineRunner {
         var skillsByID: [UUID: NativSkill] = [:]
         var unavailable = kitResolution.unavailableCapabilities
         var wholeMCPServers = Set(kitResolution.mcpServers.map(\.id))
-        var selectedTools: [ScheduledTool] = []
+        var selectedTools = kitResolution.tools
 
         for skill in kitResolution.skills {
             skillsByID[skill.id] = skill

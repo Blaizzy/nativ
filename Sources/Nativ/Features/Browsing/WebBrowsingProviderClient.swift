@@ -22,10 +22,33 @@ struct WebBrowsingProviderDocument: Sendable {
     }
 }
 
+enum WebSearchProviderAccess: Sendable, Equatable {
+    case apiKey(String)
+    case instance(URL)
+
+    func apiKey(for provider: WebSearchProvider) throws -> String {
+        guard case .apiKey(let apiKey) = self else {
+            throw WebBrowsingError.missingAPIKey(provider)
+        }
+        return apiKey
+    }
+
+    func instanceURL(for provider: WebSearchProvider) throws -> URL {
+        guard case .instance(let url) = self else {
+            throw WebBrowsingError.missingEndpoint(provider)
+        }
+        return url
+    }
+}
+
 protocol WebBrowsingProviderClient: Sendable {
     var provider: WebSearchProvider { get }
 
-    func search(apiKey: String, query: String, limit: Int) async throws -> [WebSearchResult]
+    func search(
+        access: WebSearchProviderAccess,
+        query: String,
+        limit: Int
+    ) async throws -> [WebSearchResult]
     func read(apiKey: String, urls: [String], focus: String?) async throws -> [WebBrowsingProviderDocument]
 }
 
@@ -62,6 +85,8 @@ struct WebBrowsingProviderRegistry: Sendable {
             TavilyBrowsingProvider(transport: transport)
         case .parallel:
             ParallelBrowsingProvider(transport: transport)
+        case .searxng:
+            SearXNGBrowsingProvider(transport: transport)
         }
     }
 }
@@ -169,8 +194,8 @@ extension WebBrowsingError {
             true
         case .requestFailed(_, let status):
             [401, 402, 403, 429].contains(status)
-        case .invalidArguments, .missingAPIKey, .credentialAccess, .invalidResponse, .responseTooLarge,
-             .unexpectedFailure:
+        case .invalidArguments, .missingAPIKey, .missingEndpoint, .credentialAccess,
+             .invalidResponse, .responseTooLarge, .unexpectedFailure:
             false
         }
     }

@@ -7,6 +7,7 @@ final class ControlPanelSharedDependencies {
     let launchAtLogin = LaunchAtLoginController()
     let persistedDataChanges = PersistedDataChangeHub()
     let inferenceActivity = InferenceActivityCoordinator()
+    let projects = ChatProjectStore()
 }
 
 @MainActor
@@ -17,11 +18,13 @@ final class ControlPanelDependencies: ObservableObject {
     let windowID: UUID
     let persistedDataChanges: PersistedDataChangeHub
     let inferenceActivity: InferenceActivityCoordinator
+    let projects: ChatProjectStore
 
     lazy var chat = ChatViewModel(
         windowID: windowID,
         persistedDataChanges: persistedDataChanges,
-        inferenceActivity: inferenceActivity
+        inferenceActivity: inferenceActivity,
+        projectStore: projects
     )
     lazy var imageGeneration = ImageGenerationViewModel(
         windowID: windowID,
@@ -62,5 +65,6 @@ final class ControlPanelDependencies: ObservableObject {
         self.windowID = windowID
         persistedDataChanges = shared.persistedDataChanges
         inferenceActivity = shared.inferenceActivity
+        projects = shared.projects
     }
 }

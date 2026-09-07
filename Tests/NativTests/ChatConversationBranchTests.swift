@@ -1,6 +1,38 @@
 import XCTest
 
 final class ChatConversationBranchTests: XCTestCase {
+    func testRevisingLatestPromptReplacesItsResponseHistoryWithoutChangingSession() throws {
+        let firstUser = ChatTranscriptMessage(role: .user, content: "First prompt")
+        let firstAssistant = ChatTranscriptMessage(role: .assistant, content: "First response")
+        let latestUser = ChatTranscriptMessage(role: .user, content: "Original prompt")
+        let latestAssistant = ChatTranscriptMessage(role: .assistant, content: "Old response")
+        let sessionID = UUID()
+        var session = ChatSession(
+            id: sessionID,
+            title: "First prompt",
+            createdAt: .now,
+            updatedAt: .now,
+            messages: [firstUser, firstAssistant, latestUser, latestAssistant]
+        )
+
+        let revision = try XCTUnwrap(
+            ChatPromptRevision.make(
+                messageID: latestUser.id,
+                content: "Edited prompt",
+                attachments: [],
+                modelID: "test/model",
+                in: session.messages
+            )
+        )
+        session.messages = revision.messages
+
+        XCTAssertEqual(session.id, sessionID)
+        XCTAssertEqual(session.messages.map(\.id), [firstUser.id, firstAssistant.id, latestUser.id])
+        XCTAssertEqual(session.messages.last?.content, "Edited prompt")
+        XCTAssertEqual(session.messages.last?.modelID, "test/model")
+        XCTAssertFalse(session.messages.contains(where: { $0.id == latestAssistant.id }))
+    }
+
     func testCompletedAssistantResponsesAreForkable() {
         let firstUser = ChatTranscriptMessage(role: .user, content: "First prompt")
         let firstAssistant = ChatTranscriptMessage(role: .assistant, content: "First response")
@@ -37,6 +69,7 @@ final class ChatConversationBranchTests: XCTestCase {
         let sourceID = UUID()
         let branchID = UUID()
         let folderID = UUID()
+        let projectID = UUID()
         let sourceDate = Date(timeIntervalSince1970: 100)
         let branchDate = Date(timeIntervalSince1970: 200)
         let source = ChatSession(
@@ -50,6 +83,7 @@ final class ChatConversationBranchTests: XCTestCase {
             pinnedOrder: 3,
             sessionOrder: 4,
             folderID: folderID,
+            projectID: projectID,
             imageGenerationModelID: "image-model"
         )
 
@@ -69,6 +103,7 @@ final class ChatConversationBranchTests: XCTestCase {
         XCTAssertEqual(branch.createdAt, branchDate)
         XCTAssertEqual(branch.updatedAt, branchDate)
         XCTAssertEqual(branch.folderID, folderID)
+        XCTAssertEqual(branch.projectID, projectID)
         XCTAssertEqual(branch.imageGenerationModelID, "image-model")
         XCTAssertEqual(branch.pinned, false)
         XCTAssertNil(branch.pinnedOrder)
