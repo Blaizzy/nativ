@@ -32,7 +32,7 @@ extension ControlPanelView {
     var emptyProjectsHint: some View {
         Button(action: createProject) {
             Label("Choose a folder to create a project", systemImage: "folder.badge.plus")
-                .nativTextStyle(.body)
+                .legacyTextStyle(.body)
                 .foregroundStyle(.secondary.opacity(0.7))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 17)
@@ -189,7 +189,7 @@ extension ControlPanelView {
 
     var emptyFoldersHint: some View {
         Label("No folders yet — create one above", systemImage: "folder")
-            .nativTextStyle(.body)
+            .legacyTextStyle(.body)
             .foregroundStyle(.secondary.opacity(0.6))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)
@@ -303,7 +303,7 @@ extension ControlPanelView {
             } label: {
                 HStack(spacing: 4) {
                     Text(title)
-                        .nativTextStyle(.sidebarSectionTitle)
+                        .legacyTextStyle(.sidebarSectionTitle)
                         .foregroundStyle(.secondary.opacity(0.7))
 
                     Image(systemName: "chevron.right")

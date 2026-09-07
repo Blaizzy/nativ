@@ -1824,7 +1824,7 @@ private struct ComposerModelPickerLabel: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .nativTextStyle(.supportingEmphasized)
+        .legacyTextStyle(.supportingEmphasized)
         .foregroundStyle(Color.primary)
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -2153,7 +2153,7 @@ struct ChatComposerActionPanel: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .nativTextStyle(.supportingEmphasized)
+                .legacyTextStyle(.supportingEmphasized)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
 
@@ -2184,11 +2184,11 @@ private struct ChatComposerActionRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .nativTextStyle(.rowTitle)
+                        .legacyTextStyle(.rowTitle)
                         .foregroundStyle(.primary)
 
                     Text(detail)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

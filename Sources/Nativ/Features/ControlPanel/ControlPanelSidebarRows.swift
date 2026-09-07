@@ -294,7 +294,7 @@ struct ControlPanelProjectHeaderView: View {
                         folderIcon
 
                         Text(project.name)
-                            .nativTextStyle(.sidebarItem)
+                            .legacyTextStyle(.sidebarItem)
                             .lineLimit(1)
 
                         Spacer(minLength: 4)
@@ -316,7 +316,7 @@ struct ControlPanelProjectHeaderView: View {
                 Button(action: onNewChat) {
                     Label("New Chat in \(project.name)", systemImage: "square.and.pencil")
                         .labelStyle(.iconOnly)
-                        .nativTextStyle(.rowTitle)
+                        .legacyTextStyle(.rowTitle)
                         .frame(width: 24, height: 24)
                         .contentShape(.rect)
                 }
@@ -366,7 +366,7 @@ struct ControlPanelProjectHeaderView: View {
 
     private var folderIcon: some View {
         Image(systemName: project.isCollapsed ? "folder" : "folder.fill")
-            .nativTextStyle(.metadata)
+            .legacyTextStyle(.metadata)
             .foregroundStyle(isAvailable ? Color.secondary : Color.orange)
             .contentTransition(.opacity)
     }
@@ -437,13 +437,13 @@ struct ControlPanelFolderHeaderView: View {
                     }
             } else {
                 Text(folder.name)
-                    .nativTextStyle(.rowTitle)
+                    .legacyTextStyle(.rowTitle)
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
 
                 Text("\(count)")
-                    .nativTextStyle(.metadata)
+                    .legacyTextStyle(.metadata)
                     .foregroundStyle(.secondary.opacity(0.7))
             }
         }
@@ -513,7 +513,7 @@ struct SidebarRowSelectionStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .nativTextStyle(.sidebarItem)
+            .legacyTextStyle(.sidebarItem)
             .padding(.horizontal, 7)
             .padding(.vertical, isNavigation ? 8 : 6)
             .background(
