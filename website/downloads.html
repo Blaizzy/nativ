@@ -234,6 +234,32 @@
           <p class="download-chart-summary" data-chart-summary>Waiting for download history.</p>
         </section>
 
+        <section class="download-chart reveal" aria-labelledby="star-chart-title">
+          <div class="download-chart-heading">
+            <div>
+              <p class="kicker">/ STAR HISTORY</p>
+              <h3 id="star-chart-title">Growing in<br /><em>public.</em></h3>
+            </div>
+            <div>
+              <span>GITHUB STARS</span>
+              <strong>Blaizzy/nativ</strong>
+            </div>
+          </div>
+          <div class="download-chart-frame">
+            <div class="download-chart-plot" data-star-chart role="img" aria-label="Star history chart">
+              <div class="download-chart-axis" data-star-chart-axis aria-hidden="true"></div>
+              <div class="download-chart-lines" data-star-chart-lines aria-hidden="true"></div>
+              <span class="download-chart-date download-chart-date-start" data-star-chart-start aria-hidden="true">—</span>
+              <span class="download-chart-date download-chart-date-end" data-star-chart-end aria-hidden="true">—</span>
+            </div>
+            <div class="download-chart-empty" data-star-chart-empty>
+              <strong>LOADING HISTORY</strong>
+              <span>Star history updates once a day via a scheduled workflow.</span>
+            </div>
+          </div>
+          <p class="download-chart-summary" data-star-chart-summary>Waiting for star history.</p>
+        </section>
+
         <div class="download-notes reveal">
           <a href="https://github.com/Blaizzy/nativ/releases" target="_blank" rel="noreferrer">Inspect every release on GitHub <span>↗</span></a>
         </div>
@@ -263,5 +289,6 @@
 
     <script src="script.js"></script>
     <script src="downloads.js"></script>
+    <script src="star-history.js"></script>
   </body>
 </html>

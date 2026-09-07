@@ -3,6 +3,7 @@ import Foundation
 enum WebBrowsingFailureCode: String, Sendable {
     case invalidArguments = "invalid_arguments"
     case missingAPIKey = "missing_api_key"
+    case missingEndpoint = "missing_endpoint"
     case credentialAccess = "credential_access"
     case invalidAuthentication = "invalid_authentication"
     case insufficientFunds = "insufficient_funds"
@@ -17,6 +18,7 @@ enum WebBrowsingFailureCode: String, Sendable {
 enum WebBrowsingError: LocalizedError {
     case invalidArguments
     case missingAPIKey(WebSearchProvider)
+    case missingEndpoint(WebSearchProvider)
     case credentialAccess(WebSearchProvider)
     case invalidResponse(WebSearchProvider)
     case responseTooLarge(WebSearchProvider)
@@ -30,6 +32,8 @@ enum WebBrowsingError: LocalizedError {
             .invalidArguments
         case .missingAPIKey:
             .missingAPIKey
+        case .missingEndpoint:
+            .missingEndpoint
         case .credentialAccess:
             .credentialAccess
         case .invalidResponse, .responseTooLarge:
@@ -69,6 +73,8 @@ enum WebBrowsingError: LocalizedError {
             "The browsing request has invalid arguments."
         case .missingAPIKey(let provider):
             "No API key is configured for \(provider.metadata.displayName)."
+        case .missingEndpoint(let provider):
+            "No instance URL is configured for \(provider.metadata.displayName)."
         case .credentialAccess(let provider):
             "Nativ could not read the \(provider.metadata.displayName) API key from Keychain."
         case .invalidResponse(let provider):
@@ -92,6 +98,9 @@ enum WebBrowsingError: LocalizedError {
         case 402:
             return "\(name) reported insufficient funds or credits."
         case 403:
+            if provider == .searxng {
+                return "\(name) does not allow JSON search responses. Enable the JSON format on this instance."
+            }
             return "\(name) denied access for the current plan or API key."
         case 429:
             return "\(name) is rate limiting browsing requests."

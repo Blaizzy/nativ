@@ -129,50 +129,7 @@ private struct NativApplication: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowBackgroundDragBehavior(.enabled)
         .commands {
-            CommandGroup(after: .appInfo) {
-                CheckForUpdatesCommand(updater: appDelegate.softwareUpdater.updater)
-            }
-
-            CommandGroup(replacing: .newItem) {
-                Button("New Chat") {
-                    appDelegate.createNewChat()
-                }
-                .keyboardShortcut("n")
-            }
-
-            CommandGroup(replacing: .sidebar) {
-                Button("Toggle Sidebar") {
-                    appDelegate.toggleSidebar()
-                }
-                .keyboardShortcut("s", modifiers: [.control, .command])
-            }
-
-            CommandGroup(after: .sidebar) {
-                Button("Collapse All Sections") {
-                    appDelegate.toggleAllSidebarSections()
-                }
-                .keyboardShortcut(".", modifiers: [.command, .option])
-
-                Button("Increase Chat Font Size") {
-                    appDelegate.increaseChatFontSize()
-                }
-                .keyboardShortcut("+", modifiers: .command)
-                Button("Decrease Chat Font Size") {
-                    appDelegate.decreaseChatFontSize()
-                }
-                .keyboardShortcut("-", modifiers: .command)
-                Button("Reset Chat Font Size") {
-                    appDelegate.resetChatFontSize()
-                }
-                .keyboardShortcut("0", modifiers: .command)
-            }
-
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
-                    appDelegate.openSettings()
-                }
-                .keyboardShortcut(",")
-            }
+            NativApplicationCommands(appDelegate: appDelegate)
         }
     }
 }

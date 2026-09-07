@@ -6,6 +6,8 @@ final class ControlPanelSharedDependencies {
     let systemMonitor = SystemMonitorStore()
     let launchAtLogin = LaunchAtLoginController()
     let persistedDataChanges = PersistedDataChangeHub()
+    let inferenceActivity = InferenceActivityCoordinator()
+    let projects = ChatProjectStore()
 }
 
 @MainActor
@@ -15,16 +17,39 @@ final class ControlPanelDependencies: ObservableObject {
     let launchAtLogin: LaunchAtLoginController
     let windowID: UUID
     let persistedDataChanges: PersistedDataChangeHub
+    let inferenceActivity: InferenceActivityCoordinator
+    let projects: ChatProjectStore
 
     lazy var chat = ChatViewModel(
         windowID: windowID,
-        persistedDataChanges: persistedDataChanges
+        persistedDataChanges: persistedDataChanges,
+        inferenceActivity: inferenceActivity,
+        projectStore: projects
     )
     lazy var imageGeneration = ImageGenerationViewModel(
         windowID: windowID,
-        persistedDataChanges: persistedDataChanges
+        persistedDataChanges: persistedDataChanges,
+        inferenceActivity: inferenceActivity
     )
-    lazy var artifacts = ArtifactStore()
+    lazy var artifacts = ArtifactStore { [weak self] artifact in
+        guard let self else {
+            return false
+        }
+        switch artifact.source {
+        case .uploaded:
+            return chat.removeAttachment(
+                sessionID: artifact.sessionID,
+                messageID: artifact.messageID,
+                attachmentID: artifact.id
+            )
+        case .generated:
+            return imageGeneration.removeOutput(
+                sessionID: artifact.sessionID,
+                turnID: artifact.messageID,
+                outputID: artifact.id
+            )
+        }
+    }
     lazy var dashboard = DashboardViewModel()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
@@ -39,5 +64,7 @@ final class ControlPanelDependencies: ObservableObject {
         launchAtLogin = shared.launchAtLogin
         self.windowID = windowID
         persistedDataChanges = shared.persistedDataChanges
+        inferenceActivity = shared.inferenceActivity
+        projects = shared.projects
     }
 }

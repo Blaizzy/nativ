@@ -133,6 +133,7 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                     }
                     Spacer(minLength: 12)
                     action()
+                        .fixedSize(horizontal: true, vertical: true)
                 }
                 content()
             }

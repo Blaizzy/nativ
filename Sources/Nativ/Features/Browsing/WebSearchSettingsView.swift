@@ -18,7 +18,7 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
     @Published private(set) var selectedCapability: WebBrowsingCapability
     @Published private(set) var searchProvider: WebSearchProvider
     @Published private(set) var pageReaderProvider: WebSearchProvider?
-    @Published var draftAPIKey = ""
+    @Published var draftConfiguration = ""
     @Published var revealsKey = false
     @Published private(set) var isTesting = false
     @Published private(set) var status: Status?
@@ -50,13 +50,18 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
     }
 
     var canConnect: Bool {
-        !isTesting && !draftAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isTesting && !draftConfiguration.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func select(_ provider: WebSearchProvider) {
         guard !isTesting else { return }
         selectedProvider = provider
-        draftAPIKey = ""
+        switch provider.metadata.configurationKind {
+        case .apiKey:
+            draftConfiguration = ""
+        case .instanceURL:
+            draftConfiguration = preferences.endpoint(for: provider)?.absoluteString ?? ""
+        }
         revealsKey = false
         status = nil
     }
@@ -70,7 +75,7 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
         case .read:
             select(
                 resolvedPageReaderProvider
-                    ?? WebSearchProvider.pageReaders.first { hasCredential(for: $0) }
+                    ?? WebSearchProvider.pageReaders.first { hasConfiguration(for: $0) }
                     ?? .exa
             )
         }
@@ -113,20 +118,36 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
     }
 
     func testAndConnect() async -> Bool {
-        let apiKey = draftAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty, !isTesting else { return false }
+        let value = draftConfiguration.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !isTesting else { return false }
         let provider = selectedProvider
-        let hadConfiguredSearch = hasCredential(for: searchProvider)
+        let access: WebSearchProviderAccess
+        switch provider.metadata.configurationKind {
+        case .apiKey:
+            access = .apiKey(value)
+        case .instanceURL:
+            guard let endpoint = WebSearchInstanceURL.normalized(value) else {
+                status = .failure("Enter a valid HTTP or HTTPS SearXNG instance URL.")
+                return false
+            }
+            access = .instance(endpoint)
+        }
+        let hadConfiguredSearch = hasConfiguration(for: searchProvider)
         let hadConfiguredReader = resolvedPageReaderProvider.map {
-            hasCredential(for: $0)
+            hasConfiguration(for: $0)
         } ?? false
         isTesting = true
         status = nil
 
         defer { isTesting = false }
         do {
-            try await service.validateCredential(provider: provider, apiKey: apiKey)
-            try credentials.save(apiKey, for: provider)
+            try await service.validate(provider: provider, access: access)
+            switch access {
+            case .apiKey(let apiKey):
+                try credentials.save(apiKey, for: provider)
+            case .instance(let endpoint):
+                preferences.setEndpoint(endpoint, for: provider)
+            }
             preferences.setCredentialIssue(nil, for: provider)
             connectionStates[provider] = .connected
             switch selectedCapability {
@@ -140,7 +161,12 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
                 break
             }
             if selectedProvider == provider {
-                draftAPIKey = ""
+                switch access {
+                case .apiKey:
+                    draftConfiguration = ""
+                case .instance(let endpoint):
+                    draftConfiguration = endpoint.absoluteString
+                }
                 revealsKey = false
                 status = .connected("Connected to \(provider.metadata.displayName).")
             }
@@ -179,13 +205,18 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
         }
     }
 
-    func removeKey() -> Bool {
+    func removeConfiguration() -> Bool {
         let provider = selectedProvider
         do {
-            try credentials.remove(for: provider)
+            switch provider.metadata.configurationKind {
+            case .apiKey:
+                try credentials.remove(for: provider)
+            case .instanceURL:
+                preferences.setEndpoint(nil, for: provider)
+            }
             preferences.setCredentialIssue(nil, for: provider)
             connectionStates[provider] = .disconnected
-            draftAPIKey = ""
+            draftConfiguration = ""
             revealsKey = false
             status = nil
             notifyConfigurationChanged()
@@ -199,26 +230,33 @@ final class WebBrowsingSettingsViewModel: ObservableObject {
     func refreshConnectionStates() {
         connectionStates.removeAll(keepingCapacity: true)
         for provider in WebSearchProvider.allCases {
-            do {
-                guard try credentials.load(for: provider) != nil else {
+            switch provider.metadata.configurationKind {
+            case .apiKey:
+                do {
+                    guard try credentials.load(for: provider) != nil else {
+                        connectionStates[provider] = .disconnected
+                        continue
+                    }
+                    if let issue = preferences.credentialIssue(for: provider) {
+                        connectionStates[provider] = .issue(issue)
+                    } else {
+                        connectionStates[provider] = .connected
+                    }
+                } catch {
                     connectionStates[provider] = .disconnected
-                    continue
+                    if provider == selectedProvider {
+                        status = .failure("Nativ could not read this provider’s API key from Keychain.")
+                    }
                 }
-                if let issue = preferences.credentialIssue(for: provider) {
-                    connectionStates[provider] = .issue(issue)
-                } else {
-                    connectionStates[provider] = .connected
-                }
-            } catch {
-                connectionStates[provider] = .disconnected
-                if provider == selectedProvider {
-                    status = .failure("Nativ could not read this provider’s API key from Keychain.")
-                }
+            case .instanceURL:
+                connectionStates[provider] = preferences.endpoint(for: provider) == nil
+                    ? .disconnected
+                    : .connected
             }
         }
     }
 
-    private func hasCredential(for provider: WebSearchProvider) -> Bool {
+    private func hasConfiguration(for provider: WebSearchProvider) -> Bool {
         switch connectionStates[provider] ?? .disconnected {
         case .connected, .issue:
             true
@@ -268,7 +306,7 @@ struct WebBrowsingSettingsView: View {
             HStack(alignment: .top, spacing: 16) {
                 providerPicker
                     .frame(width: 270)
-                keySetup
+                providerSetup
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -333,7 +371,7 @@ struct WebBrowsingSettingsView: View {
             .buttonStyle(.plain)
             .disabled(viewModel.isTesting)
 
-            Link(destination: provider.metadata.apiKeySetupURL) {
+            Link(destination: provider.metadata.setupURL) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -341,13 +379,22 @@ struct WebBrowsingSettingsView: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help("Open \(provider.metadata.displayName) API key setup")
-            .accessibilityLabel("Open \(provider.metadata.displayName) API key setup")
+            .help(setupLinkLabel(for: provider))
+            .accessibilityLabel(setupLinkLabel(for: provider))
         }
         .background(
             provider == viewModel.selectedProvider ? Color.accentColor.opacity(0.12) : .clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
+    }
+
+    private func setupLinkLabel(for provider: WebSearchProvider) -> String {
+        switch provider.metadata.configurationKind {
+        case .apiKey:
+            "Open \(provider.metadata.displayName) API key setup"
+        case .instanceURL:
+            "Open \(provider.metadata.displayName) setup documentation"
+        }
     }
 
     @ViewBuilder
@@ -386,7 +433,7 @@ struct WebBrowsingSettingsView: View {
         }
     }
 
-    private var keySetup: some View {
+    private var providerSetup: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(viewModel.selectedProvider.metadata.displayName)
                 .nativTextStyle(.sectionTitle)
@@ -394,17 +441,19 @@ struct WebBrowsingSettingsView: View {
             routingActions
 
             HStack(spacing: 8) {
-                keyField
-                Button { viewModel.revealsKey.toggle() } label: {
-                    Image(systemName: viewModel.revealsKey ? "eye.slash" : "eye")
-                        .frame(width: 28, height: 28)
+                configurationField
+                if viewModel.selectedProvider.metadata.configurationKind == .apiKey {
+                    Button { viewModel.revealsKey.toggle() } label: {
+                        Image(systemName: viewModel.revealsKey ? "eye.slash" : "eye")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(viewModel.revealsKey ? "Hide API key" : "Show API key")
                 }
-                .buttonStyle(.borderless)
-                .help(viewModel.revealsKey ? "Hide API key" : "Show API key")
             }
 
             HStack {
-                Button(viewModel.isTesting ? "Testing…" : "Test & Connect") {
+                Button(connectionActionTitle) {
                     Task {
                         if await viewModel.testAndConnect() {
                             onConfigurationChanged(true)
@@ -414,8 +463,8 @@ struct WebBrowsingSettingsView: View {
                 .disabled(!viewModel.canConnect)
 
                 if viewModel.selectedConnectionState != .disconnected {
-                    Button("Remove Key", role: .destructive) {
-                        if viewModel.removeKey() {
+                    Button(removeActionTitle, role: .destructive) {
+                        if viewModel.removeConfiguration() {
                             onConfigurationChanged(false)
                         }
                     }
@@ -433,13 +482,22 @@ struct WebBrowsingSettingsView: View {
                     .foregroundStyle(.orange)
             }
 
-            Text("Browsing requests are sent to the selected third-party providers. API keys stay in Keychain.")
+            Text(configurationPrivacyNote)
                 .nativTextStyle(.metadata)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var configurationPrivacyNote: String {
+        switch viewModel.selectedProvider.metadata.configurationKind {
+        case .apiKey:
+            "Browsing requests are sent to the selected third-party provider. API keys stay in Keychain."
+        case .instanceURL:
+            "Search requests are sent directly to this SearXNG instance. Nativ does not host or manage it."
+        }
     }
 
     private var routingActions: some View {
@@ -482,18 +540,21 @@ struct WebBrowsingSettingsView: View {
     }
 
     @ViewBuilder
-    private var keyField: some View {
-        let prompt = "Enter \(viewModel.selectedProvider.metadata.displayName) API key"
-        if viewModel.revealsKey {
-            TextField(prompt, text: $viewModel.draftAPIKey)
+    private var configurationField: some View {
+        switch viewModel.selectedProvider.metadata.configurationKind {
+        case .apiKey where viewModel.revealsKey:
+            TextField(configurationFieldPrompt, text: $viewModel.draftConfiguration)
                 .textFieldStyle(.roundedBorder)
-        } else {
-            SecureField(prompt, text: $viewModel.draftAPIKey)
+        case .apiKey:
+            SecureField(configurationFieldPrompt, text: $viewModel.draftConfiguration)
+                .textFieldStyle(.roundedBorder)
+        case .instanceURL:
+            TextField("https://search.example.com", text: $viewModel.draftConfiguration)
                 .textFieldStyle(.roundedBorder)
         }
     }
 
-    private var keyFieldPrompt: String {
+    private var configurationFieldPrompt: String {
         let provider = viewModel.selectedProvider.metadata.displayName
         switch viewModel.selectedConnectionState {
         case .disconnected:
@@ -502,6 +563,15 @@ struct WebBrowsingSettingsView: View {
             return "Enter a new key to replace the saved \(provider) key"
         case .issue:
             return "Enter a new \(provider) API key"
+        }
+    }
+
+    private var removeActionTitle: String {
+        switch viewModel.selectedProvider.metadata.configurationKind {
+        case .apiKey:
+            "Remove Key"
+        case .instanceURL:
+            "Disconnect"
         }
     }
 

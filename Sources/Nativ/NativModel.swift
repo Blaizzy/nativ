@@ -31,8 +31,18 @@ struct ModelLoadFailure: Equatable, Identifiable, Sendable {
     let id = UUID()
     let modelID: String?
     let message: String
+    private let titleOverride: String?
+
+    init(modelID: String?, message: String, title: String? = nil) {
+        self.modelID = modelID
+        self.message = message
+        titleOverride = title
+    }
 
     var title: String {
+        if let titleOverride {
+            return titleOverride
+        }
         guard let modelID else {
             return "Couldn’t load model"
         }
@@ -63,6 +73,7 @@ final class ServerLogStore {
 @MainActor
 @Observable
 final class NativModel: ChatModelSwitchingSurface {
+    let kitLibrary: NativKitLibrary
     private(set) var isRunning = false
     let serverLogs = ServerLogStore()
     private(set) var metrics: NativMetrics?
@@ -76,6 +87,7 @@ final class NativModel: ChatModelSwitchingSurface {
     private(set) var modelSwitchInProgress = false
     private(set) var modelSwitchTargetID: String?
     private var modelSwitchWatchdog: Task<Void, Never>?
+    @ObservationIgnored private var inferenceActivity: InferenceActivityCoordinator?
     private(set) var modelLoadingProgress: Double?
     private(set) var modelLoadFailure: ModelLoadFailure?
     private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
@@ -117,7 +129,8 @@ final class NativModel: ChatModelSwitchingSurface {
     private let maxCurrentServerOutputCharacters = 50_000
     private let maxSessionActivitySamples = 120
 
-    init() {
+    init(kitLibrary: NativKitLibrary? = nil) {
+        self.kitLibrary = kitLibrary ?? NativKitLibrary()
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
         observeExternalModelCacheVolume()
@@ -126,6 +139,32 @@ final class NativModel: ChatModelSwitchingSurface {
         refreshAllTimeStats()
         resolveHuggingFaceEnvironmentFromLoginShell()
         migrateCustomHuggingFaceCredentialIfNeeded()
+    }
+
+    func observeInferenceActivity(_ coordinator: InferenceActivityCoordinator) {
+        inferenceActivity = coordinator
+        observeInferenceActivityChanges()
+    }
+
+    var inferenceActivityInProgress: Bool {
+        inferenceActivity?.hasActiveOperations == true
+    }
+
+    private func observeInferenceActivityChanges() {
+        guard let inferenceActivity else {
+            return
+        }
+        withObservationTracking {
+            _ = inferenceActivity.hasActiveOperations
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.observeInferenceActivityChanges()
+                self.notifyMenuStateChanged()
+            }
+        }
     }
 
     /// GUI apps inherit launchd's environment, which excludes exports from
@@ -375,7 +414,17 @@ final class NativModel: ChatModelSwitchingSurface {
             // still comes up.
             launchArguments.removeSubrange(modelFlagIndex...(modelFlagIndex + 1))
             modelLoadingProgress = nil
-            appendLog("\n\(languageModelID) is not a text-generation model — starting the server without pre-loading it. Choose a language model to load one.\n")
+            settings.languageModelID = nil
+            let modelName = languageModelID.split(separator: "/").last.map(String.init)
+                ?? languageModelID
+            setModelLoadFailure(
+                modelID: languageModelID,
+                message: "The model is not supported and is not loaded.",
+                title: "Could not load \(modelName)",
+                logMessage: "\(languageModelID) is not a text-generation model — "
+                    + "starting the server without pre-loading it. "
+                    + "Choose a language model to load one."
+            )
         }
         if let speechToTextModelID = settings.normalized().speechToTextModelID,
            let speechIssue = LocalModelDiscovery.speechToTextPreloadIssue(
@@ -610,7 +659,7 @@ final class NativModel: ChatModelSwitchingSurface {
         availableModels: [LocalModel],
         onSelectionAccepted: @escaping () -> Void = {}
     ) -> Bool {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return false
         }
 
@@ -634,6 +683,9 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func confirmPendingModelPreloadSwitch() {
+        guard !inferenceActivityInProgress else {
+            return
+        }
         guard let pendingModelPreloadSwitch else {
             modelPreloadMemoryWarning = nil
             return
@@ -657,7 +709,7 @@ final class NativModel: ChatModelSwitchingSurface {
         to modelID: String?,
         for slot: ModelPreloadSlot
     ) {
-        guard !modelSwitchInProgress else {
+        guard !modelSwitchInProgress, !inferenceActivityInProgress else {
             return
         }
         clearModelLoadFailure()
@@ -1259,9 +1311,18 @@ final class NativModel: ChatModelSwitchingSurface {
         }
     }
 
-    private func setModelLoadFailure(modelID: String?, message: String) {
-        modelLoadFailure = ModelLoadFailure(modelID: modelID, message: message)
-        appendLog("\n\(message)\n")
+    private func setModelLoadFailure(
+        modelID: String?,
+        message: String,
+        title: String? = nil,
+        logMessage: String? = nil
+    ) {
+        modelLoadFailure = ModelLoadFailure(
+            modelID: modelID,
+            message: message,
+            title: title
+        )
+        appendLog("\n\(logMessage ?? message)\n")
         notifyMenuStateChanged()
     }
 

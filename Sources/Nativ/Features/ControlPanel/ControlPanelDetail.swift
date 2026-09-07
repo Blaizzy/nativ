@@ -53,8 +53,10 @@ extension ControlPanelView {
                 mcpHost: mcpHost,
                 extensionManager: extensionManager,
                 imageGeneration: imageGeneration,
+                projects: projects,
                 showsConfiguration: $isModelConfigurationVisible,
-                onExploreImageModels: navigation.openImageModelDiscovery
+                onExploreImageModels: navigation.openImageModelDiscovery,
+                onFindDraftModels: navigation.openDrafterModelDiscovery
             )
         case .scheduled:
             ScheduledTasksView(
@@ -122,7 +124,11 @@ extension ControlPanelView {
                 titleLeadingInset: 0,
                 speechModelDiscoveryRequest: speechModelDiscoveryRequest,
                 imageModelDiscoveryRequest: imageModelDiscoveryRequest,
-                imageModelDiscoveryCapability: imageModelDiscoveryCapability
+                imageModelDiscoveryCapability: imageModelDiscoveryCapability,
+                modelDiscoveryRequest: modelDiscoveryRequest,
+                modelDiscoveryRepositoryID: modelDiscoveryRepositoryID,
+                drafterModelDiscoveryRequest: drafterModelDiscoveryRequest,
+                drafterModelDiscoveryTargetID: drafterModelDiscoveryTargetID
             )
             .equatable()
         case .extensions:
@@ -175,6 +181,7 @@ extension ControlPanelView {
     }
 
     func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
+        sidebarRenameCommitRequests.send()
         switch selection {
         case .tab(let tab):
             if tab == .extensions {
@@ -233,8 +240,10 @@ struct ChatWorkspaceView: View {
     let mcpHost: MCPHostManager
     let extensionManager: NativExtensionManager
     let imageGeneration: ImageGenerationViewModel
+    let projects: ChatProjectStore
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
+    let onFindDraftModels: (String) -> Void
 
     var body: some View {
         Group {
@@ -245,10 +254,12 @@ struct ChatWorkspaceView: View {
                     chat: chat,
                     mcpHost: mcpHost,
                     extensionManager: extensionManager,
+                    projects: projects,
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
-                    onExploreImageModels: onExploreImageModels
+                    onExploreImageModels: onExploreImageModels,
+                    onFindDraftModels: onFindDraftModels
                 )
             case .images:
                 ImageGenerationView(

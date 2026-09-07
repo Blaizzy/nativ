@@ -27,6 +27,17 @@ carries its title, messages, timestamps, pin state, and an optional folder assig
   session (`folderID`) and the folder list persists alongside sessions.
 - Empty, redundant sessions are pruned automatically.
 
+### Import and export
+
+The action menu for a chat exports a versioned JSON file containing its messages,
+attachments, model repository ID, system prompt, and basic session metadata. Use the import
+button above the sidebar to add one of these files as a new local session.
+
+Imported tool calls are kept as history and are never run automatically. Nativ offers to
+switch to the original model when it is installed and links to Models when it is missing.
+Users can instead continue with any downloaded language model. A chat remains read-only when
+its recorded token count exceeds the selected model's context window.
+
 ## Chat tools
 
 A tool-calling model can invoke host capabilities mid-conversation. The registry is
