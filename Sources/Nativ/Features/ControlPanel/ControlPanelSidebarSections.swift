@@ -407,6 +407,17 @@ extension ControlPanelView {
                     }
                     .disabled(isSelectingRecents)
                     .help("Select multiple")
+
+                    Button {
+                        createChatSession()
+                    } label: {
+                        Label("New Chat", systemImage: "square.and.pencil")
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .help("New chat")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.secondary)
