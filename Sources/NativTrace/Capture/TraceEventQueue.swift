@@ -19,6 +19,8 @@ public final class TraceEventQueue: Sendable {
         case delta(content: String?, reasoning: String?, traceID: String, scope: TraceScope)
         case discardPartial(traceID: String, scope: TraceScope)
         case prune(TraceRetentionWindow)
+        case flushAll
+        case encodeFailure(kind: TraceEventKind, message: String)
         case barrier(CheckedContinuation<Void, Never>)
     }
 
@@ -41,6 +43,10 @@ public final class TraceEventQueue: Sendable {
                     await recorder.discardPartial(traceID: traceID, scope: scope)
                 case .prune(let window):
                     await recorder.prune(retaining: window)
+                case .flushAll:
+                    await recorder.flushAll()
+                case .encodeFailure(let kind, let message):
+                    await recorder.noteEncodeFailure(kind: kind, message: message)
                 case .barrier(let continuation):
                     continuation.resume()
                 }
@@ -66,8 +72,15 @@ public final class TraceEventQueue: Sendable {
         traceID: String,
         scope: TraceScope
     ) {
-        guard let json = try? TraceJSON(encoding: payload) else { return }
-        record(kind: Payload.kind, payload: json, traceID: traceID, scope: scope)
+        do {
+            let json = try TraceJSON(encoding: payload)
+            record(kind: Payload.kind, payload: json, traceID: traceID, scope: scope)
+        } catch {
+            // Counted rather than discarded: a payload that cannot be encoded
+            // is a missing row, and a silently shorter trace is the failure this
+            // design is meant to make impossible.
+            continuation.yield(.encodeFailure(kind: Payload.kind, message: String(describing: error)))
+        }
     }
 
     public func delta(
@@ -87,6 +100,12 @@ public final class TraceEventQueue: Sendable {
 
     public func prune(retaining window: TraceRetentionWindow) {
         continuation.yield(.prune(window))
+    }
+
+    /// Seals every call still streaming. For shutdown, where the accumulated
+    /// output is the only record of a call that will never complete.
+    public func flushAll() {
+        continuation.yield(.flushAll)
     }
 
     /// Waits until everything queued so far has reached the recorder.

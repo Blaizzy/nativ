@@ -61,7 +61,10 @@ public actor TraceRecorder {
         scope: TraceScope
     ) async {
         if kind.sealsStreamedOutput {
-            await flushPartial(for: TraceCallKey(traceID: traceID, scope: scope))
+            // Sealing by call key cannot work here: a turn-ending event has no
+            // requestID, so the key it derives never matches the one the deltas
+            // were stored under. Everything still open in this trace is ending.
+            await flushPartials(inTrace: traceID)
         }
         await write(kind: kind, json: json, traceID: traceID, scope: scope)
     }
@@ -99,6 +102,7 @@ public actor TraceRecorder {
     }
 
     /// Seals every open call. Call when a session closes or the app is quitting.
+    /// Seals every open call. Call at shutdown.
     public func flushAll() async {
         for key in partials.keys {
             await flushPartial(for: key)
@@ -140,6 +144,12 @@ public actor TraceRecorder {
         }
     }
 
+    private func flushPartials(inTrace traceID: String) async {
+        for (key, partial) in partials where partial.traceID == traceID {
+            await flushPartial(for: key)
+        }
+    }
+
     private func flushPartial(for key: TraceCallKey) async {
         guard let partial = partials.removeValue(forKey: key),
               !partial.isEmpty,
@@ -159,6 +169,13 @@ public actor TraceRecorder {
             note(error, while: "encoding a payload")
             return nil
         }
+    }
+
+    /// Records that a producer could not encode a payload it meant to write.
+    public func noteEncodeFailure(kind: TraceEventKind, message: String) {
+        failureCount += 1
+        lastFailure = "encoding \(kind.rawValue): \(message)"
+        logger.error("trace payload could not be encoded for \(kind.rawValue, privacy: .public)")
     }
 
     private func note(_ error: Error, while activity: String) {

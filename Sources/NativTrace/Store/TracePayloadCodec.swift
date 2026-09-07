@@ -6,21 +6,21 @@ import Foundation
 /// Compression is a storage detail, never a format detail: an exported trace is
 /// always plain JSON. Keeping the two separate is what lets the on-disk codec
 /// change later without invalidating traces anyone has already exported.
-enum TracePayloadCodec {
-    static let plain = "json"
-    static let deflated = "json+deflate"
+public enum TracePayloadCodec {
+    public static let plain = "json"
+    public static let deflated = "json+deflate"
 
     /// Below this, framing overhead outweighs any saving.
     private static let compressionThreshold = 512
 
-    struct Encoded {
-        let data: Data
-        let encoding: String
+    public struct Encoded {
+        public let data: Data
+        public let encoding: String
         /// Uncompressed byte count, required to size the decode buffer.
-        let byteCount: Int
+        public let byteCount: Int
     }
 
-    static func encode(_ payload: TraceJSON) throws -> Encoded {
+    public static func encode(_ payload: TraceJSON) throws -> Encoded {
         let raw = try payload.canonicalData()
         guard raw.count >= compressionThreshold,
               let compressed = deflate(raw),
@@ -31,7 +31,7 @@ enum TracePayloadCodec {
         return Encoded(data: compressed, encoding: deflated, byteCount: raw.count)
     }
 
-    static func decode(data: Data, encoding: String, byteCount: Int) throws -> TraceJSON {
+    public static func decode(data: Data, encoding: String, byteCount: Int) throws -> TraceJSON {
         switch encoding {
         case plain:
             return try TraceJSON.decode(data)

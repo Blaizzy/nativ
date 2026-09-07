@@ -12,8 +12,9 @@ public struct TraceRetentionWindow: Sendable, Hashable {
     public var maximumTraces: Int?
 
     public static let `default` = TraceRetentionWindow(days: 30, maximumTraces: 500)
-    /// Keeps nothing; used when recording is turned off and history is cleared.
-    public static let none = TraceRetentionWindow(days: 0, maximumTraces: 0)
+    /// Keeps nothing. Named for what it does, because `days: 0` reads like
+    /// "no limit" while it means "older than now", i.e. everything.
+    public static let clearAll = TraceRetentionWindow(days: 0, maximumTraces: 0)
     public static let unlimited = TraceRetentionWindow(days: nil, maximumTraces: nil)
 
     public init(days: Int?, maximumTraces: Int?) {

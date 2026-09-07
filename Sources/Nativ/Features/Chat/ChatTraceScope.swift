@@ -43,3 +43,16 @@ extension ChatTraceCall {
         )
     }
 }
+
+/// Whether an error means the user stopped the work rather than the work broke.
+///
+/// Two error types mean cancellation here: `CancellationError` from structured
+/// concurrency, and `URLError.cancelled` from tearing down a streaming session.
+/// The chat loop's catch clauses already treat both that way; anything deciding
+/// the same question must agree with them or a stopped response gets recorded
+/// as a failure.
+func ChatIsCancellation(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+    return false
+}

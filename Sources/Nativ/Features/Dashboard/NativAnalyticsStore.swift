@@ -143,6 +143,10 @@ struct NativAnalyticsRequestEvent: Identifiable, Sendable {
     let toolCalls: Bool
     let finishReason: String?
     let backend: String?
+    /// Id the calling app assigned before sending, when it supplied one. Joins
+    /// to `TraceScope.requestID` so a metrics row can be paired with the trace
+    /// of the same call.
+    let clientRequestID: String?
 
     var id: String { requestID }
 
@@ -588,7 +592,8 @@ final class NativAnalyticsStore {
                 thinking_enabled,
                 tool_calls,
                 finish_reason,
-                backend
+                backend,
+                client_request_id
             FROM request_events
             WHERE 1 = 1
             \(range.rangeStartUnix == nil ? "" : "AND completed_at >= ?")
@@ -639,7 +644,8 @@ final class NativAnalyticsStore {
                     thinkingEnabled: statement.int64(at: 18) != 0,
                     toolCalls: statement.int64(at: 19) != 0,
                     finishReason: statement.string(at: 20),
-                    backend: statement.string(at: 21)
+                    backend: statement.string(at: 21),
+                    clientRequestID: statement.string(at: 22)
                 )
             )
         }
@@ -796,6 +802,10 @@ private final class SQLiteConnection {
         try execute("PRAGMA synchronous = NORMAL;")
         try execute("PRAGMA busy_timeout = 3000;")
         try execute(schemaSQL)
+        // CREATE TABLE IF NOT EXISTS cannot add a column to a database an
+        // earlier build already created, and the writer is Python, so both
+        // sides have to apply the same addition.
+        try? execute("ALTER TABLE request_events ADD COLUMN client_request_id TEXT;")
     }
 
     deinit {
@@ -916,7 +926,8 @@ private let schemaSQL = """
         tool_calls INTEGER NOT NULL,
         finish_reason TEXT,
         backend TEXT,
-        created_at REAL NOT NULL
+        created_at REAL NOT NULL,
+        client_request_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS analytics_buckets (

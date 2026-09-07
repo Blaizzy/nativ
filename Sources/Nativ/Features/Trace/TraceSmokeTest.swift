@@ -19,6 +19,7 @@ func runTraceSmokeTest() async -> Bool {
     var failures: [String] = []
     func check(_ condition: Bool, _ label: String) {
         print("  \(condition ? "ok  " : "FAIL") \(label)")
+        fflush(stdout)
         if !condition { failures.append(label) }
     }
 
@@ -36,7 +37,6 @@ func runTraceSmokeTest() async -> Bool {
         let store = try TraceStore(url: directory.appendingPathComponent("Traces.sqlite3"))
         let producer = ChatTraceProducer(recorder: TraceRecorder(store: store))
 
-        producer.sessionStarted(sessionID: sessionID, title: "Smoke", modelID: "smoke-model")
         producer.turnStarted(turn, messageID: userMessageID, text: prompt, modelID: "smoke-model")
         producer.requestComposed(
             RequestComposedPayload(
@@ -69,34 +69,103 @@ func runTraceSmokeTest() async -> Bool {
         producer.toolCall(callID: "c1", name: "web_search", argumentsJSON: #"{"q":"paris"}"#, in: call)
         producer.toolResult(callID: "c1", name: "web_search", output: "Paris", isError: false, in: call)
         producer.turnEnded(turn, status: "completed", roundCount: 1)
+
+        // A second model takes over the same chat. It must get its own trace,
+        // and that trace must still account for what it was shown.
+        let secondCall = ChatTraceCall(
+            turn: ChatTraceTurn(sessionID: sessionID, turnID: UUID()),
+            requestID: UUID(),
+            round: 0,
+            modelID: "smoke-model-2"
+        )
+        let followUpID = UUID()
+        let followUp = "and germany?"
+        producer.turnStarted(
+            secondCall.turn, messageID: followUpID, text: followUp, modelID: "smoke-model-2"
+        )
+        producer.requestComposed(
+            RequestComposedPayload(
+                systemSections: [
+                    PromptSection(origin: .userSystemPrompt, label: "System prompt", body: "Be terse.")
+                ],
+                messages: [
+                    TraceMessageRef(
+                        role: .user,
+                        messageID: userMessageID.uuidString,
+                        contentHash: TraceHash.content(prompt),
+                        byteCount: prompt.utf8.count
+                    ),
+                    TraceMessageRef(
+                        role: .user,
+                        messageID: followUpID.uuidString,
+                        contentHash: TraceHash.content(followUp),
+                        byteCount: followUp.utf8.count
+                    ),
+                ],
+                advertisesTools: false
+            ),
+            in: secondCall
+        )
+        producer.responseCompleted(
+            messageID: UUID(), content: "Berlin.", reasoning: nil,
+            usage: nil, finishReason: "stop", in: secondCall
+        )
+        producer.turnEnded(secondCall.turn, status: "completed", roundCount: 1)
         await producer.drain()
 
-        let events = try await store.events(forSession: sessionID.uuidString)
-
-        // Drive the view model the inspector actually uses, rather than
-        // re-implementing the fold here and testing a copy.
-        let inspector = TraceInspectorViewModel(store: store)
-        await inspector.loadSession(sessionID)
-        blocks = inspector.blocks
-        exposures = inspector.calls.compactMap { inspector.exposure(for: $0.id) }
-
-        check(inspector.loadFailure == nil, "the inspector loaded without error")
-        check(inspector.eventCount == events.count, "the inspector saw every event")
-        check(inspector.calls.count == 1, "the inspector listed one model call")
+        let allTraces = try await store.traces(forSession: sessionID.uuidString)
+        check(allTraces.count == 2, "each model got its own trace (\(allTraces.count))")
         check(
-            inspector.selectedCallID == inspector.calls.last?.id,
-            "the newest call is selected by default"
+            allTraces.compactMap(\.modelIDs.first) == ["smoke-model", "smoke-model-2"],
+            "traces are ordered by when each model took over"
         )
 
-        check(events.count == 7, "every emitted event reached the store (\(events.count))")
-        check(events.map(\.seq) == Array(0..<Int64(events.count)), "sequence numbers are contiguous")
+        if allTraces.count != 2 {
+            print("  (found traces: \(allTraces.map { "\($0.traceID) \($0.modelIDs)" }))")
+        }
+        let firstKinds = try await store.events(forTrace: allTraces.first?.traceID ?? "").map(\.kind)
         check(
-            events.map(\.kind) == [
+            firstKinds == [
                 .sessionStarted, .turnStarted, .requestComposed,
                 .responseCompleted, .toolCall, .toolResult, .turnEnded,
             ],
-            "events landed in the order they were produced"
+            "the first model's trace holds its events in order (\(firstKinds.map(\.rawValue)))"
         )
+
+        let secondKinds = try await store.events(forTrace: allTraces.dropFirst().first?.traceID ?? "").map(\.kind)
+        check(
+            secondKinds == [
+                .modelSwitched, .turnStarted, .requestComposed, .responseCompleted, .turnEnded,
+            ],
+            "the second model's trace opens by naming the handover (\(secondKinds.map(\.rawValue)))"
+        )
+
+        // Drive the view model the panel actually uses, rather than
+        // re-implementing the fold here and testing a copy.
+        let inspector = TraceInspectorViewModel(store: store)
+        await inspector.loadSession(sessionID)
+        check(inspector.loadFailure == nil, "the inspector loaded without error")
+        check(inspector.instances.count == 2, "the chat exposes both model instances")
+
+        let second = inspector.instances.last
+        check(second?.precedingModelID == "smoke-model", "the later trace names who it took over from")
+        check(
+            second?.inheritedContext.count == 1,
+            "the later trace accounts for the message it inherited (\(second?.inheritedContext.count ?? -1))"
+        )
+        check(
+            second?.inheritedContext.first?.text == prompt,
+            "the inherited message resolves to its body from the previous model's trace"
+        )
+        check(
+            second?.inheritedContext.first?.isVerified == true,
+            "the inherited body matches what the later model was actually shown"
+        )
+
+        inspector.selectedInstanceID = inspector.instances.first?.id
+        blocks = inspector.blocks
+        exposures = inspector.calls.compactMap { inspector.exposure(for: $0.id) }
+        check(inspector.calls.count == 1, "the first instance lists its own single call")
     } catch {
         thrown = error
     }

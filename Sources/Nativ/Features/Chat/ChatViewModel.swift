@@ -1467,13 +1467,8 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Opens the turn in the trace, runs it, and records how it actually ended.
     private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
-        let client = NativChatClient(
-            baseURL: queuedRequest.settings.serverBaseURL,
-            apiKey: queuedRequest.settings.serverAPIKey
-        )
-        var assistantMessageID = queuedRequest.assistantMessageID
-        var toolRounds = 0
         let turn = ChatTraceTurn(sessionID: queuedRequest.sessionID, turnID: queuedRequest.id)
         traceProducer?.turnStarted(
             turn,
@@ -1481,14 +1476,47 @@ final class ChatViewModel: ObservableObject {
             text: message(queuedRequest.userMessageID, in: queuedRequest.sessionID)?.content ?? "",
             modelID: queuedRequest.settings.languageModelID
         )
+        var rounds = 0
+        var outcome = ChatTurnOutcome.completed
         defer {
             activeTraceCall = nil
-            traceProducer?.turnEnded(
-                turn,
-                status: Task.isCancelled ? "cancelled" : "completed",
-                roundCount: toolRounds + 1
-            )
+            traceProducer?.turnEnded(turn, status: outcome.rawValue, roundCount: rounds)
         }
+
+        do {
+            rounds = try await runTurn(queuedRequest, turn: turn)
+        } catch {
+            outcome = ChatTurnOutcome(error: error)
+            throw error
+        }
+    }
+
+    /// Outcome recorded for a turn.
+    ///
+    /// Derived from the thrown error rather than from `Task.isCancelled`, which
+    /// is false for every failure that is not a cancellation and would report a
+    /// model load failure as a completed turn.
+    private enum ChatTurnOutcome: String {
+        case completed
+        case cancelled
+        case failed
+
+        init(error: Error) {
+            self = ChatIsCancellation(error) ? .cancelled : .failed
+        }
+    }
+
+    /// Runs the tool loop for one turn and returns how many model calls it made.
+    private func runTurn(
+        _ queuedRequest: QueuedChatRequest,
+        turn: ChatTraceTurn
+    ) async throws -> Int {
+        let client = NativChatClient(
+            baseURL: queuedRequest.settings.serverBaseURL,
+            apiKey: queuedRequest.settings.serverAPIKey
+        )
+        var assistantMessageID = queuedRequest.assistantMessageID
+        var toolRounds = 0
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
         let fileReadTracker = ChatReadFileTracker()
@@ -1574,6 +1602,7 @@ final class ChatViewModel: ObservableObject {
             do {
                 completion = try await client.streamChat(
                     request,
+                    requestID: call.requestID.uuidString,
                     onEvent: { event in
                         await eventRelay.submit(event)
                     })
@@ -1582,7 +1611,7 @@ final class ChatViewModel: ObservableObject {
                 await eventRelay.cancel()
                 traceProducer?.responseFailed(
                     message: String(describing: error),
-                    isCancellation: error is CancellationError,
+                    isCancellation: ChatIsCancellation(error),
                     in: call
                 )
                 throw error
@@ -1610,7 +1639,7 @@ final class ChatViewModel: ObservableObject {
             )
 
             guard advertisesTools, !toolCalls.isEmpty else {
-                return
+                return toolRounds + 1
             }
 
             var insertionAnchor = assistantMessageID
@@ -2135,10 +2164,28 @@ final class ChatViewModel: ObservableObject {
         }
 
         let precedingMessages = sessionMessages[..<assistantIndex]
-        var requestMessages = precedingMessages.compactMap { message in
-            message.apiMessage(
+        var requestMessages: [MLXChatMessage] = []
+        var sentMessageRefs: [TraceMessageRef] = []
+        for message in precedingMessages {
+            guard let apiMessage = message.apiMessage(
                 documentContext: documentContexts[message.id],
                 includesImages: queuedRequest.languageModelSupportsVision
+            ) else { continue }
+            requestMessages.append(apiMessage)
+
+            let sentBody = apiMessage.content?.plainText ?? ""
+            sentMessageRefs.append(
+                TraceMessageRef(
+                    role: TraceRole(rawValue: apiMessage.role),
+                    messageID: message.toolCallID ?? message.id.uuidString,
+                    contentHash: TraceHash.content(sentBody),
+                    byteCount: sentBody.utf8.count,
+                    // Document context is appended to the body on the way out,
+                    // so the transcript no longer holds what was sent. Inline it
+                    // rather than let the reader resolve to a shorter body and
+                    // call it verified.
+                    inlineBody: sentBody == message.content ? nil : sentBody
+                )
             )
         }
 
@@ -2260,15 +2307,7 @@ final class ChatViewModel: ObservableObject {
                     : nil,
                 toolChoice: tools == nil ? nil : "auto"
             ),
-            messages: precedingMessages.map { message in
-                let body = message.content
-                return TraceMessageRef(
-                    role: TraceRole(rawValue: message.role.rawValue),
-                    messageID: message.toolCallID ?? message.id.uuidString,
-                    contentHash: TraceHash.content(body),
-                    byteCount: body.utf8.count
-                )
-            },
+            messages: sentMessageRefs,
             omissions: (documentOmissionsBySessionID[queuedRequest.sessionID] ?? []).map {
                 TraceOmission(
                     subject: $0.filename,

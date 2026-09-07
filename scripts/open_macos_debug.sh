@@ -15,11 +15,20 @@ app_path="$1"
 [[ -d "$app_path" ]] || fail "app bundle is missing: $app_path"
 app_path="$(cd "$(dirname "$app_path")" && pwd -P)/$(basename "$app_path")"
 
+# The product name is configurable (NATIV_PRODUCT_NAME), so the executable is
+# whatever the bundle says it is. Matching a hardcoded "Nativ" would fail for a
+# renamed build and, worse, terminate a different build than the one launching.
+executable_name="$(
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+        "$app_path/Contents/Info.plist" 2>/dev/null || true
+)"
+[[ -n "$executable_name" ]] || executable_name="$(basename "$app_path" .app)"
+
 bundle_identifier="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
         "$app_path/Contents/Info.plist" 2>/dev/null || true
 )"
-[[ -n "$bundle_identifier" ]] || fail "Nativ has no bundle identifier"
+[[ -n "$bundle_identifier" ]] || fail "the app bundle has no bundle identifier"
 
 codesign --verify --deep --strict "$app_path"
 signature_details="$(codesign -dvvv -r- "$app_path" 2>&1)"
@@ -39,11 +48,11 @@ signature_details="$(codesign -dvvv -r- "$app_path" 2>&1)"
 while IFS= read -r process_id; do
     [[ -n "$process_id" ]] || continue
     kill "$process_id" 2>/dev/null || true
-done < <(pgrep -x Nativ || true)
+done < <(pgrep -x "$executable_name" || true)
 
 open -na "$app_path"
 
-expected_command="$app_path/Contents/MacOS/Nativ"
+expected_command="$app_path/Contents/MacOS/$executable_name"
 for _ in {1..20}; do
     while IFS= read -r process_id; do
         [[ -n "$process_id" ]] || continue
@@ -54,8 +63,8 @@ for _ in {1..20}; do
             echo "Bundle identifier: $bundle_identifier"
             exit 0
         fi
-    done < <(pgrep -x Nativ || true)
+    done < <(pgrep -x "$executable_name" || true)
     sleep 0.25
 done
 
-fail "Nativ did not remain running after launch"
+fail "$executable_name did not remain running after launch"

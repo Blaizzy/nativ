@@ -20,6 +20,10 @@ final class ChatTraceProducer {
         let turn: ChatTraceTurn
         let messageID: UUID
         let text: String
+        /// Traces that already hold this prompt. Without it, the trace opened
+        /// by `turnStarted` would be replayed into by the very call that is
+        /// about to record the prompt itself.
+        var recordedIn: Set<String> = []
     }
 
     private let queue: TraceEventQueue
@@ -32,14 +36,6 @@ final class ChatTraceProducer {
 
     // MARK: - Session and turn
 
-    func sessionStarted(sessionID: UUID, title: String?, modelID: String?) {
-        queue.record(
-            SessionStartedPayload(title: title, modelID: modelID),
-            traceID: openTrace(session: sessionID, modelID: modelID),
-            scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
-        )
-    }
-
     func turnStarted(
         _ turn: ChatTraceTurn,
         messageID: UUID,
@@ -47,8 +43,9 @@ final class ChatTraceProducer {
         attachmentSummaries: [String] = [],
         modelID: String?
     ) {
+        let traceID = openTrace(session: turn.sessionID, modelID: modelID)
         turnContextBySession[turn.sessionID] = TurnContext(
-            turn: turn, messageID: messageID, text: text
+            turn: turn, messageID: messageID, text: text, recordedIn: [traceID]
         )
         record(
             TurnStartedPayload(
@@ -64,10 +61,6 @@ final class ChatTraceProducer {
     func turnEnded(_ turn: ChatTraceTurn, status: String, roundCount: Int) {
         record(TurnEndedPayload(status: status, roundCount: roundCount), turn: turn)
         turnContextBySession[turn.sessionID] = nil
-    }
-
-    func modelSwitched(_ turn: ChatTraceTurn, from: String?, to: String) {
-        record(ModelSwitchedPayload(from: from, to: to), turn: turn, modelID: to)
     }
 
     // MARK: - Calls
@@ -153,8 +146,14 @@ final class ChatTraceProducer {
         queue.prune(retaining: window)
     }
 
-    /// Waits for queued events to reach the store. For shutdown, not for the
-    /// recording path.
+    /// Seals open calls and waits for everything queued to reach the store.
+    /// For shutdown, not for the recording path.
+    func shutDown() async {
+        queue.flushAll()
+        await queue.drain()
+    }
+
+    /// Waits for queued events to reach the store, without sealing.
     func drain() async {
         await queue.drain()
     }
@@ -177,13 +176,32 @@ final class ChatTraceProducer {
             return open.traceID
         }
 
+        let previous = openTraceBySession[sessionID]
         let traceID = "\(sessionID.uuidString)/\(UUID().uuidString.prefix(8))"
         openTraceBySession[sessionID] = OpenTrace(traceID: traceID, modelID: modelID)
+
+        // Every trace opens by saying what it is: a chat starting, or one model
+        // taking over from another.
+        if let previous {
+            queue.record(
+                ModelSwitchedPayload(from: previous.modelID, to: modelID ?? "unknown"),
+                traceID: traceID,
+                scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
+            )
+        } else {
+            queue.record(
+                SessionStartedPayload(title: nil, modelID: modelID),
+                traceID: traceID,
+                scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
+            )
+        }
 
         // A trace that opens part way through a turn would otherwise start with
         // an answer and no question. Replaying the prompt keeps each trace
         // readable on its own, which is the point of splitting them.
-        if let context = turnContextBySession[sessionID] {
+        if var context = turnContextBySession[sessionID], !context.recordedIn.contains(traceID) {
+            context.recordedIn.insert(traceID)
+            turnContextBySession[sessionID] = context
             queue.record(
                 TurnStartedPayload(messageID: context.messageID.uuidString, text: context.text),
                 traceID: traceID,

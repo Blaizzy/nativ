@@ -14,7 +14,7 @@ public struct TraceReducer: Sendable {
     public private(set) var items: [TraceItem] = []
 
     private var indexByItemID: [String: Int] = [:]
-    private var openAssistantItemID: [String: String] = [:]
+    private var openAssistantItemID: [TraceCallKey: String] = [:]
     private var toolItemIDByCallID: [String: String] = [:]
 
     public init() {}
@@ -85,7 +85,7 @@ public struct TraceReducer: Sendable {
         guard let payload = TurnEndedPayload(event: event) else {
             return appendUnreadable(event)
         }
-        sealOpenAssistant(for: event)
+        sealOpenAssistants()
         append(event, body: .lifecycle(TraceLifecycleBody(
             kind: .turnEnded,
             title: payload.status,
@@ -160,7 +160,7 @@ public struct TraceReducer: Sendable {
         guard let payload = ResponseFailedPayload(event: event) else {
             return appendUnreadable(event)
         }
-        sealOpenAssistant(for: event)
+        sealOpenAssistants()
         append(event, body: .lifecycle(TraceLifecycleBody(
             kind: .failure,
             title: payload.isCancellation == true ? "Cancelled" : "Failed",
@@ -272,22 +272,24 @@ public struct TraceReducer: Sendable {
         }
     }
 
-    /// Identity of one model call, used to attach streaming deltas to the
-    /// message they belong to. Falls back to the turn when a producer does not
-    /// assign request ids.
-    private func callKey(for event: TraceEvent) -> String {
-        if let requestID = event.scope.requestID { return "r:\(requestID)" }
-        return "t:\(event.traceID):\(event.scope.turnID ?? "-")"
+    private func callKey(for event: TraceEvent) -> TraceCallKey {
+        TraceCallKey(traceID: event.traceID, scope: event.scope)
     }
 
-    private mutating func sealOpenAssistant(for event: TraceEvent) {
-        let key = callKey(for: event)
-        guard let itemID = openAssistantItemID.removeValue(forKey: key),
-              let index = indexByItemID[itemID],
-              case .message(var message) = items[index].body
-        else { return }
-        message.isStreaming = false
-        items[index].body = .message(message)
+    /// Marks every still-streaming assistant message as finished.
+    ///
+    /// A turn-ending event has no requestID, so it cannot name the call whose
+    /// message is open — matching on the key it derives never succeeds and
+    /// leaves a finished transcript rendering a live placeholder.
+    private mutating func sealOpenAssistants() {
+        for (key, itemID) in openAssistantItemID {
+            openAssistantItemID.removeValue(forKey: key)
+            guard let index = indexByItemID[itemID],
+                  case .message(var message) = items[index].body
+            else { continue }
+            message.isStreaming = false
+            items[index].body = .message(message)
+        }
     }
 
     @discardableResult

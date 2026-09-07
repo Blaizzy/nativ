@@ -13,6 +13,13 @@ struct TraceTranscriptView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    if let instance = model.selectedInstance, !instance.inheritedContext.isEmpty {
+                        TraceInheritedContextRow(
+                            messages: instance.inheritedContext,
+                            fromModelID: instance.precedingModelID
+                        )
+                    }
+
                     ForEach(model.blocks) { block in
                         switch block {
                         case .boundary(let boundary):
@@ -170,6 +177,63 @@ struct TraceMessageRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The conversation a model was handed when it took over a chat.
+///
+/// Collapsed, because it is context rather than activity — but present, because
+/// a trace that opens with an answer to an unseen question is not an account of
+/// what the model saw.
+struct TraceInheritedContextRow: View {
+    let messages: [ResolvedMessage]
+    let fromModelID: String?
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeOut(duration: 0.14)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(title)
+                        .font(.callout)
+                    Text("\(messages.count) messages")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(messages) { message in
+                        TraceResolvedMessageRow(message: message)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .nativPanelStyle(cornerRadius: .compact)
+    }
+
+    private var title: String {
+        guard let fromModelID else { return "Context carried into this model" }
+        return "Carried over from \(fromModelID)"
     }
 }
 

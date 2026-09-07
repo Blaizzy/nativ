@@ -5,6 +5,8 @@ import SwiftUI
 /// One model call, as the inspector's sidebar presents it.
 struct TraceCallSummary: Identifiable, Hashable {
     let id: String
+    /// The call's request id, used to select the call a dashboard row refers to.
+    let requestID: String?
     let round: Int?
     let modelID: String?
     let timestamp: Date
@@ -28,6 +30,15 @@ struct TraceInstance: Identifiable, Hashable {
     let eventCount: Int
     let blocks: [TraceDisplayBlock]
     let calls: [TraceCallSummary]
+    /// Conversation this model was handed but did not produce.
+    ///
+    /// A model that takes over a chat is shown everything that came before, and
+    /// its first exposure records all of it. Surfacing it here lets the trace
+    /// read as a complete account of what this instance saw, instead of opening
+    /// with an answer to a question it appears never to have been asked.
+    let inheritedContext: [ResolvedMessage]
+    /// Model this instance took over from, when it took over from one.
+    let precedingModelID: String?
 
     var modelLabel: String { modelID ?? "Unknown model" }
 }
@@ -40,6 +51,8 @@ final class TraceInspectorViewModel: ObservableObject {
     @Published var selectedInstanceID: String?
     @Published var selectedCallID: String?
 
+    /// Request whose call should be selected once loading finishes.
+    private var pendingCallSelection: String?
     private var exposuresByItemID: [String: ResolvedExposure] = [:]
     private var diffsByItemID: [String: TraceExposureDiff] = [:]
     private let injectedStore: TraceStore?
@@ -72,16 +85,22 @@ final class TraceInspectorViewModel: ObservableObject {
         }
     }
 
-    /// A single call, for the dashboard. Its events all belong to one trace.
+    /// One call, for the dashboard, read in the context of its trace.
+    ///
+    /// Reading only the events whose `request_id` matches would exclude the
+    /// turn's prompt — which has no request id — leaving a transcript with an
+    /// answer and no question and nothing for the exposure to resolve against.
     func loadRequest(_ requestID: String) async {
+        pendingCallSelection = requestID
         await load { store in
-            let events = try await store.events(forRequest: requestID)
-            guard let first = events.first else { return [] }
+            let matching = try await store.events(forRequest: requestID)
+            guard let first = matching.first else { return [] }
+            let events = try await store.events(forTrace: first.traceID)
             return [(
                 TraceSummary(
                     traceID: first.traceID,
                     sessionID: first.scope.sessionID,
-                    startedAt: first.timestamp,
+                    startedAt: events.first?.timestamp ?? first.timestamp,
                     lastEventAt: events.last?.timestamp ?? first.timestamp,
                     eventCount: events.count,
                     lastSeq: events.last?.seq ?? first.seq,
@@ -131,9 +150,11 @@ final class TraceInspectorViewModel: ObservableObject {
         // entire conversation as unretained.
         let index = TraceExposureIndex(items: foldedItems.flatMap { $0 })
 
-        let folded = zip(traces, foldedItems).map { pair, items -> TraceInstance in
-            let (summary, events) = pair
+        let folded = traces.indices.map { offset -> TraceInstance in
+            let (summary, events) = traces[offset]
+            let items = foldedItems[offset]
             var previous: RequestComposedPayload?
+            var firstExposure: RequestComposedPayload?
             var calls: [TraceCallSummary] = []
 
             for item in items {
@@ -142,11 +163,13 @@ final class TraceInspectorViewModel: ObservableObject {
                 // call of a different model would report the whole exposure as
                 // changed, which is true and useless.
                 let diff = TraceExposureDiff.between(previous, and: payload)
+                if firstExposure == nil { firstExposure = payload }
                 exposures[item.id] = index.resolve(payload)
                 diffs[item.id] = diff
                 calls.append(
                     TraceCallSummary(
                         id: item.id,
+                        requestID: item.scope.requestID,
                         round: item.scope.roundIndex,
                         modelID: item.scope.modelID,
                         timestamp: item.timestamp,
@@ -158,13 +181,28 @@ final class TraceInspectorViewModel: ObservableObject {
                 previous = payload
             }
 
+            // Anything the first call was shown but this trace never recorded
+            // came from whoever served the chat before it.
+            let produced = Set(items.compactMap { item -> String? in
+                switch item.body {
+                case .message(let message): message.messageID
+                case .tool(let tool): tool.callID
+                default: nil
+                }
+            })
+            let inherited = (firstExposure?.messages ?? [])
+                .filter { !produced.contains($0.messageID) }
+                .map { index.resolve(RequestComposedPayload(messages: [$0])).messages[0] }
+
             return TraceInstance(
                 id: summary.traceID,
                 modelID: summary.modelIDs.first,
                 startedAt: summary.startedAt,
                 eventCount: events.count,
                 blocks: TraceGrouping.blocks(for: items),
-                calls: calls
+                calls: calls,
+                inheritedContext: inherited,
+                precedingModelID: offset > 0 ? traces[offset - 1].0.modelIDs.first : nil
             )
         }
 
@@ -175,6 +213,16 @@ final class TraceInspectorViewModel: ObservableObject {
         if selectedInstanceID == nil || !folded.contains(where: { $0.id == selectedInstanceID }) {
             selectedInstanceID = folded.last?.id
         }
+        if let requested = pendingCallSelection {
+            pendingCallSelection = nil
+            let calls = folded.flatMap(\.calls)
+            if let match = calls.first(where: { $0.requestID == requested }) ?? calls.last {
+                selectedInstanceID = folded.first { $0.calls.contains(match) }?.id ?? selectedInstanceID
+                selectedCallID = match.id
+                return
+            }
+        }
+
         let survived = selectedCallID.map { exposures[$0] != nil } ?? false
         if !survived {
             selectedCallID = selectedInstance?.calls.last?.id

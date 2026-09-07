@@ -47,7 +47,7 @@ final class TraceStoreTests: XCTestCase {
         XCTAssertEqual(recorded.seq, 8, "a reopened store resumes after what is already stored")
     }
 
-    func testUnreadablePayloadStillReturnsItsEvent() async throws {
+    func testReadablePayloadCarriesNoFailureMarker() async throws {
         let store = try makeStore()
         try await store.insert(preSequenced: [
             TraceEvent(traceID: "t1", seq: 0, timestamp: base, kind: .turnStarted)
@@ -57,6 +57,33 @@ final class TraceStoreTests: XCTestCase {
 
         XCTAssertEqual(events.count, 1)
         XCTAssertNil(events[0].payload[TraceStore.unreadablePayloadKey])
+    }
+
+    func testPayloadWrittenByAFutureCodecIsRejectedRatherThanGuessed() throws {
+        let encoded = try TracePayloadCodec.encode(["a": 1])
+
+        XCTAssertThrowsError(
+            try TracePayloadCodec.decode(
+                data: encoded.data,
+                encoding: "json+somethingnew",
+                byteCount: encoded.byteCount
+            )
+        ) { error in
+            guard case TraceStoreError.unsupportedPayloadEncoding(let name) = error else {
+                return XCTFail("expected an unsupported-encoding error, got \(error)")
+            }
+            XCTAssertEqual(name, "json+somethingnew")
+        }
+    }
+
+    func testCorruptCompressedPayloadIsReportedRatherThanCrashing() throws {
+        XCTAssertThrowsError(
+            try TracePayloadCodec.decode(
+                data: Data([0x00, 0x01, 0x02, 0x03]),
+                encoding: "json+deflate",
+                byteCount: 64
+            )
+        )
     }
 
     func testEventsCanBePaged() async throws {

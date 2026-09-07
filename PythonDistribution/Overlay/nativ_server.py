@@ -160,9 +160,13 @@ def install_metrics_access_log_filter() -> None:
     access_logger.addFilter(MetricsAccessLogFilter())
 
 
+NATIV_REQUEST_ID_HEADER = "x-nativ-request-id"
+
+
 @dataclass
 class RequestObservation:
     request_id: str
+    client_request_id: str | None
     endpoint: str
     model: str | None
     stream: bool
@@ -263,6 +267,7 @@ class AnalyticsStore:
         self._connection.execute("PRAGMA synchronous = NORMAL")
         self._connection.execute("PRAGMA busy_timeout = 3000")
         self._ensure_schema()
+        self._add_missing_columns()
         self._start_session()
         atexit.register(self.close_session)
 
@@ -293,7 +298,8 @@ class AnalyticsStore:
                 tool_calls INTEGER NOT NULL,
                 finish_reason TEXT,
                 backend TEXT,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                client_request_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS analytics_buckets (
@@ -324,6 +330,8 @@ class AnalyticsStore:
                 loaded_adapter TEXT
             );
 
+            CREATE INDEX IF NOT EXISTS idx_request_events_client_request_id
+                ON request_events (client_request_id);
             CREATE INDEX IF NOT EXISTS idx_request_events_completed_at
                 ON request_events (completed_at);
             CREATE INDEX IF NOT EXISTS idx_request_events_model_completed_at
@@ -336,6 +344,29 @@ class AnalyticsStore:
                 ON analytics_buckets (granularity, model_id, bucket_start);
             """
         )
+
+    def _add_missing_columns(self) -> None:
+        """Adds columns that CREATE TABLE IF NOT EXISTS cannot add.
+
+        A database created by an earlier build already has request_events, so
+        the schema statement above is a no-op for it and any column added later
+        has to be applied explicitly.
+        """
+        added = {
+            "request_events": {"client_request_id": "TEXT"},
+        }
+        for table, columns in added.items():
+            existing = {
+                row[1]
+                for row in self._connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            for column, declaration in columns.items():
+                if column in existing:
+                    continue
+                self._connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+                )
+        self._connection.commit()
 
     def _start_session(self) -> None:
         started_at = time.time()
@@ -424,6 +455,7 @@ class AnalyticsStore:
             event.get("finish_reason"),
             event.get("backend"),
             updated_at,
+            event.get("client_request_id"),
         )
 
         with self._lock:
@@ -453,8 +485,9 @@ class AnalyticsStore:
                     tool_calls,
                     finish_reason,
                     backend,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at,
+                    client_request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 record,
             )
@@ -598,6 +631,7 @@ class MetricsTracker:
             "tool_calls": False,
             "finish_reason": None,
             "backend": BACKEND_NAME,
+            "client_request_id": observation.client_request_id,
         }
 
         with self._lock:
@@ -691,6 +725,7 @@ class MetricsTracker:
             "tool_calls": bool(completion.get("tool_calls")),
             "finish_reason": completion.get("finish_reason"),
             "backend": BACKEND_NAME,
+            "client_request_id": observation.client_request_id,
         }
 
         with self._lock:
@@ -849,8 +884,14 @@ def parse_request_observation(request: Request, payload: dict[str, Any]) -> Requ
         if isinstance(input_items, list):
             image_count, audio_count = iter_message_media(input_items)
 
+    supplied = request.headers.get(NATIV_REQUEST_ID_HEADER)
+    client_request_id = (
+        supplied.strip()[:128] if isinstance(supplied, str) and supplied.strip() else None
+    )
+
     return RequestObservation(
         request_id=uuid.uuid4().hex,
+        client_request_id=client_request_id,
         endpoint=request.url.path.lstrip("/"),
         model=payload.get("model"),
         stream=bool(payload.get("stream")),

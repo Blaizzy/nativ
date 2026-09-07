@@ -204,18 +204,23 @@ final class RoutineRunner {
     ) async throws -> ScheduledExecutionResult {
         let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
         var requestMessages: [MLXChatMessage] = []
+        // Parallel to `requestMessages`, minus the system message: the trace
+        // records system content as provenance-tagged sections, not as a
+        // message. Each entry carries the id the trace knows that body by, so
+        // an assistant turn resolves to its own text rather than the prompt's.
+        var sentRefs: [TraceMessageRef] = []
         let systemPrompt = Self.systemPrompt(for: capabilities)
         if !systemPrompt.isEmpty {
             requestMessages.append(MLXChatMessage(role: "system", content: systemPrompt))
         }
         requestMessages.append(MLXChatMessage(role: "user", content: routine.instructions))
 
-        let tracer = await TraceServices.shared.producer
+        let tracer = await TraceServices.shared.producer(
+            enabled: settings.traceRecordingEnabled
+        )
         let turn = ChatTraceTurn(sessionID: sessionID, turnID: UUID())
         let userMessageID = UUID()
-        await tracer?.sessionStarted(
-            sessionID: sessionID, title: routine.name, modelID: routine.modelID
-        )
+        sentRefs.append(Self.messageRef(role: .user, id: userMessageID.uuidString, body: routine.instructions))
         await tracer?.turnStarted(
             turn,
             messageID: userMessageID,
@@ -223,14 +228,31 @@ final class RoutineRunner {
             modelID: routine.modelID
         )
 
+        // FINDING 13: without this, cancellation or a throwing tool left the
+        // turn open forever and a reader could not tell an aborted run from one
+        // still in flight.
+        var outcome = "completed"
+        var recordedRounds = 0
+        defer {
+            let producer = tracer
+            let endedTurn = turn
+            let status = outcome
+            let rounds = recordedRounds
+            Task { @MainActor in
+                producer?.turnEnded(endedTurn, status: status, roundCount: rounds)
+            }
+        }
+
         var transcript = [ChatTranscriptMessage(role: .user, content: routine.instructions)]
         var toolRound = 0
         let fileReadTracker = ChatReadFileTracker()
         let fileSearchTracker = ChatSearchFilesTracker()
         let fileOperationRunID = UUID()
 
+        do {
         while true {
             try Task.checkCancellation()
+            recordedRounds = toolRound + 1
             let advertisesTools =
                 !capabilities.tools.isEmpty
                 && ChatToolRoundGate.advertisesTools(atRound: toolRound)
@@ -269,20 +291,21 @@ final class RoutineRunner {
             )
             await tracer?.requestComposed(
                 Self.exposure(
-                    systemPrompt: systemPrompt,
                     capabilities: capabilities,
                     advertisesTools: advertisesTools,
                     toolDefinitions: toolDefinitions,
                     settings: settings,
-                    messages: requestMessages,
-                    userMessageID: userMessageID
+                    messages: sentRefs
                 ),
                 in: call
             )
 
             let completion: MLXChatCompletion
             do {
-                completion = try await client.completeChat(request)
+                completion = try await client.completeChat(
+                    request,
+                    requestID: call.requestID.uuidString
+                )
             } catch {
                 await tracer?.responseFailed(
                     message: String(describing: error),
@@ -293,6 +316,13 @@ final class RoutineRunner {
                 throw ScheduledCompletionFailure(underlying: error, transcript: transcript)
             }
             let assistantMessageID = UUID()
+            sentRefs.append(
+                Self.messageRef(
+                    role: .assistant,
+                    id: assistantMessageID.uuidString,
+                    body: completion.content
+                )
+            )
             await tracer?.responseCompleted(
                 messageID: assistantMessageID,
                 content: completion.content,
@@ -339,9 +369,13 @@ final class RoutineRunner {
 
             for toolCall in toolCalls {
                 try Task.checkCancellation()
+                // FINDING 9: the call and its result must agree on the id, or
+                // the reducer cannot pair them and every result collapses onto
+                // one orphan row.
+                let traceCallID = toolCall.id ?? UUID().uuidString
                 if let name = toolCall.function?.name {
                     await tracer?.toolCall(
-                        callID: toolCall.id ?? UUID().uuidString,
+                        callID: traceCallID,
                         name: name,
                         argumentsJSON: toolCall.function?.arguments,
                         in: call
@@ -357,11 +391,14 @@ final class RoutineRunner {
                     fileOperationRunID: fileOperationRunID
                 )
                 await tracer?.toolResult(
-                    callID: toolCall.id ?? "",
+                    callID: traceCallID,
                     name: toolCall.function?.name,
                     output: result.content,
                     isError: !result.succeeded,
                     in: call
+                )
+                sentRefs.append(
+                    Self.messageRef(role: .tool, id: traceCallID, body: result.content)
                 )
                 requestMessages.append(
                     MLXChatMessage(
@@ -383,6 +420,23 @@ final class RoutineRunner {
             }
             toolRound += 1
         }
+        } catch {
+            outcome = ChatIsCancellation(error) ? "cancelled" : "failed"
+            throw error
+        }
+    }
+
+    private static func messageRef(
+        role: TraceRole,
+        id: String,
+        body: String
+    ) -> TraceMessageRef {
+        TraceMessageRef(
+            role: role,
+            messageID: id,
+            contentHash: TraceHash.content(body),
+            byteCount: body.utf8.count
+        )
     }
 
     private func executeTool(
@@ -532,13 +586,11 @@ final class RoutineRunner {
     }
 
     private static func exposure(
-        systemPrompt: String,
         capabilities: ResolvedCapabilities,
         advertisesTools: Bool,
         toolDefinitions: [MLXChatToolDefinition]?,
         settings: NativSettings,
-        messages: [MLXChatMessage],
-        userMessageID: UUID
+        messages: [TraceMessageRef]
     ) -> RequestComposedPayload {
         var sections: [PromptSection] = []
         if !capabilities.tools.isEmpty {
@@ -575,19 +627,21 @@ final class RoutineRunner {
                 topK: settings.topK,
                 minP: settings.minP,
                 maxTokens: settings.maxTokens,
+                repetitionPenalty: settings.repetitionPenaltyEnabled
+                    ? settings.repetitionPenalty
+                    : nil,
                 thinkingEnabled: settings.thinkingEnabled,
-                toolChoice: toolDefinitions == nil ? nil : "auto"
+                thinkingBudget: settings.thinkingEnabled
+                    && settings.thinkingBudgetEnabled
+                    && !settings.speculativeDecodingActive
+                    ? settings.thinkingBudget
+                    : nil,
+                toolChoice: toolDefinitions == nil ? nil : "auto",
+                responseFormat: toolDefinitions == nil
+                    ? settings.chatResponseFormat.flatMap { try? TraceJSON(encoding: $0) }
+                    : nil
             ),
-            messages: messages.compactMap { message -> TraceMessageRef? in
-                guard message.role != "system" else { return nil }
-                let body = message.content?.plainText ?? ""
-                return TraceMessageRef(
-                    role: TraceRole(rawValue: message.role),
-                    messageID: message.toolCallID ?? userMessageID.uuidString,
-                    contentHash: TraceHash.content(body),
-                    byteCount: body.utf8.count
-                )
-            },
+            messages: messages,
             advertisesTools: advertisesTools
         )
     }
