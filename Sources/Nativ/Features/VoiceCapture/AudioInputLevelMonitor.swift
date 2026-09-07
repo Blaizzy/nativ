@@ -41,7 +41,8 @@ final class AudioInputLevelMonitor: ObservableObject {
                 try inputNode.auAudioUnit.setDeviceID(deviceID)
             }
 
-            let format = inputNode.outputFormat(forBus: 0)
+            // Device selection can leave the node's output format on the previous device's rate.
+            let format = inputNode.inputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
                 throw VoiceAudioRecorderError.couldNotStart
             }
