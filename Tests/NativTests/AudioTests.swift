@@ -463,6 +463,84 @@ final class AudioAnalyticsStoreTests: XCTestCase {
     }
 }
 
+@MainActor
+final class FnControlShortcutMonitorTests: XCTestCase {
+    func testPollingDeliversPressAndReleaseThenStops() async throws {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = [.function, .control]
+        var samples = 0
+        var changes: [Bool] = []
+        let released = expectation(description: "Polling observes modifier release")
+        let monitor = FnControlShortcutMonitor(preferences: preferences) {
+            samples += 1
+            return modifiers
+        }
+        monitor.onChange = { held in
+            XCTAssertTrue(Thread.isMainThread)
+            changes.append(held)
+            if !held { released.fulfill() }
+        }
+        monitor.start()
+        defer { monitor.stop() }
+
+        // The first sample is synchronous, before the polling task starts.
+        XCTAssertEqual(changes, [true])
+        modifiers = []
+        await fulfillment(of: [released], timeout: 2)
+        XCTAssertEqual(changes, [true, false])
+
+        monitor.stop()
+        let samplesAtStop = samples
+        modifiers = [.function, .control]
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, samplesAtStop)
+        XCTAssertEqual(changes, [true, false])
+    }
+
+    func testImmediateStopAndRestartDoNotLeaveOldPollersRunning() async throws {
+        let preferences = makePreferences()
+        var samples = 0
+        var retryEnabled = false
+        let polled = expectation(description: "Restarted monitor polls")
+        let monitor = FnControlShortcutMonitor(preferences: preferences) {
+            samples += 1
+            return retryEnabled && samples > 21 ? [.option] : []
+        }
+
+        for _ in 0 ..< 20 {
+            monitor.start()
+            monitor.stop()
+        }
+        XCTAssertEqual(samples, 20)
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, 20)
+
+        monitor.onRetry = { polled.fulfill() }
+        retryEnabled = true
+        monitor.start()
+        defer { monitor.stop() }
+        await fulfillment(of: [polled], timeout: 2)
+        monitor.stop()
+        let samplesAtStop = samples
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, samplesAtStop)
+    }
+
+    private func makePreferences() -> VoiceShortcutPreferences {
+        let suiteName = "FnControlShortcutMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = VoiceShortcutPreferences(defaults: defaults)
+        preferences.isHandsFreeEnabled = false
+        preferences.retryShortcut = VoiceShortcut(
+            keyCode: nil,
+            keyDisplay: nil,
+            modifiers: [.option]
+        )
+        return preferences
+    }
+}
+
 final class FnControlShortcutStateTests: XCTestCase {
     func testActivatesOnlyWhenFnAndControlAreBothHeld() {
         var state = FnControlShortcutState()
