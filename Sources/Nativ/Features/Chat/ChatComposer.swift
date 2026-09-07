@@ -286,6 +286,7 @@ struct ChatComposer: View {
                         isEnabled: canCompose,
                         onSubmit: send,
                         onCancel: cancelPromptEditingAction,
+                        onRecallPrevious: { viewModel.recallPreviousPrompt() },
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
@@ -295,12 +296,17 @@ struct ChatComposer: View {
                     )
 
                     if viewModel.draft.isEmpty {
-                        Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
-                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
-                            .foregroundStyle(.tertiary)
-                            .padding(textInset)
-                            .offset(x: 4)
-                            .allowsHitTesting(false)
+                        HStack(spacing: 8) {
+                            Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
+                            if viewModel.canRecallPreviousPrompt {
+                                ChatRecallHint()
+                            }
+                        }
+                        .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
+                        .foregroundStyle(.tertiary)
+                        .padding(textInset)
+                        .offset(x: 4)
+                        .allowsHitTesting(false)
                     }
                 }
                 .frame(height: editorHeight)
@@ -1174,6 +1180,21 @@ struct ChatComposer: View {
 
     private var editorHeight: CGFloat {
         min(max(editorContentHeight, editorMinimumHeight), editorMaximumHeight)
+    }
+}
+
+/// Tells you the gesture exists, in the one place you would be about to use it.
+private struct ChatRecallHint: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.up")
+                .imageScale(.small)
+            Text("edit last")
+        }
+        .font(.caption)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.primary.opacity(0.05), in: Capsule())
     }
 }
 
@@ -2359,6 +2380,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let isEnabled: Bool
     let onSubmit: () -> Void
     var onCancel: (() -> Void)?
+    var onRecallPrevious: (() -> Bool)?
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
     var fontScale: Double = 1.0
@@ -2369,6 +2391,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             text: $text,
             onSubmit: onSubmit,
             onCancel: onCancel,
+            onRecallPrevious: onRecallPrevious,
             onPasteImage: onPasteImage,
             onContentHeightChange: onContentHeightChange,
             focusToken: focusToken
@@ -2380,6 +2403,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onSubmit = context.coordinator.handleSubmit
         textView.onCancel = context.coordinator.handleCancel
+        textView.onRecallPrevious = context.coordinator.handleRecallPrevious
         textView.onPasteImage = context.coordinator.handlePasteImage
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
@@ -2437,6 +2461,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         @Binding private var text: String
         var onSubmit: () -> Void
         var onCancel: (() -> Void)?
+        var onRecallPrevious: (() -> Bool)?
         var onPasteImage: (NSPasteboard) -> Bool
         var onContentHeightChange: (CGFloat) -> Void
         weak var textView: NSTextView?
@@ -2447,6 +2472,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             text: Binding<String>,
             onSubmit: @escaping () -> Void,
             onCancel: (() -> Void)?,
+            onRecallPrevious: (() -> Bool)?,
             onPasteImage: @escaping (NSPasteboard) -> Bool,
             onContentHeightChange: @escaping (CGFloat) -> Void,
             focusToken: Int
@@ -2454,6 +2480,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             _text = text
             self.onSubmit = onSubmit
             self.onCancel = onCancel
+            self.onRecallPrevious = onRecallPrevious
             self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
             lastFocusToken = focusToken
@@ -2483,6 +2510,10 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         func handleCancel() {
             onCancel?()
+        }
+
+        func handleRecallPrevious() -> Bool {
+            onRecallPrevious?() ?? false
         }
 
         func requestFocus(ifNeeded focusToken: Int) {
@@ -2540,6 +2571,9 @@ private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
+    /// Returns whether the recall happened, so an Up key that recalls nothing
+    /// still moves the caret.
+    var onRecallPrevious: (() -> Bool)?
 
     override func keyDown(with event: NSEvent) {
         // Return confirms a marked composition in input methods such as Japanese
@@ -2552,6 +2586,14 @@ private final class ChatComposerNSTextView: NSTextView {
 
         if event.keyCode == 53, onCancel != nil {
             onCancel?()
+            return
+        }
+
+        // Up in an empty composer recalls the last prompt. Guarded on empty
+        // rather than on caret position so that Up never stops being Up while
+        // there is text to move through.
+        if ComposerRecallGesture.isRecall(event, isEmpty: string.isEmpty),
+            onRecallPrevious?() == true {
             return
         }
 
@@ -2570,6 +2612,22 @@ private final class ChatComposerNSTextView: NSTextView {
             return
         }
         super.paste(sender)
+    }
+}
+
+/// Whether an Up key should recall the previous prompt.
+enum ComposerRecallGesture {
+    static func isRecall(_ event: NSEvent, isEmpty: Bool) -> Bool {
+        guard isEmpty, isUpArrow(event) else { return false }
+        // Any modifier means the user is asking for a selection or a jump, not
+        // for history.
+        return event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .isDisjoint(with: [.command, .option, .control, .shift])
+    }
+
+    private static func isUpArrow(_ event: NSEvent) -> Bool {
+        event.keyCode == 126
     }
 }
 

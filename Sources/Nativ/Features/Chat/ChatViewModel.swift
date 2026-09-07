@@ -334,6 +334,38 @@ final class ChatViewModel: ObservableObject {
         composerFocusToken += 1
     }
 
+    /// Whether Up would recall a prompt right now, for the composer's hint.
+    var canRecallPreviousPrompt: Bool {
+        guard promptEditContext == nil,
+            draft.isEmpty,
+            pendingImageAttachments.isEmpty,
+            let messageID = latestUserMessageID
+        else {
+            return false
+        }
+        return canEditUserMessage(messageID)
+    }
+
+    /// Loads the most recent prompt back into the composer for editing, the way
+    /// a shell recalls the last command.
+    ///
+    /// Only from an empty composer. Recalling over a half-written message would
+    /// destroy work to save a click, and the snapshot that `beginEditingUserMessage`
+    /// takes is meant for restoring a draft, not for rescuing one this gesture
+    /// threw away.
+    ///
+    /// Returns whether it recalled, so the key handler knows whether to consume
+    /// the event or let the caret move.
+    @discardableResult
+    func recallPreviousPrompt() -> Bool {
+        guard canRecallPreviousPrompt, let messageID = latestUserMessageID else {
+            return false
+        }
+
+        beginEditingUserMessage(messageID)
+        return true
+    }
+
     func cancelPromptEditing() {
         guard promptEditContext != nil else {
             return
