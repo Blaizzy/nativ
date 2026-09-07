@@ -13,8 +13,10 @@ struct TraceCallSummary: Identifiable, Hashable {
     let toolCount: Int
     let advertisesTools: Bool
     let diff: TraceExposureDiff
+    /// Position of this call within its trace, one-based.
+    let index: Int
 
-    var title: String { TraceCallLabel.title(round: round) }
+    var title: String { TraceCallLabel.title(index: index, round: round) }
 }
 
 /// One model's view of a chat, folded on its own.
@@ -119,6 +121,16 @@ final class TraceInspectorViewModel: ObservableObject {
         diffsByItemID[itemID] ?? .none
     }
 
+    /// Label for an exposure row, numbered within its trace rather than by the
+    /// per-turn round index.
+    func callLabel(for itemID: String) -> String {
+        instances
+            .lazy
+            .flatMap(\.calls)
+            .first { $0.id == itemID }?
+            .title ?? "Model call"
+    }
+
     private func load(
         _ fetch: @escaping (TraceStore) async throws -> [(TraceSummary, [TraceEvent])]
     ) async {
@@ -155,6 +167,7 @@ final class TraceInspectorViewModel: ObservableObject {
             let items = foldedItems[offset]
             var previous: RequestComposedPayload?
             var firstExposure: RequestComposedPayload?
+            var callIndex = 0
             var calls: [TraceCallSummary] = []
 
             for item in items {
@@ -166,6 +179,7 @@ final class TraceInspectorViewModel: ObservableObject {
                 if firstExposure == nil { firstExposure = payload }
                 exposures[item.id] = index.resolve(payload)
                 diffs[item.id] = diff
+                callIndex += 1
                 calls.append(
                     TraceCallSummary(
                         id: item.id,
@@ -175,7 +189,8 @@ final class TraceInspectorViewModel: ObservableObject {
                         timestamp: item.timestamp,
                         toolCount: payload.tools.count,
                         advertisesTools: payload.advertisesTools,
-                        diff: diff
+                        diff: diff,
+                        index: callIndex
                     )
                 )
                 previous = payload

@@ -75,7 +75,7 @@ struct TraceTranscriptView: View {
                 TraceExposureCard(
                     exposure: exposure,
                     diff: model.diff(for: item.id),
-                    round: item.scope.roundIndex,
+                    label: model.callLabel(for: item.id),
                     modelID: item.scope.modelID,
                     isHighlighted: model.selectedCallID == item.id
                 )
@@ -84,7 +84,7 @@ struct TraceTranscriptView: View {
                 TraceLifecycleRow(
                     lifecycle: TraceLifecycleBody(
                         kind: .failure,
-                        title: TraceCallLabel.title(round: item.scope.roundIndex),
+                        title: model.callLabel(for: item.id),
                         detail: "exposure could not be resolved"
                     ),
                     timestamp: item.timestamp
@@ -138,13 +138,24 @@ struct TraceMessageRow: View {
                     Text("\(prompt) in · \(usage.completionTokens ?? 0) out")
                 }
                 if let reason = message.finishReason {
-                    Text(reason)
+                    Text(Self.finishReasonLabel(reason))
                 }
             }
             .font(.caption)
             .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    /// The wire value is API vocabulary; the transcript is prose.
+    static func finishReasonLabel(_ reason: String) -> String {
+        switch reason {
+        case "stop": "finished"
+        case "tool_calls": "called tools"
+        case "length": "hit the token limit"
+        case "content_filter": "stopped by content filter"
+        default: reason
+        }
     }
 
     private func thinking(_ reasoning: String) -> some View {
@@ -241,23 +252,47 @@ struct TraceBoundaryRow: View {
     let boundary: TraceBoundary
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             line
-            HStack(spacing: 6) {
-                Image(systemName: boundary.kind == .modelSwitched ? "arrow.triangle.swap" : "dot.radiowaves.left.and.right")
-                    .font(.caption)
-                Text(boundary.title)
-                    .font(.caption.weight(.medium))
-                if let detail = boundary.detail {
-                    Text(detail).font(.caption)
-                }
-                Text(boundary.timestamp.formatted(date: .abbreviated, time: .standard))
-                    .font(.caption)
-            }
-            .foregroundStyle(.secondary)
+            label
             line
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+    }
+
+    /// Every text here is single-line on purpose. The rules either side are
+    /// flexible, so without a line limit they compress the label until it wraps
+    /// one character per line — which is what this panel did at its default
+    /// width. A long model id truncates in the middle instead of pushing the
+    /// rules off the row.
+    private var label: some View {
+        HStack(spacing: 6) {
+            Image(
+                systemName: boundary.kind == .modelSwitched
+                    ? "arrow.triangle.swap"
+                    : "dot.radiowaves.left.and.right"
+            )
+            .font(.caption)
+
+            Text(boundary.title)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            if let detail = boundary.detail {
+                Text(detail)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Text(boundary.timestamp.formatted(date: .omitted, time: .shortened))
+                .font(.caption)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .foregroundStyle(.secondary)
+        .layoutPriority(1)
     }
 
     private var line: some View {
@@ -276,9 +311,13 @@ struct TraceLifecycleRow: View {
             Image(systemName: lifecycle.kind == .failure ? "exclamationmark.triangle" : "flag")
                 .font(.caption)
                 .foregroundStyle(lifecycle.kind == .failure ? TracePalette.removed : .secondary)
-            Text(lifecycle.title).font(.callout)
+            Text(lifecycle.title).font(.callout).lineLimit(1)
             if let detail = lifecycle.detail {
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
             Spacer(minLength: 0)
             Text(timestamp.formatted(date: .omitted, time: .shortened))

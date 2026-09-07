@@ -10,7 +10,7 @@ import SwiftUI
 struct TraceExposureCard: View {
     let exposure: ResolvedExposure
     let diff: TraceExposureDiff
-    let round: Int?
+    let label: String
     let modelID: String?
     var isHighlighted = false
 
@@ -44,7 +44,7 @@ struct TraceExposureCard: View {
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
-                Text(TraceCallLabel.title(round: round))
+                Text(label)
                     .font(.callout.weight(.semibold))
 
                 Text("\(exposure.systemSections.count) prompt \(exposure.systemSections.count == 1 ? "section" : "sections") · \(toolSummary)")

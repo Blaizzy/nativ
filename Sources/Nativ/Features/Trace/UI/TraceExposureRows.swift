@@ -10,9 +10,11 @@ enum TracePalette {
 }
 
 enum TraceCallLabel {
-    static func title(round: Int?) -> String {
-        guard let round else { return "Model call" }
-        return "Call \(round + 1)"
+    /// `index` counts calls within a trace; `round` counts them within a turn
+    /// and restarts at zero each time, so it cannot number the list on its own.
+    static func title(index: Int, round: Int?) -> String {
+        guard let round, round > 0 else { return "Call \(index)" }
+        return "Call \(index) · round \(round + 1)"
     }
 }
 

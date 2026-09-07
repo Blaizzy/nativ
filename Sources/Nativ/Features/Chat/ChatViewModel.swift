@@ -45,6 +45,8 @@ final class ChatViewModel: ObservableObject {
     /// The model call in flight, so the tool funnels below can attach their
     /// events to it without threading identifiers through 21 call sites.
     private var activeTraceCall: ChatTraceCall?
+    /// Model calls made so far in the turn in flight.
+    private var activeTurnRounds = 0
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
 
     private struct QueuedChatRequest {
@@ -1476,15 +1478,18 @@ final class ChatViewModel: ObservableObject {
             text: message(queuedRequest.userMessageID, in: queuedRequest.sessionID)?.content ?? "",
             modelID: queuedRequest.settings.languageModelID
         )
-        var rounds = 0
         var outcome = ChatTurnOutcome.completed
+        activeTurnRounds = 0
         defer {
             activeTraceCall = nil
-            traceProducer?.turnEnded(turn, status: outcome.rawValue, roundCount: rounds)
+            // Read from the loop rather than from runTurn's return value: a turn
+            // that throws never returns one, and reporting zero rounds for a
+            // turn that had already made calls is worse than not reporting.
+            traceProducer?.turnEnded(turn, status: outcome.rawValue, roundCount: activeTurnRounds)
         }
 
         do {
-            rounds = try await runTurn(queuedRequest, turn: turn)
+            try await runTurn(queuedRequest, turn: turn)
         } catch {
             outcome = ChatTurnOutcome(error: error)
             throw error
@@ -1506,11 +1511,10 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Runs the tool loop for one turn and returns how many model calls it made.
     private func runTurn(
         _ queuedRequest: QueuedChatRequest,
         turn: ChatTraceTurn
-    ) async throws -> Int {
+    ) async throws {
         let client = NativChatClient(
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey
@@ -1580,6 +1584,7 @@ final class ChatViewModel: ObservableObject {
                 modelID: activeSettings.languageModelID
             )
             activeTraceCall = call
+            activeTurnRounds = toolRounds + 1
             traceProducer?.requestComposed(composed.exposure, in: call)
 
             let streamingMessageID = assistantMessageID
@@ -1639,7 +1644,7 @@ final class ChatViewModel: ObservableObject {
             )
 
             guard advertisesTools, !toolCalls.isEmpty else {
-                return toolRounds + 1
+                return
             }
 
             var insertionAnchor = assistantMessageID
