@@ -131,7 +131,7 @@ struct ScheduledTasksView: View {
 
             if draft == nil {
                 Button(action: presentNewTask) {
-                    Label("New scheduled task", systemImage: "plus")
+                    Label("New Scheduled Task", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -169,7 +169,7 @@ struct ScheduledTasksView: View {
                 if !recentRuns.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         ScheduledSectionHeader(
-                            title: "Recent runs",
+                            title: "Recent Runs",
                             count: recentRuns.count
                         )
                         VStack(spacing: 0) {
@@ -182,7 +182,7 @@ struct ScheduledTasksView: View {
                                 }
                             }
                         }
-                        .scheduledPanelStyle()
+                        .nativPanelStyle()
                     }
                 }
             }
@@ -298,7 +298,7 @@ struct ScheduledTasksView: View {
         for capability in task.capabilities {
             guard case .kit(let id) = capability,
                   !previousKitIDs.contains(id),
-                  let kit = NativKitCatalog.bundled.kit(id: id)
+                  let kit = model.kitLibrary.catalog.kit(id: id)
             else { continue }
             NativKitActivation.enableMissing(
                 in: kit,

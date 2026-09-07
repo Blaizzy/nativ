@@ -57,17 +57,17 @@ struct ArtifactPreview: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(artifact.filename)
-                    .font(.system(size: 14, weight: .semibold))
+                    .nativTextStyle(.compactCardTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text("\(artifact.typeLabel) · \(artifact.source.label)")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.metadata)
                     .foregroundStyle(.white.opacity(0.6))
             }
             Spacer(minLength: 0)
 
             Button(action: { onOpenChat(artifact) }) {
-                Label("Open in chat", systemImage: "bubble.left.and.bubble.right")
+                Label("Open in Chat", systemImage: "bubble.left.and.bubble.right")
             }
             .buttonStyle(.bordered)
             .tint(.white)
@@ -107,7 +107,7 @@ struct ArtifactPreview: View {
         HStack {
             if let prompt = artifact.prompt, !prompt.isEmpty {
                 Text(prompt)
-                    .font(.system(size: 12))
+                    .nativTextStyle(.body)
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(2)
                     .textSelection(.enabled)
@@ -115,7 +115,7 @@ struct ArtifactPreview: View {
             Spacer(minLength: 0)
             if let index {
                 Text("\(index + 1) of \(artifacts.count)")
-                    .font(.system(size: 11).monospacedDigit())
+                    .nativTextStyle(.metadataNumeric)
                     .foregroundStyle(.white.opacity(0.5))
             }
         }
@@ -128,7 +128,7 @@ struct ArtifactPreview: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 28))
             Text("Preview unavailable")
-                .font(.system(size: 13))
+                .nativTextStyle(.body)
         }
         .foregroundStyle(.white.opacity(0.6))
     }

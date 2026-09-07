@@ -64,13 +64,13 @@ enum HuggingFaceModelReadmeError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidRepositoryID:
-            "This model doesn’t have a Hugging Face repository."
+            "This model doesn’t have a Hugging Face Hub repository."
         case .notFound:
             "This model doesn’t include a README."
         case .authenticationRequired:
             "Sign in to Hugging Face to view this model’s README."
         case .invalidResponse:
-            "Hugging Face returned an invalid README response."
+            "Hugging Face Hub returned an invalid README response."
         case .requestFailed(let statusCode):
             "The model README couldn’t be loaded (HTTP \(statusCode))."
         case .empty:
@@ -201,7 +201,7 @@ enum HuggingFaceModelReadmeFormatting {
     }
 
     /// Hugging Face model cards frequently use small HTML fragments for centered banners,
-    /// navigation links, and inline emphasis. Textual intentionally renders Markdown rather
+    /// navigation links, and inline emphasis. The app intentionally renders Markdown rather
     /// than arbitrary HTML, so translate the safe presentation subset instead of exposing tags.
     private static func normalizeHTMLOutsideCodeFences(_ markdown: String) -> String {
         var result = ""

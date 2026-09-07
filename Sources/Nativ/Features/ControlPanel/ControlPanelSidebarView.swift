@@ -25,7 +25,7 @@ extension ControlPanelView {
                     )
 
                 Text("Nativ")
-                    .font(.system(size: 18, weight: .semibold))
+                    .nativTextStyle(.brandTitle)
                     .foregroundStyle(.primary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -35,22 +35,20 @@ extension ControlPanelView {
 
             sidebarNavigation
                 .padding(.horizontal, 10)
-                .padding(.bottom, 5)
+                .padding(.bottom, 16)
 
             if isSelectingRecents {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-            } else {
-                sidebarActionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
                     .padding(.bottom, 8)
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    if !isSelectingRecents {
+                        projectsSection
+                            .transition(.opacity)
+                    }
                     if showsPinnedSection {
                         pinnedSection
                     }
@@ -61,6 +59,10 @@ extension ControlPanelView {
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
+                // Animate the shared layout so sibling sections move with the fading rows.
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarProjectsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarSessionsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: isSelectingRecents)
             }
             .frame(maxHeight: .infinity)
 
@@ -136,6 +138,42 @@ extension ControlPanelView {
         } message: {
             Text(bulkDeleteDescription)
         }
+        .alert(
+            "Remove project?",
+            isPresented: Binding(
+                get: { pendingDeleteProject != nil },
+                set: { if !$0 { pendingDeleteProject = nil } }
+            ),
+            presenting: pendingDeleteProject
+        ) { project in
+            Button("Keep Chats") {
+                removeProject(project, disposition: .keepChats)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Delete Chats", role: .destructive) {
+                removeProject(project, disposition: .deleteChats)
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteProject = nil
+            }
+        } message: { project in
+            Text(
+                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted."
+            )
+        }
+        .alert(
+            "Project Error",
+            isPresented: Binding(
+                get: { projectErrorMessage != nil },
+                set: { if !$0 { projectErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                projectErrorMessage = nil
+            }
+        } message: {
+            Text(projectErrorMessage ?? "The project could not be updated.")
+        }
     }
 
     var resizableSidebar: some View {
@@ -199,7 +237,7 @@ extension ControlPanelView {
             ForEach(ControlPanelTab.allCases) { tab in
                 sidebarTabButton(tab)
 
-                if tab == .chat {
+                if tab == .models {
                     ForEach(contentState.extensionSidebarContributions) { contribution in
                         extensionSidebarButton(contribution)
                     }

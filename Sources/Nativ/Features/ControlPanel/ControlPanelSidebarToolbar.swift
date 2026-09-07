@@ -6,50 +6,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    var sidebarActionBar: some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    enterSelectMode()
-                }
-            } label: {
-                Image(systemName: "checklist")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(recentSessions.isEmpty && sidebarState.recents.folders.isEmpty)
-            .help("Select multiple")
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    createRecentSession()
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(
-                        isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
-            }
-            .buttonStyle(.plain)
-            .disabled(
-                selectedTab == .chat
-                    && chatWorkspaceMode == .images
-                    && sidebarState.isGeneratingImage
-            )
-            .help(newRecentHelp)
-            .onHover { isNewChatHovering = $0 }
-        }
-    }
-
     var bulkSelectionBar: some View {
         HStack(spacing: 6) {
             Text(bulkSelectionTitle)
-                .font(.system(size: 12))
+                .nativTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             Spacer(minLength: 0)
@@ -86,7 +46,7 @@ extension ControlPanelView {
                     exitSelectMode()
                 }
             }
-            .font(.system(size: 12, weight: .medium))
+            .nativTextStyle(.supportingEmphasized)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

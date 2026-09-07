@@ -6,6 +6,84 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
+    var projectsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sidebarProjectsHeader
+                .padding(.leading, 8)
+                .padding(.trailing, 10)
+                .padding(.bottom, 4)
+
+            if !chromeState.sidebarProjectsCollapsed {
+                VStack(alignment: .leading, spacing: 0) {
+                    if sidebarState.recents.projects.isEmpty {
+                        emptyProjectsHint
+                    } else {
+                        ForEach(sidebarState.recents.projects) { project in
+                            projectView(project)
+                        }
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var emptyProjectsHint: some View {
+        Button(action: createProject) {
+            Label("Choose a folder to create a project", systemImage: "folder.badge.plus")
+                .nativTextStyle(.body)
+                .foregroundStyle(.secondary.opacity(0.7))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 17)
+                .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    func projectView(_ project: ChatProject) -> some View {
+        let projectSessions = sessions(inProject: project.id)
+        VStack(alignment: .leading, spacing: 0) {
+            ControlPanelProjectHeaderView(
+                project: project,
+                isAvailable: projects.isRootAvailable(for: project),
+                onToggleCollapse: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        projects.setCollapsed(project.id, collapsed: !project.isCollapsed)
+                    }
+                },
+                onNewChat: {
+                    createChatSession(projectID: project.id)
+                },
+                onRename: {
+                    projects.renameProject(project.id, to: $0)
+                },
+                onReveal: {
+                    revealProject(project)
+                },
+                onLocate: {
+                    locateProject(project)
+                },
+                onRemove: {
+                    pendingDeleteProject = project
+                }
+            )
+            .padding(.leading, 8)
+            .padding(.trailing, 10)
+
+            if !project.isCollapsed {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(projectSessions) { recent in
+                        projectSessionRow(recent, project: project)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: project.isCollapsed)
+    }
+
     var pinnedSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             sidebarPinnedHeader
@@ -58,23 +136,25 @@ extension ControlPanelView {
             sidebarRecentsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
-                .padding(.top, showsPinnedSection || showsFoldersSection ? 12 : 0)
                 .padding(.bottom, 4)
 
             if !chromeState.sidebarSessionsCollapsed {
-                ForEach(ungroupedSessions) { recent in
-                    draggableRow(recent, isPinnedRow: false)
-                        .overlay(alignment: .top) {
-                            pinnedInsertionLine(
-                                visible: reorderTargetID == recent.id && !reorderInsertAfter
-                                    && isSessionsDropTargeted)
-                        }
-                        .overlay(alignment: .bottom) {
-                            pinnedInsertionLine(
-                                visible: reorderTargetID == recent.id && reorderInsertAfter
-                                    && isSessionsDropTargeted)
-                        }
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(ungroupedSessions) { recent in
+                        draggableRow(recent, isPinnedRow: false)
+                            .overlay(alignment: .top) {
+                                pinnedInsertionLine(
+                                    visible: reorderTargetID == recent.id && !reorderInsertAfter
+                                        && isSessionsDropTargeted)
+                            }
+                            .overlay(alignment: .bottom) {
+                                pinnedInsertionLine(
+                                    visible: reorderTargetID == recent.id && reorderInsertAfter
+                                        && isSessionsDropTargeted)
+                            }
+                    }
                 }
+                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,7 +172,6 @@ extension ControlPanelView {
             sidebarFoldersHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
-                .padding(.top, 12)
                 .padding(.bottom, 4)
 
             if !chromeState.sidebarFoldersCollapsed {
@@ -116,7 +195,7 @@ extension ControlPanelView {
 
     var emptyFoldersHint: some View {
         Label("No folders yet — tap + to add one", systemImage: "folder")
-            .font(.system(size: 13))
+            .nativTextStyle(.body)
             .foregroundStyle(.secondary.opacity(0.6))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)
@@ -218,7 +297,7 @@ extension ControlPanelView {
 
     var emptyPinnedHint: some View {
         Label("Drag a chat here to pin", systemImage: "pin")
-            .font(.system(size: 13))
+            .nativTextStyle(.body)
             .foregroundStyle(.secondary.opacity(0.6))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)
@@ -233,28 +312,35 @@ extension ControlPanelView {
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(.secondary.opacity(0.7))
-
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary.opacity(0.7))
-                    .frame(width: 12)
-
-                Spacer(minLength: 0)
-            }
-            .contentShape(.rect)
-            .onTapGesture {
-                withAnimation(.snappy(duration: 0.2)) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
                     onToggle()
                 }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .nativTextStyle(.sidebarSectionTitle)
+                        .foregroundStyle(.secondary.opacity(0.7))
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.7))
+                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                        .frame(width: 12)
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                .contentShape(.rect)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
             .help(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
 
             trailing()
         }
+        .animation(.easeInOut(duration: 0.2), value: isCollapsed)
     }
 
     var sidebarPinnedHeader: some View {
@@ -264,6 +350,28 @@ extension ControlPanelView {
             onToggle: { model.settings.sidebarPinnedCollapsed.toggle() },
             trailing: { EmptyView() }
         )
+    }
+
+    var sidebarProjectsHeader: some View {
+        sidebarSectionHeader(
+            title: "Projects",
+            isCollapsed: chromeState.sidebarProjectsCollapsed,
+            onToggle: { model.settings.sidebarProjectsCollapsed.toggle() },
+            trailing: {
+                Button(action: createProject) {
+                    Image(systemName: "folder.badge.plus")
+                        .nativTextStyle(.rowTitle)
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(Color.secondary.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .help("New project")
+                .opacity(isProjectsHeaderHovering ? 1 : 0)
+                .allowsHitTesting(isProjectsHeaderHovering)
+            }
+        )
+        .contentShape(.rect)
+        .onHover { isProjectsHeaderHovering = $0 }
     }
 
     var sidebarFoldersHeader: some View {
@@ -294,14 +402,63 @@ extension ControlPanelView {
             title: "Sessions",
             isCollapsed: chromeState.sidebarSessionsCollapsed,
             onToggle: { model.settings.sidebarSessionsCollapsed.toggle() },
-            trailing: { EmptyView() }
+            trailing: {
+                HStack(spacing: 4) {
+                    Button(action: importChat) {
+                        Label("Import Chat", systemImage: "square.and.arrow.down")
+                            .labelStyle(.iconOnly)
+                            .nativTextStyle(.rowTitle)
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .help("Import chat")
+
+                    Button {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            enterSelectMode()
+                        }
+                    } label: {
+                        Label("Select Multiple", systemImage: "checklist")
+                            .labelStyle(.iconOnly)
+                            .nativTextStyle(.rowTitle)
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .disabled(
+                        isSelectingRecents
+                            || (pinnedSessions.isEmpty
+                                && unpinnedSessions.isEmpty
+                                && sidebarState.recents.folders.isEmpty)
+                    )
+                    .help("Select multiple")
+
+                    Button {
+                        createChatSession()
+                    } label: {
+                        Label("New Standalone Chat", systemImage: "square.and.pencil")
+                            .labelStyle(.iconOnly)
+                            .nativTextStyle(.rowTitle)
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .help("New standalone chat")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.secondary.opacity(0.7))
+                .opacity(isSessionsHeaderHovering ? 1 : 0)
+                .allowsHitTesting(isSessionsHeaderHovering)
+            }
         )
+        .contentShape(.rect)
+        .onHover { isSessionsHeaderHovering = $0 }
     }
 
     var allSidebarSectionsCollapsed: Bool {
         chromeState.sidebarPinnedCollapsed
+            && chromeState.sidebarProjectsCollapsed
             && chromeState.sidebarFoldersCollapsed
             && chromeState.sidebarSessionsCollapsed
+            && !projects.projects.contains { !$0.isCollapsed }
             && !sidebarState.recents.folders.contains { !$0.isCollapsed }
     }
 
@@ -319,6 +476,7 @@ extension ControlPanelView {
         withAnimation(.snappy(duration: 0.2)) {
             model.settings.setAllSidebarSectionsCollapsed(shouldCollapse)
             chat.setAllFoldersCollapsed(shouldCollapse)
+            projects.setAllCollapsed(shouldCollapse)
         }
     }
 
@@ -371,6 +529,10 @@ extension ControlPanelView {
 
     func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
         sidebarState.recents.sessions(inFolder: folderID)
+    }
+
+    func sessions(inProject projectID: UUID) -> [ControlPanelRecentSession] {
+        sidebarState.recents.sessions(inProject: projectID)
     }
 
 }

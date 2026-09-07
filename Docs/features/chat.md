@@ -27,6 +27,17 @@ carries its title, messages, timestamps, pin state, and an optional folder assig
   session (`folderID`) and the folder list persists alongside sessions.
 - Empty, redundant sessions are pruned automatically.
 
+### Import and export
+
+The action menu for a chat exports a versioned JSON file containing its messages,
+attachments, model repository ID, system prompt, and basic session metadata. Use the import
+button above the sidebar to add one of these files as a new local session.
+
+Imported tool calls are kept as history and are never run automatically. Nativ offers to
+switch to the original model when it is installed and links to Models when it is missing.
+Users can instead continue with any downloaded language model. A chat remains read-only when
+its recorded token count exceeds the selected model's context window.
+
 ## Chat tools
 
 A tool-calling model can invoke host capabilities mid-conversation. The registry is
@@ -38,7 +49,8 @@ A tool-calling model can invoke host capabilities mid-conversation. The registry
 | Model library | List installed models or switch the active model. |
 | Server stats | Report server and request statistics. |
 | System monitor | Report live CPU, GPU, and memory readings. |
-| File Read | Read bounded, numbered text from a user-authorized local folder. |
+| File Read | Read bounded text and search contents or filenames in a user-authorized local folder. |
+| File Write | Create, overwrite, and patch text files in a user-authorized local folder. |
 
 Tools are advertised to the model only when the active model reports tool-calling support
 and the tool is enabled and configured. Tools that change app state or execute custom scripts
@@ -47,9 +59,9 @@ additional tools through the same path — see [Integrations](integrations.md).
 
 ### File Read
 
-The built-in `read_file` tool is local to the Mac running Nativ, including when the model
-server is remote. It remains unavailable until the user chooses one authorized folder in
-**Extensions → Tools → File Read**.
+The built-in `read_file` and `search_files` tools appear as one **File Read** capability and
+are local to the Mac running Nativ, including when the model server is remote. They remain
+unavailable until the user chooses one authorized folder in **Extensions → Tools → File Read**.
 
 - Relative paths resolve inside that folder. Absolute paths and symlinks are accepted only
   when their canonical target remains inside it.
@@ -58,8 +70,36 @@ server is remote. It remains unavailable until the user chooses one authorized f
   blocked. High-confidence secret values in otherwise readable text are replaced with
   `<redacted>` without hiding the rest of the file.
 - Text-layer PDFs use Nativ's existing PDF extraction.
+- `search_files` uses ripgrep with user configuration disabled. Content
+  mode accepts ripgrep's default regular-expression syntax and returns line-numbered matches
+  with optional context. Files mode accepts a glob, skips hidden and ignored files by default,
+  and sorts results by modification date with the newest first.
+- Search supports content, matching-file, and per-file count output, plus bounded offset/limit
+  pagination. Credential paths are excluded before the search and every returned path is
+  revalidated; returned snippets use the same secret-value redaction as `read_file`.
+- Identical consecutive searches warn once and are then blocked to stop tool loops. Missing
+  search roots are negatively cached briefly, and process time/output limits bound large scans.
 - Scheduled routines may use File Read only when the user explicitly selects the capability;
   every run is restricted to a snapshot of the same configured folder.
+
+### File Write
+
+The built-in `write_file` and `patch` operations appear as one **File Write** capability in
+**Extensions → Tools** and share one authorized folder and enabled state. `write_file` replaces
+an entire UTF-8 text file (creating parent folders as needed), while `patch` supports a
+single-file fuzzy replacement and V4A multi-file add, update, delete, and move patches.
+
+- Canonical path checks and descriptor-relative, no-symlink-following I/O keep every mutation
+  inside the authorized folder. Sensitive system and key-material paths and binary document
+  formats are blocked.
+- Protected instruction and credential configuration files require confirmation in the chat.
+- Per-path locks serialize mutations. Writes report a SHA-256 verification hash, unified diff,
+  staleness warning when applicable, and only newly introduced syntax errors for supported
+  formats.
+- Content that looks like numbered `read_file` output or an unchanged-read response is rejected
+  to prevent accidental tool-output echoing.
+- File Write is not offered to scheduled routines because routines have no interactive approval
+  surface.
 
 ## Image generation
 

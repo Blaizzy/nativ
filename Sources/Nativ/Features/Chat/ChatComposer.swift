@@ -2,6 +2,126 @@ import AppKit
 import Foundation
 import SwiftUI
 
+private struct ChatContextWindowUsage: Equatable {
+    let usedTokens: Int
+    let capacityTokens: Int
+
+    var usedFraction: Double {
+        guard capacityTokens > 0 else { return 0 }
+        return min(max(Double(usedTokens) / Double(capacityTokens), 0), 1)
+    }
+
+    var remainingPercentage: Int {
+        Int(((1 - usedFraction) * 100).rounded())
+    }
+}
+
+@MainActor
+private enum ChatContextWindowFormatting {
+    static let percentageFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.numberStyle = .percent
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    static let tokenCountFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    static func percentage(_ fraction: Double) -> String {
+        percentageFormatter.string(from: NSNumber(value: fraction))
+            ?? "\(Int((fraction * 100).rounded()))%"
+    }
+
+    static func tokenCount(_ value: Int) -> String {
+        tokenCountFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    static func compactTokenCount(_ value: Int) -> String {
+        guard value >= 1_000 else { return tokenCount(value) }
+        let thousands = (Double(value) / 1_000).formatted(
+            .number.precision(.fractionLength(0...1))
+        )
+        return "\(thousands)k"
+    }
+}
+
+private struct ChatContextWindowRing: View, Equatable {
+    let usage: ChatContextWindowUsage
+    @State private var showsDetails = false
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.usage == rhs.usage
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.quaternary, lineWidth: 2)
+
+            Circle()
+                .trim(from: 0, to: usage.usedFraction)
+                .stroke(
+                    ringColor,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 17, height: 17)
+        .contentShape(.circle)
+        .onHover { showsDetails = $0 }
+        .background {
+            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6, isInteractive: false) {
+                VStack(alignment: .center, spacing: 4) {
+                    Text(verbatim: "Context window:")
+                        .foregroundStyle(.secondary)
+                    Text(verbatim: "\(remainingPercentageText) remaining")
+                    Text(verbatim: "\(tokenUsageText) tokens used")
+                }
+                .monospacedDigit()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Model context window")
+        .accessibilityValue(Text(verbatim: accessibilityValue))
+    }
+
+    private var remainingPercentageText: String {
+        ChatContextWindowFormatting.percentage(1 - usage.usedFraction)
+    }
+
+    private var tokenUsageText: String {
+        "\(ChatContextWindowFormatting.compactTokenCount(usage.usedTokens)) / "
+            + ChatContextWindowFormatting.compactTokenCount(usage.capacityTokens)
+    }
+
+    private var accessibilityValue: String {
+        "\(usage.remainingPercentage) percent remaining, "
+            + "\(ChatContextWindowFormatting.tokenCount(usage.usedTokens)) of "
+            + "\(ChatContextWindowFormatting.tokenCount(usage.capacityTokens)) tokens used"
+    }
+
+    private var ringColor: Color {
+        switch usage.usedFraction {
+        case ..<0.75:
+            .secondary
+        case ..<0.9:
+            .orange
+        default:
+            .red
+        }
+    }
+
+}
+
 private struct ChatAttachmentThumbnail: View {
     let attachment: ChatImageAttachment
     var width: CGFloat = 120
@@ -104,6 +224,7 @@ struct ChatComposer: View {
     let canSend: Bool
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
+    let onFindDraftModels: (String) -> Void
     let onSend: (Bool, Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
@@ -225,6 +346,11 @@ struct ChatComposer: View {
                     )
 
                     Spacer(minLength: 12)
+
+                    if let contextWindowUsage {
+                        ChatContextWindowRing(usage: contextWindowUsage)
+                            .equatable()
+                    }
 
                     modelPicker
 
@@ -406,10 +532,13 @@ struct ChatComposer: View {
             selectedModelDetail: selectedModelSupportsThinking
                 ? reasoningLevel.rawValue
                 : nil,
-            secondarySection: reasoningPickerSection,
+            showsFastIndicator: model.settings.speculativeDecodingActive,
+            secondarySections: modelPickerSecondarySections,
+            secondarySectionsForModel: modelPickerSecondarySections(for:),
             isModelLoading: model.isModelLoading,
             modelLoadingPercentage: model.modelLoadingPercentage,
-            isDisabled: model.isModelLoading || viewModel.hasPendingRequests,
+            isDisabled: model.isModelLoading || viewModel.hasPendingRequests
+                || model.inferenceActivityInProgress,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelPickerAccessibilityValue,
@@ -421,8 +550,43 @@ struct ChatComposer: View {
         )
     }
 
+    private var contextWindowUsage: ChatContextWindowUsage? {
+        guard let capacity = effectiveContextWindowCapacity,
+              capacity > 0 else {
+            return nil
+        }
+
+        let usedTokens = viewModel.visibleMessages
+            .reversed()
+            .lazy
+            .compactMap({ $0.responseMetrics?.totalTokens })
+            .first ?? 0
+
+        return ChatContextWindowUsage(
+            usedTokens: usedTokens,
+            capacityTokens: capacity
+        )
+    }
+
+    private var effectiveContextWindowCapacity: Int? {
+        if let runtimeCapacity = model.metrics?.server.effectiveContextLimit
+            ?? model.metrics?.server.configuredContextLimit
+            ?? model.metrics?.server.loadedContextSize {
+            return runtimeCapacity
+        }
+
+        let advertisedCapacity = selectedLocalModel?.contextSize
+        guard model.settings.maxKVSize > 0 else {
+            return advertisedCapacity
+        }
+        guard let advertisedCapacity else {
+            return model.settings.maxKVSize
+        }
+        return min(advertisedCapacity, model.settings.maxKVSize)
+    }
+
     private var languageModels: [LocalModel] {
-        localLibrary.models.filter { $0.capabilities.contains(.text) }
+        localLibrary.models.filter(\.isEligibleForLanguageModelPicker)
     }
 
     private var selectedModelID: String? {
@@ -431,15 +595,20 @@ struct ChatComposer: View {
 
     private var selectedModelLabel: String {
         guard let selectedModelID else {
-            return "Choose model"
+            return "Choose Model"
         }
         return modelMenuLabel(selectedModelID)
     }
 
     private var modelPickerAccessibilityValue: String {
-        let value = selectedModelSupportsThinking
-            ? "\(selectedModelLabel), reasoning \(reasoningLevel.rawValue)"
-            : selectedModelLabel
+        var components = [selectedModelLabel]
+        if selectedModelSupportsThinking {
+            components.append("reasoning \(reasoningLevel.rawValue)")
+        }
+        if model.settings.speculativeDecodingActive {
+            components.append("speed Fast")
+        }
+        let value = components.joined(separator: ", ")
         guard model.isModelLoading, let percentage = model.modelLoadingPercentage else {
             return value
         }
@@ -456,11 +625,14 @@ struct ChatComposer: View {
     }
 
     private var effectiveCanSend: Bool {
-        canSend && !hasVisionRejectedAttachment
+        canSend && !hasVisionRejectedAttachment && importedContinuationIsAvailable
     }
 
     private var attachmentNotices: [ChatAttachmentNotice] {
         var notices: [ChatAttachmentNotice] = []
+        if let importedContinuationNotice {
+            notices.append(importedContinuationNotice)
+        }
         let rejectedImages = modelLacksVision
             ? viewModel.pendingImageAttachments.filter { $0.chatAttachmentKind == .image }
             : []
@@ -537,6 +709,40 @@ struct ChatComposer: View {
         return notices
     }
 
+    private var importedContinuationIsAvailable: Bool {
+        guard viewModel.importedModelRepositoryID != nil else {
+            return true
+        }
+        guard let selectedLocalModel
+        else {
+            return true
+        }
+        guard let tokenCount = viewModel.importedPromptTokenCount,
+            let contextWindow = selectedLocalModel.contextSize
+        else {
+            return true
+        }
+        return tokenCount <= contextWindow
+    }
+
+    private var importedContinuationNotice: ChatAttachmentNotice? {
+        guard viewModel.importedModelRepositoryID != nil else {
+            return nil
+        }
+        if let tokenCount = viewModel.importedPromptTokenCount,
+           let contextWindow = selectedLocalModel?.contextSize,
+           tokenCount > contextWindow {
+            return ChatAttachmentNotice(
+                id: "imported-chat-context-limit",
+                severity: .error,
+                title: "This chat can’t be continued",
+                message: "Its \(tokenCount)-token history exceeds the selected model’s "
+                    + "\(contextWindow)-token context window."
+            )
+        }
+        return nil
+    }
+
     private func documentContextWarningMessage(
         for omissions: [ChatDocumentOmission]
     ) -> String {
@@ -571,21 +777,30 @@ struct ChatComposer: View {
     }
 
     private var selectedModelSupportsThinking: Bool {
-        model.settings.thinkingEnabled
-            || selectedLocalModel?.capabilities.contains(.reasoning) == true
+        guard let selectedModelID else {
+            return model.settings.thinkingEnabled
+        }
+        return modelSupportsThinking(
+            selectedModelID,
+            profile: model.settings.currentModelProfile
+        )
     }
 
     private var reasoningLevel: ChatReasoningLevel {
-        guard model.settings.thinkingEnabled else {
+        reasoningLevel(for: model.settings.currentModelProfile)
+    }
+
+    private func reasoningLevel(for profile: ModelConfigProfile) -> ChatReasoningLevel {
+        guard profile.thinkingEnabled else {
             return .off
         }
-        guard model.settings.thinkingBudgetEnabled,
-              !model.settings.speculativeDecodingActive
+        guard profile.thinkingBudgetEnabled,
+              !speculativeDecodingActive(in: profile)
         else {
             return .max
         }
 
-        switch model.settings.thinkingBudget {
+        switch profile.thinkingBudget {
         case ...512:
             return .low
         case ...2_048:
@@ -602,15 +817,20 @@ struct ChatComposer: View {
         return localLibrary.error ?? "No installed language models"
     }
 
-    private var reasoningPickerSection: ComposerModelPickerSecondarySection? {
-        guard selectedModelSupportsThinking else {
+    private func reasoningPickerSection(
+        for modelID: String,
+        profile: ModelConfigProfile
+    ) -> ComposerModelPickerSecondarySection? {
+        guard modelSupportsThinking(modelID, profile: profile) else {
             return nil
         }
+        let level = reasoningLevel(for: profile)
         return ComposerModelPickerSecondarySection(
+            id: "reasoning",
             title: "Reasoning",
-            selectedID: reasoningLevel.rawValue,
-            selectedLabel: reasoningLevel.rawValue,
-            options: availableReasoningLevels.map {
+            selectedID: level.rawValue,
+            selectedLabel: level.rawValue,
+            options: availableReasoningLevels(for: profile).map {
                 ComposerModelPickerSecondaryOption(
                     id: $0.rawValue,
                     title: $0.rawValue,
@@ -626,9 +846,130 @@ struct ChatComposer: View {
         )
     }
 
+    private var modelPickerSecondarySections: [ComposerModelPickerSecondarySection] {
+        guard let selectedModelID else { return [] }
+        return modelPickerSecondarySections(
+            for: selectedModelID,
+            profile: model.settings.currentModelProfile
+        )
+    }
+
+    private func modelPickerSecondarySections(
+        for modelID: String
+    ) -> [ComposerModelPickerSecondarySection] {
+        modelPickerSecondarySections(
+            for: modelID,
+            profile: modelPickerProfile(for: modelID)
+        )
+    }
+
+    private func modelPickerSecondarySections(
+        for modelID: String,
+        profile: ModelConfigProfile
+    ) -> [ComposerModelPickerSecondarySection] {
+        [
+            drafterPickerSection(for: modelID, profile: profile),
+            reasoningPickerSection(for: modelID, profile: profile),
+        ].compactMap { $0 }
+    }
+
+    private func modelPickerProfile(for modelID: String) -> ModelConfigProfile {
+        if modelID == selectedModelID {
+            return model.settings.currentModelProfile
+        }
+        if let profile = model.settings.modelProfile(for: modelID) {
+            return profile
+        }
+        let supportsReasoning = localLibrary.models.first {
+            $0.repoID == modelID
+        }?.capabilities.contains(.reasoning) == true
+        return ModelConfigProfile(thinkingEnabled: supportsReasoning)
+    }
+
+    private func modelSupportsThinking(
+        _ modelID: String,
+        profile: ModelConfigProfile
+    ) -> Bool {
+        profile.thinkingEnabled
+            || localLibrary.models.first { $0.repoID == modelID }?
+                .capabilities.contains(.reasoning) == true
+    }
+
+    private func compatibleDrafters(for modelID: String) -> [LocalModel] {
+        guard let targetModel = localLibrary.models.first(where: {
+            $0.repoID == modelID
+        }) else { return [] }
+        return DrafterModelCompatibility.compatibleDrafters(
+            in: localLibrary.models,
+            with: targetModel
+        )
+    }
+
+    private func drafterPickerSection(
+        for modelID: String,
+        profile: ModelConfigProfile
+    ) -> ComposerModelPickerSecondarySection {
+        let compatibleDrafters = compatibleDrafters(for: modelID)
+        let activeDraftModelID = speculativeDecodingActive(in: profile)
+            ? profile.draftModelID
+            : ""
+        var options = [
+            ComposerModelPickerSecondaryOption(id: "", title: "Normal", detail: "")
+        ]
+        options.append(contentsOf: compatibleDrafters.map { drafter in
+            ComposerModelPickerSecondaryOption(
+                id: drafter.repoID,
+                title: modelMenuLabel(drafter.repoID),
+                detail: drafter.drafterKindLabel ?? "Drafter",
+                summaryTitle: "Fast"
+            )
+        })
+
+        if !activeDraftModelID.isEmpty,
+           !options.contains(where: { $0.id == activeDraftModelID }) {
+            options.insert(
+                ComposerModelPickerSecondaryOption(
+                    id: activeDraftModelID,
+                    title: modelMenuLabel(activeDraftModelID),
+                    detail: "Current",
+                    summaryTitle: "Fast"
+                ),
+                at: 1
+            )
+        }
+
+        let hasCompatibleDrafters = !compatibleDrafters.isEmpty
+        return ComposerModelPickerSecondarySection(
+            id: "drafter",
+            title: "Speed",
+            selectedID: activeDraftModelID,
+            selectedLabel: activeDraftModelID.isEmpty
+                ? "Normal"
+                : "Fast",
+            options: options,
+            statusTitle: !hasCompatibleDrafters && localLibrary.isScanning
+                ? "Scanning for drafters…"
+                : nil,
+            actionTitle: !hasCompatibleDrafters && !localLibrary.isScanning
+                ? "Find Draft Models..."
+                : nil,
+            onAction: {
+                onFindDraftModels(modelID)
+            },
+            onSelect: selectDrafter
+        )
+    }
+
+    private func speculativeDecodingActive(in profile: ModelConfigProfile) -> Bool {
+        profile.speculativeDecodingEnabled
+            && !profile.draftModelID.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
+    }
+
     private var modelPickerHelp: String {
-        if viewModel.hasPendingRequests {
-            return "Model switching is unavailable while requests are active or queued"
+        if viewModel.hasPendingRequests || model.inferenceActivityInProgress {
+            return "Models can’t be changed while a response is being generated."
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(selectedModelLabel)"
@@ -637,8 +978,10 @@ struct ChatComposer: View {
     }
 
     private func modelMenuLabel(_ modelID: String) -> String {
-        let shortName = modelID.split(separator: "/").last.map(String.init) ?? modelID
-        return NativFormatting.truncateModelName(shortName, maxLength: 28)
+        NativFormatting.truncateModelName(
+            LocalModel.displayTitle(for: modelID),
+            maxLength: 28
+        )
     }
 
     private func select(_ localModel: LocalModel) {
@@ -649,8 +992,37 @@ struct ChatComposer: View {
         ) {}
     }
 
-    private var availableReasoningLevels: [ChatReasoningLevel] {
-        guard model.settings.speculativeDecodingActive else {
+    private func selectDrafter(_ drafterID: String) {
+        var settings = model.settings
+        if drafterID.isEmpty {
+            guard settings.speculativeDecodingActive else { return }
+            settings.speculativeDecodingEnabled = false
+        } else {
+            guard let drafter = localLibrary.models.first(where: {
+                $0.repoID == drafterID
+            }) else {
+                return
+            }
+            guard !settings.speculativeDecodingActive
+                    || settings.draftModelID != drafter.repoID
+                    || settings.draftKind != drafter.drafterKind
+            else {
+                return
+            }
+            settings.draftModelID = drafter.repoID
+            settings.draftKind = drafter.drafterKind ?? "auto"
+            settings.speculativeDecodingEnabled = true
+            settings.structuredOutputEnabled = false
+            settings.thinkingBudgetEnabled = false
+        }
+        model.settings = settings
+        model.restartServer()
+    }
+
+    private func availableReasoningLevels(
+        for profile: ModelConfigProfile
+    ) -> [ChatReasoningLevel] {
+        guard speculativeDecodingActive(in: profile) else {
             return ChatReasoningLevel.allCases
         }
         return ChatReasoningLevel.allCases.filter { $0.tokenBudget == nil }
@@ -768,7 +1140,7 @@ struct ChatComposer: View {
             return blockingNotice.message
         }
         if viewModel.promptEditContext != nil {
-            return "Fork and regenerate (Return)"
+            return "Save and regenerate (Return)"
         }
         return "Send (Return)"
     }
@@ -778,7 +1150,7 @@ struct ChatComposer: View {
     }
 
     private func workingStatus(elapsed: TimeInterval) -> String {
-        "Working for \(NativFormatting.elapsedDuration(elapsed))..."
+        "Working for \(NativFormatting.elapsedDuration(elapsed))…"
     }
 
     private func send() {
@@ -817,7 +1189,7 @@ private struct ChatPromptEditBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Editing prompt")
                     .fontWeight(.medium)
-                Text("Sending will create a new conversation branch.")
+                Text("Sending will replace the latest response.")
                     .foregroundStyle(.secondary)
             }
 
@@ -856,14 +1228,53 @@ struct ComposerModelPickerSecondaryOption: Identifiable {
     let id: String
     let title: String
     let detail: String
+    let summaryTitle: String?
+
+    init(
+        id: String,
+        title: String,
+        detail: String,
+        summaryTitle: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.summaryTitle = summaryTitle
+    }
 }
 
-struct ComposerModelPickerSecondarySection {
+struct ComposerModelPickerSecondarySection: Identifiable {
+    let id: String
     let title: String
     let selectedID: String
     let selectedLabel: String
     let options: [ComposerModelPickerSecondaryOption]
+    let statusTitle: String?
+    let actionTitle: String?
+    let onAction: (() -> Void)?
     let onSelect: (String) -> Void
+
+    init(
+        id: String,
+        title: String,
+        selectedID: String,
+        selectedLabel: String,
+        options: [ComposerModelPickerSecondaryOption],
+        statusTitle: String? = nil,
+        actionTitle: String? = nil,
+        onAction: (() -> Void)? = nil,
+        onSelect: @escaping (String) -> Void
+    ) {
+        self.id = id
+        self.title = title
+        self.selectedID = selectedID
+        self.selectedLabel = selectedLabel
+        self.options = options
+        self.statusTitle = statusTitle
+        self.actionTitle = actionTitle
+        self.onAction = onAction
+        self.onSelect = onSelect
+    }
 }
 
 struct ComposerModelPicker: View {
@@ -876,7 +1287,9 @@ struct ComposerModelPicker: View {
     let selectedModelLabel: String
     let selectedModelProvider: LocalModelProvider?
     let selectedModelDetail: String?
-    let secondarySection: ComposerModelPickerSecondarySection?
+    let showsFastIndicator: Bool
+    let secondarySections: [ComposerModelPickerSecondarySection]
+    let secondarySectionsForModel: ((String) -> [ComposerModelPickerSecondarySection])?
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
     let isDisabled: Bool
@@ -899,7 +1312,8 @@ struct ComposerModelPicker: View {
                 selectedModelID: selectedModelID,
                 selectedModelLabel: selectedModelLabel,
                 selectedModelProvider: selectedModelProvider,
-                secondarySection: secondarySection,
+                secondarySections: secondarySections,
+                secondarySectionsForModel: secondarySectionsForModel,
                 isEnabled: !isDisabled,
                 usesSelectModelShortcut: shortcutLabel != nil,
                 statusLabel: statusLabel,
@@ -954,13 +1368,14 @@ struct ComposerModelPicker: View {
             selectedModelLabel: selectedModelLabel,
             selectedModelProvider: selectedModelProvider,
             selectedModelDetail: selectedModelDetail,
+            showsFastIndicator: showsFastIndicator,
             isModelLoading: isModelLoading,
             modelLoadingPercentage: modelLoadingPercentage
         )
     }
 
     private var pickerTooltip: String {
-        isDisabled ? helpText : "Select model"
+        isDisabled ? helpText : "Choose Model"
     }
 
     private var isPickerActive: Bool {
@@ -984,7 +1399,8 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
     let selectedModelID: String?
     let selectedModelLabel: String
     let selectedModelProvider: LocalModelProvider?
-    let secondarySection: ComposerModelPickerSecondarySection?
+    let secondarySections: [ComposerModelPickerSecondarySection]
+    let secondarySectionsForModel: ((String) -> [ComposerModelPickerSecondarySection])?
     let isEnabled: Bool
     let usesSelectModelShortcut: Bool
     let statusLabel: String
@@ -1031,9 +1447,13 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
 
         private static let menuFont = NSFont.menuFont(ofSize: NSFont.systemFontSize)
         private weak var modelSummaryItem: NSMenuItem?
-        private weak var secondarySummaryItem: NSMenuItem?
+        private weak var presentedMenu: NSMenu?
+        private var presentedSecondarySections = [
+            String: ComposerModelPickerSecondarySection
+        ]()
+        private var secondarySummaryItems = [String: NSMenuItem]()
         private var modelOptionViews = [PersistentMenuActionView]()
-        private var secondaryOptionViews = [PersistentMenuActionView]()
+        private var secondaryOptionViews = [String: [PersistentMenuActionView]]()
 
         init(parent: ComposerModelPickerMenuControl) {
             self.parent = parent
@@ -1043,10 +1463,16 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             // Build the entire tree before tracking begins. Keeping both submenus
             // alive for the whole session prevents hover-driven view replacement.
             modelOptionViews.removeAll()
+            secondarySummaryItems.removeAll()
             secondaryOptionViews.removeAll()
             let menu = makeMenu()
+            presentedMenu = menu
             parent.onTrackingChanged(true)
-            defer { parent.onTrackingChanged(false) }
+            defer {
+                presentedMenu = nil
+                presentedSecondarySections.removeAll()
+                parent.onTrackingChanged(false)
+            }
             menu.update()
             menu.popUp(
                 positioning: nil,
@@ -1073,7 +1499,23 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             menu.addItem(modelItem)
             modelSummaryItem = modelItem
 
-            if let secondarySection = parent.secondarySection {
+            installSecondarySections(parent.secondarySections, in: menu)
+
+            return menu
+        }
+
+        private func installSecondarySections(
+            _ sections: [ComposerModelPickerSecondarySection],
+            in menu: NSMenu
+        ) {
+            for item in secondarySummaryItems.values {
+                menu.removeItem(item)
+            }
+            secondarySummaryItems.removeAll()
+            secondaryOptionViews.removeAll()
+            presentedSecondarySections.removeAll()
+
+            for secondarySection in sections {
                 let secondaryItem = NSMenuItem(
                     title: "\(secondarySection.title)   \(secondarySection.selectedLabel)",
                     action: nil,
@@ -1081,10 +1523,9 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                 )
                 secondaryItem.submenu = makeSecondaryMenu(secondarySection)
                 menu.addItem(secondaryItem)
-                secondarySummaryItem = secondaryItem
+                secondarySummaryItems[secondarySection.id] = secondaryItem
+                presentedSecondarySections[secondarySection.id] = secondarySection
             }
-
-            return menu
         }
 
         private func makeModelMenu() -> NSMenu {
@@ -1159,15 +1600,39 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
                     image: nil,
                     isSelected: option.id == section.selectedID
                 ) { [weak self] in
-                    self?.selectSecondaryOption(option.id)
+                    self?.selectSecondaryOption(option.id, sectionID: section.id)
                 }
                 if let itemView = item.view as? PersistentMenuActionView {
-                    secondaryOptionViews.append(itemView)
+                    secondaryOptionViews[section.id, default: []].append(itemView)
                 }
                 menu.addItem(item)
             }
 
+            if let statusTitle = section.statusTitle {
+                menu.addItem(.separator())
+                let statusItem = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
+                statusItem.isEnabled = false
+                menu.addItem(statusItem)
+            } else if let actionTitle = section.actionTitle,
+                      section.onAction != nil {
+                menu.addItem(.separator())
+                let actionItem = NSMenuItem(
+                    title: actionTitle,
+                    action: #selector(performSecondaryAction(_:)),
+                    keyEquivalent: ""
+                )
+                actionItem.target = self
+                actionItem.representedObject = section.id
+                actionItem.isEnabled = true
+                menu.addItem(actionItem)
+            }
+
             return menu
+        }
+
+        @objc private func performSecondaryAction(_ sender: NSMenuItem) {
+            guard let sectionID = sender.representedObject as? String else { return }
+            presentedSecondarySections[sectionID]?.onAction?()
         }
 
         private func modelItem(
@@ -1213,6 +1678,7 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
         }
 
         private func selectModel(_ repoID: String) {
+            let nextSecondarySections = parent.secondarySectionsForModel?(repoID)
             modelOptionViews.forEach { $0.isSelected = $0.optionID == repoID }
             modelSummaryItem?.title = "Model   \(modelMenuLabel(repoID))"
 
@@ -1221,26 +1687,36 @@ private struct ComposerModelPickerMenuControl: NSViewRepresentable {
             } else {
                 parent.onSwitchModel(repoID)
             }
+
+            if let nextSecondarySections, let presentedMenu {
+                installSecondarySections(nextSecondarySections, in: presentedMenu)
+                presentedMenu.update()
+            }
         }
 
-        private func selectSecondaryOption(_ optionID: String) {
-            guard let section = parent.secondarySection,
+        private func selectSecondaryOption(_ optionID: String, sectionID: String) {
+            guard let section = presentedSecondarySections[sectionID],
                   let option = section.options.first(where: { $0.id == optionID })
             else { return }
 
-            secondaryOptionViews.forEach { $0.isSelected = $0.optionID == optionID }
-            secondarySummaryItem?.title = "\(section.title)   \(option.title)"
+            secondaryOptionViews[sectionID]?.forEach {
+                $0.isSelected = $0.optionID == optionID
+            }
+            secondarySummaryItems[sectionID]?.title =
+                "\(section.title)   \(option.summaryTitle ?? option.title)"
             section.onSelect(optionID)
         }
 
         func updateActionAvailability(_ isEnabled: Bool) {
             modelOptionViews.forEach { $0.isActionEnabled = isEnabled }
-            secondaryOptionViews.forEach { $0.isActionEnabled = isEnabled }
+            secondaryOptionViews.values.joined().forEach { $0.isActionEnabled = isEnabled }
         }
 
         private func modelMenuLabel(_ modelID: String) -> String {
-            let shortName = modelID.split(separator: "/").last.map(String.init) ?? modelID
-            return NativFormatting.truncateModelName(shortName, maxLength: 28)
+            NativFormatting.truncateModelName(
+                LocalModel.displayTitle(for: modelID),
+                maxLength: 28
+            )
         }
 
         private func providerImage(_ provider: LocalModelProvider?) -> NSImage? {
@@ -1303,11 +1779,19 @@ private struct ComposerModelPickerLabel: View {
     let selectedModelLabel: String
     let selectedModelProvider: LocalModelProvider?
     let selectedModelDetail: String?
+    let showsFastIndicator: Bool
     let isModelLoading: Bool
     let modelLoadingPercentage: Int?
 
     var body: some View {
         HStack(spacing: 5) {
+            if showsFastIndicator {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.black)
+                    .accessibilityHidden(true)
+            }
+
             Label {
                 HStack(spacing: 4) {
                     pickerTitle
@@ -1333,7 +1817,7 @@ private struct ComposerModelPickerLabel: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .font(.system(size: 12, weight: .medium))
+        .nativTextStyle(.supportingEmphasized)
         .foregroundStyle(Color.primary)
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -1501,12 +1985,12 @@ struct ChatComposerActionMenu: NSViewRepresentable {
             menu.addItem(pasteItem)
 
             let screenshotItem = NSMenuItem(
-                title: "Take Screenshot",
+                title: "Take a Screenshot",
                 action: #selector(captureScreenshot(_:)),
                 keyEquivalent: ""
             )
             screenshotItem.target = self
-            screenshotItem.image = menuImage("camera.viewfinder", description: "Take Screenshot")
+            screenshotItem.image = menuImage("camera.viewfinder", description: "Take a screenshot")
             screenshotItem.isEnabled = true
             menu.addItem(screenshotItem)
 
@@ -1578,7 +2062,7 @@ struct ChatComposerActionPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 section("Add") {
                     ChatComposerActionRow(
-                        title: "Upload file",
+                        title: "Upload File",
                         detail: "Choose an image or document from your Mac",
                         systemName: "doc.badge.plus",
                         action: onAttachImages
@@ -1586,7 +2070,7 @@ struct ChatComposerActionPanel: View {
 
                     if canPasteImage {
                         ChatComposerActionRow(
-                            title: "Paste image",
+                            title: "Paste Image",
                             detail: "Use an image from your clipboard",
                             systemName: "doc.on.clipboard",
                             action: onPasteImage
@@ -1594,7 +2078,7 @@ struct ChatComposerActionPanel: View {
                     }
 
                     ChatComposerActionRow(
-                        title: "Take a screenshot",
+                        title: "Take a Screenshot",
                         detail: "Capture part of your screen",
                         systemName: "camera.viewfinder",
                         action: onCaptureScreenshot
@@ -1668,7 +2152,7 @@ struct ChatComposerActionPanel: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .nativTextStyle(.supportingEmphasized)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
 
@@ -1699,11 +2183,11 @@ private struct ChatComposerActionRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 13, weight: .medium))
+                        .nativTextStyle(.rowTitle)
                         .foregroundStyle(.primary)
 
                     Text(detail)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -2140,7 +2624,7 @@ struct ChatPendingImageAttachmentView: View {
 
             statusIndicator
 
-            Button("Remove attachment", systemImage: "xmark", action: onRemove)
+            Button("Remove Attachment", systemImage: "xmark", action: onRemove)
                 .labelStyle(.iconOnly)
                 .font(.caption.weight(.semibold))
                 .frame(width: 14, height: 14)

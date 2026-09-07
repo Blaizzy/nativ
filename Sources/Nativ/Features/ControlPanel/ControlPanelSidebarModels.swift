@@ -12,28 +12,36 @@ struct SidebarRecentsSnapshot: Equatable {
     let pinnedSessions: [ControlPanelRecentSession]
     let unpinnedSessions: [ControlPanelRecentSession]
     let ungroupedSessions: [ControlPanelRecentSession]
+    let projects: [ChatProject]
     let folders: [ChatFolder]
     let pinnedFolders: [ChatFolder]
     let unpinnedFolders: [ChatFolder]
     private let sessionsByFolder: [UUID: [ControlPanelRecentSession]]
+    private let sessionsByProject: [UUID: [ControlPanelRecentSession]]
     private let chatSessionIDs: Set<UUID>
     private let imageSessionIDs: Set<UUID>
 
     init(
         chatSessions: [ChatSessionSummary],
         folders: [ChatFolder],
-        imageSessions: [ImageGenerationSessionSummary]
+        imageSessions: [ImageGenerationSessionSummary],
+        projects: [ChatProject] = []
     ) {
         let recentSessions =
             (chatSessions.map(ControlPanelRecentSession.init(chat:))
             + imageSessions.map(ControlPanelRecentSession.init(imageGeneration:))).sorted(
                 by: ControlPanelRecentSession.recencySort)
+        let projectIDs = Set(projects.map(\.id))
+        let standaloneSessions = recentSessions.filter {
+            guard let projectID = $0.projectID else { return true }
+            return !projectIDs.contains(projectID)
+        }
         let pinnedSessions =
-            recentSessions
+            standaloneSessions
             .filter(\.pinned)
             .sorted(by: ControlPanelRecentSession.pinnedSort)
         let unpinnedSessions =
-            recentSessions
+            standaloneSessions
             .filter { !$0.pinned }
             .sorted(by: ControlPanelRecentSession.sessionSort)
         let folderIDs = Set(folders.map(\.id))
@@ -41,6 +49,7 @@ struct SidebarRecentsSnapshot: Equatable {
         self.recentSessions = recentSessions
         self.pinnedSessions = pinnedSessions
         self.unpinnedSessions = unpinnedSessions
+        self.projects = projects.sorted(by: ChatProject.sidebarSort)
         ungroupedSessions = unpinnedSessions.filter { recent in
             guard let folderID = recent.folderID else { return true }
             return !folderIDs.contains(folderID)
@@ -54,12 +63,24 @@ struct SidebarRecentsSnapshot: Equatable {
             sessionsByFolder[folderID, default: []].append(recent)
         }
         self.sessionsByFolder = sessionsByFolder
+        var sessionsByProject: [UUID: [ControlPanelRecentSession]] = [:]
+        for recent in recentSessions {
+            guard let projectID = recent.projectID else { continue }
+            sessionsByProject[projectID, default: []].append(recent)
+        }
+        self.sessionsByProject = sessionsByProject.mapValues {
+            $0.sorted(by: ControlPanelRecentSession.sessionSort)
+        }
         chatSessionIDs = Set(chatSessions.map(\.id))
         imageSessionIDs = Set(imageSessions.map(\.id))
     }
 
     func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
         sessionsByFolder[folderID] ?? []
+    }
+
+    func sessions(inProject projectID: UUID) -> [ControlPanelRecentSession] {
+        sessionsByProject[projectID] ?? []
     }
 
     func containsChatSession(_ sessionID: UUID) -> Bool {
@@ -85,26 +106,33 @@ final class ChatSidebarState: ObservableObject {
     @Published private(set) var currentImageSessionID: UUID?
     @Published private(set) var isGeneratingImage: Bool
 
-    init(chat: ChatViewModel, imageGeneration: ImageGenerationViewModel) {
+    init(
+        chat: ChatViewModel,
+        imageGeneration: ImageGenerationViewModel,
+        projects: ChatProjectStore
+    ) {
         recents = SidebarRecentsSnapshot(
             chatSessions: chat.sessions,
             folders: chat.folders,
-            imageSessions: imageGeneration.sessions
+            imageSessions: imageGeneration.sessions,
+            projects: projects.projects
         )
         currentChatSessionID = chat.currentSessionID
         currentImageSessionID = imageGeneration.currentSessionID
         isGeneratingImage = imageGeneration.isGenerating
 
-        Publishers.CombineLatest3(
+        Publishers.CombineLatest4(
             chat.$sessions.removeDuplicates(),
             chat.$folders.removeDuplicates(),
-            imageGeneration.$sessions.removeDuplicates()
+            imageGeneration.$sessions.removeDuplicates(),
+            projects.$projects.removeDuplicates()
         )
-        .map { sessions, folders, imageSessions in
+        .map { sessions, folders, imageSessions, projects in
             SidebarRecentsSnapshot(
                 chatSessions: sessions,
                 folders: folders,
-                imageSessions: imageSessions
+                imageSessions: imageSessions,
+                projects: projects
             )
         }
         .removeDuplicates()
@@ -142,6 +170,7 @@ struct ControlPanelRecentSession: Identifiable, Equatable {
     let pinnedOrder: Int?
     let sessionOrder: Int?
     let folderID: UUID?
+    let projectID: UUID?
     let scheduledTaskID: String?
 
     init(chat session: ChatSessionSummary) {
@@ -153,6 +182,7 @@ struct ControlPanelRecentSession: Identifiable, Equatable {
         pinnedOrder = session.pinnedOrder
         sessionOrder = session.sessionOrder
         folderID = session.folderID
+        projectID = session.projectID
         scheduledTaskID = session.scheduledTaskID
     }
 
@@ -165,6 +195,7 @@ struct ControlPanelRecentSession: Identifiable, Equatable {
         pinnedOrder = nil
         sessionOrder = nil
         folderID = nil
+        projectID = nil
         scheduledTaskID = nil
     }
 

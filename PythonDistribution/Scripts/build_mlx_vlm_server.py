@@ -19,18 +19,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from generate_image_model_manifest import (
-    MANIFEST_FILENAME as IMAGE_MODEL_MANIFEST_FILENAME,
+from generate_model_capabilities_manifest import MANIFEST_FILENAME
+from generate_model_capabilities_manifest import (
+    generate_model_capabilities_manifest,
+    validate_manifest,
 )
-from generate_image_model_manifest import generate_image_model_manifest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_DISTRIBUTION_ROOT = REPO_ROOT / "PythonDistribution"
 LAUNCHER_SOURCE = PYTHON_DISTRIBUTION_ROOT / "Launcher" / "mlx_vlm_server_launcher.c"
 OVERLAY_SERVER = PYTHON_DISTRIBUTION_ROOT / "Overlay" / "nativ_server.py"
-IMAGE_MODEL_MANIFEST_GENERATOR = Path(__file__).with_name(
-    "generate_image_model_manifest.py"
+MODEL_CAPABILITIES_MANIFEST_GENERATOR = Path(__file__).with_name(
+    "generate_model_capabilities_manifest.py"
 )
 DEFAULT_PYTHON_VERSION = "3.12.13"
 DEFAULT_PBS_RELEASE = "20260508"
@@ -310,8 +311,8 @@ def build_signature(
         ),
         "launcher_sha256": file_sha256(LAUNCHER_SOURCE),
         "overlay_server_sha256": file_sha256(OVERLAY_SERVER),
-        "image_model_manifest_generator_sha256": file_sha256(
-            IMAGE_MODEL_MANIFEST_GENERATOR
+        "model_capabilities_manifest_generator_sha256": file_sha256(
+            MODEL_CAPABILITIES_MANIFEST_GENERATOR
         ),
         "builder_sha256": file_sha256(Path(__file__)),
         "skip_install": skip_install,
@@ -619,10 +620,10 @@ def install_overlay(output: Path) -> None:
     shutil.copy2(OVERLAY_SERVER, destination)
 
 
-def install_image_model_manifest(output: Path) -> None:
-    destination = output / IMAGE_MODEL_MANIFEST_FILENAME
-    log(f"Generating image model capability manifest {destination.name}")
-    generate_image_model_manifest(site_packages_dir(output), destination)
+def install_model_capabilities_manifest(output: Path) -> None:
+    destination = output / MANIFEST_FILENAME
+    log(f"Generating model capability manifest {destination.name}")
+    generate_model_capabilities_manifest(site_packages_dir(output), destination)
 
 
 def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
@@ -647,23 +648,16 @@ def verify_distribution(output: Path, *, expect_mlx_vlm: bool) -> None:
                 "raise SystemExit(0 if importlib.util.find_spec('nativ_server') else 1)",
             ]
         )
-        manifest_path = output / IMAGE_MODEL_MANIFEST_FILENAME
+        manifest_path = output / MANIFEST_FILENAME
         if not manifest_path.exists():
-            raise SystemExit(f"Missing image model capability manifest: {manifest_path}")
+            raise SystemExit(f"Missing model capability manifest: {manifest_path}")
         try:
             manifest = json.loads(manifest_path.read_text())
-        except (OSError, json.JSONDecodeError) as error:
+            validate_manifest(manifest)
+        except (OSError, json.JSONDecodeError, RuntimeError) as error:
             raise SystemExit(
-                f"Invalid image model capability manifest: {manifest_path}: {error}"
+                f"Invalid model capability manifest: {manifest_path}: {error}"
             ) from error
-        if (
-            manifest.get("schema_version") != 1
-            or not isinstance(manifest.get("model_types"), list)
-            or not manifest["model_types"]
-        ):
-            raise SystemExit(
-                f"Invalid image model capability manifest contents: {manifest_path}"
-            )
     if not launcher.exists():
         raise SystemExit(f"Missing launcher: {launcher}")
 
@@ -842,7 +836,7 @@ def main() -> None:
                 extra_pip_args=args.pip_arg,
             )
         install_overlay(output)
-        install_image_model_manifest(output)
+        install_model_capabilities_manifest(output)
 
     launcher = write_or_build_launcher(output)
     verify_distribution(output, expect_mlx_vlm=not args.skip_install)

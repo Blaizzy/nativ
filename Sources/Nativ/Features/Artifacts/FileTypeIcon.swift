@@ -1,8 +1,27 @@
-import PhosphorSwift
 import SwiftUI
 
+enum PhosphorFileIcon: String {
+    case fileAudio = "Phosphor-file-audio"
+    case fileCode = "Phosphor-file-code"
+    case fileCsv = "Phosphor-file-csv"
+    case fileDashed = "Phosphor-file-dashed"
+    case fileDoc = "Phosphor-file-doc"
+    case fileImage = "Phosphor-file-image"
+    case filePdf = "Phosphor-file-pdf"
+    case filePpt = "Phosphor-file-ppt"
+    case fileText = "Phosphor-file-text"
+    case fileVideo = "Phosphor-file-video"
+    case fileZip = "Phosphor-file-zip"
+
+    var image: Image {
+        Image(rawValue)
+            .interpolation(.medium)
+            .resizable()
+    }
+}
+
 struct FileTypeStyle {
-    let icon: Ph
+    let icon: PhosphorFileIcon
     let tint: Color
     let label: String
 
@@ -49,7 +68,7 @@ struct FileTypeIcon: View {
 
     var body: some View {
         let style = FileTypeStyle.resolve(fileExtension: fileExtension)
-        style.icon.regular
+        style.icon.image
             .renderingMode(.template)
             .scaledToFit()
             .frame(width: size, height: size)

@@ -78,9 +78,11 @@ struct IntegrationProfileManager {
         case .openCode:
             guard
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let providers = root["provider"] as? [String: Any]
+                let providers = root["provider"] as? [String: Any],
+                let provider = providers[Self.providerID] as? [String: Any],
+                let options = provider["options"] as? [String: Any]
             else { return false }
-            return providers[Self.providerID] != nil
+            return options["baseURL"] as? String == openAIBaseURL
         case .goose:
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
             return root["name"] as? String == Self.providerID
@@ -101,9 +103,10 @@ struct IntegrationProfileManager {
             guard
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let languageModels = root["language_models"] as? [String: Any],
-                let openAICompatible = languageModels["openai_compatible"] as? [String: Any]
+                let openAICompatible = languageModels["openai_compatible"] as? [String: Any],
+                let provider = openAICompatible[Self.providerID] as? [String: Any]
             else { return false }
-            return openAICompatible[Self.providerID] != nil
+            return provider["api_url"] as? String == openAIBaseURL
         case .codex, .hermes, .aider, .qwenCode, .continueDev, .openInterpreter:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
@@ -213,6 +216,61 @@ struct IntegrationProfileManager {
         let invocation = "\(usesExec ? "exec " : "")\(executable)\(arguments.isEmpty ? "" : " \(arguments)")"
         return (["cd \(shellQuote(workingDirectory.path))"] + exports + [invocation])
             .joined(separator: "\n")
+    }
+
+    var serverOrigin: String {
+        var origin = serverBaseURL.absoluteString
+        while origin.hasSuffix("/") {
+            origin.removeLast()
+        }
+        return origin
+    }
+
+    private var recordedOriginURL: URL {
+        integrationsSupportURL.appendingPathComponent("base-url")
+    }
+
+    private var recordedOrigin: String? {
+        guard let text = try? String(contentsOf: recordedOriginURL, encoding: .utf8) else {
+            return nil
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func recordServerOrigin() {
+        try? fileManager.createDirectory(
+            at: integrationsSupportURL,
+            withIntermediateDirectories: true
+        )
+        try? serverOrigin.write(to: recordedOriginURL, atomically: true, encoding: .utf8)
+    }
+
+    @discardableResult
+    func migrateConfiguredBaseURLs() -> [IntegrationTool] {
+        let origin = serverOrigin
+        guard let previous = recordedOrigin else {
+            recordServerOrigin()
+            return []
+        }
+        guard previous != origin else { return [] }
+
+        var migrated: [IntegrationTool] = []
+        for tool in IntegrationTool.allCases {
+            let url = configurationURL(for: tool)
+            guard
+                let data = try? Data(contentsOf: url),
+                let text = String(data: data, encoding: .utf8),
+                text.contains(previous)
+            else { continue }
+            let rewritten = text.replacingOccurrences(of: previous, with: origin)
+            guard (try? rewritten.write(to: url, atomically: true, encoding: .utf8)) != nil else {
+                continue
+            }
+            migrated.append(tool)
+        }
+        recordServerOrigin()
+        return migrated
     }
 
     func configurationURL(for tool: IntegrationTool) -> URL {

@@ -123,6 +123,24 @@ final class ChatReadFileToolTests: XCTestCase {
         let credentialFailure = await failure(path: ".env")
         XCTAssertEqual(errorCode(in: credentialFailure), "blocked_credential_path")
 
+        let absoluteFailure = await failure(path: "/scripts/archive_macos_release.sh")
+        let absoluteError = try XCTUnwrap(absoluteFailure["error"] as? [String: Any])
+        XCTAssertEqual(absoluteError["code"] as? String, "outside_allowed_root")
+        XCTAssertEqual(
+            absoluteError["message"] as? String,
+            "The requested path resolves outside the authorized File Read folder."
+        )
+        XCTAssertTrue(
+            (absoluteError["hint"] as? String)?.contains(
+                "use its relative path without the leading /"
+            ) == true
+        )
+        XCTAssertTrue(
+            (absoluteError["hint"] as? String)?.contains(
+                "Pass paths returned by search_files unchanged."
+            ) == true
+        )
+
         let outside = rootURL.deletingLastPathComponent().appendingPathComponent("outside.txt")
         try "outside".write(to: outside, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: outside) }

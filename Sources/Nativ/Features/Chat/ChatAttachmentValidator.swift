@@ -27,7 +27,7 @@ actor ChatAttachmentValidator {
     ) -> ChatAttachmentValidation? {
         switch attachment.chatAttachmentKind {
         case .image:
-            guard let data = Data(base64Encoded: attachment.base64Data), !data.isEmpty else {
+            guard let data = attachment.imageData, !data.isEmpty else {
                 return .blocked(message: "“\(attachment.filename)” is empty or couldn’t be read.")
             }
             return .ready

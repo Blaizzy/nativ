@@ -131,6 +131,8 @@ private extension WebBrowsingError {
         switch code {
         case .missingAPIKey:
             "Ask the user to add a search API key in Extensions → Browsing, then retry \(ChatWebSearchToolRegistry.toolName)."
+        case .missingEndpoint:
+            "Ask the user to connect a SearXNG instance in Extensions → Browsing, then retry \(ChatWebSearchToolRegistry.toolName)."
         case .invalidAuthentication, .credentialAccess:
             "Ask the user to reconnect the search API key in Extensions → Browsing, then retry \(ChatWebSearchToolRegistry.toolName)."
         case .insufficientFunds:
