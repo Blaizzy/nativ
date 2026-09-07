@@ -42,6 +42,14 @@ private enum ChatContextWindowFormatting {
     static func tokenCount(_ value: Int) -> String {
         tokenCountFormatter.string(from: NSNumber(value: value)) ?? String(value)
     }
+
+    static func compactTokenCount(_ value: Int) -> String {
+        guard value >= 1_000 else { return tokenCount(value) }
+        let thousands = (Double(value) / 1_000).formatted(
+            .number.precision(.fractionLength(0...1))
+        )
+        return "\(thousands)k"
+    }
 }
 
 private struct ChatContextWindowRing: View, Equatable {
@@ -69,11 +77,16 @@ private struct ChatContextWindowRing: View, Equatable {
         .contentShape(.circle)
         .onHover { showsDetails = $0 }
         .background {
-            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6) {
-                Text(verbatim: "Context window: \(remainingPercentageText) remaining")
-                    .monospacedDigit()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6, isInteractive: false) {
+                VStack(alignment: .center, spacing: 4) {
+                    Text(verbatim: "Context window:")
+                        .foregroundStyle(.secondary)
+                    Text(verbatim: "\(remainingPercentageText) remaining")
+                    Text(verbatim: "\(tokenUsageText) tokens used")
+                }
+                .monospacedDigit()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -83,6 +96,11 @@ private struct ChatContextWindowRing: View, Equatable {
 
     private var remainingPercentageText: String {
         ChatContextWindowFormatting.percentage(1 - usage.usedFraction)
+    }
+
+    private var tokenUsageText: String {
+        "\(ChatContextWindowFormatting.compactTokenCount(usage.usedTokens)) / "
+            + ChatContextWindowFormatting.compactTokenCount(usage.capacityTokens)
     }
 
     private var accessibilityValue: String {
