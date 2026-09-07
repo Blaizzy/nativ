@@ -57,11 +57,11 @@ struct ArtifactPreview: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(artifact.filename)
-                    .nativTextStyle(.compactCardTitle)
+                    .legacyTextStyle(.compactCardTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text("\(artifact.typeLabel) · \(artifact.source.label)")
-                    .nativTextStyle(.metadata)
+                    .legacyTextStyle(.metadata)
                     .foregroundStyle(.white.opacity(0.6))
             }
             Spacer(minLength: 0)
@@ -107,7 +107,7 @@ struct ArtifactPreview: View {
         HStack {
             if let prompt = artifact.prompt, !prompt.isEmpty {
                 Text(prompt)
-                    .nativTextStyle(.body)
+                    .legacyTextStyle(.body)
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(2)
                     .textSelection(.enabled)
@@ -115,7 +115,7 @@ struct ArtifactPreview: View {
             Spacer(minLength: 0)
             if let index {
                 Text("\(index + 1) of \(artifacts.count)")
-                    .nativTextStyle(.metadataNumeric)
+                    .legacyTextStyle(.metadataNumeric)
                     .foregroundStyle(.white.opacity(0.5))
             }
         }
@@ -128,7 +128,7 @@ struct ArtifactPreview: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 28))
             Text("Preview unavailable")
-                .nativTextStyle(.body)
+                .legacyTextStyle(.body)
         }
         .foregroundStyle(.white.opacity(0.6))
     }

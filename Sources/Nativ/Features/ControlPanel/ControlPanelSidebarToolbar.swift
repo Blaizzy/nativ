@@ -10,7 +10,7 @@ extension ControlPanelView {
         VStack(spacing: 6) {
             HStack {
                 Text(bulkSelectionTitle)
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 Button("Done") {
@@ -18,7 +18,7 @@ extension ControlPanelView {
                         exitSelectMode()
                     }
                 }
-                .nativTextStyle(.supportingEmphasized)
+                .legacyTextStyle(.supportingEmphasized)
             }
             HStack(spacing: 6) {
                 Button {

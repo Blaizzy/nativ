@@ -240,7 +240,7 @@ extension Color {
 // rather than a stack of boxes. Prefer these over re-rolling a pill/badge/dot.
 
 /// The application-wide typography roles used by Nativ interface chrome.
-enum NativTypography {
+enum LegacyTypography {
     enum Style {
         case displayTitle
         case pageTitle
@@ -340,8 +340,8 @@ enum NativTypography {
     }
 }
 
-private struct NativTypographyModifier: ViewModifier {
-    let style: NativTypography.Style
+private struct LegacyTypographyModifier: ViewModifier {
+    let style: LegacyTypography.Style
 
     func body(content: Content) -> some View {
         content.font(style.font)
@@ -397,8 +397,8 @@ private struct NativPanelSurfaceModifier: ViewModifier {
 
 extension View {
     /// Applies one of Nativ's application-wide typography roles.
-    func nativTextStyle(_ style: NativTypography.Style) -> some View {
-        modifier(NativTypographyModifier(style: style))
+    func legacyTextStyle(_ style: LegacyTypography.Style) -> some View {
+        modifier(LegacyTypographyModifier(style: style))
     }
 
     /// Applies Nativ's standard semantic panel surface.
@@ -415,7 +415,7 @@ extension View {
     }
 }
 
-private struct NativTypographyPreview: View {
+private struct LegacyTypographyPreview: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -473,7 +473,7 @@ private struct NativTypographyPreview: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
             content()
         }
     }
@@ -481,22 +481,22 @@ private struct NativTypographyPreview: View {
     private func previewRow(
         _ name: String,
         sample: String,
-        style: NativTypography.Style
+        style: LegacyTypography.Style
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(name)
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
                 .frame(width: 150, alignment: .leading)
             Text(sample)
-                .nativTextStyle(style)
+                .legacyTextStyle(style)
             Spacer(minLength: 0)
         }
     }
 }
 
 #Preview("Typography") {
-    NativTypographyPreview()
+    LegacyTypographyPreview()
         .frame(width: 520, height: 760)
 }
 
@@ -563,7 +563,7 @@ struct NativStatusBadge: View {
             }
             Text(text)
         }
-        .nativTextStyle(.statusBadge)
+        .legacyTextStyle(.statusBadge)
         .foregroundStyle(tone.color)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
