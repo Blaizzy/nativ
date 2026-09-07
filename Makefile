@@ -11,7 +11,11 @@ XCODE_DERIVED_DATA ?= build/NativDevelopmentDerivedData
 # comment tells you to use.
 NATIV_PRODUCT_NAME ?= $(firstword $(shell sed -n 's/^NATIV_PRODUCT_NAME[[:space:]]*=[[:space:]]*//p' \
 	Configuration/Signing.local.xcconfig Configuration/Signing.xcconfig 2>/dev/null) Nativ)
-ifeq ($(origin NATIV_PRODUCT_NAME),command line)
+# Forward the name to xcodebuild only when it came from outside the Makefile.
+# Passing it unconditionally would override the xcconfig this comment points at;
+# not passing an explicit override would build Nativ.app while the paths below
+# expect the overridden name.
+ifneq ($(filter command line environment,$(origin NATIV_PRODUCT_NAME)),)
 XCODE_PRODUCT_NAME_OVERRIDE := NATIV_PRODUCT_NAME=$(NATIV_PRODUCT_NAME)
 endif
 NATIV_APP := $(XCODE_DERIVED_DATA)/Build/Products/Debug/$(NATIV_PRODUCT_NAME).app
