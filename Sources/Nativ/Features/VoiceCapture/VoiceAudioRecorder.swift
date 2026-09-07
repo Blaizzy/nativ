@@ -186,7 +186,8 @@ final class VoiceAudioRecorder {
             try inputNode.auAudioUnit.setDeviceID(deviceID)
         }
 
-        let inputFormat = inputNode.outputFormat(forBus: 0)
+        // Device selection can leave the node's output format on the previous device's rate.
+        let inputFormat = inputNode.inputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw VoiceAudioRecorderError.couldNotStart
         }
