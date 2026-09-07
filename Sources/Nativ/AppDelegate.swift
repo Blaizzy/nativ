@@ -7,12 +7,12 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotificationCenterDelegate {
     private let model = NativModel()
     let softwareUpdater = SoftwareUpdater()
+    private let controlPanelDependencies = ControlPanelSharedDependencies()
+    let windowRegistry = NativWindowRegistry()
     private let voiceDictationExtension = VoiceDictationExtension()
     private lazy var extensionManager = NativExtensionManager(
         builtInExtensions: [voiceDictationExtension]
     )
-    private let controlPanelNavigation = ControlPanelNavigation()
-    private let controlPanelSharedDependencies = ControlPanelSharedDependencies()
     private let runtime = SystemRuntimeMonitor()
     private let routineStore = RoutineStore.shared
     private let routineSessionStore = ChatSessionStore()
@@ -28,7 +28,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         }
     )
     private let systemMenuBarPreferences = SystemMenuBarPreferences.shared
-    private var mainWindowOpener: (() -> Void)?
     private var statusItem: NSStatusItem?
     private lazy var statusMenuController = StatusMenuController(
         model: model,
@@ -42,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
 
     override init() {
         super.init()
-        model.observeInferenceActivity(controlPanelSharedDependencies.inferenceActivity)
+        model.observeInferenceActivity(controlPanelDependencies.inferenceActivity)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -134,26 +133,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         model.applicationWillTerminate()
     }
 
-    func makeControlPanelDependencies() -> ControlPanelDependencies {
-        ControlPanelDependencies(shared: controlPanelSharedDependencies)
+    func makeWindowState() -> NativWindowState {
+        NativWindowState(sharedDependencies: controlPanelDependencies)
     }
 
-    func rootView(controlPanelDependencies: ControlPanelDependencies) -> some View {
+    func rootView(for windowState: NativWindowState) -> some View {
         WelcomeGateView(
             model: model,
-            navigation: controlPanelNavigation,
+            navigation: windowState.navigation,
             runtime: runtime,
             extensionManager: extensionManager,
             softwareUpdater: softwareUpdater,
-            controlPanelDependencies: controlPanelDependencies,
+            controlPanelDependencies: windowState.dependencies,
             onComplete: { [weak self] modelID, serverAPIKey in
                 self?.completeWelcome(modelID: modelID, serverAPIKey: serverAPIKey)
             }
         )
     }
 
-    func registerMainWindowOpener(_ opener: @escaping () -> Void) {
-        mainWindowOpener = opener
+    func registerWindowOpener(_ opener: @escaping () -> Void) {
+        windowRegistry.registerWindowOpener(opener)
     }
 
     private func setUpRoutines() {
@@ -222,13 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     }
 
     func performWindowIntent(_ intent: NativWindowIntent) {
-        controlPanelNavigation.perform(intent)
-        showMainWindow()
-    }
-
-    private func showMainWindow() {
-        mainWindowOpener?()
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        windowRegistry.perform(intent)
     }
 
     private func completeWelcome(modelID: String?, serverAPIKey: String?) {
