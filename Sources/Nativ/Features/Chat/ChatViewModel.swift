@@ -399,7 +399,7 @@ final class ChatViewModel: ObservableObject {
 
         persistCurrentSession(updateTimestamp: false)
         storedSessions.append(session)
-        pruneRedundantEmptySessions()
+        pruneRedundantEmptySessions(keeping: session.id)
         saveSession(session)
         discardPromptEditing()
         draft = ""
@@ -2839,13 +2839,13 @@ final class ChatViewModel: ObservableObject {
         }
 
         return currentSession.projectID == projectID
-            && currentSession.messages.isEmpty
+            && messages.isEmpty
             && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pendingImageAttachments.isEmpty
     }
 
-    private func pruneRedundantEmptySessions() {
-        let selectedSessionID = currentSessionID
+    private func pruneRedundantEmptySessions(keeping sessionID: UUID? = nil) {
+        let selectedSessionID = sessionID ?? currentSessionID
         let sortedSessions = storedSessions.sorted { lhs, rhs in
             if lhs.id == selectedSessionID { return true }
             if rhs.id == selectedSessionID { return false }

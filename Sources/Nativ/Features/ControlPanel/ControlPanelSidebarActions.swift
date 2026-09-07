@@ -41,9 +41,6 @@ extension ControlPanelView {
             onRename: { newTitle in
                 renameRecentSession(recent, to: newTitle)
             },
-            onNewChat: {
-                createChatSession()
-            },
             onTogglePin: {
                 togglePinRecent(recent)
             },
@@ -91,9 +88,6 @@ extension ControlPanelView {
             },
             onRename: { newTitle in
                 renameRecentSession(recent, to: newTitle)
-            },
-            onNewChat: {
-                createChatSession(projectID: project.id)
             },
             onTogglePin: {},
             folders: [],

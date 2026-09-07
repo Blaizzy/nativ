@@ -93,6 +93,7 @@ extension ControlPanelView {
                 chatImportAlert = .failed("Nativ could not save the imported chat.")
                 return
             }
+            exitSelectMode()
             showChatWorkspace()
             applySidebarSelection(.chat(sessionID))
             revealSidebarSection(\.sidebarSessionsCollapsed)
@@ -314,6 +315,7 @@ extension ControlPanelView {
     }
 
     func createChatSession(projectID: UUID? = nil) {
+        exitSelectMode()
         sidebarRenameCommitRequests.send()
         chat.createSession(projectID: projectID)
         showChatWorkspace()
